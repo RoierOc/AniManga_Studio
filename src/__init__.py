@@ -1,0 +1,1 @@
+# Manga Upscaler - Professional Edition

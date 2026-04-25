@@ -1,0 +1,43 @@
+# Python cache artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Tooling cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local runtime outputs
+*.log
+
+# Windows Zone.Identifier metadata (WSL artifact)
+*:Zone.Identifier
+
+# Runtime status JSON files
+.*_status.json
+
+# Backup files
+*.bak
+
+# Local configuration and public repository metadata.
+/.*/
+!/.github/
+/.github/*/
+!/.github/workflows/
+!/.github/ISSUE_TEMPLATE/
+/*.md
+!/README.md
+!/CONTRIBUTING.md
+!/CHANGELOG.md
+!/SECURITY.md
+!/CODE_OF_CONDUCT.md
+!/LICENSE.md
+!/AUTHORS.md
+/docs/*/
+!/docs/img/

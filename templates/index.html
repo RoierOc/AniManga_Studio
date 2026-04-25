@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MangaJaNai</title>
+  <link rel="stylesheet" href="/static/css/styles.css">
+  <script src="/static/js/vue.js"></script>
+</head>
+<body>
+<div id="app">
+
+  <!-- HEADER -->
+  <header class="md-header">
+    <div class="md-header-inner">
+      <a href="/" class="md-logo">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+          <path d="M4 4h24v24H4V4z" fill="#6184d3"/>
+          <path d="M8 8h16v16H8V8z" fill="white"/>
+        </svg>
+        <span>MangaJaNai</span>
+        <span v-if="taskQueueList.length > 0" class="task-badge">{{ taskQueueList.length }}</span>
+      </a>
+
+      <nav class="md-nav">
+        <button class="md-nav-link" :class="{ active: currentView === 'library' }" @click="currentView = 'library'">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z"/></svg>
+          Biblioteca
+        </button>
+        <button class="md-nav-link" :class="{ active: currentView === 'mangadex' }" @click="currentView = 'mangadex'">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          Explorar
+        </button>
+        <button class="md-nav-link" :class="{ active: currentView === 'followed' }" @click="currentView = 'followed'">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+          Seguidos
+        </button>
+      </nav>
+
+      <div class="md-search">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+        <input type="text" v-model="searchQuery" @input="debouncedSearch" placeholder="Buscar manga...">
+      </div>
+    </div>
+  </header>
+
+  <!-- MAIN -->
+  <main class="md-main">
+
+    <!-- Library View -->
+    <div v-if="currentView === 'library'" class="md-section">
+      <div class="md-section-header">
+        <h2 class="md-section-title">Mi Biblioteca</h2>
+        <div class="md-sort">
+          <select>
+            <option>Ordenar por: Actualizado</option>
+            <option>Ordenar por: Título</option>
+            <option>Ordenar por: Último leído</option>
+          </select>
+        </div>
+      </div>
+
+      <div v-if="combinedLibrary.length > 0" class="md-grid">
+        <div v-for="item in combinedLibrary" :key="item.key" class="md-card" @click="openLibraryItem(item)">
+          <div class="md-cover-wrapper">
+            <img v-if="item.cover" :src="item.cover" :alt="item.title" loading="lazy" @error="handleCoverError">
+            <div v-else class="md-cover-placeholder">
+              <span>{{ item.title.charAt(0).toUpperCase() }}</span>
+            </div>
+            <div v-if="item.upscaled > 0" class="md-badge">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+              {{ item.upscaled }}
+            </div>
+          </div>
+          <div class="md-card-title">{{ item.title }}</div>
+          <div class="md-card-meta">
+            <template v-if="item.downloaded">
+              <span>{{ item.chapter_count || 0 }}</span> capítulos
+            </template>
+            <template v-else>
+              <span>Guardado</span>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <div v-else class="md-empty">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor" opacity="0.3"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z"/></svg>
+        <h3>Tu biblioteca está vacía</h3>
+        <p>Agrega manga desde MangaDex para comenzar a leer</p>
+        <button class="md-btn-primary" @click="currentView = 'mangadex'">Explorar MangaDex</button>
+      </div>
+    </div>
+
+    <!-- MangaDex Explore View -->
+    <div v-else-if="currentView === 'mangadex'" class="md-section">
+      <div class="md-section-header">
+        <h2 class="md-section-title">Explorar MangaDex</h2>
+      </div>
+
+      <div v-if="searchResults.length > 0" class="md-grid">
+        <div v-for="manga in searchResults" :key="manga.id" class="md-card" @click="openMdManga(manga)">
+          <div class="md-cover-wrapper">
+            <img v-if="manga.cover" :src="manga.cover" :alt="manga.title" loading="lazy" @error="handleCoverError">
+            <div v-else class="md-cover-placeholder">
+              <span>{{ (manga.title || '?').charAt(0).toUpperCase() }}</span>
+            </div>
+          </div>
+          <div class="md-card-title">{{ manga.title }}</div>
+          <div class="md-card-meta">
+            <span>{{ manga.status || 'En curso' }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div v-else-if="searchQuery.length >= 2" class="md-loading">
+        <div class="md-spinner"></div>
+        <p>Buscando "{{ searchQuery }}"...</p>
+      </div>
+
+      <div v-else class="md-empty">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor" opacity="0.3"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+        <h3>¿Qué quieres leer?</h3>
+        <p>Busca manga por título en MangaDex</p>
+      </div>
+    </div>
+
+    <!-- Followed MangaDex Library View -->
+    <div v-else-if="currentView === 'followed'" class="md-section">
+      <div class="md-section-header">
+        <h2 class="md-section-title">MangaDex Seguidos</h2>
+      </div>
+
+      <div v-if="mdLibrary.length > 0" class="md-grid">
+        <div v-for="manga in mdLibrary" :key="manga.id" class="md-card" @click="openMdManga(manga)">
+          <div class="md-cover-wrapper">
+            <img v-if="manga.cover" :src="manga.cover" :alt="manga.title" loading="lazy" @error="handleCoverError">
+            <div v-else class="md-cover-placeholder">
+              <span>{{ (manga.title || '?').charAt(0).toUpperCase() }}</span>
+            </div>
+          </div>
+          <div class="md-card-title">{{ manga.title }}</div>
+          <div class="md-card-meta">
+            <span>{{ manga.status || 'Desconocido' }}</span>
+          </div>
+        </div>
+      </div>
+
+      <div v-else class="md-loading">
+        <div class="md-spinner"></div>
+        <p>Cargando biblioteca...</p>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- MODAL del manga -->
+  <div v-if="showModal" class="md-modal-overlay" @click.self="closeModal">
+    <div class="md-modal">
+      <button class="md-modal-close" @click="closeModal">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+
+      <div class="md-modal-header">
+        <div class="md-modal-cover">
+          <img v-if="currentCoverUrl" :src="currentCoverUrl" :alt="currentTitle">
+          <div v-else class="md-cover-placeholder-lg">
+            <span>{{ currentTitle.charAt(0).toUpperCase() }}</span>
+          </div>
+        </div>
+        <div class="md-modal-info">
+          <h2>{{ currentTitle }}</h2>
+          <div class="md-modal-stats">
+            <span v-if="stats.total > 0">{{ stats.total }} capítulos</span>
+            <span v-if="stats.downloaded > 0">• {{ stats.downloaded }} descargados</span>
+            <span v-if="stats.upscaled > 0">• {{ stats.upscaled }} upscaleados</span>
+          </div>
+          <div class="md-modal-actions">
+            <button class="md-btn-primary" :class="{ 'md-btn-added': isInLibrary }" @click="addToLibrary()">
+              <svg v-if="!isInLibrary" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+              <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+              {{ isInLibrary ? 'En biblioteca' : 'Agregar a biblioteca' }}
+            </button>
+            <button class="md-btn-danger" @click="removeLibraryItem({ title: currentTitle, downloaded: true, localManga: currentManga, mdManga: currentMdManga })">
+              Borrar manga
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div class="md-chapters">
+        <div class="md-chapters-header">
+          <h3>Capítulos</h3>
+          <span>{{ filteredChapters.length }} capítulos</span>
+        </div>
+        <div v-if="availableLangs.length > 1" class="md-lang-filter">
+          <button v-for="lang in availableLangs" :key="lang"
+              class="md-lang-btn" :class="{ active: selectedLang === lang }"
+              @click="selectedLang = selectedLang === lang ? '' : lang">
+            {{ getLangFlag(lang) }}
+          </button>
+        </div>
+        <div class="md-chapters-list">
+
+          <div v-for="group in filteredChapters" :key="group.chapter" class="ch-row"
+               :class="{ 'ch-row--upscaled': isUpscaled(group.chapter), 'ch-row--downloaded': isDownloaded(group.chapter) && !isUpscaled(group.chapter) }">
+
+            <!-- Status dot -->
+            <div class="ch-dot" :class="{
+              'ch-dot--upscaled': isUpscaled(group.chapter),
+              'ch-dot--downloaded': isDownloaded(group.chapter) && !isUpscaled(group.chapter),
+              'ch-dot--active': getTask(group.chapter,'download') || getTask(group.chapter,'upscale')
+            }"></div>
+
+            <!-- Info -->
+            <div class="ch-info">
+              <span class="ch-num">Cap. {{ group.chapter }}</span>
+              <span class="ch-pages">{{ group.variants[0]?.page_count || '?' }} pág.</span>
+            </div>
+
+            <!-- Progress (inline, visible only when task active) -->
+            <div v-if="getTask(group.chapter,'download') || getTask(group.chapter,'upscale')" class="ch-progress-inline">
+              <div class="ch-bar">
+                <div class="ch-bar-fill"
+                     :class="{ 'ch-bar-fill--up': getTask(group.chapter,'upscale') }"
+                     :style="{ width: getProgressPercent(getTask(group.chapter,'download') || getTask(group.chapter,'upscale')) + '%' }">
+                </div>
+              </div>
+              <span class="ch-pct">{{ getProgressPercent(getTask(group.chapter,'download') || getTask(group.chapter,'upscale')) }}%</span>
+            </div>
+
+            <!-- Actions -->
+            <div class="ch-actions">
+              <template v-if="isUpscaled(group.chapter)">
+                <span class="ch-tag ch-tag--upscaled">Upscaled</span>
+                <button class="md-btn-sm" @click.stop="readChapter(group.chapter)">Leer</button>
+                <button class="ch-btn-trash" @click.stop="deleteChapter(group.chapter)" title="Borrar capítulo">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                </button>
+              </template>
+              <template v-else-if="isDownloaded(group.chapter)">
+                <span class="ch-tag ch-tag--downloaded">Descargado</span>
+                <button v-if="!getTask(group.chapter,'upscale')" class="md-btn-sm md-btn-upscale" @click.stop="upscaleChapter(group.chapter)">Upscale</button>
+                <button class="md-btn-sm" @click.stop="readChapter(group.chapter)">Leer</button>
+                <button class="ch-btn-trash" @click.stop="deleteChapter(group.chapter)" title="Borrar capítulo">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                </button>
+              </template>
+              <template v-else-if="getTask(group.chapter,'download')">
+                <span class="ch-tag ch-tag--loading">Descargando...</span>
+              </template>
+              <template v-else-if="getTask(group.chapter,'upscale')">
+                <span class="ch-tag ch-tag--loading">Upscaleando...</span>
+                <button class="md-btn-sm" @click.stop="readChapter(group.chapter)">Leer</button>
+              </template>
+              <template v-else>
+                <button class="md-btn-sm" @click.stop="downloadChapter(group)">Descargar</button>
+              </template>
+            </div>
+
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- READER -->
+  <div v-if="showReader" class="md-reader">
+    <div class="md-reader-header">
+      <button class="md-reader-back" @click="closeReader">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+        Volver
+      </button>
+      <div class="md-reader-title">{{ currentTitle }} - Ch. {{ currentChapter }}</div>
+      <div class="md-reader-pages">{{ currentPage + 1 }} / {{ pages.length }}</div>
+    </div>
+    <div class="md-reader-content" :class="{ zoomed: isZoomed }">
+      <img v-if="currentPageUrl" :src="currentPageUrl" @load="onPageLoad" @click="nextPage" alt="Page">
+    </div>
+    <div class="md-reader-nav">
+      <button @click="prevPage" :disabled="currentPage === 0">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+      </button>
+      <input type="range" :min="1" :max="pages.length" :value="currentPage + 1" @input="goToPage($event.target.value)">
+      <button @click="nextPage" :disabled="currentPage >= pages.length - 1">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- TASK QUEUE PANEL (fijo abajo) -->
+  <div v-if="taskQueueList.length > 0 && !showReader" class="task-queue">
+    <div class="task-queue-header" @click="taskQueueExpanded = !taskQueueExpanded">
+      <div class="task-queue-title">
+        <div class="tq-spinner"></div>
+        <span>{{ taskQueueList.length }} tarea{{ taskQueueList.length > 1 ? 's' : '' }} en progreso</span>
+      </div>
+      <svg class="tq-chevron" :class="{ rotated: taskQueueExpanded }" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/>
+      </svg>
+    </div>
+    <div v-if="taskQueueExpanded" class="task-queue-body">
+      <div v-for="task in taskQueueList" :key="task.id" class="tq-item">
+        <div class="tq-icon" :class="task.type === 'download' ? 'tq-icon--dl' : 'tq-icon--up'">
+          <svg v-if="task.type === 'download'" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14l5-5 5 5z"/></svg>
+        </div>
+        <div class="tq-content">
+          <div class="tq-label">
+            <span class="tq-title">{{ task.displayTitle || '...' }}</span>
+            <span class="tq-chapter">Cap. {{ task.displayChapter }}</span>
+            <span class="tq-type-badge" :class="task.type === 'download' ? 'tq-type-badge--dl' : 'tq-type-badge--up'">
+              {{ task.type === 'download' ? 'Descarga' : 'Upscale' }}
+            </span>
+          </div>
+          <div class="tq-progress-row">
+            <div class="tq-bar">
+              <div class="tq-bar-fill" :class="task.type === 'upscale' ? 'tq-bar-fill--up' : ''" :style="{ width: task.percent + '%' }"></div>
+            </div>
+            <span class="tq-pct">{{ task.percent }}%</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div v-if="toast.show" class="md-toast" :class="toast.type">{{ toast.message }}</div>
+
+</div>
+<script src="/static/js/app.js?v=20260425-3"></script>
+</body>
+</html>
