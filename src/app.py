@@ -33,6 +33,7 @@ from api.upscale import upscale_bp
 from api.reader import reader_bp
 from api.status import status_bp
 from api.mangadex import auth_bp
+from api.export import export_bp
 
 app.register_blueprint(library_bp, url_prefix='/api/library')
 app.register_blueprint(search_bp, url_prefix='/api/search')
@@ -41,6 +42,7 @@ app.register_blueprint(upscale_bp, url_prefix='/api/upscale')
 app.register_blueprint(reader_bp, url_prefix='/api/reader')
 app.register_blueprint(status_bp, url_prefix='/api/status')
 app.register_blueprint(auth_bp, url_prefix='/api/mangadex')
+app.register_blueprint(export_bp, url_prefix='/api/export')
 
 @app.route('/')
 def index():

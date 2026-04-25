@@ -181,14 +181,34 @@
               <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
               {{ isInLibrary ? 'En biblioteca' : 'Agregar a biblioteca' }}
             </button>
+            <button class="md-btn-export" @click="openTomoTab()" :class="{ active: currentModalTab === 'tomo' }">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+              Crear Tomo
+              <span v-if="exportSelectedChapters.length > 0" class="md-btn-export-badge">{{ exportSelectedChapters.length }}</span>
+            </button>
             <button class="md-btn-danger" @click="removeLibraryItem({ title: currentTitle, downloaded: true, localManga: currentManga, mdManga: currentMdManga })">
-              Borrar manga
+              Borrar
             </button>
           </div>
         </div>
       </div>
 
-      <div class="md-chapters">
+      <!-- ── Modal tabs ── -->
+      <div class="md-modal-tabs">
+        <button class="md-modal-tab" :class="{ active: currentModalTab === 'chapters' }" @click="currentModalTab = 'chapters'">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+          Capítulos
+          <span class="md-tab-count">{{ filteredChapters.length }}</span>
+        </button>
+        <button class="md-modal-tab" :class="{ active: currentModalTab === 'tomo' }" @click="openTomoTab()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H8V4h12v12zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z"/></svg>
+          Crear Tomo
+          <span v-if="exportSelectedChapters.length > 0" class="md-tab-badge">{{ exportSelectedChapters.length }}</span>
+        </button>
+      </div>
+
+      <!-- ── Chapters tab ── -->
+      <div v-if="currentModalTab === 'chapters'" class="md-chapters">
         <div class="md-chapters-header">
           <h3>Capítulos</h3>
           <span>{{ filteredChapters.length }} capítulos</span>
@@ -205,20 +225,17 @@
           <div v-for="group in filteredChapters" :key="group.chapter" class="ch-row"
                :class="{ 'ch-row--upscaled': isUpscaled(group.chapter), 'ch-row--downloaded': isDownloaded(group.chapter) && !isUpscaled(group.chapter) }">
 
-            <!-- Status dot -->
             <div class="ch-dot" :class="{
               'ch-dot--upscaled': isUpscaled(group.chapter),
               'ch-dot--downloaded': isDownloaded(group.chapter) && !isUpscaled(group.chapter),
               'ch-dot--active': getTask(group.chapter,'download') || getTask(group.chapter,'upscale')
             }"></div>
 
-            <!-- Info -->
             <div class="ch-info">
               <span class="ch-num">Cap. {{ group.chapter }}</span>
               <span class="ch-pages">{{ group.variants[0]?.page_count || '?' }} pág.</span>
             </div>
 
-            <!-- Progress (inline, visible only when task active) -->
             <div v-if="getTask(group.chapter,'download') || getTask(group.chapter,'upscale')" class="ch-progress-inline">
               <div class="ch-bar">
                 <div class="ch-bar-fill"
@@ -229,26 +246,19 @@
               <span class="ch-pct">{{ getProgressPercent(getTask(group.chapter,'download') || getTask(group.chapter,'upscale')) }}%</span>
             </div>
 
-            <!-- Actions -->
             <div class="ch-actions">
               <template v-if="isUpscaled(group.chapter)">
-                <span class="ch-tag ch-tag--upscaled">
-                  4K
-                  <span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="ch-tag-lang">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span>
-                </span>
+                <span class="ch-tag ch-tag--upscaled">4K<span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="ch-tag-lang">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span></span>
                 <button class="md-btn-sm" @click.stop="readChapter(group.chapter)">Leer</button>
-                <button class="ch-btn-trash" @click.stop="deleteChapter(group.chapter)" title="Borrar capítulo">
+                <button class="ch-btn-trash" @click.stop="deleteChapter(group.chapter)" title="Borrar">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                 </button>
               </template>
               <template v-else-if="isDownloaded(group.chapter)">
-                <span class="ch-tag ch-tag--downloaded">
-                  ✓
-                  <span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="ch-tag-lang">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span>
-                </span>
+                <span class="ch-tag ch-tag--downloaded">✓<span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="ch-tag-lang">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span></span>
                 <button v-if="!getTask(group.chapter,'upscale')" class="md-btn-sm md-btn-upscale" @click.stop="upscaleChapter(group.chapter)">4x</button>
                 <button class="md-btn-sm" @click.stop="readChapter(group.chapter)">Leer</button>
-                <button class="ch-btn-trash" @click.stop="deleteChapter(group.chapter)" title="Borrar capítulo">
+                <button class="ch-btn-trash" @click.stop="deleteChapter(group.chapter)" title="Borrar">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                 </button>
               </template>
@@ -260,11 +270,9 @@
                 <button class="md-btn-sm" @click.stop="readChapter(group.chapter)">Leer</button>
               </template>
               <template v-else>
-                <!-- Per-language download buttons (MangaDex style) -->
                 <div class="ch-lang-dl" v-if="getUniqueLangs(group.variants).length > 1">
                   <button v-for="v in getUniqueLangs(group.variants)" :key="v.language"
-                          class="ch-lang-pill"
-                          @click.stop="downloadChapter(group, v.language)"
+                          class="ch-lang-pill" @click.stop="downloadChapter(group, v.language)"
                           :title="'Descargar en ' + getLangName(v.language)">
                     <span class="ch-lang-flag">{{ getLangFlag(v.language) }}</span>
                   </button>
@@ -274,9 +282,156 @@
             </div>
 
           </div>
-
         </div>
       </div>
+
+      <!-- ── Crear Tomo tab ── -->
+      <div v-else-if="currentModalTab === 'tomo'" class="tomo-builder">
+
+        <!-- Controls: name + format -->
+        <div class="tomo-controls">
+          <input class="tomo-name-input" v-model="exportVolumeName" placeholder="Nombre del tomo..." maxlength="80">
+          <div class="tomo-fmt-toggle">
+            <button :class="['tomo-fmt-btn', exportFormat==='cbz'?'active':'']" @click="exportFormat='cbz'">CBZ</button>
+            <button :class="['tomo-fmt-btn', exportFormat==='cbr'?'active':'']" @click="exportFormat='cbr'">CBR</button>
+          </div>
+        </div>
+
+        <!-- Toolbar: quick select + count -->
+        <div class="tomo-toolbar">
+          <div class="tomo-quick-row">
+            <button class="tomo-q-btn" @click="selectAllExportChapters()">Todos DL</button>
+            <button class="tomo-q-btn tomo-q-btn--4k" @click="selectUpscaledExportChapters()">Solo 4K</button>
+            <button class="tomo-q-btn" @click="exportSelectedChapters=[]; scheduleExportPreview()">Ninguno</button>
+          </div>
+          <span class="tomo-sel-count" v-if="exportSelectedChapters.length > 0">
+            {{ exportSelectedChapters.length }} cap. seleccionados
+          </span>
+          <span class="tomo-sel-count tomo-sel-hint" v-else>
+            Selecciona los capítulos a comprimir
+          </span>
+        </div>
+
+        <!-- Chapter table -->
+        <div class="tomo-list">
+
+          <!-- Column headers -->
+          <div class="tomo-list-header">
+            <span></span>
+            <span>Capítulo</span>
+            <span>Estado</span>
+            <span>Acción</span>
+          </div>
+
+          <div v-for="group in groupedChapters" :key="group.chapter"
+               class="tomo-row"
+               :class="{
+                 'tomo-row--sel':  exportSelectedChapters.includes(normalizeChapter(group.chapter)),
+                 'tomo-row--up':   isUpscaled(group.chapter),
+                 'tomo-row--dl':   isDownloaded(group.chapter) && !isUpscaled(group.chapter),
+                 'tomo-row--busy': getTask(group.chapter,'download') || getTask(group.chapter,'upscale'),
+                 'tomo-row--miss': !isDownloaded(group.chapter) && !isUpscaled(group.chapter) && !getTask(group.chapter,'download') && !getTask(group.chapter,'upscale')
+               }">
+
+            <!-- Checkbox col -->
+            <label class="tomo-check" :class="{'tomo-check--off': !isDownloaded(group.chapter) && !isUpscaled(group.chapter)}">
+              <input type="checkbox"
+                     :value="normalizeChapter(group.chapter)"
+                     v-model="exportSelectedChapters"
+                     :disabled="!isDownloaded(group.chapter) && !isUpscaled(group.chapter)"
+                     @change="scheduleExportPreview()">
+            </label>
+
+            <!-- Info col -->
+            <div class="tomo-ch-info">
+              <span class="tomo-ch-num">Cap. {{ group.chapter }}</span>
+              <span class="tomo-ch-pages">{{ group.variants[0]?.page_count || '?' }}p</span>
+            </div>
+
+            <!-- Status col -->
+            <div class="tomo-status-col">
+              <template v-if="isUpscaled(group.chapter)">
+                <span class="tomo-badge tomo-badge--up">4K</span>
+                <span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="tomo-flag">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span>
+              </template>
+              <template v-else-if="isDownloaded(group.chapter)">
+                <span class="tomo-badge tomo-badge--dl">DL</span>
+                <span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="tomo-flag">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span>
+              </template>
+              <template v-else-if="getTask(group.chapter,'download') || getTask(group.chapter,'upscale')">
+                <span class="tomo-badge tomo-badge--busy">
+                  {{ getProgressPercent(getTask(group.chapter,'download')||getTask(group.chapter,'upscale')) }}%
+                </span>
+              </template>
+              <template v-else>
+                <span class="tomo-badge tomo-badge--miss">—</span>
+              </template>
+            </div>
+
+            <!-- Progress bar (spans action col when visible) -->
+            <div v-if="getTask(group.chapter,'download') || getTask(group.chapter,'upscale')" class="tomo-prog-col">
+              <div class="tomo-prog-track">
+                <div class="tomo-prog-fill"
+                     :class="{'tomo-prog-fill--up': getTask(group.chapter,'upscale')}"
+                     :style="{width: getProgressPercent(getTask(group.chapter,'download')||getTask(group.chapter,'upscale'))+'%'}">
+                </div>
+              </div>
+            </div>
+
+            <!-- Actions col -->
+            <div v-else class="tomo-act-col">
+              <!-- Upscale if downloaded but not upscaled -->
+              <button v-if="isDownloaded(group.chapter) && !isUpscaled(group.chapter)"
+                      class="tomo-act tomo-act--up"
+                      @click.stop="upscaleChapter(group.chapter)"
+                      title="Upscale a 4K">
+                4K↑
+              </button>
+              <!-- Download language pills for missing chapters -->
+              <template v-if="!isDownloaded(group.chapter) && !isUpscaled(group.chapter)">
+                <button v-for="v in getUniqueLangs(group.variants)" :key="v.language"
+                        class="tomo-lang-btn"
+                        @click.stop="downloadChapter(group, v.language)"
+                        :title="'Descargar ' + getLangName(v.language)">
+                  {{ getLangFlag(v.language) }}
+                </button>
+                <button v-if="getUniqueLangs(group.variants).length === 0"
+                        class="tomo-act"
+                        @click.stop="downloadChapter(group)">DL</button>
+              </template>
+            </div>
+
+          </div>
+
+          <div v-if="groupedChapters.length === 0" class="tomo-empty">
+            Abre un manga para ver sus capítulos aquí
+          </div>
+        </div>
+
+        <!-- Sticky footer -->
+        <div class="tomo-footer">
+          <div class="tomo-estimate">
+            <template v-if="exportSelectedChapters.length > 0">
+              <span class="tomo-est-main">{{ exportSelectedChapters.length }} cap.</span>
+              <span v-if="exportPreview.pages > 0" class="tomo-est-detail">
+                &nbsp;· {{ exportPreview.pages }} págs · ~{{ exportPreview.size_mb }} MB
+                <span v-if="exportPreview.upscaled_pages > 0" class="tomo-est-4k">&nbsp;({{ exportPreview.upscaled_pages }} 4K)</span>
+              </span>
+            </template>
+            <span v-else class="tomo-est-hint">Selecciona capítulos para exportar</span>
+          </div>
+          <button class="tomo-dl-btn"
+                  :disabled="exportSelectedChapters.length === 0 || exportBusy"
+                  @click="downloadTomo()">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+            <span v-if="exportBusy">Preparando...</span>
+            <span v-else>Descargar .{{ exportFormat }}</span>
+          </button>
+        </div>
+
+      </div>
+      <!-- ── END TOMO TAB ── -->
+
     </div>
   </div>
 
@@ -344,6 +499,6 @@
   <div v-if="toast.show" class="md-toast" :class="toast.type">{{ toast.message }}</div>
 
 </div>
-<script src="/static/js/app.js?v=20260425-5"></script>
+<script src="/static/js/app.js?v=20260425-8"></script>
 </body>
 </html>

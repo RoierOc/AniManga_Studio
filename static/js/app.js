@@ -40,6 +40,17 @@ const app = createApp({
         const downloadedLang = ref({});  // tracks which language was downloaded per chapter key
         const taskQueueExpanded = ref(true);
         const toast = ref({ show: false, message: '', type: 'info' });
+
+        // Modal tab state
+        const currentModalTab = ref('chapters');
+
+        // Export / Tomo state
+        const exportVolumeName = ref('');
+        const exportFormat = ref('cbz');
+        const exportSelectedChapters = ref([]);
+        const exportBusy = ref(false);
+        const exportPreview = ref({ pages: 0, size_mb: 0, upscaled_pages: 0 });
+        let exportPreviewTimer = null;
         
         // Search debounce
         let searchTimeout = null;
@@ -276,6 +287,8 @@ const app = createApp({
             chapters.value = [];
             mdChapters.value = [];
             chapterStatus.value = { downloaded: {}, upscaled: {} };
+            currentModalTab.value = 'chapters';
+            exportSelectedChapters.value = [];
             showModal.value = true;
             loadChapters(manga.name || manga.title);
 
@@ -306,6 +319,8 @@ const app = createApp({
             chapters.value = [];
             mdChapters.value = [];
             chapterStatus.value = { downloaded: {}, upscaled: {} };
+            currentModalTab.value = 'chapters';
+            exportSelectedChapters.value = [];
             showModal.value = true;
             loadMdChapters(manga.id);
             // Also check local chapters
@@ -754,6 +769,88 @@ const app = createApp({
             }
         };
 
+        // Export / Tomo
+        const openTomoTab = () => {
+            if (!exportVolumeName.value) exportVolumeName.value = currentTitle.value || '';
+            currentModalTab.value = 'tomo';
+            if (!exportSelectedChapters.value.length) {
+                exportPreview.value = { pages: 0, size_mb: 0, upscaled_pages: 0 };
+            }
+        };
+
+        const scheduleExportPreview = () => {
+            clearTimeout(exportPreviewTimer);
+            if (!exportSelectedChapters.value.length) {
+                exportPreview.value = { pages: 0, size_mb: 0, upscaled_pages: 0 };
+                return;
+            }
+            exportPreviewTimer = setTimeout(async () => {
+                try {
+                    const res = await fetch('/api/export/preview', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title: currentTitle.value, chapters: exportSelectedChapters.value })
+                    });
+                    if (res.ok) exportPreview.value = await res.json();
+                } catch (e) {}
+            }, 400);
+        };
+
+        const selectAllExportChapters = () => {
+            exportSelectedChapters.value = groupedChapters.value
+                .filter(g => isDownloaded(g.chapter) || isUpscaled(g.chapter))
+                .map(g => normalizeChapter(g.chapter));
+            scheduleExportPreview();
+        };
+
+        const selectUpscaledExportChapters = () => {
+            exportSelectedChapters.value = groupedChapters.value
+                .filter(g => isUpscaled(g.chapter))
+                .map(g => normalizeChapter(g.chapter));
+            scheduleExportPreview();
+        };
+
+        const downloadTomo = async () => {
+            if (!exportSelectedChapters.value.length) {
+                showToast('Selecciona al menos un capítulo', 'warning');
+                return;
+            }
+            exportBusy.value = true;
+            try {
+                const fmt = exportFormat.value || 'cbz';
+                const res = await fetch('/api/export/cbz', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: currentTitle.value,
+                        chapters: exportSelectedChapters.value,
+                        volume_name: exportVolumeName.value || currentTitle.value,
+                        format: fmt,
+                    })
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    showToast('Error: ' + (err.error || res.statusText), 'error');
+                    return;
+                }
+                const blob = await res.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                const safeName = (exportVolumeName.value || currentTitle.value || 'tomo').replace(/[^\w\-. ]/g, '_');
+                a.href = url;
+                a.download = safeName + '.' + fmt;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                showToast('Tomo exportado', 'success');
+            } catch (e) {
+                showToast('Error: ' + e.message, 'error');
+            } finally {
+                exportBusy.value = false;
+            }
+        };
+
         // Init
         onMounted(() => {
             loadLibrary();
@@ -773,6 +870,10 @@ const app = createApp({
             downloadChapter, upscaleChapter, readChapter, closeReader,
             nextPage, prevPage, toggleZoom, goToPage, onPageLoad, debouncedSearch,
             isInLibrary, taskQueueExpanded, taskQueueList, deleteChapter, downloadedLang, normalizeChapter,
+            currentModalTab, openTomoTab,
+            exportVolumeName, exportFormat, exportSelectedChapters, exportBusy, exportPreview,
+            selectAllExportChapters, selectUpscaledExportChapters,
+            downloadTomo, scheduleExportPreview,
             handleCoverError: (e) => { e.target.style.display = 'none'; if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex'; }
         };
     }
