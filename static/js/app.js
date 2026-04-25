@@ -37,6 +37,7 @@ const app = createApp({
         
         // Tasks & Toast
         const activeTasks = ref({});
+        const downloadedLang = ref({});  // tracks which language was downloaded per chapter key
         const taskQueueExpanded = ref(true);
         const toast = ref({ show: false, message: '', type: 'info' });
         
@@ -201,6 +202,15 @@ const app = createApp({
         };
         const getLangName = (code) => langNames[code] || code;
         const getLangFlag = (code) => langFlags[code] || '🌐';
+
+        const getUniqueLangs = (variants) => {
+            const seen = new Set();
+            return (variants || []).filter(v => {
+                if (!v.language || seen.has(v.language)) return false;
+                seen.add(v.language);
+                return true;
+            });
+        };
         
         // Load covers from MangaDex
         const loadCoverForManga = async (manga) => {
@@ -518,15 +528,17 @@ const app = createApp({
         };
         
         // Actions
-        const downloadChapter = async (group) => {
+        const downloadChapter = async (group, forceLang = null) => {
             const title = currentTitle.value;
             if (!title) return;
-            
+
             const variants = Array.isArray(group?.variants) ? group.variants : [];
-            const selectedVariant = selectedLang.value
-                ? variants.find(v => v.language === selectedLang.value)
+            const langToUse = forceLang || selectedLang.value || null;
+            const selectedVariant = langToUse
+                ? variants.find(v => v.language === langToUse) || variants[0]
                 : null;
             const ch = selectedVariant || variants[0] || (Array.isArray(group) ? group[0] : group);
+            const resolvedLang = ch?.language || langToUse || null;
             const chapter = group?.chapter ?? ch?.chapter;
             const chapterId = ch?.id || null; // MangaDex ID may not exist for local chapters
             const mangaId = currentMdManga.value?.id || null;
@@ -535,6 +547,12 @@ const app = createApp({
                 return;
             }
             const taskId = getTaskKey(chapter, 'download', title);
+
+            // Track the language being downloaded for this chapter
+            if (resolvedLang) {
+                const chKey = normalizeChapter(chapter);
+                downloadedLang.value = { ...downloadedLang.value, [chKey]: resolvedLang };
+            }
             
             // Immediate UI update
             activeTasks.value = { ...activeTasks.value, [taskId]: { type: 'download', status: 'starting', progress: 0, total: 0, misses: 0, displayTitle: title, displayChapter: String(chapter) } };
@@ -705,7 +723,16 @@ const app = createApp({
             const title = currentTitle.value;
             if (!title) return;
             const chNum = normalizeChapter(chapter);
-            if (!window.confirm(`Borrar capítulo ${chNum} de "${title}"?\nSe eliminarán los archivos descargados.`)) return;
+            if (!window.confirm(`Borrar capítulo ${chNum} de "${title}"?\nSe eliminarán los archivos descargados y upscaleados.`)) return;
+
+            // Optimistic UI update — remove immediately before server confirms
+            const prevStatus = chapterStatus.value;
+            const newDownloaded = { ...chapterStatus.value.downloaded };
+            const newUpscaled = { ...chapterStatus.value.upscaled };
+            delete newDownloaded[chNum];
+            delete newUpscaled[chNum];
+            chapterStatus.value = { downloaded: newDownloaded, upscaled: newUpscaled };
+
             try {
                 const res = await fetch('/api/download/delete_chapter', {
                     method: 'POST',
@@ -715,11 +742,16 @@ const app = createApp({
                 const data = await res.json();
                 if (res.ok) {
                     showToast(`Capítulo ${chNum} eliminado`, 'success');
-                    loadChapters(title);
+                    loadChapters(title);  // sync server state
                 } else {
+                    // Revert optimistic update on failure
+                    chapterStatus.value = prevStatus;
                     showToast('Error: ' + (data.error || 'No se pudo eliminar'), 'error');
                 }
-            } catch (e) { showToast('Error: ' + e.message, 'error'); }
+            } catch (e) {
+                chapterStatus.value = prevStatus;
+                showToast('Error: ' + e.message, 'error');
+            }
         };
 
         // Init
@@ -736,11 +768,11 @@ const app = createApp({
             currentManga, currentMdManga, currentTitle, currentCover, currentCoverUrl,
             currentChapter, currentPage, pages, isZoomed, selectedLang, toast,
             stats, groupedChapters, filteredChapters, availableLangs, currentPageUrl, combinedLibrary,
-            getLangName, getLangFlag, openManga, openMdManga, openLibraryItem, closeModal, addToLibrary, removeLibraryItem,
+            getLangName, getLangFlag, getUniqueLangs, openManga, openMdManga, openLibraryItem, closeModal, addToLibrary, removeLibraryItem,
             isDownloaded, isUpscaled, getTask, getActiveTask, getProgressPercent,
             downloadChapter, upscaleChapter, readChapter, closeReader,
             nextPage, prevPage, toggleZoom, goToPage, onPageLoad, debouncedSearch,
-            isInLibrary, taskQueueExpanded, taskQueueList, deleteChapter,
+            isInLibrary, taskQueueExpanded, taskQueueList, deleteChapter, downloadedLang,
             handleCoverError: (e) => { e.target.style.display = 'none'; if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex'; }
         };
     }

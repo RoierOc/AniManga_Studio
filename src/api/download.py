@@ -343,20 +343,28 @@ def delete_chapter():
     data = request.get_json()
     title = data.get('title')
     chapter = data.get('chapter')
-    
+
     if not title or not chapter:
         return jsonify({'error': 'title and chapter required'}), 400
-    
-    try:
-        folder = Path(MANGA_DIR) / title
-        if not folder.exists():
-            return jsonify({'error': 'Carpeta no encontrada'}), 404
 
-        deleted = 0
+    try:
         ch_num = int(float(chapter))
-        for f in folder.glob(f"ch{ch_num:04d}_*"):
-            f.unlink()
-            deleted += 1
+        pattern = f"ch{ch_num:04d}_*"
+        deleted = 0
+
+        # Delete from downloaded folder
+        folder = Path(MANGA_DIR) / title
+        if folder.exists():
+            for f in folder.glob(pattern):
+                f.unlink()
+                deleted += 1
+
+        # Also delete from upscaled folder
+        upscaled_folder = Path(UPSCALED_DIR) / title
+        if upscaled_folder.exists():
+            for f in upscaled_folder.glob(pattern):
+                f.unlink()
+                deleted += 1
 
         if deleted > 0:
             return jsonify({'status': 'ok', 'deleted': deleted})

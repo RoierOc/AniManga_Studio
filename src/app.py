@@ -56,22 +56,23 @@ def serve_static(filename):
 
 @app.route('/uploads/<path:filename>')
 def serve_upload(filename):
-    for d in [MANGA_DIR, UPSCALED_DIR]:
+    # Prefer upscaled version when available; fall back to original
+    for d in [UPSCALED_DIR, MANGA_DIR]:
         path = Path(d) / filename
         if path.exists():
             return send_from_directory(path.parent, path.name)
-    
+
     parts = filename.split('/')
     if len(parts) >= 2:
         subfolder = parts[0]
         filename_only = '/'.join(parts[1:])
-        for d in [MANGA_DIR, UPSCALED_DIR]:
+        for d in [UPSCALED_DIR, MANGA_DIR]:
             search_path = Path(d) / subfolder
             if search_path.is_dir():
                 full_path = search_path / filename_only
                 if full_path.exists():
                     return send_from_directory(search_path, filename_only)
-    
+
     return 'Not found', 404
 
 if __name__ == '__main__':

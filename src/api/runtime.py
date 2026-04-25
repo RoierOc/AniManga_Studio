@@ -32,6 +32,12 @@ MODEL_PATH_4X = Path(
         str(DEFAULT_MODELS_DIR / "4x_IllustrationJaNai_V2standard_FDAT_M_52k.safetensors"),
     )
 ).expanduser()
+MODEL_PATH_EULA_4X = Path(
+    os.environ.get(
+        "MODEL_PATH_EULA_4X",
+        "/Manga_Upscaler_project/MODELS/4x-eula-digimanga-bw-v2-nc1.pth",
+    )
+).expanduser()
 
 PYTHON_EXECUTABLE = os.environ.get("PYTHON_EXECUTABLE", sys.executable)
 

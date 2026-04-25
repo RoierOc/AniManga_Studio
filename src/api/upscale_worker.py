@@ -14,25 +14,31 @@ SRC_DIR = CURRENT_DIR.parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from api.runtime import MODEL_PATH_4X
+from api.runtime import MODEL_PATH_EULA_4X
 
-ACTIVE_MODEL_PATH = MODEL_PATH_4X
+ACTIVE_MODEL_PATH = MODEL_PATH_EULA_4X
 UPSCALE_SCALE = 4
-TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "512"))
-TILE_OVERLAP = 32
+TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "896"))
+TILE_OVERLAP = 48
 
 
-def upscale_tiled(model, img_pil, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=UPSCALE_SCALE):
-    """Upscale img_pil in tiles to cap peak VRAM regardless of page size."""
+def upscale_tiled(model, img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=UPSCALE_SCALE):
+    """Upscale img_pil in tiles. Handles both grayscale (1ch) and RGB (3ch) models."""
     import torch
     from PIL import Image
 
-    img = img_pil.convert('RGB')
-    img_np = np.asarray(img, dtype=np.float32) / 255.0
-    h, w = img_np.shape[:2]
+    if in_channels == 1:
+        img = img_pil.convert('L')
+        img_np = np.asarray(img, dtype=np.float32) / 255.0
+        img_np = img_np[:, :, np.newaxis]  # (H, W, 1)
+    else:
+        img = img_pil.convert('RGB')
+        img_np = np.asarray(img, dtype=np.float32) / 255.0  # (H, W, 3)
+
+    h, w, c = img_np.shape
     oh, ow = h * scale, w * scale
 
-    out_sum = np.zeros((oh, ow, 3), dtype=np.float32)
+    out_sum = np.zeros((oh, ow, c), dtype=np.float32)
     out_wgt = np.zeros((oh, ow, 1), dtype=np.float32)
 
     stride = tile_size - overlap
@@ -55,12 +61,13 @@ def upscale_tiled(model, img_pil, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, sca
             th, tw = tile.shape[:2]
 
             if th < tile_size or tw < tile_size:
-                padded = np.zeros((tile_size, tile_size, 3), dtype=np.float32)
+                padded = np.zeros((tile_size, tile_size, c), dtype=np.float32)
                 padded[:th, :tw] = tile
                 tile_in = padded
             else:
                 tile_in = tile
 
+            # tile_in: (tile_size, tile_size, c) → (1, c, tile_size, tile_size)
             t = torch.from_numpy(tile_in).permute(2, 0, 1).unsqueeze(0)
             t = t.to(device='cuda', dtype=torch.float16, non_blocking=True)
             t = t.contiguous(memory_format=torch.channels_last)
@@ -68,7 +75,13 @@ def upscale_tiled(model, img_pil, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, sca
             with torch.inference_mode():
                 out_t = model(t)
 
-            out_tile = out_t.squeeze().permute(1, 2, 0).cpu().float().numpy()
+            # out_t: (1, c_out, th*scale, tw*scale)
+            out_squeezed = out_t.squeeze(0)  # (c_out, th*scale, tw*scale)
+            if out_squeezed.ndim == 2:
+                # single channel squeezed to 2D
+                out_tile = out_squeezed.cpu().float().numpy()[:, :, np.newaxis]
+            else:
+                out_tile = out_squeezed.permute(1, 2, 0).cpu().float().numpy()
             out_tile = out_tile[:th * scale, :tw * scale]
 
             fade = min(overlap * scale, th * scale // 2, tw * scale // 2)
@@ -87,8 +100,10 @@ def upscale_tiled(model, img_pil, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, sca
             out_wgt[oy0:oy1, ox0:ox1] += wgt[:, :, None]
 
     out_wgt = np.maximum(out_wgt, 1e-6)
-    result = np.clip(out_sum / out_wgt * 255, 0, 255).astype(np.uint8)
-    return Image.fromarray(result, 'RGB')
+    result_np = np.clip(out_sum / out_wgt * 255, 0, 255).astype(np.uint8)
+    if c == 1:
+        return Image.fromarray(result_np[:, :, 0], 'L')
+    return Image.fromarray(result_np, 'RGB')
 
 
 def main():
@@ -140,8 +155,9 @@ def main():
         print(f"DEBUG: Loading model {ACTIVE_MODEL_PATH.name}...", flush=True)
         model_desc = ModelLoader().load_from_file(str(ACTIVE_MODEL_PATH))
         model = model_desc.model.cuda().eval().half().to(memory_format=torch.channels_last)
+        in_channels = getattr(model_desc, 'input_channels', 3)
 
-        dummy = torch.randn(1, 3, 256, 256, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
+        dummy = torch.randn(1, in_channels, 256, 256, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
         with torch.inference_mode():
             _ = model(dummy)
         torch.cuda.synchronize()
@@ -175,10 +191,10 @@ def main():
                 })
 
                 img = Image.open(img_path)
-                out_pil = upscale_tiled(model, img)
+                out_pil = upscale_tiled(model, img, in_channels=in_channels)
 
                 out_path = output_folder / (img_path.stem + ".jpg")
-                out_pil.save(out_path, quality=95, optimize=True)
+                out_pil.save(out_path, quality=95, optimize=True, progressive=True)
                 processed += 1
 
                 print(f"DEBUG: Saved {out_path.name}", flush=True)

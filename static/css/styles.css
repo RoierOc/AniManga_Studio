@@ -2601,3 +2601,44 @@ body::before {
     color: white;
     margin-left: 6px;
 }
+
+/* ── Per-language download buttons (MangaDex-style) ── */
+.ch-lang-dl {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.ch-lang-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1.5px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.06);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  padding: 0;
+}
+
+.ch-lang-pill:hover {
+  background: rgba(97,132,211,0.25);
+  border-color: #6184d3;
+  transform: scale(1.12);
+}
+
+.ch-lang-flag {
+  pointer-events: none;
+}
+
+/* Language indicator inside status tags */
+.ch-tag-lang {
+  margin-left: 4px;
+  font-size: 13px;
+  opacity: 0.9;
+}

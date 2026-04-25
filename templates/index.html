@@ -232,15 +232,21 @@
             <!-- Actions -->
             <div class="ch-actions">
               <template v-if="isUpscaled(group.chapter)">
-                <span class="ch-tag ch-tag--upscaled">Upscaled</span>
+                <span class="ch-tag ch-tag--upscaled">
+                  4K
+                  <span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="ch-tag-lang">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span>
+                </span>
                 <button class="md-btn-sm" @click.stop="readChapter(group.chapter)">Leer</button>
                 <button class="ch-btn-trash" @click.stop="deleteChapter(group.chapter)" title="Borrar capítulo">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                 </button>
               </template>
               <template v-else-if="isDownloaded(group.chapter)">
-                <span class="ch-tag ch-tag--downloaded">Descargado</span>
-                <button v-if="!getTask(group.chapter,'upscale')" class="md-btn-sm md-btn-upscale" @click.stop="upscaleChapter(group.chapter)">Upscale</button>
+                <span class="ch-tag ch-tag--downloaded">
+                  ✓
+                  <span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="ch-tag-lang">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span>
+                </span>
+                <button v-if="!getTask(group.chapter,'upscale')" class="md-btn-sm md-btn-upscale" @click.stop="upscaleChapter(group.chapter)">4x</button>
                 <button class="md-btn-sm" @click.stop="readChapter(group.chapter)">Leer</button>
                 <button class="ch-btn-trash" @click.stop="deleteChapter(group.chapter)" title="Borrar capítulo">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
@@ -254,7 +260,16 @@
                 <button class="md-btn-sm" @click.stop="readChapter(group.chapter)">Leer</button>
               </template>
               <template v-else>
-                <button class="md-btn-sm" @click.stop="downloadChapter(group)">Descargar</button>
+                <!-- Per-language download buttons (MangaDex style) -->
+                <div class="ch-lang-dl" v-if="getUniqueLangs(group.variants).length > 1">
+                  <button v-for="v in getUniqueLangs(group.variants)" :key="v.language"
+                          class="ch-lang-pill"
+                          @click.stop="downloadChapter(group, v.language)"
+                          :title="'Descargar en ' + getLangName(v.language)">
+                    <span class="ch-lang-flag">{{ getLangFlag(v.language) }}</span>
+                  </button>
+                </div>
+                <button v-else class="md-btn-sm" @click.stop="downloadChapter(group)">Descargar</button>
               </template>
             </div>
 
@@ -329,6 +344,6 @@
   <div v-if="toast.show" class="md-toast" :class="toast.type">{{ toast.message }}</div>
 
 </div>
-<script src="/static/js/app.js?v=20260425-3"></script>
+<script src="/static/js/app.js?v=20260425-4"></script>
 </body>
 </html>
