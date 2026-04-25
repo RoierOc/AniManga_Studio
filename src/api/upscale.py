@@ -15,14 +15,15 @@ from decimal import Decimal, InvalidOperation
 from api.runtime import (
     MANGA_DIR,
     UPSCALED_DIR,
-    MODEL_PATH_2X,
+    MODEL_PATH_4X,
     PROJECT_ROOT,
     build_task_id,
     normalize_chapter,
 )
 
 upscale_status = {}
-REQUIRED_MODEL_2X_NAME = "2x_IllustrationJaNai_V2standard_FDAT_M_unshuffle_40k.safetensors"
+ACTIVE_MODEL_PATH = MODEL_PATH_4X
+UPSCALE_SCALE = 4
 
 TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "512"))
 TILE_OVERLAP = 32
@@ -32,11 +33,11 @@ _model_cache: dict = {}
 
 
 def _get_model():
-    """Load 2x model once and keep it cached in VRAM."""
+    """Load 4x model once and keep it cached in VRAM."""
     import torch
     from spandrel import ModelLoader
 
-    key = str(MODEL_PATH_2X)
+    key = str(ACTIVE_MODEL_PATH)
     if key not in _model_cache:
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
@@ -45,6 +46,7 @@ def _get_model():
         model_desc = ModelLoader().load_from_file(key)
         model = model_desc.model.cuda().eval().half().to(memory_format=torch.channels_last)
 
+        # Warmup: use 256px input (scales to 1024px output for 4x — minimal VRAM hit)
         dummy = torch.randn(1, 3, 256, 256, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
         with torch.inference_mode():
             _ = model(dummy)
@@ -55,7 +57,7 @@ def _get_model():
     return _model_cache[key]
 
 
-def _upscale_tiled(model, img_pil, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=2):
+def _upscale_tiled(model, img_pil, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=UPSCALE_SCALE):
     """Upscale img_pil in tiles to cap peak VRAM regardless of page size."""
     import torch
     from PIL import Image
@@ -204,18 +206,11 @@ def upscale_chapter():
         if not title or chapter is None:
             return jsonify({'status': 'error', 'message': 'title required'}), 400
 
-        if MODEL_PATH_2X.name != REQUIRED_MODEL_2X_NAME:
+        if not Path(ACTIVE_MODEL_PATH).exists():
             return jsonify({
                 'status': 'error',
-                'message': f'Modelo inválido configurado: {MODEL_PATH_2X.name}',
-                'required_model': REQUIRED_MODEL_2X_NAME,
-            }), 400
-        if not Path(MODEL_PATH_2X).exists():
-            return jsonify({
-                'status': 'error',
-                'message': 'Modelo 2x V2 no encontrado',
-                'required_model': REQUIRED_MODEL_2X_NAME,
-                'expected_path': str(MODEL_PATH_2X),
+                'message': f'Modelo 4x no encontrado: {ACTIVE_MODEL_PATH.name}',
+                'expected_path': str(ACTIVE_MODEL_PATH),
             }), 404
 
         from api.library import find_manga_folder
@@ -263,7 +258,8 @@ def upscale_chapter():
             'percent': 0,
             'title': actual_folder,
             'chapter': chapter_norm,
-            'model': MODEL_PATH_2X.name,
+            'model': ACTIVE_MODEL_PATH.name,
+            'scale': UPSCALE_SCALE,
         })
 
         threading.Thread(
@@ -314,12 +310,10 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id):
         import torch
         from PIL import Image
 
-        if MODEL_PATH_2X.name != REQUIRED_MODEL_2X_NAME:
-            raise RuntimeError(f'Modelo inválido configurado: {MODEL_PATH_2X.name}. Requerido: {REQUIRED_MODEL_2X_NAME}')
-        if not Path(MODEL_PATH_2X).exists():
-            raise FileNotFoundError(f'Modelo requerido no encontrado: {MODEL_PATH_2X}')
+        if not Path(ACTIVE_MODEL_PATH).exists():
+            raise FileNotFoundError(f'Modelo no encontrado: {ACTIVE_MODEL_PATH}')
         if not torch.cuda.is_available():
-            raise RuntimeError('CUDA no disponible. El upscale V2 requiere GPU NVIDIA.')
+            raise RuntimeError('CUDA no disponible. El upscale requiere GPU NVIDIA.')
 
         model = _get_model()
 
@@ -334,7 +328,8 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id):
                     'current': current,
                     'progress': current,
                     'total': total,
-                    'model': MODEL_PATH_2X.name,
+                    'model': ACTIVE_MODEL_PATH.name,
+                    'scale': UPSCALE_SCALE,
                 })
 
                 img = Image.open(img_path)
@@ -353,7 +348,8 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id):
                 'progress': processed,
                 'total': total,
                 'percent': 100,
-                'model': MODEL_PATH_2X.name,
+                'model': ACTIVE_MODEL_PATH.name,
+                'scale': UPSCALE_SCALE,
             })
         else:
             set_upscale_status(upscale_id, {
@@ -362,11 +358,11 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id):
                 'progress': processed,
                 'total': total,
                 'error': f'Upscale incompleto: {processed}/{total}',
-                'model': MODEL_PATH_2X.name,
+                'model': ACTIVE_MODEL_PATH.name,
             })
 
     except Exception as e:
-        set_upscale_status(upscale_id, {'status': 'error', 'error': str(e), 'model': MODEL_PATH_2X.name})
+        set_upscale_status(upscale_id, {'status': 'error', 'error': str(e), 'model': ACTIVE_MODEL_PATH.name})
 
 
 def run_upscale_all(input_folder, output_folder, images, upscale_id):
@@ -387,6 +383,8 @@ def run_upscale_all(input_folder, output_folder, images, upscale_id):
                     'current': processed + 1,
                     'progress': processed + 1,
                     'total': len(images),
+                    'model': ACTIVE_MODEL_PATH.name,
+                    'scale': UPSCALE_SCALE,
                 })
 
                 img = Image.open(img_path)
@@ -403,6 +401,8 @@ def run_upscale_all(input_folder, output_folder, images, upscale_id):
             'current': processed,
             'progress': processed,
             'total': len(images),
+            'model': ACTIVE_MODEL_PATH.name,
+            'scale': UPSCALE_SCALE,
         })
 
     except Exception as e:

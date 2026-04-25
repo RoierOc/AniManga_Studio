@@ -14,14 +14,15 @@ SRC_DIR = CURRENT_DIR.parent
 if str(SRC_DIR) not in sys.path:
     sys.path.insert(0, str(SRC_DIR))
 
-from api.runtime import MODEL_PATH_2X
+from api.runtime import MODEL_PATH_4X
 
-REQUIRED_MODEL_2X_NAME = "2x_IllustrationJaNai_V2standard_FDAT_M_unshuffle_40k.safetensors"
+ACTIVE_MODEL_PATH = MODEL_PATH_4X
+UPSCALE_SCALE = 4
 TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "512"))
 TILE_OVERLAP = 32
 
 
-def upscale_tiled(model, img_pil, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=2):
+def upscale_tiled(model, img_pil, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=UPSCALE_SCALE):
     """Upscale img_pil in tiles to cap peak VRAM regardless of page size."""
     import torch
     from PIL import Image
@@ -127,19 +128,17 @@ def main():
 
         print(f"DEBUG: PyTorch version: {torch.__version__}", flush=True)
 
-        if MODEL_PATH_2X.name != REQUIRED_MODEL_2X_NAME:
-            raise RuntimeError(f"Modelo inválido configurado: {MODEL_PATH_2X.name}. Requerido: {REQUIRED_MODEL_2X_NAME}")
-        if not Path(MODEL_PATH_2X).exists():
-            raise FileNotFoundError(f"Modelo requerido no encontrado: {MODEL_PATH_2X}")
+        if not Path(ACTIVE_MODEL_PATH).exists():
+            raise FileNotFoundError(f"Modelo no encontrado: {ACTIVE_MODEL_PATH}")
         if not torch.cuda.is_available():
-            raise RuntimeError("CUDA no disponible. El upscale V2 requiere GPU NVIDIA.")
+            raise RuntimeError("CUDA no disponible. El upscale requiere GPU NVIDIA.")
 
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.set_float32_matmul_precision('high')
 
-        print(f"DEBUG: Loading model...", flush=True)
-        model_desc = ModelLoader().load_from_file(str(MODEL_PATH_2X))
+        print(f"DEBUG: Loading model {ACTIVE_MODEL_PATH.name}...", flush=True)
+        model_desc = ModelLoader().load_from_file(str(ACTIVE_MODEL_PATH))
         model = model_desc.model.cuda().eval().half().to(memory_format=torch.channels_last)
 
         dummy = torch.randn(1, 3, 256, 256, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
@@ -157,7 +156,7 @@ def main():
             'progress': 0,
             'total': total,
             'percent': 0,
-            'model': MODEL_PATH_2X.name,
+            'model': ACTIVE_MODEL_PATH.name,
         })
 
         for img_path in image_paths:
@@ -172,7 +171,7 @@ def main():
                     'progress': current,
                     'total': total,
                     'percent': percent,
-                    'model': MODEL_PATH_2X.name,
+                    'model': ACTIVE_MODEL_PATH.name,
                 })
 
                 img = Image.open(img_path)
@@ -193,7 +192,7 @@ def main():
                 'progress': processed,
                 'total': total,
                 'percent': 100,
-                'model': MODEL_PATH_2X.name,
+                'model': ACTIVE_MODEL_PATH.name,
             })
         else:
             percent = round((processed * 100.0) / total, 2) if total else 0
@@ -203,14 +202,14 @@ def main():
                 'progress': processed,
                 'total': total,
                 'percent': percent,
-                'model': MODEL_PATH_2X.name,
+                'model': ACTIVE_MODEL_PATH.name,
             })
 
         print(f"DEBUG: Complete - {processed} images processed", flush=True)
 
     except Exception as e:
         print(f"ERROR: {e}", flush=True)
-        write_status({'status': 'error', 'error': str(e), 'model': MODEL_PATH_2X.name})
+        write_status({'status': 'error', 'error': str(e), 'model': ACTIVE_MODEL_PATH.name})
         import traceback
         traceback.print_exc()
 
