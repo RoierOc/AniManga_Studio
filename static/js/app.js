@@ -772,7 +772,7 @@ const app = createApp({
             isDownloaded, isUpscaled, getTask, getActiveTask, getProgressPercent,
             downloadChapter, upscaleChapter, readChapter, closeReader,
             nextPage, prevPage, toggleZoom, goToPage, onPageLoad, debouncedSearch,
-            isInLibrary, taskQueueExpanded, taskQueueList, deleteChapter, downloadedLang,
+            isInLibrary, taskQueueExpanded, taskQueueList, deleteChapter, downloadedLang, normalizeChapter,
             handleCoverError: (e) => { e.target.style.display = 'none'; if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex'; }
         };
     }
