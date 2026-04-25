@@ -18,8 +18,8 @@ from api.runtime import MODEL_PATH_EULA_4X
 
 ACTIVE_MODEL_PATH = MODEL_PATH_EULA_4X
 UPSCALE_SCALE = 4
-TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "896"))
-TILE_OVERLAP = 48
+TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "384"))
+TILE_OVERLAP = 24
 
 
 def upscale_tiled(model, img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=UPSCALE_SCALE):

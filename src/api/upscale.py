@@ -25,8 +25,8 @@ upscale_status = {}
 ACTIVE_MODEL_PATH = MODEL_PATH_EULA_4X
 UPSCALE_SCALE = 4
 
-TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "896"))
-TILE_OVERLAP = 48
+TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "384"))
+TILE_OVERLAP = 24
 
 # Singleton: keeps the model in VRAM between chapter calls
 _model_cache: dict = {}
