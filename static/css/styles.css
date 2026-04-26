@@ -3392,3 +3392,91 @@ body::before {
   text-align: center;
   padding: 4px;
 }
+/* ── Sources / Suwayomi ───────────────────────────────────────────────────── */
+.source-online-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #4caf50;
+  margin-left: 5px;
+  vertical-align: middle;
+}
+.sources-offline-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 32px;
+  margin: 40px auto;
+  max-width: 540px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.sources-offline-banner h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+  color: var(--text-primary);
+}
+.sources-offline-banner p {
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.sources-offline-banner code {
+  display: inline-block;
+  padding: 4px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--accent);
+  font-family: monospace;
+}
+.sources-search-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.sources-selector {
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  min-width: 180px;
+  cursor: pointer;
+}
+.sources-selector:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.sources-search-input {
+  flex: 1;
+  min-width: 200px;
+  padding: 8px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.sources-search-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.sources-search-input:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.source-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: rgba(97, 132, 211, 0.2);
+  color: var(--accent);
+  border-radius: 10px;
+  font-weight: 500;
+}

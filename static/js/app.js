@@ -62,6 +62,16 @@ const app = createApp({
         const exportUploadedCoverB64 = ref('');
         const exportUploadedCoverUrl = ref('');
         
+        // Sources / Suwayomi
+        const sources = ref([]);
+        const activeSource = ref(null);
+        const sourceQuery = ref('');
+        const sourceResults = ref([]);
+        const sourcesLoading = ref(false);
+        const suwayomiOnline = ref(false);
+        const sourceHasNextPage = ref(false);
+        const currentSourceContext = ref(null); // non-null when modal opened from sources view
+
         // Search debounce
         let searchTimeout = null;
 
@@ -369,6 +379,7 @@ const app = createApp({
             selectedLang.value = '';
             currentManga.value = null;
             currentMdManga.value = null;
+            currentSourceContext.value = null;
         };
         
         // Add to local library
@@ -554,6 +565,7 @@ const app = createApp({
         
         // Actions
         const downloadChapter = async (group, forceLang = null) => {
+            if (currentSourceContext.value) { await _downloadFromSource(group); return; }
             const title = currentTitle.value;
             if (!title) return;
 
@@ -920,12 +932,141 @@ const app = createApp({
             }
         };
 
+        // ── Sources (Suwayomi) ──────────────────────────────────────────────────
+
+        const checkSuwayomi = async () => {
+            try {
+                const res = await fetch('/api/sources/health');
+                const data = await res.json();
+                suwayomiOnline.value = data.online;
+                if (data.online && sources.value.length === 0) await loadSources();
+            } catch (e) {
+                suwayomiOnline.value = false;
+            }
+        };
+
+        const loadSources = async () => {
+            try {
+                const res = await fetch('/api/sources/list');
+                if (res.ok) sources.value = await res.json();
+            } catch (e) {}
+        };
+
+        const searchSources = async () => {
+            if (!activeSource.value || !sourceQuery.value.trim()) return;
+            sourcesLoading.value = true;
+            sourceResults.value = [];
+            try {
+                const params = new URLSearchParams({
+                    source: activeSource.value.id,
+                    q: sourceQuery.value.trim(),
+                    page: 1,
+                });
+                const res = await fetch(`/api/sources/search?${params}`);
+                if (!res.ok) throw new Error(res.statusText);
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                sourceResults.value = data.results || [];
+                sourceHasNextPage.value = data.hasNextPage || false;
+            } catch (e) {
+                showToast('Error buscando: ' + e.message, 'error');
+            } finally {
+                sourcesLoading.value = false;
+            }
+        };
+
+        const openSourceManga = async (manga) => {
+            currentTitle.value = manga.title;
+            currentCover.value = manga.thumbnailUrl || null;
+            currentMdManga.value = { id: manga.id, title: manga.title, cover: manga.thumbnailUrl };
+            currentManga.value = null;
+            currentSourceContext.value = { sourceId: activeSource.value?.id, mangaId: manga.id };
+            mdChapters.value = [];
+            chapters.value = [];
+            chapterStatus.value = { downloaded: {}, upscaled: {} };
+            exportSelectedChapters.value = [];
+            currentModalTab.value = 'chapters';
+            showModal.value = true;
+
+            try {
+                const res = await fetch(`/api/sources/manga/${manga.id}/chapters`);
+                if (!res.ok) throw new Error(res.statusText);
+                const raw = await res.json();
+                if (raw.error) throw new Error(raw.error);
+                mdChapters.value = raw.map(ch => ({
+                    id: 'suw_' + ch.id,
+                    suwayomiId: ch.id,
+                    chapter: String(ch.chapterNumber ?? '0').replace(/\.0$/, ''),
+                    title: ch.name || '',
+                    language: activeSource.value?.lang || 'und',
+                    scanlator: ch.scanlator || '',
+                    pageCount: ch.pageCount || 0,
+                }));
+                // Sync local download/upscale status
+                const statusRes = await fetch('/api/library/' + encodeURIComponent(manga.title)).catch(() => null);
+                if (statusRes?.ok) {
+                    const d = await statusRes.json().catch(() => ({}));
+                    if (d.chapters?.length) {
+                        const dl = {};
+                        for (const c of d.chapters) { if (c.page_count > 0) dl[normalizeChapter(c.chapter)] = true; }
+                        const up = {};
+                        for (const key of Object.keys(d.upscaled || {})) { up[normalizeChapter(key)] = Boolean(d.upscaled[key]); }
+                        chapterStatus.value = { downloaded: dl, upscaled: up };
+                    }
+                }
+            } catch (e) {
+                showToast('Error cargando capítulos: ' + e.message, 'error');
+            }
+        };
+
+        const _downloadFromSource = async (group) => {
+            const title = currentTitle.value;
+            const chapter = group?.chapter;
+            if (!chapter || !title) return;
+            const chapterNorm = normalizeChapter(chapter);
+
+            const variant = group.variants?.find(v => v.suwayomiId) || group.variants?.[0];
+            const suwayomiId = variant?.suwayomiId;
+            if (!suwayomiId) { showToast('No se encontró el ID del capítulo en la fuente', 'error'); return; }
+
+            const taskId = getTaskKey(chapter, 'download', title);
+            activeTasks.value = { ...activeTasks.value, [taskId]: { type: 'download', status: 'starting', progress: 0, total: 0, misses: 0, displayTitle: title, displayChapter: String(chapter) } };
+            showToast(`Descargando capítulo ${chapter} desde fuente...`, 'info');
+
+            try {
+                const pagesRes = await fetch(`/api/sources/chapter/${suwayomiId}/pages`);
+                if (!pagesRes.ok) throw new Error('No se obtuvieron las páginas de la fuente');
+                const pagesData = await pagesRes.json();
+
+                const dlRes = await fetch('/api/download/download_source_chapter', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, chapter: chapterNorm, pageUrls: pagesData.pages }),
+                });
+                const dlData = await dlRes.json();
+                if (dlData.error) throw new Error(dlData.error);
+
+                const realId = dlData.task_id || taskId;
+                if (realId !== taskId && activeTasks.value[taskId]) {
+                    const next = { ...activeTasks.value };
+                    const cur = next[taskId];
+                    delete next[taskId];
+                    next[realId] = { ...cur, taskId: realId };
+                    activeTasks.value = next;
+                }
+            } catch (e) {
+                showToast('Error: ' + e.message, 'error');
+                activeTasks.value = { ...activeTasks.value, [taskId]: { ...activeTasks.value[taskId], status: 'error' } };
+            }
+        };
+
         // Init
         onMounted(() => {
             loadLibrary();
             loadLocalLibrary();
             loadMdLibrary();
             pollTasks();
+            checkSuwayomi();
             document.addEventListener('keydown', handleKeydown);
         });
         return {
@@ -946,7 +1087,9 @@ const app = createApp({
             exportCoverMode, exportColorPages, exportColorPagesLoading,
             exportSelectedCover, exportUploadedCoverUrl,
             setCoverMode, onCoverUpload,
-            handleCoverError: (e) => { e.target.style.display = 'none'; if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex'; }
+            handleCoverError: (e) => { e.target.style.display = 'none'; if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex'; },
+            sources, activeSource, sourceQuery, sourceResults, sourcesLoading, suwayomiOnline, sourceHasNextPage, currentSourceContext,
+            checkSuwayomi, loadSources, searchSources, openSourceManga,
         };
     }
 });

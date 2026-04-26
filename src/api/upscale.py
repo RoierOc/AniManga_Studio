@@ -27,9 +27,9 @@ UPSCALE_SCALE = 4
 COLOR_DIFF_THRESHOLD = int(os.environ.get("COLOR_DIFF_THRESHOLD", "15"))
 COLOR_PIXEL_FRACTION = float(os.environ.get("COLOR_PIXEL_FRACTION", "0.10"))
 
-TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "512"))
-TILE_OVERLAP = int(os.environ.get("UPSCALE_TILE_OVERLAP", "32"))
-GPU_BATCH_SIZE = int(os.environ.get("GPU_BATCH_SIZE", "4"))
+TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "384"))
+TILE_OVERLAP = int(os.environ.get("UPSCALE_TILE_OVERLAP", "24"))
+GPU_BATCH_SIZE = int(os.environ.get("GPU_BATCH_SIZE", "8"))
 
 
 def is_color_page(img_pil, threshold=COLOR_DIFF_THRESHOLD, min_fraction=COLOR_PIXEL_FRACTION):
@@ -103,16 +103,16 @@ def _gpu_worker_loop():
         torch.cuda.synchronize()
         del dummy
 
-        # torch.compile — reduces kernel launch overhead, same math = same quality
+        # torch.compile default: kernel fusion without CUDA graphs — avoids per-batch-size
+        # VRAM pre-allocation that reduce-overhead causes (~4 GB extra on 12 GB cards).
         try:
-            model = torch.compile(model, mode='reduce-overhead')
+            model = torch.compile(model, mode='default')
             dummy = torch.randn(1, in_channels, TILE_SIZE, TILE_SIZE, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
             with torch.inference_mode():
-                for _ in range(3):
-                    _ = model(dummy)
+                _ = model(dummy)
             torch.cuda.synchronize()
             del dummy
-            print("GPU worker: torch.compile activo", flush=True)
+            print("GPU worker: torch.compile activo (mode=default)", flush=True)
         except Exception as ce:
             print(f"GPU worker: torch.compile omitido ({type(ce).__name__})", flush=True)
 
@@ -192,7 +192,9 @@ def _submit_tile(tile_tensor):
 # ── Tiled upscale ────────────────────────────────────────────────────────────
 
 def _upscale_tiled(img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=UPSCALE_SCALE):
-    """Upscale img_pil in tiles via the shared GPU worker queue."""
+    """Upscale img_pil via the shared GPU worker queue.
+    Phase 1: submit ALL tiles at once (non-blocking) so the worker can fill full batches.
+    Phase 2: collect results and reconstruct the image."""
     import torch
     from PIL import Image
 
@@ -204,10 +206,6 @@ def _upscale_tiled(img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVE
 
     h, w, c = img_np.shape
     oh, ow = h * scale, w * scale
-
-    out_sum = np.zeros((oh, ow, c), dtype=np.float32)
-    out_wgt = np.zeros((oh, ow, 1), dtype=np.float32)
-
     stride = tile_size - overlap
 
     def make_starts(length):
@@ -217,6 +215,11 @@ def _upscale_tiled(img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVE
             starts.append(last)
         return starts
 
+    # Phase 1 — enqueue every tile before waiting on any result.
+    # With the old blocking .result() call, only 1 tile was ever in the queue at a time
+    # so GPU_BATCH_SIZE was effectively 1. Submitting all tiles up-front lets the worker
+    # drain the queue in full batches without waiting on Python round-trips.
+    tile_meta = []
     for y0 in make_starts(h):
         for x0 in make_starts(w):
             y0c = max(0, min(y0, h - 1))
@@ -236,31 +239,36 @@ def _upscale_tiled(img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVE
             t = torch.from_numpy(tile_in).permute(2, 0, 1).unsqueeze(0)
             t = t.to(device='cuda', dtype=torch.float16, non_blocking=True)
             t = t.contiguous(memory_format=torch.channels_last)
+            tile_meta.append((y0c, x0c, y1, x1, th, tw, _submit_tile(t)))
 
-            # Submit to GPU worker and wait for result
-            out_t = _submit_tile(t).result()
+    # Phase 2 — collect results in submission order and reconstruct.
+    out_sum = np.zeros((oh, ow, c), dtype=np.float32)
+    out_wgt = np.zeros((oh, ow, 1), dtype=np.float32)
 
-            out_squeezed = out_t.squeeze(0)
-            if out_squeezed.ndim == 2:
-                out_tile = out_squeezed.cpu().float().numpy()[:, :, np.newaxis]
-            else:
-                out_tile = out_squeezed.permute(1, 2, 0).cpu().float().numpy()
-            out_tile = out_tile[:th * scale, :tw * scale]
+    for y0c, x0c, y1, x1, th, tw, fut in tile_meta:
+        out_t = fut.result()
 
-            fade = min(overlap * scale, th * scale // 2, tw * scale // 2)
-            wgt = np.ones((th * scale, tw * scale), dtype=np.float32)
-            if fade > 1:
-                if y0c > 0:
-                    ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
-                    wgt[:fade, :] *= ramp[:, None]
-                if x0c > 0:
-                    ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
-                    wgt[:, :fade] *= ramp[None, :]
+        out_squeezed = out_t.squeeze(0)
+        if out_squeezed.ndim == 2:
+            out_tile = out_squeezed.cpu().float().numpy()[:, :, np.newaxis]
+        else:
+            out_tile = out_squeezed.permute(1, 2, 0).cpu().float().numpy()
+        out_tile = out_tile[:th * scale, :tw * scale]
 
-            oy0, ox0 = y0c * scale, x0c * scale
-            oy1, ox1 = y1 * scale, x1 * scale
-            out_sum[oy0:oy1, ox0:ox1] += out_tile * wgt[:, :, None]
-            out_wgt[oy0:oy1, ox0:ox1] += wgt[:, :, None]
+        fade = min(overlap * scale, th * scale // 2, tw * scale // 2)
+        wgt = np.ones((th * scale, tw * scale), dtype=np.float32)
+        if fade > 1:
+            if y0c > 0:
+                ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+                wgt[:fade, :] *= ramp[:, None]
+            if x0c > 0:
+                ramp = np.linspace(0.0, 1.0, fade, dtype=np.float32)
+                wgt[:, :fade] *= ramp[None, :]
+
+        oy0, ox0 = y0c * scale, x0c * scale
+        oy1, ox1 = y1 * scale, x1 * scale
+        out_sum[oy0:oy1, ox0:ox1] += out_tile * wgt[:, :, None]
+        out_wgt[oy0:oy1, ox0:ox1] += wgt[:, :, None]
 
     out_wgt = np.maximum(out_wgt, 1e-6)
     result_np = np.clip(out_sum / out_wgt * 255, 0, 255).astype(np.uint8)
@@ -488,7 +496,7 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id):
 
                 out_pil = _upscale_tiled(img, in_channels=in_channels)
                 out_path = output_folder / (img_path.stem + ".jpg")
-                out_pil.save(out_path, quality=95, optimize=True, progressive=True)
+                out_pil.save(out_path, quality=95)
                 processed += 1
             except Exception as e:
                 print(f"Error: {img_path}: {e}", flush=True)

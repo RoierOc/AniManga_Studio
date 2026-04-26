@@ -18,8 +18,8 @@ from api.runtime import MODEL_PATH_EULA_4X
 
 ACTIVE_MODEL_PATH = MODEL_PATH_EULA_4X
 UPSCALE_SCALE = 4
-TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "512"))
-TILE_OVERLAP = int(os.environ.get("UPSCALE_TILE_OVERLAP", "32"))
+TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "384"))
+TILE_OVERLAP = int(os.environ.get("UPSCALE_TILE_OVERLAP", "24"))
 COLOR_DIFF_THRESHOLD = int(os.environ.get("COLOR_DIFF_THRESHOLD", "15"))
 COLOR_PIXEL_FRACTION = float(os.environ.get("COLOR_PIXEL_FRACTION", "0.10"))
 
@@ -177,14 +177,13 @@ def main():
 
         # torch.compile: reduce kernel launch overhead (same output quality)
         try:
-            model = torch.compile(model, mode='reduce-overhead')
+            model = torch.compile(model, mode='default')
             dummy = torch.randn(1, in_channels, TILE_SIZE, TILE_SIZE, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
             with torch.inference_mode():
-                for _ in range(3):
-                    _ = model(dummy)
+                _ = model(dummy)
             torch.cuda.synchronize()
             del dummy
-            print("torch.compile activo", flush=True)
+            print("torch.compile activo (mode=default)", flush=True)
         except Exception as ce:
             print(f"torch.compile omitido ({type(ce).__name__})", flush=True)
 
@@ -225,7 +224,7 @@ def main():
 
                 out_pil = upscale_tiled(model, img, in_channels=in_channels)
                 out_path = output_folder / (img_path.stem + ".jpg")
-                out_pil.save(out_path, quality=95, optimize=True, progressive=True)
+                out_pil.save(out_path, quality=95)
                 processed += 1
 
                 print(f"DEBUG: Saved {out_path.name}", flush=True)

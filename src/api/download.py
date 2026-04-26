@@ -405,6 +405,104 @@ def delete_manga():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@download_bp.route('/download_source_chapter', methods=['POST'])
+def download_source_chapter():
+    """Download a chapter from an external source (Suwayomi page URLs)."""
+    data = request.get_json(silent=True) or {}
+    title = (data.get('title') or '').strip()
+    chapter = data.get('chapter')
+    page_urls = data.get('pageUrls') or []
+
+    if not title or chapter is None:
+        return jsonify({'error': 'title and chapter required'}), 400
+    if not page_urls:
+        return jsonify({'error': 'pageUrls required'}), 400
+
+    chapter_norm = normalize_chapter(chapter)
+    download_id = build_task_id(title, chapter_norm, 'download')
+
+    set_download_status(download_id, {
+        'status': 'downloading',
+        'title': title,
+        'chapter': chapter_norm,
+        'progress': 0,
+        'total': len(page_urls),
+        'source': 'external',
+    })
+
+    threading.Thread(
+        target=_run_source_download,
+        args=(download_id, title, chapter_norm, page_urls),
+        daemon=True,
+    ).start()
+
+    return jsonify({
+        'status': 'started',
+        'chapter': chapter_norm,
+        'total': len(page_urls),
+        'task_id': download_id,
+    })
+
+
+def _run_source_download(download_id, title, chapter_norm, page_urls):
+    folder = Path(MANGA_DIR) / title
+    folder.mkdir(parents=True, exist_ok=True)
+    prefix = _chapter_file_prefix(chapter_norm)
+    downloaded = 0
+    total = len(page_urls)
+
+    try:
+        for i, url in enumerate(page_urls, 1):
+            set_download_status(download_id, {
+                'status': 'downloading',
+                'title': title,
+                'chapter': chapter_norm,
+                'progress': i,
+                'total': total,
+                'source': 'external',
+            })
+            try:
+                r = http_requests.get(url, timeout=30)
+                if r.status_code == 200:
+                    # Infer extension from Content-Type or URL
+                    ct = r.headers.get('Content-Type', '')
+                    if 'png' in ct:
+                        ext = 'png'
+                    elif 'webp' in ct:
+                        ext = 'webp'
+                    else:
+                        ext = url.split('?')[0].rsplit('.', 1)[-1].lower()
+                        if ext not in ('jpg', 'jpeg', 'png', 'webp'):
+                            ext = 'jpg'
+                    filename = f"{prefix}_{i:03d}.{ext}"
+                    with open(folder / filename, 'wb') as f:
+                        f.write(r.content)
+                    downloaded += 1
+            except Exception as e:
+                print(f"Error downloading page {i}: {e}", flush=True)
+            time.sleep(0.1)
+
+        if downloaded > 0:
+            set_download_status(download_id, {
+                'status': 'complete',
+                'title': title,
+                'chapter': chapter_norm,
+                'pages': downloaded,
+                'progress': total,
+                'total': total,
+                'source': 'external',
+            })
+        else:
+            set_download_status(download_id, {
+                'status': 'error',
+                'message': 'No se pudo descargar ninguna página',
+                'title': title,
+                'chapter': chapter_norm,
+            })
+    except Exception as e:
+        set_download_status(download_id, {'status': 'error', 'message': str(e)})
+
+
 def run_download(download_id, manga_id, title, max_chapters):
     try:
         chapters_by_num = {}
