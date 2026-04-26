@@ -53,6 +53,8 @@ const app = createApp({
         let exportPreviewTimer = null;
 
         // Cover state
+        const exportQuality = ref(85);           // JPEG quality for CBZ re-encoding
+
         const exportCoverMode = ref('none');   // 'none' | 'chapter' | 'upload'
         const exportColorPages = ref([]);
         const exportColorPagesLoading = ref(false);
@@ -847,7 +849,7 @@ const app = createApp({
                     const res = await fetch('/api/export/preview', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ title: currentTitle.value, chapters: exportSelectedChapters.value })
+                        body: JSON.stringify({ title: currentTitle.value, chapters: exportSelectedChapters.value, quality: exportQuality.value })
                     });
                     if (res.ok) exportPreview.value = await res.json();
                 } catch (e) {}
@@ -891,6 +893,7 @@ const app = createApp({
                         chapters: exportSelectedChapters.value,
                         volume_name: exportVolumeName.value || currentTitle.value,
                         format: fmt,
+                        quality: exportQuality.value,
                         ...coverPayload,
                     })
                 });
@@ -937,7 +940,7 @@ const app = createApp({
             nextPage, prevPage, toggleZoom, goToPage, onPageLoad, debouncedSearch,
             isInLibrary, taskQueueExpanded, taskQueueList, deleteChapter, downloadedLang, normalizeChapter,
             currentModalTab, openTomoTab,
-            exportVolumeName, exportFormat, exportSelectedChapters, exportBusy, exportPreview,
+            exportVolumeName, exportFormat, exportQuality, exportSelectedChapters, exportBusy, exportPreview,
             selectAllExportChapters, selectUpscaledExportChapters,
             downloadTomo, scheduleExportPreview,
             exportCoverMode, exportColorPages, exportColorPagesLoading,

@@ -3006,6 +3006,9 @@ body::before {
 
 .tomo-fmt-toggle { display: flex; gap: 3px; }
 
+.tomo-quality-toggle { display: flex; align-items: center; gap: 3px; }
+.tomo-quality-label { font-size: 11px; color: var(--text-muted); margin-right: 2px; }
+
 .tomo-fmt-btn {
   padding: 6px 12px;
   border-radius: var(--radius-sm);
@@ -3202,6 +3205,7 @@ body::before {
 .tomo-est-detail { font-size: 12px; color: var(--text-muted); }
 .tomo-est-4k { color: var(--accent-hover); font-weight: 600; }
 .tomo-est-hint { font-size: 12px; color: var(--text-muted); }
+.tomo-est-raw { font-size: 11px; color: var(--text-muted); opacity: 0.6; }
 
 .tomo-dl-btn {
   display: inline-flex;

@@ -290,12 +290,18 @@
       <!-- ── Crear Tomo tab ── -->
       <div v-else-if="currentModalTab === 'tomo'" class="tomo-builder">
 
-        <!-- Controls: name + format -->
+        <!-- Controls: name + format + quality -->
         <div class="tomo-controls">
           <input class="tomo-name-input" v-model="exportVolumeName" placeholder="Nombre del tomo..." maxlength="80">
           <div class="tomo-fmt-toggle">
             <button :class="['tomo-fmt-btn', exportFormat==='cbz'?'active':'']" @click="exportFormat='cbz'">CBZ</button>
             <button :class="['tomo-fmt-btn', exportFormat==='cbr'?'active':'']" @click="exportFormat='cbr'">CBR</button>
+          </div>
+          <div class="tomo-quality-toggle" title="Calidad JPEG de exportación">
+            <span class="tomo-quality-label">Cal.</span>
+            <button v-for="q in [80,85,90]" :key="q"
+                    :class="['tomo-fmt-btn', exportQuality===q?'active':'']"
+                    @click="exportQuality=q; scheduleExportPreview()">{{ q }}</button>
           </div>
         </div>
 
@@ -468,8 +474,15 @@
             <template v-if="exportSelectedChapters.length > 0">
               <span class="tomo-est-main">{{ exportSelectedChapters.length }} cap.</span>
               <span v-if="exportPreview.pages > 0" class="tomo-est-detail">
-                &nbsp;· {{ exportPreview.pages }} págs · ~{{ exportPreview.size_mb }} MB
-                <span v-if="exportPreview.upscaled_pages > 0" class="tomo-est-4k">&nbsp;({{ exportPreview.upscaled_pages }} 4K)</span>
+                &nbsp;· {{ exportPreview.pages }} págs
+                <template v-if="exportPreview.est_mb > 0">
+                  &nbsp;· ~{{ exportPreview.est_mb }} MB
+                  <span class="tomo-est-raw">(bruto {{ exportPreview.size_mb }} MB)</span>
+                </template>
+                <template v-else>
+                  &nbsp;· ~{{ exportPreview.size_mb }} MB
+                </template>
+                <span v-if="exportPreview.upscaled_pages > 0" class="tomo-est-4k">&nbsp;· {{ exportPreview.upscaled_pages }} 4K</span>
               </span>
             </template>
             <span v-else class="tomo-est-hint">Selecciona capítulos para exportar</span>
