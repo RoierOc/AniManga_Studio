@@ -126,8 +126,11 @@ def get_download_status(task_id=None):
 def _chapter_file_prefix(chapter):
     chapter_norm = normalize_chapter(chapter)
     try:
-        chapter_int = int(Decimal(chapter_norm))
-        return f"ch{chapter_int:04d}"
+        value = Decimal(chapter_norm)
+        int_part = int(value.to_integral_value(rounding='ROUND_FLOOR'))
+        if '.' in chapter_norm:
+            return f"ch{int_part:04d}.{chapter_norm.split('.')[-1]}"
+        return f"ch{int_part:04d}"
     except (InvalidOperation, ValueError):
         return f"ch{chapter_norm}"
 
@@ -348,8 +351,8 @@ def delete_chapter():
         return jsonify({'error': 'title and chapter required'}), 400
 
     try:
-        ch_num = int(float(chapter))
-        pattern = f"ch{ch_num:04d}_*"
+        prefix = _chapter_file_prefix(chapter)
+        pattern = f"{prefix}_*"
         deleted = 0
 
         # Delete from downloaded folder

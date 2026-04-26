@@ -18,8 +18,8 @@ from api.runtime import MODEL_PATH_EULA_4X
 
 ACTIVE_MODEL_PATH = MODEL_PATH_EULA_4X
 UPSCALE_SCALE = 4
-TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "384"))
-TILE_OVERLAP = 24
+TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "512"))
+TILE_OVERLAP = int(os.environ.get("UPSCALE_TILE_OVERLAP", "32"))
 COLOR_DIFF_THRESHOLD = int(os.environ.get("COLOR_DIFF_THRESHOLD", "15"))
 COLOR_PIXEL_FRACTION = float(os.environ.get("COLOR_PIXEL_FRACTION", "0.10"))
 
@@ -169,11 +169,24 @@ def main():
         model = model_desc.model.cuda().eval().half().to(memory_format=torch.channels_last)
         in_channels = getattr(model_desc, 'input_channels', 3)
 
-        dummy = torch.randn(1, in_channels, 256, 256, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
+        dummy = torch.randn(1, in_channels, TILE_SIZE, TILE_SIZE, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
         with torch.inference_mode():
             _ = model(dummy)
         torch.cuda.synchronize()
         del dummy
+
+        # torch.compile: reduce kernel launch overhead (same output quality)
+        try:
+            model = torch.compile(model, mode='reduce-overhead')
+            dummy = torch.randn(1, in_channels, TILE_SIZE, TILE_SIZE, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
+            with torch.inference_mode():
+                for _ in range(3):
+                    _ = model(dummy)
+            torch.cuda.synchronize()
+            del dummy
+            print("torch.compile activo", flush=True)
+        except Exception as ce:
+            print(f"torch.compile omitido ({type(ce).__name__})", flush=True)
 
         processed = 0
         skipped_color = 0

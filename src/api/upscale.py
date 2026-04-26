@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """
-Upscale API - Upscale manga images using MangaJaNai models
+Upscale API - single GPU worker thread with tile batching.
 """
 
 from flask import Blueprint, jsonify, request
 from pathlib import Path
 import threading
+import queue
 import json
 import os
 import numpy as np
-import sys
 from decimal import Decimal, InvalidOperation
 
 from api.runtime import (
     MANGA_DIR,
     UPSCALED_DIR,
     MODEL_PATH_EULA_4X,
-    PROJECT_ROOT,
     build_task_id,
     normalize_chapter,
 )
@@ -28,10 +27,13 @@ UPSCALE_SCALE = 4
 COLOR_DIFF_THRESHOLD = int(os.environ.get("COLOR_DIFF_THRESHOLD", "15"))
 COLOR_PIXEL_FRACTION = float(os.environ.get("COLOR_PIXEL_FRACTION", "0.10"))
 
+TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "512"))
+TILE_OVERLAP = int(os.environ.get("UPSCALE_TILE_OVERLAP", "32"))
+GPU_BATCH_SIZE = int(os.environ.get("GPU_BATCH_SIZE", "4"))
+
 
 def is_color_page(img_pil, threshold=COLOR_DIFF_THRESHOLD, min_fraction=COLOR_PIXEL_FRACTION):
-    """Returns True if image has significant non-grayscale content.
-    Uses a thumbnail for speed (< 5ms). Skips color pages during upscaling."""
+    """Returns True if image has significant non-grayscale content."""
     thumb = img_pil.copy()
     thumb.thumbnail((256, 256))
     arr = np.asarray(thumb.convert('RGB'), dtype=np.int16)
@@ -39,51 +41,166 @@ def is_color_page(img_pil, threshold=COLOR_DIFF_THRESHOLD, min_fraction=COLOR_PI
     max_diff = np.maximum(np.maximum(np.abs(r - g), np.abs(r - b)), np.abs(g - b))
     return float(np.mean(max_diff > threshold)) > min_fraction
 
-TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "384"))
-TILE_OVERLAP = 24
 
-# Singleton: keeps the model in VRAM between chapter calls
-_model_cache: dict = {}
+# ── GPU worker ──────────────────────────────────────────────────────────────
+
+class _TileFuture:
+    """Lightweight future for getting a GPU tile result back to a chapter thread."""
+    def __init__(self):
+        self._event = threading.Event()
+        self._result = None
+        self._exc = None
+
+    def set_result(self, r):
+        self._result = r
+        self._event.set()
+
+    def set_exception(self, e):
+        self._exc = e
+        self._event.set()
+
+    def result(self, timeout=120):
+        if not self._event.wait(timeout):
+            raise TimeoutError("GPU tile timed out after 120s")
+        if self._exc:
+            raise self._exc
+        return self._result
 
 
-def _get_model():
-    """Load model once and keep it cached in VRAM. Returns (model, in_channels)."""
+_gpu_queue: queue.Queue = queue.Queue()
+_gpu_worker_thread = None
+_gpu_worker_lock = threading.Lock()
+_gpu_worker_ready = threading.Event()
+_gpu_worker_error: list = [None]
+_gpu_in_channels: list = [1]   # updated by worker on startup
+
+
+def _gpu_worker_loop():
+    """Single daemon thread: owns CUDA context, processes tile batches."""
     import torch
     from spandrel import ModelLoader
 
-    key = str(ACTIVE_MODEL_PATH)
-    if key not in _model_cache:
+    try:
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA no disponible. El upscale requiere GPU NVIDIA.")
+        if not Path(ACTIVE_MODEL_PATH).exists():
+            raise FileNotFoundError(f"Modelo no encontrado: {ACTIVE_MODEL_PATH}")
+
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.set_float32_matmul_precision('high')
 
-        model_desc = ModelLoader().load_from_file(key)
+        print(f"GPU worker: cargando {Path(ACTIVE_MODEL_PATH).name}...", flush=True)
+        model_desc = ModelLoader().load_from_file(str(ACTIVE_MODEL_PATH))
         model = model_desc.model.cuda().eval().half().to(memory_format=torch.channels_last)
         in_channels = getattr(model_desc, 'input_channels', 3)
+        _gpu_in_channels[0] = in_channels
 
-        # Warmup with correct channel count
-        dummy = torch.randn(1, in_channels, 256, 256, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
+        # Warmup pass (cuDNN algorithm selection)
+        dummy = torch.randn(1, in_channels, TILE_SIZE, TILE_SIZE, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
         with torch.inference_mode():
             _ = model(dummy)
         torch.cuda.synchronize()
         del dummy
 
-        _model_cache[key] = (model, in_channels)
-    return _model_cache[key]
+        # torch.compile — reduces kernel launch overhead, same math = same quality
+        try:
+            model = torch.compile(model, mode='reduce-overhead')
+            dummy = torch.randn(1, in_channels, TILE_SIZE, TILE_SIZE, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
+            with torch.inference_mode():
+                for _ in range(3):
+                    _ = model(dummy)
+            torch.cuda.synchronize()
+            del dummy
+            print("GPU worker: torch.compile activo", flush=True)
+        except Exception as ce:
+            print(f"GPU worker: torch.compile omitido ({type(ce).__name__})", flush=True)
+
+        _gpu_worker_ready.set()
+        print(f"GPU worker listo — tile={TILE_SIZE}px, overlap={TILE_OVERLAP}px, batch={GPU_BATCH_SIZE}", flush=True)
+
+        # ── Main loop: drain queue in batches ──
+        while True:
+            pending = []
+
+            # Block for first item
+            try:
+                item = _gpu_queue.get(timeout=5.0)
+                if item is None:
+                    break
+                pending.append(item)
+            except queue.Empty:
+                continue
+
+            # Drain up to GPU_BATCH_SIZE-1 more without blocking
+            while len(pending) < GPU_BATCH_SIZE:
+                try:
+                    pending.append(_gpu_queue.get_nowait())
+                except queue.Empty:
+                    break
+
+            try:
+                batch = torch.cat([p[0] for p in pending], dim=0)
+                with torch.inference_mode():
+                    out = model(batch)
+                for i, (_, fut) in enumerate(pending):
+                    fut.set_result(out[i:i + 1].clone())
+            except Exception as e:
+                for _, fut in pending:
+                    fut.set_exception(e)
+            finally:
+                for _ in pending:
+                    _gpu_queue.task_done()
+
+    except Exception as startup_err:
+        _gpu_worker_error[0] = startup_err
+        _gpu_worker_ready.set()
+        # Drain pending queue so chapter threads don't hang
+        while True:
+            try:
+                item = _gpu_queue.get_nowait()
+                if item:
+                    item[1].set_exception(startup_err)
+                _gpu_queue.task_done()
+            except queue.Empty:
+                break
 
 
-def _upscale_tiled(model, img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=UPSCALE_SCALE):
-    """Upscale img_pil in tiles. Handles both grayscale (1ch) and RGB (3ch) models."""
+def _ensure_gpu_worker():
+    """Start GPU worker if not alive and wait until model is loaded."""
+    global _gpu_worker_thread
+    with _gpu_worker_lock:
+        if _gpu_worker_thread is None or not _gpu_worker_thread.is_alive():
+            _gpu_worker_error[0] = None
+            _gpu_worker_ready.clear()
+            _gpu_worker_thread = threading.Thread(
+                target=_gpu_worker_loop, daemon=True, name="gpu-worker"
+            )
+            _gpu_worker_thread.start()
+    _gpu_worker_ready.wait(timeout=120)
+    if _gpu_worker_error[0]:
+        raise _gpu_worker_error[0]
+
+
+def _submit_tile(tile_tensor):
+    """Submit a CUDA tile tensor to the GPU worker; returns a _TileFuture."""
+    fut = _TileFuture()
+    _gpu_queue.put((tile_tensor, fut))
+    return fut
+
+
+# ── Tiled upscale ────────────────────────────────────────────────────────────
+
+def _upscale_tiled(img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=UPSCALE_SCALE):
+    """Upscale img_pil in tiles via the shared GPU worker queue."""
     import torch
     from PIL import Image
 
     if in_channels == 1:
-        img = img_pil.convert('L')
-        img_np = np.asarray(img, dtype=np.float32) / 255.0
-        img_np = img_np[:, :, np.newaxis]  # (H, W, 1)
+        img_np = np.asarray(img_pil.convert('L'), dtype=np.float32) / 255.0
+        img_np = img_np[:, :, np.newaxis]
     else:
-        img = img_pil.convert('RGB')
-        img_np = np.asarray(img, dtype=np.float32) / 255.0  # (H, W, 3)
+        img_np = np.asarray(img_pil.convert('RGB'), dtype=np.float32) / 255.0
 
     h, w, c = img_np.shape
     oh, ow = h * scale, w * scale
@@ -106,10 +223,9 @@ def _upscale_tiled(model, img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=T
             x0c = max(0, min(x0, w - 1))
             y1 = min(y0c + tile_size, h)
             x1 = min(x0c + tile_size, w)
+            th, tw = y1 - y0c, x1 - x0c
 
             tile = img_np[y0c:y1, x0c:x1]
-            th, tw = tile.shape[:2]
-
             if th < tile_size or tw < tile_size:
                 padded = np.zeros((tile_size, tile_size, c), dtype=np.float32)
                 padded[:th, :tw] = tile
@@ -117,18 +233,15 @@ def _upscale_tiled(model, img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=T
             else:
                 tile_in = tile
 
-            # tile_in: (tile_size, tile_size, c) → (1, c, tile_size, tile_size)
             t = torch.from_numpy(tile_in).permute(2, 0, 1).unsqueeze(0)
             t = t.to(device='cuda', dtype=torch.float16, non_blocking=True)
             t = t.contiguous(memory_format=torch.channels_last)
 
-            with torch.inference_mode():
-                out_t = model(t)
+            # Submit to GPU worker and wait for result
+            out_t = _submit_tile(t).result()
 
-            # out_t: (1, c_out, th*scale, tw*scale)
-            out_squeezed = out_t.squeeze(0)  # (c_out, th*scale, tw*scale)
+            out_squeezed = out_t.squeeze(0)
             if out_squeezed.ndim == 2:
-                # single channel squeezed to 2D
                 out_tile = out_squeezed.cpu().float().numpy()[:, :, np.newaxis]
             else:
                 out_tile = out_squeezed.permute(1, 2, 0).cpu().float().numpy()
@@ -155,6 +268,8 @@ def _upscale_tiled(model, img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=T
         return Image.fromarray(result_np[:, :, 0], 'L')
     return Image.fromarray(result_np, 'RGB')
 
+
+# ── Status helpers ────────────────────────────────────────────────────────────
 
 def set_upscale_status(task_id, status):
     payload = dict(status)
@@ -184,8 +299,7 @@ def _read_status_file(task_id):
         try:
             with open(status_file, encoding='utf-8') as f:
                 data = json.load(f)
-                if 'task_id' not in data:
-                    data['task_id'] = task_id
+                data.setdefault('task_id', task_id)
                 return data
         except Exception:
             continue
@@ -212,6 +326,8 @@ def get_upscale_status(task_id=None):
         return live or {'status': 'not_found', 'task_id': task_id}
     return upscale_status.copy()
 
+
+# ── Blueprint routes ──────────────────────────────────────────────────────────
 
 upscale_bp = Blueprint('upscale', __name__)
 
@@ -254,8 +370,12 @@ def upscale_chapter():
 
         chapter_norm = normalize_chapter(chapter)
         try:
-            chapter_int = int(Decimal(chapter_norm))
-            ch_prefix = f"ch{chapter_int:04d}_"
+            value = Decimal(chapter_norm)
+            int_part = int(value.to_integral_value(rounding='ROUND_FLOOR'))
+            if '.' in chapter_norm:
+                ch_prefix = f"ch{int_part:04d}.{chapter_norm.split('.')[-1]}_"
+            else:
+                ch_prefix = f"ch{int_part:04d}_"
         except (InvalidOperation, ValueError):
             ch_prefix = f"ch{chapter_norm}_"
 
@@ -335,29 +455,25 @@ def upscale_manga():
     return jsonify({'status': 'started', 'total': total, 'upscale_id': upscale_id})
 
 
+# ── Worker threads (chapter threads submit tiles to GPU worker) ───────────────
+
 def run_upscale_chapter(input_folder, output_folder, images, upscale_id):
     try:
-        import torch
         from PIL import Image
 
-        if not Path(ACTIVE_MODEL_PATH).exists():
-            raise FileNotFoundError(f'Modelo no encontrado: {ACTIVE_MODEL_PATH}')
-        if not torch.cuda.is_available():
-            raise RuntimeError('CUDA no disponible. El upscale requiere GPU NVIDIA.')
-
-        model, in_channels = _get_model()
+        _ensure_gpu_worker()
+        in_channels = _gpu_in_channels[0]
 
         processed = 0
+        skipped_color = 0
         total = len(images)
 
-        skipped_color = 0
         for img_path in images:
             try:
-                current = processed + 1
                 set_upscale_status(upscale_id, {
                     'status': 'upscaling',
-                    'current': current,
-                    'progress': current,
+                    'current': processed + 1,
+                    'progress': processed + 1,
                     'total': total,
                     'model': ACTIVE_MODEL_PATH.name,
                     'scale': UPSCALE_SCALE,
@@ -365,17 +481,17 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id):
 
                 img = Image.open(img_path)
                 if is_color_page(img):
-                    print(f"Skip color page: {img_path.name}")
+                    print(f"Skip color: {img_path.name}", flush=True)
                     skipped_color += 1
                     processed += 1
                     continue
 
-                out_pil = _upscale_tiled(model, img, in_channels=in_channels)
+                out_pil = _upscale_tiled(img, in_channels=in_channels)
                 out_path = output_folder / (img_path.stem + ".jpg")
                 out_pil.save(out_path, quality=95, optimize=True, progressive=True)
                 processed += 1
             except Exception as e:
-                print(f"Error: {img_path}: {e}")
+                print(f"Error: {img_path}: {e}", flush=True)
 
         if processed == total:
             set_upscale_status(upscale_id, {
@@ -405,13 +521,10 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id):
 
 def run_upscale_all(input_folder, output_folder, images, upscale_id):
     try:
-        import torch
         from PIL import Image
 
-        if not torch.cuda.is_available():
-            raise RuntimeError('CUDA no disponible.')
-
-        model, in_channels = _get_model()
+        _ensure_gpu_worker()
+        in_channels = _gpu_in_channels[0]
         processed = 0
 
         for img_path in images:
@@ -426,13 +539,16 @@ def run_upscale_all(input_folder, output_folder, images, upscale_id):
                 })
 
                 img = Image.open(img_path)
-                out_pil = _upscale_tiled(model, img, in_channels=in_channels)
+                if is_color_page(img):
+                    processed += 1
+                    continue
 
+                out_pil = _upscale_tiled(img, in_channels=in_channels)
                 out_path = output_folder / (img_path.stem + ".jpg")
                 out_pil.save(out_path, quality=95, optimize=True, progressive=True)
                 processed += 1
             except Exception as e:
-                print(f"Error: {e}")
+                print(f"Error: {e}", flush=True)
 
         set_upscale_status(upscale_id, {
             'status': 'complete',

@@ -249,7 +249,7 @@
             <div class="ch-actions">
               <template v-if="isUpscaled(group.chapter)">
                 <span class="ch-tag ch-tag--upscaled">4K<span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="ch-tag-lang">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span></span>
-                <button class="md-btn-sm" @click.stop="readChapter(group.chapter)">Leer</button>
+                <button class="md-btn-sm md-btn-4k" @click.stop="readChapterUpscaled(group.chapter)">Leer 4K</button>
                 <button class="ch-btn-trash" @click.stop="deleteChapter(group.chapter)" title="Borrar">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                 </button>
@@ -257,7 +257,10 @@
               <template v-else-if="isDownloaded(group.chapter)">
                 <span class="ch-tag ch-tag--downloaded">✓<span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="ch-tag-lang">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span></span>
                 <button v-if="!getTask(group.chapter,'upscale')" class="md-btn-sm md-btn-upscale" @click.stop="upscaleChapter(group.chapter)">4x</button>
-                <button class="md-btn-sm" @click.stop="readChapter(group.chapter)">Leer</button>
+                <button class="md-btn-sm"
+                        :disabled="!!getTask(group.chapter,'upscale')"
+                        :title="getTask(group.chapter,'upscale') ? 'Espera a que termine el upscale' : 'Leer original'"
+                        @click.stop="readChapterOriginal(group.chapter)">Leer</button>
                 <button class="ch-btn-trash" @click.stop="deleteChapter(group.chapter)" title="Borrar">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                 </button>
@@ -267,7 +270,6 @@
               </template>
               <template v-else-if="getTask(group.chapter,'upscale')">
                 <span class="ch-tag ch-tag--loading">Upscaleando...</span>
-                <button class="md-btn-sm" @click.stop="readChapter(group.chapter)">Leer</button>
               </template>
               <template v-else>
                 <div class="ch-lang-dl" v-if="getUniqueLangs(group.variants).length > 1">

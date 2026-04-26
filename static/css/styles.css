@@ -2168,6 +2168,23 @@ body::before {
     background: rgba(139, 92, 246, 0.25);
 }
 
+.md-btn-4k {
+    background: rgba(99, 132, 211, 0.15);
+    border-color: #6184d3;
+    color: #93b4f5;
+    font-weight: 700;
+}
+
+.md-btn-4k:hover {
+    background: rgba(99, 132, 211, 0.28);
+}
+
+.md-btn-sm:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
 .md-reader {
     position: fixed;
     top: 0;

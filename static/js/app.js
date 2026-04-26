@@ -641,19 +641,22 @@ const app = createApp({
             }
 };
         
-        const readChapter = (ch) => {
+        const readChapter = (ch, source = 'auto') => {
             const title = currentTitle.value;
             if (!title) return;
             currentChapter.value = ch;
             fetch('/api/reader/read_chapter', {
                 method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title, chapter: ch })
+                body: JSON.stringify({ title, chapter: ch, source })
             }).then(r => r.json()).then(d => {
                 pages.value = d.pages || [];
                 currentPage.value = 0;
             });
             showReader.value = true;
         };
+
+        const readChapterOriginal = (ch) => readChapter(ch, 'original');
+        const readChapterUpscaled = (ch) => readChapter(ch, 'upscaled');
         
         // Reader
         const closeReader = () => { showReader.value = false; pages.value = []; isZoomed.value = false; };
@@ -930,7 +933,7 @@ const app = createApp({
             stats, groupedChapters, filteredChapters, availableLangs, currentPageUrl, combinedLibrary,
             getLangName, getLangFlag, getUniqueLangs, openManga, openMdManga, openLibraryItem, closeModal, addToLibrary, removeLibraryItem,
             isDownloaded, isUpscaled, getTask, getActiveTask, getProgressPercent,
-            downloadChapter, upscaleChapter, readChapter, closeReader,
+            downloadChapter, upscaleChapter, readChapter, readChapterOriginal, readChapterUpscaled, closeReader,
             nextPage, prevPage, toggleZoom, goToPage, onPageLoad, debouncedSearch,
             isInLibrary, taskQueueExpanded, taskQueueList, deleteChapter, downloadedLang, normalizeChapter,
             currentModalTab, openTomoTab,
