@@ -37,6 +37,16 @@ def get_library():
                         chapters.add(parts[0])
                 chapters_count = len(chapters)
             
+            source_meta = None
+            meta_path = f / '.source_meta.json'
+            if meta_path.exists():
+                try:
+                    source_meta = json.loads(meta_path.read_text())
+                except Exception:
+                    pass
+
+            cover = source_meta.get('thumbnailUrl') if source_meta else None
+
             folders.append({
                 'id': f.name,
                 'name': f.name,
@@ -44,7 +54,8 @@ def get_library():
                 'image_count': len(images),
                 'page_count': sum(1 for img in images if img.suffix in ('.jpg', '.png', '.webp')),
                 'upscaled': len(upscaled),
-                'cover': None
+                'cover': cover,
+                'source_meta': source_meta,
             })
     
     folders.sort(key=lambda x: x['name'].lower())

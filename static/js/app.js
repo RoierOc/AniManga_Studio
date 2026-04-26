@@ -62,6 +62,74 @@ const app = createApp({
         const exportUploadedCoverB64 = ref('');
         const exportUploadedCoverUrl = ref('');
         
+        // Google Drive
+        const driveConfigured = ref(false);
+        const driveConnected = ref(false);
+        const driveEmail = ref('');
+        const driveUploading = ref(false);
+        const driveUploadResult = ref(null); // { name, link } after successful upload
+
+        const checkDrive = async () => {
+            try {
+                const r = await fetch('/api/drive/status');
+                const d = await r.json();
+                driveConfigured.value = d.configured;
+                driveConnected.value = d.connected;
+                driveEmail.value = d.email || '';
+            } catch (_) {}
+        };
+
+        const connectDrive = async () => {
+            try {
+                const r = await fetch('/api/drive/auth');
+                const d = await r.json();
+                if (d.error) { showToast(d.error, 'error'); return; }
+                window.open(d.auth_url, '_blank', 'width=500,height=650');
+                // Poll for connection
+                let tries = 0;
+                const poll = setInterval(async () => {
+                    await checkDrive();
+                    if (driveConnected.value || ++tries > 30) clearInterval(poll);
+                }, 2000);
+            } catch (e) { showToast('Error conectando Drive', 'error'); }
+        };
+
+        const disconnectDrive = async () => {
+            await fetch('/api/drive/disconnect', { method: 'POST' });
+            driveConnected.value = false;
+            driveEmail.value = '';
+        };
+
+        const uploadToDrive = async () => {
+            if (!driveConnected.value) { connectDrive(); return; }
+            driveUploading.value = true;
+            driveUploadResult.value = null;
+            try {
+                const payload = {
+                    title: currentTitle.value,
+                    chapters: exportSelectedChapters.value,
+                    volume_name: exportVolumeName.value || currentTitle.value,
+                    format: exportFormat.value,
+                    quality: exportQuality.value,
+                    cover_path: exportSelectedCover.value?.path || '',
+                    cover_data: exportUploadedCoverB64.value || '',
+                };
+                const r = await fetch('/api/drive/upload_tomo', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                const d = await r.json();
+                if (d.error) { showToast('Error subiendo: ' + d.error, 'error'); return; }
+                driveUploadResult.value = { name: d.name, link: d.link };
+                showToast(`"${d.name}" subido a Google Drive`, 'success');
+            } catch (e) {
+                showToast('Error subiendo a Drive', 'error');
+            } finally {
+                driveUploading.value = false;
+            }
+        };
+
         // Sources / Suwayomi
         const sources = ref([]);
         const activeSource = ref(null);
@@ -120,59 +188,55 @@ const app = createApp({
         });
 
         const combinedLibrary = computed(() => {
-            const byKey = new Map();
             const output = [];
 
+            // Local downloaded manga — split MangaDex vs Mihon by source_meta
             for (const manga of library.value || []) {
                 if (!manga) continue;
                 const title = (manga.name || manga.title || '').trim();
                 if (!title) continue;
-                const key = canonicalTitle(title) || String(manga.id || title).toLowerCase();
+                const isMihon = !!(manga.source_meta?.sourceId);
                 const card = {
-                    key: `local:${manga.id || title}`,
+                    key: isMihon ? `mihon:${title}` : `local:${manga.id || title}`,
                     title,
+                    source: isMihon ? 'mihon' : 'local',
+                    source_meta: manga.source_meta || null,
                     cover: manga.cachedCover || manga.cover || null,
                     chapter_count: manga.chapter_count || manga.page_count || 0,
                     upscaled: Number(manga.upscaled || 0),
                     downloaded: true,
                     localManga: manga,
-                    mdManga: null
+                    mdManga: null,
                 };
-                byKey.set(key, card);
                 output.push(card);
             }
 
+            // MangaDex followed (not yet downloaded) — never merge with Mihon entries
+            const localKeys = new Set(output.map(c => canonicalTitle(c.title) + ':' + c.source));
             for (const manga of localLibrary.value || []) {
                 if (!manga) continue;
                 const title = (manga.title || manga.name || '').trim();
                 if (!title) continue;
-                const key = canonicalTitle(title) || String(manga.id || title).toLowerCase();
-                const mdManga = {
-                    id: manga.id,
-                    title,
-                    cover: manga.cover || null,
-                    status: manga.status || 'Guardado'
-                };
-
-                const existing = byKey.get(key);
+                const ck = canonicalTitle(title) + ':local';
+                // Merge cover into existing local entry if titles match and it's not Mihon
+                const existing = output.find(c => c.source !== 'mihon' && canonicalTitle(c.title) === canonicalTitle(title));
                 if (existing) {
-                    if (!existing.cover && mdManga.cover) existing.cover = mdManga.cover;
-                    if (!existing.mdManga && mdManga.id) existing.mdManga = mdManga;
+                    if (!existing.cover && manga.cover) existing.cover = manga.cover;
+                    if (!existing.mdManga && manga.id) existing.mdManga = { id: manga.id, title, cover: manga.cover, status: manga.status };
                     continue;
                 }
-
-                const card = {
+                if (localKeys.has(ck)) continue;
+                output.push({
                     key: `saved:${manga.id || title}`,
                     title,
-                    cover: mdManga.cover,
+                    source: 'mangadex',
+                    cover: manga.cover || null,
                     chapter_count: 0,
                     upscaled: 0,
                     downloaded: false,
                     localManga: null,
-                    mdManga
-                };
-                byKey.set(key, card);
-                output.push(card);
+                    mdManga: { id: manga.id, title, cover: manga.cover, status: manga.status || 'Guardado' },
+                });
             }
 
             output.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
@@ -247,23 +311,62 @@ const app = createApp({
             });
         };
         
-        // Load covers from MangaDex
+        // Load covers from MangaDex — skip Mihon manga (they come from a different source)
         const loadCoverForManga = async (manga) => {
             if (manga.cachedCover) return manga.cachedCover;
+            // For Suwayomi/Mihon manga use the stored thumbnail URL (no MangaDex lookup)
+            if (manga.source_meta?.sourceId) {
+                // Use stored thumbnail if available
+                if (manga.source_meta.thumbnailUrl || manga.cover) {
+                    const thumb = manga.source_meta.thumbnailUrl || manga.cover;
+                    manga.cachedCover = thumb;
+                    return thumb;
+                }
+                // No stored thumbnail — fetch from Suwayomi and cache it
+                if (manga.source_meta.mangaId) {
+                    try {
+                        const r = await fetch(`/api/sources/manga/${manga.source_meta.mangaId}`);
+                        if (r.ok) {
+                            const d = await r.json();
+                            if (d.thumbnailUrl) {
+                                manga.cachedCover = d.thumbnailUrl;
+                                // Persist thumbnail into source_meta for next time
+                                fetch('/api/sources/save_to_library', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({
+                                        title: manga.name || manga.title,
+                                        sourceId: manga.source_meta.sourceId,
+                                        mangaId: manga.source_meta.mangaId,
+                                        thumbnailUrl: d.thumbnailUrl,
+                                        onlyIfExists: true,
+                                    }),
+                                }).catch(() => {});
+                                const idx = library.value.findIndex(m => m.id === manga.id);
+                                if (idx >= 0) {
+                                    library.value = [...library.value];
+                                    library.value[idx].cachedCover = d.thumbnailUrl;
+                                }
+                                return d.thumbnailUrl;
+                            }
+                        }
+                    } catch (e) {}
+                }
+                return null;
+            }
             try {
                 const searchRes = await fetch('/api/mangadex/search?q=' + encodeURIComponent(manga.name));
                 const searchData = await searchRes.json();
                 if (searchData?.[0]?.cover) {
                     manga.cachedCover = searchData[0].cover;
                     const idx = library.value.findIndex(m => m.id === manga.id);
-                    // Force reactivity update
                     if (idx >= 0) {
                         library.value = [...library.value];
                         library.value[idx].cachedCover = searchData[0].cover;
                     }
                 }
-            } catch (e) { 
-                console.log('Error loading cover for', manga.name, e.message); 
+            } catch (e) {
+                console.log('Error loading cover for', manga.name, e.message);
             }
             return manga.cachedCover;
         };
@@ -304,7 +407,10 @@ const app = createApp({
         };
         
         // Open local manga
-        const openManga = async (manga) => {
+        // options.skipMangaDexLookup — when true, never fall through to MangaDex search
+        // options.forcedSourceMeta   — source_meta from the library card (may be newer than API response)
+        // options.pairedMdManga      — MangaDex entry paired with this local manga (for the link button only)
+        const openManga = async (manga, { skipMangaDexLookup = false, forcedSourceMeta = null, pairedMdManga = null } = {}) => {
             currentManga.value = manga;
             currentMdManga.value = null;
             currentTitle.value = manga.name || manga.title;
@@ -327,12 +433,19 @@ const app = createApp({
                 for (const key of Object.keys(d.upscaled || {})) { up[normalizeChapter(key)] = Boolean(d.upscaled[key]); }
                 chapterStatus.value = { downloaded: dl, upscaled: up };
 
+                // Use forcedSourceMeta from the card (covers old downloads without .source_meta.json)
+                const sourceMeta = forcedSourceMeta || d.source_meta;
+
                 // If manga was downloaded from a Suwayomi source, load the full chapter list from there
-                if (d.source_meta?.sourceId && d.source_meta?.mangaId) {
-                    currentSourceContext.value = { sourceId: d.source_meta.sourceId, mangaId: d.source_meta.mangaId };
+                if (sourceMeta?.sourceId && sourceMeta?.mangaId) {
+                    currentSourceContext.value = { sourceId: sourceMeta.sourceId, mangaId: sourceMeta.mangaId };
+                    // Load cover and chapters in parallel
+                    const [, chRes] = await Promise.all([
+                        loadCoverForManga(manga).then(c => { currentCover.value = c || manga.cachedCover || manga.cover || null; }),
+                        fetch(`/api/sources/manga/${sourceMeta.mangaId}/chapters`).catch(() => null),
+                    ]);
                     try {
-                        const chRes = await fetch(`/api/sources/manga/${d.source_meta.mangaId}/chapters`);
-                        if (chRes.ok) {
+                        if (chRes?.ok) {
                             const raw = await chRes.json();
                             if (Array.isArray(raw) && !raw.error) {
                                 mdChapters.value = raw.map(ch => ({
@@ -351,10 +464,23 @@ const app = createApp({
                 }
             }
 
+            // Stop here — show only local chapters. For non-Mihon local downloads
+            // that have a paired MangaDex entry, still set currentMdManga so the
+            // MangaDex link button is available without loading the chapter list.
+            if (skipMangaDexLookup) {
+                const cover = await loadCoverForManga(manga);
+                currentCover.value = cover || manga.cover;
+                if (!forcedSourceMeta?.sourceId && pairedMdManga?.id) {
+                    currentMdManga.value = pairedMdManga;
+                    if (!currentCover.value && pairedMdManga.cover) currentCover.value = pairedMdManga.cover;
+                }
+                return;
+            }
+
             const cover = await loadCoverForManga(manga);
             currentCover.value = cover || manga.cover;
 
-            // No source meta — try MangaDex for the full chapter list
+            // No source meta and MangaDex lookup allowed — try MangaDex for the full chapter list
             const titleHint = title;
             try {
                 const res = await fetch('/api/mangadex/search?q=' + encodeURIComponent(titleHint));
@@ -405,7 +531,15 @@ const app = createApp({
         const openLibraryItem = (item) => {
             if (!item) return;
             if (item.localManga) {
-                openManga(item.localManga);
+                // Any locally-downloaded manga shows its local chapters; never fall through
+                // to MangaDex search. MangaDex metadata (cover, link) can still be shown
+                // via item.mdManga without loading an unrelated chapter list.
+                openManga(item.localManga, {
+                    skipMangaDexLookup: true,
+                    forcedSourceMeta: item.source_meta || null,
+                    // Pass mdManga so the modal can show a MangaDex link if available
+                    pairedMdManga: item.mdManga || null,
+                });
                 return;
             }
             if (item.mdManga) {
@@ -431,7 +565,61 @@ const app = createApp({
 
             if (!manga) manga = currentMdManga.value || currentManga.value;
 
-            // If the current manga doesn't have MangaDex id (local entry), resolve it by title.
+            // ── Mihon / Suwayomi source ───────────────────────────────────────────
+            // If the modal was opened from a Mihon source, save as a Mihon library entry
+            // (write .source_meta.json) instead of going through MangaDex.
+            if (currentSourceContext.value?.sourceId && currentSourceContext.value?.mangaId) {
+                const title = (manga?.title || manga?.name || currentTitle.value || '').trim();
+                if (!title) { showToast('No hay manga seleccionado', 'error'); return; }
+
+                // Already in library as Mihon entry?
+                const norm = canonicalTitle(title);
+                if (library.value.some(m => canonicalTitle(m.name || m.title || '') === norm && m.source_meta?.sourceId)) {
+                    showToast('Ya está en biblioteca', 'info');
+                    return;
+                }
+
+                showToast('Añadiendo a biblioteca...', 'info');
+                try {
+                    const thumbnailUrl = currentCover.value || null;
+                    const res = await fetch('/api/sources/save_to_library', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            title,
+                            sourceId: currentSourceContext.value.sourceId,
+                            mangaId: currentSourceContext.value.mangaId,
+                            thumbnailUrl,
+                        }),
+                    });
+                    const payload = await res.json();
+                    if (!res.ok) { showToast('Error: ' + (payload?.error || 'Unknown'), 'error'); return; }
+
+                    showToast('Añadido a biblioteca (Mihon)', 'success');
+                    // Add to in-memory library immediately so the card shows up right away
+                    if (!library.value.some(m => canonicalTitle(m.name || m.title || '') === norm)) {
+                        library.value = [...library.value, {
+                            id: title, name: title, title,
+                            chapter_count: 0, upscaled: 0,
+                            cover: thumbnailUrl,
+                            source_meta: {
+                                sourceId: String(currentSourceContext.value.sourceId),
+                                mangaId: currentSourceContext.value.mangaId,
+                                title,
+                                thumbnailUrl,
+                            },
+                            cachedCover: thumbnailUrl,
+                        }];
+                    }
+                    loadLibrary();
+                } catch (e) {
+                    showToast('Error: ' + e.message, 'error');
+                }
+                return;
+            }
+
+            // ── MangaDex flow ─────────────────────────────────────────────────────
+            // If the manga doesn't have a MangaDex id, try to resolve it by title.
             if (!manga?.id) {
                 const titleHint = (manga?.title || manga?.name || currentTitle.value || '').trim();
                 if (!titleHint) {
@@ -453,7 +641,6 @@ const app = createApp({
                     const partial = candidates.find(c => canonicalTitle(c?.title).includes(target) || target.includes(canonicalTitle(c?.title)));
                     manga = exact || partial || candidates[0];
 
-                    // Keep modal context consistent once resolved.
                     currentMdManga.value = manga;
                     if (!currentCover.value && manga?.cover) currentCover.value = manga.cover;
                 } catch (e) {
@@ -467,14 +654,13 @@ const app = createApp({
                 showToast('No se pudo resolver ID de manga', 'error');
                 return;
             }
-            
-            // Check if already in library  
+
             const alreadyIn = localLibrary.value.some(m => String(m?.id || m?.mangaId || '') === mangaId);
             if (alreadyIn) {
                 showToast('Ya está en biblioteca', 'info');
                 return;
             }
-            
+
             showToast('Añadiendo...', 'info');
             try {
                 const res = await fetch('/api/mangadex/local_library/add', {
@@ -491,11 +677,8 @@ const app = createApp({
                         localLibrary.value = [...localLibrary.value, manga];
                     }
                     loadLocalLibrary();
-                    // Also update the mdLibrary to reflect it's now in library
                     const idx = mdLibrary.value.findIndex(m => m.id === manga.id);
-                    if (idx >= 0) {
-                        mdLibrary.value[idx].inLibrary = true;
-                    }
+                    if (idx >= 0) mdLibrary.value[idx].inLibrary = true;
                 } else {
                     showToast('Error: ' + (payload?.error || 'Unknown'), 'error');
                 }
@@ -639,7 +822,7 @@ const app = createApp({
                 const body = chapterId || mangaId
                     ? JSON.stringify({ chapterId, mangaId, title, chapter })
                     : JSON.stringify({ title, chapter });
-                
+
                 const res = await fetch('/api/download/download_chapter', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -649,12 +832,23 @@ const app = createApp({
                 if (data.error) {
                     showToast('Error: ' + data.error, 'error');
                     activeTasks.value = { ...activeTasks.value, [taskId]: { ...activeTasks.value[taskId], status: 'error' } };
-                } else if (data.task_id && data.task_id !== taskId && activeTasks.value[taskId]) {
-                    const currentTask = activeTasks.value[taskId];
-                    const nextTasks = { ...activeTasks.value };
-                    delete nextTasks[taskId];
-                    nextTasks[data.task_id] = { ...currentTask, taskId: data.task_id };
-                    activeTasks.value = nextTasks;
+                } else {
+                    // Add manga to library immediately if not already present
+                    const norm = canonicalTitle(title);
+                    if (!library.value.some(m => canonicalTitle(m.name || m.title || '') === norm)) {
+                        library.value = [...library.value, {
+                            id: title, name: title, title,
+                            chapter_count: 0, upscaled: 0,
+                            cachedCover: currentCover.value || null,
+                        }];
+                    }
+                    if (data.task_id && data.task_id !== taskId && activeTasks.value[taskId]) {
+                        const currentTask = activeTasks.value[taskId];
+                        const nextTasks = { ...activeTasks.value };
+                        delete nextTasks[taskId];
+                        nextTasks[data.task_id] = { ...currentTask, taskId: data.task_id };
+                        activeTasks.value = nextTasks;
+                    }
                 }
             } catch(e) {
                 showToast('Error: ' + e.message, 'error');
@@ -753,8 +947,9 @@ const app = createApp({
                                 const t = { ...activeTasks.value };
                                 delete t[taskId];
                                 activeTasks.value = t;
-                                // Reload chapters to update status
                                 if (currentTitle.value) loadChapters(currentTitle.value);
+                                // Refresh library so card shows real chapter count
+                                if (task.type === 'download') loadLibrary();
                             }, 2000);
                         } else if (data.status === 'error' || data.status === 'not_found') {
                             const misses = data.status === 'not_found' ? (task.misses || 0) + 1 : 0;
@@ -787,6 +982,16 @@ const app = createApp({
                 ...task,
                 percent: task.total > 0 ? Math.min(100, Math.round(((task.progress || 0) * 100) / task.total)) : 0
             }));
+        });
+
+        // Map canonical title → active task (used to show progress overlays on library cards)
+        const activeTasksByTitle = computed(() => {
+            const map = {};
+            for (const task of taskQueueList.value) {
+                const norm = canonicalTitle(task.displayTitle || '');
+                if (norm && !map[norm]) map[norm] = task;
+            }
+            return map;
         });
 
         const isInLibrary = computed(() => {
@@ -1034,11 +1239,14 @@ const app = createApp({
 
         const openSourceManga = async (manga, sourceOverride) => {
             const source = sourceOverride || activeSource.value;
+            const sourceId = source?.id ?? manga.sourceId;
+            const mangaId = manga.id;
+
             currentTitle.value = manga.title;
             currentCover.value = manga.thumbnailUrl || null;
-            currentMdManga.value = { id: manga.id, title: manga.title, cover: manga.thumbnailUrl };
+            currentMdManga.value = null; // this is a Suwayomi manga, not MangaDex
             currentManga.value = null;
-            currentSourceContext.value = { sourceId: source?.id ?? manga.sourceId, mangaId: manga.id };
+            currentSourceContext.value = { sourceId, mangaId };
             mdChapters.value = [];
             chapters.value = [];
             chapterStatus.value = { downloaded: {}, upscaled: {} };
@@ -1046,8 +1254,23 @@ const app = createApp({
             currentModalTab.value = 'chapters';
             showModal.value = true;
 
+            // Auto-write source_meta if this manga already has a local folder (retroactive fix)
+            if (sourceId && mangaId) {
+                fetch('/api/sources/save_to_library', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: manga.title,
+                        sourceId,
+                        mangaId,
+                        thumbnailUrl: manga.thumbnailUrl || null,
+                        onlyIfExists: true,
+                    }),
+                }).catch(() => {});
+            }
+
             try {
-                const res = await fetch(`/api/sources/manga/${manga.id}/chapters`);
+                const res = await fetch(`/api/sources/manga/${mangaId}/chapters`);
                 if (!res.ok) throw new Error(res.statusText);
                 const raw = await res.json();
                 if (raw.error) throw new Error(raw.error);
@@ -1110,6 +1333,24 @@ const app = createApp({
                 const dlData = await dlRes.json();
                 if (dlData.error) throw new Error(dlData.error);
 
+                // Add manga to library immediately if not already present
+                const norm = canonicalTitle(title);
+                if (!library.value.some(m => canonicalTitle(m.name || m.title || '') === norm)) {
+                    const thumbUrl = currentCover.value || null;
+                    library.value = [...library.value, {
+                        id: title, name: title, title,
+                        chapter_count: 0, upscaled: 0,
+                        cover: thumbUrl,
+                        source_meta: currentSourceContext.value ? {
+                            sourceId: String(currentSourceContext.value.sourceId),
+                            mangaId: currentSourceContext.value.mangaId,
+                            title,
+                            thumbnailUrl: thumbUrl,
+                        } : null,
+                        cachedCover: thumbUrl,
+                    }];
+                }
+
                 const realId = dlData.task_id || taskId;
                 if (realId !== taskId && activeTasks.value[taskId]) {
                     const next = { ...activeTasks.value };
@@ -1131,6 +1372,7 @@ const app = createApp({
             loadMdLibrary();
             pollTasks();
             checkSuwayomi();
+            checkDrive();
             document.addEventListener('keydown', handleKeydown);
         });
         return {
@@ -1155,6 +1397,9 @@ const app = createApp({
             sources, activeSource, sourceQuery, sourceResults, sourcesLoading, suwayomiOnline, sourceHasNextPage, currentSourceContext,
             globalQuery, globalResults, globalSearchLoading, searchMode,
             checkSuwayomi, loadSources, searchSources, searchAllSources, openSourceManga,
+            activeTasksByTitle, canonicalTitle,
+            driveConfigured, driveConnected, driveEmail, driveUploading, driveUploadResult,
+            connectDrive, disconnectDrive, uploadToDrive,
         };
     }
 });

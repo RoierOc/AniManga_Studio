@@ -5,7 +5,11 @@ Suwayomi exposes Tachiyomi/Mihon extensions via GraphQL at localhost:4567.
 """
 
 from flask import Blueprint, jsonify, request
+from pathlib import Path
+import json as _json
 import requests as http_requests
+
+from api.runtime import MANGA_DIR
 
 sources_bp = Blueprint("sources", __name__)
 
@@ -334,3 +338,44 @@ def install_extension():
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@sources_bp.route("/save_to_library", methods=["POST"])
+def save_to_library():
+    """Create a manga folder + write .source_meta.json so it shows as a Mihon entry in the library.
+
+    If onlyIfExists=true is sent, only writes the meta file when the folder already
+    exists (used to silently tag old Mihon downloads when the user opens them from
+    the sources view).
+    """
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "").strip()
+    source_id = data.get("sourceId")
+    manga_id = data.get("mangaId")
+    thumbnail_url = (data.get("thumbnailUrl") or "").strip() or None
+    only_if_exists = data.get("onlyIfExists", False)
+
+    if not title or not source_id or not manga_id:
+        return jsonify({"error": "title, sourceId, mangaId required"}), 400
+
+    folder = Path(MANGA_DIR) / title
+    if only_if_exists and not folder.exists():
+        return jsonify({"status": "skipped", "reason": "folder does not exist"})
+
+    folder.mkdir(parents=True, exist_ok=True)
+
+    meta_path = folder / ".source_meta.json"
+    meta = {"sourceId": str(source_id), "mangaId": int(manga_id), "title": title}
+    if thumbnail_url:
+        meta["thumbnailUrl"] = thumbnail_url
+    # Preserve existing thumbnailUrl if we're not providing a new one
+    elif meta_path.exists():
+        try:
+            existing = _json.loads(meta_path.read_text())
+            if existing.get("thumbnailUrl"):
+                meta["thumbnailUrl"] = existing["thumbnailUrl"]
+        except Exception:
+            pass
+    meta_path.write_text(_json.dumps(meta))
+
+    return jsonify({"status": "ok", "title": title})

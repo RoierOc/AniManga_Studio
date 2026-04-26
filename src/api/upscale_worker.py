@@ -5,6 +5,7 @@ Upscale worker - runs in a separate process with correct venv
 
 import sys
 import os
+import shutil
 from pathlib import Path
 import numpy as np
 import json
@@ -22,6 +23,10 @@ TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "384"))
 TILE_OVERLAP = int(os.environ.get("UPSCALE_TILE_OVERLAP", "24"))
 COLOR_DIFF_THRESHOLD = int(os.environ.get("COLOR_DIFF_THRESHOLD", "15"))
 COLOR_PIXEL_FRACTION = float(os.environ.get("COLOR_PIXEL_FRACTION", "0.10"))
+OUTPUT_DOWNSCALE = int(os.environ.get("UPSCALE_OUTPUT_DOWNSCALE", "1"))
+JPEG_QUALITY = int(os.environ.get("UPSCALE_JPEG_QUALITY", "95"))
+VRAM_LIMIT_PCT = int(os.environ.get("VRAM_LIMIT_PCT", "80"))
+GPU_THROTTLE_MS = int(os.environ.get("GPU_THROTTLE_MS", "10"))
 
 
 def is_color_page(img_pil, threshold=COLOR_DIFF_THRESHOLD, min_fraction=COLOR_PIXEL_FRACTION):
@@ -160,6 +165,11 @@ def main():
         if not torch.cuda.is_available():
             raise RuntimeError("CUDA no disponible. El upscale requiere GPU NVIDIA.")
 
+        total_vram = torch.cuda.get_device_properties(0).total_memory
+        fraction = min(VRAM_LIMIT_PCT / 100.0, 1.0)
+        torch.cuda.set_per_process_memory_fraction(fraction, 0)
+        print(f"DEBUG: VRAM cap {fraction*100:.0f}% ({fraction*total_vram/1024**3:.1f}GB de {total_vram/1024**3:.1f}GB)", flush=True)
+
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.set_float32_matmul_precision('high')
@@ -175,15 +185,14 @@ def main():
         torch.cuda.synchronize()
         del dummy
 
-        # torch.compile: reduce kernel launch overhead (same output quality)
         try:
-            model = torch.compile(model, mode='default')
+            model = torch.compile(model, mode='max-autotune-no-cudagraphs')
             dummy = torch.randn(1, in_channels, TILE_SIZE, TILE_SIZE, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
             with torch.inference_mode():
                 _ = model(dummy)
             torch.cuda.synchronize()
             del dummy
-            print("torch.compile activo (mode=default)", flush=True)
+            print("torch.compile activo (mode=max-autotune-no-cudagraphs)", flush=True)
         except Exception as ce:
             print(f"torch.compile omitido ({type(ce).__name__})", flush=True)
 
@@ -217,19 +226,33 @@ def main():
 
                 img = Image.open(img_path)
                 if is_color_page(img):
-                    print(f"DEBUG: Skip color page {img_path.name}", flush=True)
+                    print(f"DEBUG: Copy color page (no upscale): {img_path.name}", flush=True)
+                    out_path = output_folder / (img_path.stem + img_path.suffix)
+                    shutil.copy2(img_path, out_path)
                     skipped_color += 1
                     processed += 1
                     continue
 
                 out_pil = upscale_tiled(model, img, in_channels=in_channels)
+                torch.cuda.synchronize()
+                if GPU_THROTTLE_MS > 0:
+                    import time
+                    time.sleep(GPU_THROTTLE_MS / 1000.0)
+                if OUTPUT_DOWNSCALE > 1:
+                    out_pil = out_pil.resize(
+                        (max(1, out_pil.width // OUTPUT_DOWNSCALE), max(1, out_pil.height // OUTPUT_DOWNSCALE)),
+                        Image.LANCZOS
+                    )
                 out_path = output_folder / (img_path.stem + ".jpg")
-                out_pil.save(out_path, quality=95)
+                out_pil.save(out_path, quality=JPEG_QUALITY)
                 processed += 1
 
                 print(f"DEBUG: Saved {out_path.name}", flush=True)
             except Exception as e:
                 print(f"ERROR: {img_path}: {e}", flush=True)
+
+        torch.cuda.empty_cache()
+        print(f"DEBUG: VRAM cache liberada", flush=True)
 
         if processed == total:
             write_status({

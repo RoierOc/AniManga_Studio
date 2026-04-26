@@ -1724,8 +1724,22 @@ body::before {
 }
 
 .md-nav-link.active {
-    background: rgba(97, 132, 211, 0.15);
+    background: rgba(97, 132, 211, 0.18);
     color: var(--md-accent);
+    position: relative;
+    font-weight: 600;
+}
+
+.md-nav-link.active::after {
+    content: '';
+    position: absolute;
+    bottom: -2px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 24px;
+    height: 2px;
+    background: var(--md-accent);
+    border-radius: 2px;
 }
 
 .md-search {
@@ -1786,11 +1800,18 @@ body::before {
 
 .md-card {
     cursor: pointer;
-    transition: transform 0.2s;
+    transition: transform 0.22s ease, box-shadow 0.22s ease;
+    border-radius: 10px;
+    overflow: visible;
 }
 
 .md-card:hover {
-    transform: translateY(-4px);
+    transform: translateY(-6px) scale(1.02);
+    box-shadow: 0 12px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(99,102,241,0.25);
+}
+
+.md-card--active-task .md-cover-wrapper {
+    box-shadow: 0 0 0 2px var(--md-accent);
 }
 
 .md-cover-wrapper {
@@ -1798,6 +1819,19 @@ body::before {
     aspect-ratio: 2/3;
     border-radius: 8px;
     overflow: hidden;
+    background: linear-gradient(90deg, #16161e 25%, #1e1e2a 50%, #16161e 75%);
+    background-size: 200% 100%;
+    animation: cover-shimmer 1.6s infinite linear;
+}
+
+@keyframes cover-shimmer {
+    0%   { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* Stop shimmer once image has loaded */
+.md-cover-wrapper:has(img.img-loaded) {
+    animation: none;
     background: var(--md-bg);
 }
 
@@ -1805,6 +1839,16 @@ body::before {
     width: 100%;
     height: 100%;
     object-fit: cover;
+    transition: transform 0.28s ease, opacity 0.2s ease;
+    opacity: 0;
+}
+
+.md-cover-wrapper img.img-loaded {
+    opacity: 1;
+}
+
+.md-card:hover .md-cover-wrapper img {
+    transform: scale(1.05);
 }
 
 .md-cover-placeholder {
@@ -2490,6 +2534,24 @@ body::before {
     cursor: pointer; transition: all 0.2s;
 }
 .md-btn-danger:hover { background: rgba(239,68,68,0.22); }
+
+.md-btn-mdlink {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 10px 16px;
+    background: rgba(241,153,62,0.1);
+    border: 1px solid rgba(241,153,62,0.35);
+    border-radius: 6px;
+    color: #fbbf6a;
+    font-size: 14px; font-weight: 600;
+    text-decoration: none;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+.md-btn-mdlink:hover {
+    background: rgba(241,153,62,0.2);
+    border-color: rgba(241,153,62,0.6);
+    color: #fcd09a;
+}
 
 .md-btn-added {
     background: rgba(16,185,129,0.12) !important;
@@ -3535,4 +3597,271 @@ body::before {
   font-size: 12px;
   color: var(--text-secondary);
   margin-left: auto;
+}
+
+/* ── Library card task overlay ── */
+.md-task-overlay {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    padding: 6px 8px 7px;
+    background: linear-gradient(to top, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.0) 100%);
+    border-radius: 0 0 8px 8px;
+}
+
+.md-task-overlay-label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #fff;
+    margin-bottom: 5px;
+    line-height: 1;
+}
+
+.md-task-overlay-icon {
+    display: flex;
+    align-items: center;
+    opacity: 0.9;
+}
+
+.md-task-overlay-pct {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.85);
+}
+
+.md-task-overlay-bar {
+    height: 3px;
+    background: rgba(255,255,255,0.2);
+    border-radius: 2px;
+    overflow: hidden;
+}
+
+.md-task-overlay-fill {
+    height: 100%;
+    background: var(--md-accent);
+    border-radius: 2px;
+    transition: width 0.4s ease;
+    min-width: 4px;
+}
+
+.md-task-overlay-fill--upscale {
+    background: linear-gradient(90deg, #f97316, #f59e0b);
+}
+
+/* ── Google Drive section ── */
+.drive-section {
+    margin-top: 24px;
+    padding: 16px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid var(--border, #2e2e3a);
+    border-radius: 10px;
+}
+
+.drive-section-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+
+.drive-section-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary, #f8fafc);
+}
+
+.drive-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 20px;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    margin-left: auto;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 200px;
+}
+
+.drive-badge--on  { background: rgba(16,185,129,0.15); color: #34d399; }
+.drive-badge--off { background: rgba(100,116,139,0.2); color: #94a3b8; }
+.drive-badge--warn{ background: rgba(245,158,11,0.15); color: #fbbf24; }
+
+.drive-setup-hint {
+    font-size: 12px;
+    color: var(--text-secondary, #94a3b8);
+    line-height: 1.6;
+}
+
+.drive-setup-hint code {
+    background: rgba(255,255,255,0.08);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 11px;
+}
+
+.drive-setup-link {
+    display: inline-block;
+    margin-top: 8px;
+    font-size: 12px;
+    color: #60a5fa;
+    text-decoration: none;
+}
+
+.drive-setup-link:hover { text-decoration: underline; }
+
+.drive-connect-row,
+.drive-upload-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.drive-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: none;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.drive-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.drive-btn--connect {
+    background: rgba(66,133,244,0.18);
+    border: 1px solid rgba(66,133,244,0.4);
+    color: #93bbfd;
+}
+
+.drive-btn--connect:hover:not(:disabled) {
+    background: rgba(66,133,244,0.3);
+}
+
+.drive-btn--upload {
+    flex: 1;
+    background: rgba(52,211,153,0.15);
+    border: 1px solid rgba(52,211,153,0.35);
+    color: #6ee7b7;
+    justify-content: center;
+}
+
+.drive-btn--upload:hover:not(:disabled) {
+    background: rgba(52,211,153,0.25);
+}
+
+.drive-btn--disconnect {
+    padding: 8px 10px;
+    background: rgba(239,68,68,0.1);
+    border: 1px solid rgba(239,68,68,0.3);
+    color: #fca5a5;
+}
+
+.drive-btn--disconnect:hover { background: rgba(239,68,68,0.2); }
+
+.drive-result {
+    margin-top: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: #34d399;
+    background: rgba(16,185,129,0.08);
+    border: 1px solid rgba(16,185,129,0.2);
+    border-radius: 6px;
+    padding: 8px 12px;
+}
+
+.drive-result span {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.drive-result-link {
+    color: #60a5fa;
+    text-decoration: none;
+    white-space: nowrap;
+    font-weight: 600;
+}
+
+.drive-result-link:hover { text-decoration: underline; }
+
+.spin { animation: spin-anim 1s linear infinite; }
+@keyframes spin-anim { to { transform: rotate(360deg); } }
+
+/* Source badges on library cards */
+.card-source-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+}
+
+.card-source-badge--mihon {
+    background: rgba(251,143,107,0.18);
+    color: #fb8f6b;
+}
+
+.card-source-badge--md {
+    background: rgba(97,132,211,0.18);
+    color: #6184d3;
+}
+
+/* "En cola" pending state in card meta */
+.md-card-meta--pending {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--md-accent);
+    opacity: 0.8;
+    font-style: italic;
+}
+
+/* ── Responsive grid improvements ── */
+@media (min-width: 1200px) {
+    .md-grid {
+        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        gap: 22px;
+    }
+}
+
+@media (min-width: 1600px) {
+    .md-grid {
+        grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+        gap: 24px;
+    }
+}
+
+@media (max-width: 600px) {
+    .md-grid {
+        grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+        gap: 14px;
+    }
+
+    .md-nav-link {
+        padding: 8px 10px;
+        font-size: 13px;
+        gap: 4px;
+    }
+
+    .md-nav-link svg {
+        display: none;
+    }
 }

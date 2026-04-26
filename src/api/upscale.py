@@ -9,8 +9,10 @@ import threading
 import queue
 import json
 import os
+import shutil
 import numpy as np
 from decimal import Decimal, InvalidOperation
+from concurrent.futures import ThreadPoolExecutor
 
 from api.runtime import (
     MANGA_DIR,
@@ -30,6 +32,21 @@ COLOR_PIXEL_FRACTION = float(os.environ.get("COLOR_PIXEL_FRACTION", "0.10"))
 TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "384"))
 TILE_OVERLAP = int(os.environ.get("UPSCALE_TILE_OVERLAP", "24"))
 GPU_BATCH_SIZE = int(os.environ.get("GPU_BATCH_SIZE", "8"))
+# Divide 4x output by this factor before saving (2 → effective 2x, ideal for 1440p)
+OUTPUT_DOWNSCALE = int(os.environ.get("UPSCALE_OUTPUT_DOWNSCALE", "1"))
+JPEG_QUALITY = int(os.environ.get("UPSCALE_JPEG_QUALITY", "95"))
+VRAM_LIMIT_PCT = int(os.environ.get("VRAM_LIMIT_PCT", "80"))      # % of total VRAM to use
+GPU_THROTTLE_MS = int(os.environ.get("GPU_THROTTLE_MS", "10"))    # ms sleep between batches
+
+# Thread pool for async JPEG saves — keeps GPU busy while CPU encodes previous image
+_save_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="jpeg-save")
+
+
+def _resize_save(img, path, downscale, quality):
+    from PIL import Image as _Image
+    if downscale > 1:
+        img = img.resize((max(1, img.width // downscale), max(1, img.height // downscale)), _Image.LANCZOS)
+    img.save(path, quality=quality)
 
 
 def is_color_page(img_pil, threshold=COLOR_DIFF_THRESHOLD, min_fraction=COLOR_PIXEL_FRACTION):
@@ -86,6 +103,12 @@ def _gpu_worker_loop():
         if not Path(ACTIVE_MODEL_PATH).exists():
             raise FileNotFoundError(f"Modelo no encontrado: {ACTIVE_MODEL_PATH}")
 
+        total_vram = torch.cuda.get_device_properties(0).total_memory
+        fraction = min(VRAM_LIMIT_PCT / 100.0, 1.0)
+        torch.cuda.set_per_process_memory_fraction(fraction, 0)
+        print(f"GPU worker: VRAM cap {fraction*100:.0f}% ({fraction*total_vram/1024**3:.1f}GB de {total_vram/1024**3:.1f}GB)", flush=True)
+        print(f"GPU worker: throttle entre batches = {GPU_THROTTLE_MS}ms", flush=True)
+
         torch.backends.cudnn.benchmark = True
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.set_float32_matmul_precision('high')
@@ -103,16 +126,16 @@ def _gpu_worker_loop():
         torch.cuda.synchronize()
         del dummy
 
-        # torch.compile default: kernel fusion without CUDA graphs — avoids per-batch-size
-        # VRAM pre-allocation that reduce-overhead causes (~4 GB extra on 12 GB cards).
+        # max-autotune-no-cudagraphs: selects optimal CUDA kernels for this GPU without
+        # CUDA graph VRAM pre-allocation. Better than 'default', safer than 'reduce-overhead'.
         try:
-            model = torch.compile(model, mode='default')
+            model = torch.compile(model, mode='max-autotune-no-cudagraphs')
             dummy = torch.randn(1, in_channels, TILE_SIZE, TILE_SIZE, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
             with torch.inference_mode():
                 _ = model(dummy)
             torch.cuda.synchronize()
             del dummy
-            print("GPU worker: torch.compile activo (mode=default)", flush=True)
+            print("GPU worker: torch.compile activo (mode=max-autotune-no-cudagraphs)", flush=True)
         except Exception as ce:
             print(f"GPU worker: torch.compile omitido ({type(ce).__name__})", flush=True)
 
@@ -130,6 +153,8 @@ def _gpu_worker_loop():
                     break
                 pending.append(item)
             except queue.Empty:
+                # Queue idle — release unused cached blocks back to OS
+                torch.cuda.empty_cache()
                 continue
 
             # Drain up to GPU_BATCH_SIZE-1 more without blocking
@@ -143,6 +168,10 @@ def _gpu_worker_loop():
                 batch = torch.cat([p[0] for p in pending], dim=0)
                 with torch.inference_mode():
                     out = model(batch)
+                torch.cuda.synchronize()
+                if GPU_THROTTLE_MS > 0:
+                    import time
+                    time.sleep(GPU_THROTTLE_MS / 1000.0)
                 for i, (_, fut) in enumerate(pending):
                     fut.set_result(out[i:i + 1].clone())
             except Exception as e:
@@ -475,6 +504,7 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id):
         processed = 0
         skipped_color = 0
         total = len(images)
+        save_futures = []
 
         for img_path in images:
             try:
@@ -489,17 +519,33 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id):
 
                 img = Image.open(img_path)
                 if is_color_page(img):
-                    print(f"Skip color: {img_path.name}", flush=True)
+                    print(f"Copy color (no upscale): {img_path.name}", flush=True)
+                    out_path = output_folder / (img_path.stem + img_path.suffix)
+                    shutil.copy2(img_path, out_path)
                     skipped_color += 1
                     processed += 1
                     continue
 
                 out_pil = _upscale_tiled(img, in_channels=in_channels)
                 out_path = output_folder / (img_path.stem + ".jpg")
-                out_pil.save(out_path, quality=95)
+                save_futures.append(_save_pool.submit(_resize_save, out_pil, out_path, OUTPUT_DOWNSCALE, JPEG_QUALITY))
                 processed += 1
             except Exception as e:
                 print(f"Error: {img_path}: {e}", flush=True)
+
+        # Wait for all pending saves before marking complete
+        for fut in save_futures:
+            try:
+                fut.result()
+            except Exception as e:
+                print(f"Save error: {e}", flush=True)
+
+        # Release PyTorch's unused CUDA cache blocks back to the OS
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
 
         if processed == total:
             set_upscale_status(upscale_id, {
@@ -548,15 +594,23 @@ def run_upscale_all(input_folder, output_folder, images, upscale_id):
 
                 img = Image.open(img_path)
                 if is_color_page(img):
+                    out_path = output_folder / (img_path.stem + img_path.suffix)
+                    shutil.copy2(img_path, out_path)
                     processed += 1
                     continue
 
                 out_pil = _upscale_tiled(img, in_channels=in_channels)
                 out_path = output_folder / (img_path.stem + ".jpg")
-                out_pil.save(out_path, quality=95, optimize=True, progressive=True)
+                _save_pool.submit(_resize_save, out_pil, out_path, OUTPUT_DOWNSCALE, JPEG_QUALITY)
                 processed += 1
             except Exception as e:
                 print(f"Error: {e}", flush=True)
+
+        try:
+            import torch
+            torch.cuda.empty_cache()
+        except Exception:
+            pass
 
         set_upscale_status(upscale_id, {
             'status': 'complete',

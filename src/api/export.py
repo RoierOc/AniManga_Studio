@@ -140,9 +140,8 @@ def _collect_images(title: str, chapters: list) -> list:
     return result
 
 
-@export_bp.route("/cbz", methods=["POST"])
-def create_cbz():
-    data = request.get_json(silent=True) or {}
+def build_archive(data) -> tuple:
+    """Build CBZ/CBR archive from request data. Returns (tmp_path, filename) or raises."""
     title = (data.get("title") or "").strip()
     chapters = data.get("chapters") or []
     volume_name = (data.get("volume_name") or title or "tomo").strip()
@@ -152,13 +151,13 @@ def create_cbz():
     cover_b64 = (data.get("cover_data") or "").strip()
 
     if not title:
-        return jsonify({"error": "title required"}), 400
+        raise ValueError("title required")
     if not chapters:
-        return jsonify({"error": "select at least one chapter"}), 400
+        raise ValueError("select at least one chapter")
 
     images = _collect_images(title, chapters)
     if not images:
-        return jsonify({"error": "No images found for selected chapters"}), 404
+        raise ValueError("No images found for selected chapters")
 
     safe_name = re.sub(r"[^\w\s\-]", "", volume_name).strip().replace(" ", "_") or "tomo"
     filename = f"{safe_name}.{fmt}"
@@ -166,7 +165,6 @@ def create_cbz():
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{fmt}")
     try:
         with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_STORED) as zf:
-            # Cover — re-encoded at same quality for consistency
             if cover_b64:
                 try:
                     raw = base64.b64decode(cover_b64)
@@ -179,18 +177,27 @@ def create_cbz():
                 except Exception:
                     zf.write(cover_path, "000_cover.jpg")
 
-            # Pages — re-encode at requested quality
             for arcname, img_path in images:
                 try:
                     zf.writestr(arcname, _encode_jpeg(img_path, quality))
                 except Exception:
-                    # Fallback: store raw bytes rather than silently drop the page
                     zf.write(str(img_path), arcname)
 
         tmp.flush()
         tmp_path = tmp.name
     finally:
         tmp.close()
+
+    return tmp_path, filename
+
+
+@export_bp.route("/cbz", methods=["POST"])
+def create_cbz():
+    data = request.get_json(silent=True) or {}
+    try:
+        tmp_path, filename = build_archive(data)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
 
     return send_file(tmp_path, mimetype=_MIME, as_attachment=True,
                      download_name=filename, max_age=0)
