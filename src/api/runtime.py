@@ -39,6 +39,13 @@ MODEL_PATH_EULA_4X = Path(
     )
 ).expanduser()
 
+MODEL_PATH_DWTP_4X = Path(
+    os.environ.get(
+        "MODEL_PATH_DWTP_4X",
+        "/Manga_Upscaler_project/MODELS/4x-DWTP-ds-esrgan-5.pth",
+    )
+).expanduser()
+
 PYTHON_EXECUTABLE = os.environ.get("PYTHON_EXECUTABLE", sys.executable)
 
 

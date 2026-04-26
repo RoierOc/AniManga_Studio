@@ -51,6 +51,14 @@ const app = createApp({
         const exportBusy = ref(false);
         const exportPreview = ref({ pages: 0, size_mb: 0, upscaled_pages: 0 });
         let exportPreviewTimer = null;
+
+        // Cover state
+        const exportCoverMode = ref('none');   // 'none' | 'chapter' | 'upload'
+        const exportColorPages = ref([]);
+        const exportColorPagesLoading = ref(false);
+        const exportSelectedCover = ref(null); // { path, url, label }
+        const exportUploadedCoverB64 = ref('');
+        const exportUploadedCoverUrl = ref('');
         
         // Search debounce
         let searchTimeout = null;
@@ -776,6 +784,53 @@ const app = createApp({
             if (!exportSelectedChapters.value.length) {
                 exportPreview.value = { pages: 0, size_mb: 0, upscaled_pages: 0 };
             }
+            exportCoverMode.value = 'none';
+            exportSelectedCover.value = null;
+            exportUploadedCoverB64.value = '';
+            exportUploadedCoverUrl.value = '';
+        };
+
+        const loadColorPages = async () => {
+            if (!currentTitle.value || !exportSelectedChapters.value.length) {
+                exportColorPages.value = [];
+                return;
+            }
+            exportColorPagesLoading.value = true;
+            exportColorPages.value = [];
+            try {
+                const res = await fetch('/api/export/color_pages', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title: currentTitle.value, chapters: exportSelectedChapters.value })
+                });
+                if (res.ok) exportColorPages.value = await res.json();
+            } catch (e) {}
+            exportColorPagesLoading.value = false;
+        };
+
+        const setCoverMode = (mode) => {
+            exportCoverMode.value = mode;
+            exportSelectedCover.value = null;
+            exportUploadedCoverB64.value = '';
+            exportUploadedCoverUrl.value = '';
+            if (mode === 'chapter') loadColorPages();
+        };
+
+        const onCoverUpload = (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            if (file.size > 8 * 1024 * 1024) {
+                showToast('Imagen demasiado grande (máx 8 MB)', 'warning');
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                const dataUrl = ev.target.result;
+                exportUploadedCoverUrl.value = dataUrl;
+                // Strip the data:image/xxx;base64, prefix — only send raw base64
+                exportUploadedCoverB64.value = dataUrl.split(',')[1] || '';
+            };
+            reader.readAsDataURL(file);
         };
 
         const scheduleExportPreview = () => {
@@ -818,6 +873,13 @@ const app = createApp({
             exportBusy.value = true;
             try {
                 const fmt = exportFormat.value || 'cbz';
+                const coverPayload = {};
+                if (exportCoverMode.value === 'chapter' && exportSelectedCover.value?.path) {
+                    coverPayload.cover_path = exportSelectedCover.value.path;
+                } else if (exportCoverMode.value === 'upload' && exportUploadedCoverB64.value) {
+                    coverPayload.cover_data = exportUploadedCoverB64.value;
+                }
+
                 const res = await fetch('/api/export/cbz', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -826,6 +888,7 @@ const app = createApp({
                         chapters: exportSelectedChapters.value,
                         volume_name: exportVolumeName.value || currentTitle.value,
                         format: fmt,
+                        ...coverPayload,
                     })
                 });
                 if (!res.ok) {
@@ -874,6 +937,9 @@ const app = createApp({
             exportVolumeName, exportFormat, exportSelectedChapters, exportBusy, exportPreview,
             selectAllExportChapters, selectUpscaledExportChapters,
             downloadTomo, scheduleExportPreview,
+            exportCoverMode, exportColorPages, exportColorPagesLoading,
+            exportSelectedCover, exportUploadedCoverUrl,
+            setCoverMode, onCoverUpload,
             handleCoverError: (e) => { e.target.style.display = 'none'; if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex'; }
         };
     }

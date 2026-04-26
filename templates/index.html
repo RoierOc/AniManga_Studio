@@ -312,6 +312,58 @@
           </span>
         </div>
 
+        <!-- Portada -->
+        <div class="tomo-cover-section">
+          <div class="tomo-cover-row">
+            <span class="tomo-cover-title">Portada</span>
+            <div class="tomo-cover-modes">
+              <button :class="['tomo-cov-mode', exportCoverMode==='none'?'active':'']"
+                      @click="setCoverMode('none')">Sin portada</button>
+              <button :class="['tomo-cov-mode', exportCoverMode==='chapter'?'active':'']"
+                      @click="setCoverMode('chapter')"
+                      :disabled="exportSelectedChapters.length === 0">De los capítulos</button>
+              <button :class="['tomo-cov-mode', exportCoverMode==='upload'?'active':'']"
+                      @click="setCoverMode('upload')">Subir imagen</button>
+            </div>
+          </div>
+
+          <!-- Color pages grid -->
+          <div v-if="exportCoverMode === 'chapter'" class="tomo-cov-pages">
+            <div v-if="exportColorPagesLoading" class="tomo-cov-loading">
+              <div class="md-spinner-sm"></div> Buscando páginas de color...
+            </div>
+            <div v-else-if="exportColorPages.length === 0" class="tomo-cov-empty">
+              No se encontraron páginas de color en los capítulos seleccionados
+            </div>
+            <div v-else class="tomo-cov-grid">
+              <div v-for="(page, i) in exportColorPages" :key="i"
+                   class="tomo-cov-thumb"
+                   :class="{ selected: exportSelectedCover && exportSelectedCover.path === page.path }"
+                   @click="exportSelectedCover = page"
+                   :title="page.label">
+                <img :src="page.url" :alt="page.label" loading="lazy">
+                <div class="tomo-cov-thumb-label">Cap. {{ page.chapter }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Upload area -->
+          <div v-if="exportCoverMode === 'upload'" class="tomo-cov-upload">
+            <label class="tomo-upload-area">
+              <input type="file" accept="image/*" @change="onCoverUpload" style="display:none">
+              <div v-if="!exportUploadedCoverUrl" class="tomo-upload-placeholder">
+                <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" opacity="0.4"><path d="M9 16h6v-6h4l-7-7-7 7h4v6zm-4 2h14v2H5v-2z"/></svg>
+                <span>Haz clic para seleccionar una imagen</span>
+                <span class="tomo-upload-hint">JPG, PNG, WEBP · máx 8 MB</span>
+              </div>
+              <div v-else class="tomo-upload-preview-wrap">
+                <img :src="exportUploadedCoverUrl" class="tomo-upload-preview">
+                <span class="tomo-upload-change">Cambiar imagen</span>
+              </div>
+            </label>
+          </div>
+        </div>
+
         <!-- Chapter table -->
         <div class="tomo-list">
 
@@ -499,6 +551,6 @@
   <div v-if="toast.show" class="md-toast" :class="toast.type">{{ toast.message }}</div>
 
 </div>
-<script src="/static/js/app.js?v=20260425-8"></script>
+<script src="/static/js/app.js?v=20260425-9"></script>
 </body>
 </html>

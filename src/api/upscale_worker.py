@@ -20,6 +20,18 @@ ACTIVE_MODEL_PATH = MODEL_PATH_EULA_4X
 UPSCALE_SCALE = 4
 TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "384"))
 TILE_OVERLAP = 24
+COLOR_DIFF_THRESHOLD = int(os.environ.get("COLOR_DIFF_THRESHOLD", "15"))
+COLOR_PIXEL_FRACTION = float(os.environ.get("COLOR_PIXEL_FRACTION", "0.10"))
+
+
+def is_color_page(img_pil, threshold=COLOR_DIFF_THRESHOLD, min_fraction=COLOR_PIXEL_FRACTION):
+    """Returns True if image has significant non-grayscale content."""
+    thumb = img_pil.copy()
+    thumb.thumbnail((256, 256))
+    arr = np.asarray(thumb.convert('RGB'), dtype=np.int16)
+    r, g, b = arr[:, :, 0], arr[:, :, 1], arr[:, :, 2]
+    max_diff = np.maximum(np.maximum(np.abs(r - g), np.abs(r - b)), np.abs(g - b))
+    return float(np.mean(max_diff > threshold)) > min_fraction
 
 
 def upscale_tiled(model, img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=UPSCALE_SCALE):
@@ -164,6 +176,7 @@ def main():
         del dummy
 
         processed = 0
+        skipped_color = 0
         total = len(image_paths)
 
         write_status({
@@ -191,8 +204,13 @@ def main():
                 })
 
                 img = Image.open(img_path)
-                out_pil = upscale_tiled(model, img, in_channels=in_channels)
+                if is_color_page(img):
+                    print(f"DEBUG: Skip color page {img_path.name}", flush=True)
+                    skipped_color += 1
+                    processed += 1
+                    continue
 
+                out_pil = upscale_tiled(model, img, in_channels=in_channels)
                 out_path = output_folder / (img_path.stem + ".jpg")
                 out_pil.save(out_path, quality=95, optimize=True, progressive=True)
                 processed += 1
@@ -208,6 +226,7 @@ def main():
                 'progress': processed,
                 'total': total,
                 'percent': 100,
+                'skipped_color': skipped_color,
                 'model': ACTIVE_MODEL_PATH.name,
             })
         else:
@@ -218,6 +237,7 @@ def main():
                 'progress': processed,
                 'total': total,
                 'percent': percent,
+                'skipped_color': skipped_color,
                 'model': ACTIVE_MODEL_PATH.name,
             })
 

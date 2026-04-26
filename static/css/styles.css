@@ -3203,3 +3203,171 @@ body::before {
 }
 .tomo-dl-btn:hover:not(:disabled) { background: var(--accent-hover); }
 .tomo-dl-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── Tomo Cover / Portada section ─────────────────────────── */
+.tomo-cover-section {
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.tomo-cover-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 14px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.tomo-cover-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.tomo-cover-modes { display: flex; gap: 4px; }
+
+.tomo-cov-mode {
+  padding: 4px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.tomo-cov-mode.active {
+  background: rgba(99,102,241,0.15);
+  border-color: var(--accent);
+  color: var(--accent-hover);
+}
+.tomo-cov-mode:hover:not(.active):not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.tomo-cov-mode:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* Loading state */
+.tomo-cov-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.md-spinner-sm {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(99,102,241,0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+  flex-shrink: 0;
+}
+
+/* Empty state */
+.tomo-cov-empty {
+  padding: 10px 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+/* Color pages grid */
+.tomo-cov-grid {
+  display: flex;
+  gap: 8px;
+  padding: 8px 14px 10px;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
+.tomo-cov-thumb {
+  flex-shrink: 0;
+  width: 72px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  border: 2px solid transparent;
+  overflow: hidden;
+  transition: border-color 0.15s, transform 0.12s;
+  background: var(--bg-tertiary);
+}
+.tomo-cov-thumb:hover { transform: scale(1.04); border-color: var(--border-light); }
+.tomo-cov-thumb.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+.tomo-cov-thumb img {
+  width: 100%;
+  height: 96px;
+  object-fit: cover;
+  display: block;
+}
+
+.tomo-cov-thumb-label {
+  font-size: 9px;
+  color: var(--text-muted);
+  text-align: center;
+  padding: 2px 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Upload area */
+.tomo-cov-upload { padding: 8px 14px 10px; }
+
+.tomo-upload-area {
+  display: block;
+  cursor: pointer;
+}
+
+.tomo-upload-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 18px;
+  border: 1.5px dashed var(--border-light);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+  font-size: 13px;
+  transition: border-color 0.15s, background 0.15s;
+  text-align: center;
+}
+.tomo-upload-placeholder:hover {
+  border-color: var(--accent);
+  background: rgba(99,102,241,0.05);
+}
+
+.tomo-upload-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.tomo-upload-preview-wrap {
+  position: relative;
+  display: inline-block;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.tomo-upload-preview {
+  display: block;
+  max-height: 140px;
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+}
+.tomo-upload-change {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0,0,0,0.6);
+  color: #fff;
+  font-size: 11px;
+  text-align: center;
+  padding: 4px;
+}

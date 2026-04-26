@@ -25,6 +25,15 @@ env/
 # Backup files
 *.bak
 
+# Suwayomi runtime data (extensions, database, downloads)
+suwayomi/data/
+
+# Large binary files not belonging to the app
+*.onnx
+*.onnx.data
+*.pth
+*.safetensors
+
 # Local configuration and public repository metadata.
 /.*/
 !/.github/
