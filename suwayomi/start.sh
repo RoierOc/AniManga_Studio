@@ -21,7 +21,7 @@ mkdir -p /Manga_Upscaler_project/suwayomi/data
 
 java -Xmx512m \
   -Dsuwayomi.tachidesk.config.server.rootDir="/Manga_Upscaler_project/suwayomi/data" \
-  -Dsuwayomi.tachidesk.config.server.ip="127.0.0.1" \
+  -Dsuwayomi.tachidesk.config.server.ip="0.0.0.0" \
   -Dsuwayomi.tachidesk.config.server.port="4567" \
   -Dsuwayomi.tachidesk.config.server.systemTrayEnabled="false" \
   -Dsuwayomi.tachidesk.config.server.initialOpenInBrowserEnabled="false" \

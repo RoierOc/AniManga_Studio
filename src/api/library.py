@@ -6,6 +6,7 @@ Library API - Manage local manga library
 from flask import Blueprint, jsonify, request
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
+import json
 
 from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter
 
@@ -133,11 +134,20 @@ def get_manga(title):
                 ch = normalize_chapter(parts[0])
                 upscaled[ch] = True
     
+    source_meta = None
+    meta_path = folder / '.source_meta.json'
+    if meta_path.exists():
+        try:
+            source_meta = json.loads(meta_path.read_text())
+        except Exception:
+            pass
+
     return jsonify({
         'id': title,
         'name': title,
         'chapters': chapters,
-        'upscaled': upscaled
+        'upscaled': upscaled,
+        'source_meta': source_meta,
     })
 
 def get_chapters_from_folder(folder):

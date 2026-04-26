@@ -83,6 +83,58 @@ def list_sources():
 
 # ── Search ────────────────────────────────────────────────────────────────────
 
+@sources_bp.route("/search_all", methods=["GET"])
+def search_all():
+    """Search a query across every installed source in parallel."""
+    query = (request.args.get("q") or "").strip()
+    if not query:
+        return jsonify({"error": "q is required"}), 400
+
+    try:
+        src_data = _gql("{ sources { nodes { id name lang } } }")
+        source_nodes = [n for n in src_data["sources"]["nodes"] if n["id"] != "0"]
+    except Exception as e:
+        return jsonify({"error": str(e), "offline": not _suwayomi_online()}), 503
+
+    def _search_one(source):
+        try:
+            data = _gql(
+                """
+                mutation SearchManga($source: LongString!, $query: String, $page: Int!) {
+                  fetchSourceManga(input: { source: $source, type: SEARCH, query: $query, page: $page }) {
+                    mangas { id title thumbnailUrl inLibrary }
+                  }
+                }
+                """,
+                {"source": source["id"], "query": query, "page": 1},
+            )
+            mangas = [
+                {
+                    "id": m["id"],
+                    "title": m["title"],
+                    "thumbnailUrl": SUWAYOMI_BASE + m["thumbnailUrl"] if m.get("thumbnailUrl") else None,
+                    "inLibrary": m.get("inLibrary", False),
+                    "sourceId": source["id"],
+                    "sourceName": source["name"],
+                    "sourceLang": source["lang"],
+                }
+                for m in data["fetchSourceManga"]["mangas"]
+            ]
+            return {"source": source, "results": mangas}
+        except Exception as e:
+            return {"source": source, "results": [], "error": str(e)}
+
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    groups = []
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futs = {pool.submit(_search_one, s): s for s in source_nodes}
+        for fut in as_completed(futs):
+            groups.append(fut.result())
+
+    groups.sort(key=lambda g: -len(g["results"]))
+    return jsonify(groups)
+
+
 @sources_bp.route("/search", methods=["GET"])
 def search():
     source_id = (request.args.get("source") or "").strip()
@@ -95,8 +147,8 @@ def search():
     try:
         data = _gql(
             """
-            query SearchManga($sourceId: LongString!, $query: String!, $page: Int!) {
-              fetchSourceManga(sourceId: $sourceId, type: SEARCH, query: $query, page: $page) {
+            mutation SearchManga($source: LongString!, $query: String, $page: Int!) {
+              fetchSourceManga(input: { source: $source, type: SEARCH, query: $query, page: $page }) {
                 mangas {
                   id
                   title
@@ -107,7 +159,7 @@ def search():
               }
             }
             """,
-            {"sourceId": source_id, "query": query, "page": page},
+            {"source": source_id, "query": query, "page": page},
         )
         results = data["fetchSourceManga"]
         mangas = [
@@ -178,7 +230,7 @@ def manga_chapters(manga_id):
         data = _gql(
             """
             query GetChapters($mangaId: Int!) {
-              chapters(condition: { mangaId: $mangaId }, orderBy: CHAPTER_NUMBER_DESC) {
+              chapters(condition: { mangaId: $mangaId }, orderBy: CHAPTER_NUMBER, orderByType: DESC) {
                 nodes {
                   id
                   name
@@ -207,8 +259,8 @@ def chapter_pages(chapter_id):
     try:
         data = _gql(
             """
-            query GetPages($chapterId: Int!) {
-              fetchChapterPages(chapterId: $chapterId) {
+            mutation FetchPages($chapterId: Int!) {
+              fetchChapterPages(input: { chapterId: $chapterId }) {
                 pages
               }
             }

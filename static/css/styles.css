@@ -3480,3 +3480,59 @@ body::before {
   border-radius: 10px;
   font-weight: 500;
 }
+.source-lang-badge {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: rgba(76, 175, 80, 0.15);
+  color: #4caf50;
+  border-radius: 10px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.sources-mode-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+.sources-tab {
+  padding: 8px 16px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  margin-bottom: -1px;
+  transition: color 0.15s, border-color 0.15s;
+}
+.sources-tab:hover {
+  color: var(--text-primary);
+}
+.sources-tab--active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 500;
+}
+.sources-group {
+  margin-bottom: 32px;
+}
+.sources-group-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+.sources-group-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.sources-group-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-left: auto;
+}

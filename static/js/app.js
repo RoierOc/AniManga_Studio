@@ -70,7 +70,11 @@ const app = createApp({
         const sourcesLoading = ref(false);
         const suwayomiOnline = ref(false);
         const sourceHasNextPage = ref(false);
-        const currentSourceContext = ref(null); // non-null when modal opened from sources view
+        const currentSourceContext = ref(null);
+        const globalQuery = ref('');
+        const globalResults = ref([]);   // [{source:{id,name,lang}, results:[...]}]
+        const globalSearchLoading = ref(false);
+        const searchMode = ref('global'); // 'global' | 'source'
 
         // Search debounce
         let searchTimeout = null;
@@ -307,16 +311,51 @@ const app = createApp({
             chapters.value = [];
             mdChapters.value = [];
             chapterStatus.value = { downloaded: {}, upscaled: {} };
+            currentSourceContext.value = null;
             currentModalTab.value = 'chapters';
             exportSelectedChapters.value = [];
             showModal.value = true;
-            loadChapters(manga.name || manga.title);
+
+            const title = manga.name || manga.title;
+            // Load local downloaded chapters + check for source metadata
+            const libRes = await fetch('/api/library/' + encodeURIComponent(title)).catch(() => null);
+            if (libRes?.ok) {
+                const d = await libRes.json().catch(() => ({}));
+                chapters.value = d.chapters || [];
+                const dl = {}, up = {};
+                for (const c of d.chapters || []) { if (c.page_count > 0) dl[normalizeChapter(c.chapter)] = true; }
+                for (const key of Object.keys(d.upscaled || {})) { up[normalizeChapter(key)] = Boolean(d.upscaled[key]); }
+                chapterStatus.value = { downloaded: dl, upscaled: up };
+
+                // If manga was downloaded from a Suwayomi source, load the full chapter list from there
+                if (d.source_meta?.sourceId && d.source_meta?.mangaId) {
+                    currentSourceContext.value = { sourceId: d.source_meta.sourceId, mangaId: d.source_meta.mangaId };
+                    try {
+                        const chRes = await fetch(`/api/sources/manga/${d.source_meta.mangaId}/chapters`);
+                        if (chRes.ok) {
+                            const raw = await chRes.json();
+                            if (Array.isArray(raw) && !raw.error) {
+                                mdChapters.value = raw.map(ch => ({
+                                    id: 'suw_' + ch.id,
+                                    suwayomiId: ch.id,
+                                    chapter: String(ch.chapterNumber ?? '0').replace(/\.0$/, ''),
+                                    title: ch.name || '',
+                                    language: 'und',
+                                    scanlator: ch.scanlator || '',
+                                    pageCount: ch.pageCount || 0,
+                                }));
+                            }
+                        }
+                    } catch (e) {}
+                    return;
+                }
+            }
 
             const cover = await loadCoverForManga(manga);
             currentCover.value = cover || manga.cover;
 
-            // Also load MangaDex chapters so we can show all available chapters
-            const titleHint = manga.name || manga.title;
+            // No source meta — try MangaDex for the full chapter list
+            const titleHint = title;
             try {
                 const res = await fetch('/api/mangadex/search?q=' + encodeURIComponent(titleHint));
                 const results = await res.json();
@@ -975,12 +1014,31 @@ const app = createApp({
             }
         };
 
-        const openSourceManga = async (manga) => {
+        const searchAllSources = async () => {
+            if (!globalQuery.value.trim()) return;
+            globalSearchLoading.value = true;
+            globalResults.value = [];
+            try {
+                const params = new URLSearchParams({ q: globalQuery.value.trim() });
+                const res = await fetch(`/api/sources/search_all?${params}`);
+                if (!res.ok) throw new Error(res.statusText);
+                const data = await res.json();
+                if (data.error) throw new Error(data.error);
+                globalResults.value = (data || []).filter(g => g.results.length > 0);
+            } catch (e) {
+                showToast('Error buscando: ' + e.message, 'error');
+            } finally {
+                globalSearchLoading.value = false;
+            }
+        };
+
+        const openSourceManga = async (manga, sourceOverride) => {
+            const source = sourceOverride || activeSource.value;
             currentTitle.value = manga.title;
             currentCover.value = manga.thumbnailUrl || null;
             currentMdManga.value = { id: manga.id, title: manga.title, cover: manga.thumbnailUrl };
             currentManga.value = null;
-            currentSourceContext.value = { sourceId: activeSource.value?.id, mangaId: manga.id };
+            currentSourceContext.value = { sourceId: source?.id ?? manga.sourceId, mangaId: manga.id };
             mdChapters.value = [];
             chapters.value = [];
             chapterStatus.value = { downloaded: {}, upscaled: {} };
@@ -1041,7 +1099,13 @@ const app = createApp({
                 const dlRes = await fetch('/api/download/download_source_chapter', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title, chapter: chapterNorm, pageUrls: pagesData.pages }),
+                    body: JSON.stringify({
+                        title,
+                        chapter: chapterNorm,
+                        pageUrls: pagesData.pages,
+                        sourceId: currentSourceContext.value?.sourceId,
+                        mangaId: currentSourceContext.value?.mangaId,
+                    }),
                 });
                 const dlData = await dlRes.json();
                 if (dlData.error) throw new Error(dlData.error);
@@ -1089,7 +1153,8 @@ const app = createApp({
             setCoverMode, onCoverUpload,
             handleCoverError: (e) => { e.target.style.display = 'none'; if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex'; },
             sources, activeSource, sourceQuery, sourceResults, sourcesLoading, suwayomiOnline, sourceHasNextPage, currentSourceContext,
-            checkSuwayomi, loadSources, searchSources, openSourceManga,
+            globalQuery, globalResults, globalSearchLoading, searchMode,
+            checkSuwayomi, loadSources, searchSources, searchAllSources, openSourceManga,
         };
     }
 });
