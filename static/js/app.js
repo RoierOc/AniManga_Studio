@@ -1,6 +1,6 @@
 // Manga Upscaler Pro - Full MangaDex-Style Vue 3 App
 
-const { createApp, ref, computed, onMounted } = Vue;
+const { createApp, ref, computed, watch, onMounted } = Vue;
 
 // Initialize
 const app = createApp({
@@ -31,6 +31,25 @@ const app = createApp({
         const currentPage = ref(0);
         const pages = ref([]);
         const isZoomed = ref(false);
+        const readerMode = ref(localStorage.getItem('reader-mode') || 'paged');
+        const fitMode = ref(localStorage.getItem('reader-fit') || 'width');
+        const readingDir = ref(localStorage.getItem('reader-dir') || 'rtl');
+        const readerZoom = ref(1.0);
+        const panY = ref(0);
+        const panX = ref(0);
+        const readerBarsHidden = ref(false);
+        let readerBarsTimer = null;
+        // drag-to-pan state (not reactive — not needed in template)
+        let dragActive = false;
+        let dragOriginX = 0, dragOriginY = 0;
+        let dragStartPanX = 0, dragStartPanY = 0;
+        let dragHasMoved = false;
+
+        // Compare mode (before/after upscale slider)
+        const compareMode = ref(false);
+        const compareX = ref(50);   // divider position 0-100 %
+        const readerSource = ref(''); // 'original' | 'upscaled'
+        let compareDragging = false;
         
         // Filters
         const selectedLang = ref('');
@@ -48,19 +67,37 @@ const app = createApp({
         const exportVolumeName = ref('');
         const exportFormat = ref('cbz');
         const exportSelectedChapters = ref([]);
+        const exportChapterSet = computed(() => new Set(exportSelectedChapters.value.map(c => normalizeChapter(c))));
         const exportBusy = ref(false);
-        const exportPreview = ref({ pages: 0, size_mb: 0, upscaled_pages: 0 });
+        const exportPreview = ref({ pages: 0, size_mb: 0, upscaled_pages: 0, original_pages: 0 });
+        const chapterHealth = ref([]);   // [{chapter, status, missing_upscaled, download_gaps}]
         let exportPreviewTimer = null;
 
         // Cover state
-        const exportQuality = ref(85);           // JPEG quality for CBZ re-encoding
+        const exportQuality = ref(92);           // JPEG quality for CBZ re-encoding (MozJPEG)
+        const exportDownscaleHalf = ref(true);   // resize to ½ on export (tablet-friendly)
 
-        const exportCoverMode = ref('none');   // 'none' | 'chapter' | 'upload'
+        const exportCoverMode = ref('none');   // 'none' | 'chapter' | 'upload' | 'mdex'
         const exportColorPages = ref([]);
         const exportColorPagesLoading = ref(false);
         const exportSelectedCover = ref(null); // { path, url, label }
         const exportUploadedCoverB64 = ref('');
         const exportUploadedCoverUrl = ref('');
+        const exportExcludedPages = ref([]);   // filenames to exclude from CBZ/CBR
+
+        // MangaDex volumes + covers
+        const mdexVolumes = ref([]);           // [{ volume, label, chapters, count }]
+        const mdexVolumesLoading = ref(false);
+        const mdexCovers = ref([]);            // [{ id, volume, url512, url256, ... }]
+        const mdexCoversLoading = ref(false);
+        const mdexSelectedCover = ref(null);   // { url512, url256, volume }
+        const mdexCoverLoadingId = ref(null);  // cover id being fetched as b64
+        const mdexSearchQuery = ref('');
+        const mdexSearchResults = ref([]);
+        const mdexSearchLoading = ref(false);
+
+        // Export task tracking
+        const exportTasks = ref({});           // task_id → {status, title, progress, total, ...}
         
         // Google Drive
         const driveConfigured = ref(false);
@@ -111,8 +148,10 @@ const app = createApp({
                     volume_name: exportVolumeName.value || currentTitle.value,
                     format: exportFormat.value,
                     quality: exportQuality.value,
+                    downscale_half: exportDownscaleHalf.value,
                     cover_path: exportSelectedCover.value?.path || '',
                     cover_data: exportUploadedCoverB64.value || '',
+                    exclude_pages: exportExcludedPages.value,
                 };
                 const r = await fetch('/api/drive/upload_tomo', {
                     method: 'POST',
@@ -179,7 +218,7 @@ const app = createApp({
             return {
                 total: all.length,
                 downloaded: Object.values(chapterStatus.value.downloaded).filter(Boolean).length,
-                upscaled: Object.values(chapterStatus.value.upscaled).filter(Boolean).length
+                upscaled: Object.values(chapterStatus.value.upscaled).filter(v => v === true).length
             };
         });
         
@@ -260,7 +299,61 @@ const app = createApp({
             if (!selectedLang.value) return groupedChapters.value;
             return groupedChapters.value.filter(g => g.variants.some(v => v.language === selectedLang.value));
         });
-        
+
+        // ── Reader computed ─────────────────────────────────────────────────────
+        const readerChapterList = computed(() =>
+            [...filteredChapters.value].sort((a,b) => (parseFloat(a.chapter)||0) - (parseFloat(b.chapter)||0))
+        );
+        const readerChapterIndex = computed(() =>
+            readerChapterList.value.findIndex(g => normalizeChapter(g.chapter) === normalizeChapter(currentChapter.value))
+        );
+        const canGoPrevChapter = computed(() => readerChapterIndex.value > 0);
+        const canGoNextChapter = computed(() => readerChapterIndex.value < readerChapterList.value.length - 1);
+
+        // ── Reading progress (localStorage) ─────────────────────────────────────
+        const PROGRESS_KEY = 'manga-progress-v1';
+        const _progressStore = ref((() => { try { return JSON.parse(localStorage.getItem(PROGRESS_KEY) || '{}'); } catch { return {}; } })());
+        const getProgressStore = () => _progressStore.value;
+        const _writeProgressStore = (s) => {
+            _progressStore.value = s;
+            localStorage.setItem(PROGRESS_KEY, JSON.stringify(s));
+        };
+        const saveReadingProgress = (title, chapter, page) => {
+            const s = JSON.parse(JSON.stringify(getProgressStore())); const k = canonicalTitle(title);
+            if (!s[k]) s[k] = { read: {} };
+            s[k].lastChapter = String(chapter); s[k].lastPage = page;
+            _writeProgressStore(s);
+        };
+        const markChapterRead = (title, chapter) => {
+            const s = JSON.parse(JSON.stringify(getProgressStore())); const k = canonicalTitle(title);
+            if (!s[k]) s[k] = { read: {} };
+            s[k].read[normalizeChapter(chapter)] = true;
+            _writeProgressStore(s);
+        };
+        const isChapterRead = (chapter) => {
+            if (!currentTitle.value) return false;
+            return !!(getProgressStore()[canonicalTitle(currentTitle.value)]?.read?.[normalizeChapter(chapter)]);
+        };
+        const getLastReadProgress = (title) => title ? (getProgressStore()[canonicalTitle(title)] || null) : null;
+        const toggleChapterRead = (chapter) => {
+            const s = JSON.parse(JSON.stringify(getProgressStore())); const k = canonicalTitle(currentTitle.value);
+            if (!s[k]) s[k] = { read: {} };
+            if (!s[k].read) s[k].read = {};
+            const norm = normalizeChapter(chapter);
+            if (s[k].read[norm]) delete s[k].read[norm];
+            else s[k].read[norm] = true;
+            _writeProgressStore(s);
+        };
+
+        const seriesReadCounts = computed(() => {
+            const s = getProgressStore();
+            const out = {};
+            for (const [k, data] of Object.entries(s)) {
+                out[k] = Object.keys(data.read || {}).length;
+            }
+            return out;
+        });
+
         const availableLangs = computed(() => {
             const langs = new Set();
             for (const ch of mdChapters.value) if (ch.language) langs.add(ch.language);
@@ -271,6 +364,19 @@ const app = createApp({
             if (!pages.value.length) return '';
             return '/uploads/' + encodeURIComponent(pages.value[currentPage.value]);
         });
+
+        // Compare mode — explicit original / upscaled URLs for the same page path
+        const currentPageOrigUrl = computed(() => {
+            if (!pages.value.length) return '';
+            return '/uploads/original/' + encodeURIComponent(pages.value[currentPage.value]);
+        });
+        const currentPageUpUrl = computed(() => {
+            if (!pages.value.length) return '';
+            return '/uploads/upscaled/' + encodeURIComponent(pages.value[currentPage.value]);
+        });
+        const canCompare = computed(() =>
+            readerSource.value === 'upscaled' && readerMode.value === 'paged'
+        );
         
         // Load library WITH covers (PARALLEL for speed)
         const loadLibrary = async () => {
@@ -385,12 +491,56 @@ const app = createApp({
                     }
                     const upscaled = {};
                     for (const key of Object.keys(d.upscaled || {})) {
-                        upscaled[normalizeChapter(key)] = Boolean(d.upscaled[key]);
+                        upscaled[normalizeChapter(key)] = d.upscaled[key];
                     }
                     chapterStatus.value = { downloaded, upscaled };
                 });
+            loadChapterHealth(title);
         };
         
+        const loadChapterHealth = (title) => {
+            fetch('/api/library/chapter_health/' + encodeURIComponent(title))
+                .then(r => r.json()).catch(() => [])
+                .then(d => { if (Array.isArray(d)) chapterHealth.value = d; });
+        };
+
+        const getChapterHealth = (ch) => {
+            const norm = normalizeChapter(ch);
+            return chapterHealth.value.find(h => normalizeChapter(h.chapter) === norm) || null;
+        };
+
+        const repairChapter = async (ch, mode = 'full') => {
+            const title = currentTitle.value;
+            if (!title) return;
+            const taskId = getTaskKey(ch, 'upscale', title);
+            activeTasks.value = { ...activeTasks.value, [taskId]: { type: 'upscale', status: 'starting', progress: 0, total: 0, misses: 0, displayTitle: title, displayChapter: String(ch), mode, repair: true } };
+            showToast(`Reparando cap. ${ch}...`, 'info');
+            try {
+                const res = await fetch('/api/upscale/repair_chapter', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, chapter: ch, mode })
+                });
+                const data = await res.json();
+                if (data.status === 'nothing_to_repair') {
+                    showToast(`Cap. ${ch} ya está completo`, 'info');
+                    const t = { ...activeTasks.value }; delete t[taskId]; activeTasks.value = t;
+                    loadChapterHealth(title);
+                } else if (data.error) {
+                    showToast('Error: ' + data.error, 'error');
+                    activeTasks.value = { ...activeTasks.value, [taskId]: { ...activeTasks.value[taskId], status: 'error' } };
+                } else if (data.task_id && data.task_id !== taskId && activeTasks.value[taskId]) {
+                    const next = { ...activeTasks.value };
+                    const cur = next[taskId]; delete next[taskId];
+                    next[data.task_id] = { ...cur, taskId: data.task_id };
+                    activeTasks.value = next;
+                }
+            } catch(e) {
+                showToast('Error: ' + e.message, 'error');
+                activeTasks.value = { ...activeTasks.value, [taskId]: { ...activeTasks.value[taskId], status: 'error' } };
+            }
+        };
+
         const loadMdChapters = (mangaId) => {
             fetch('/api/mangadex/chapters/' + mangaId).then(r => r.json()).catch(() => [])
                 .then(d => { if (Array.isArray(d)) mdChapters.value = d; });
@@ -416,10 +566,11 @@ const app = createApp({
             currentTitle.value = manga.name || manga.title;
             chapters.value = [];
             mdChapters.value = [];
-            chapterStatus.value = { downloaded: {}, upscaled: {} };
+            chapterStatus.value = { downloaded: {}, upscaled: {} }; chapterHealth.value = [];
             currentSourceContext.value = null;
             currentModalTab.value = 'chapters';
             exportSelectedChapters.value = [];
+            exportExcludedPages.value = [];
             showModal.value = true;
 
             const title = manga.name || manga.title;
@@ -430,7 +581,7 @@ const app = createApp({
                 chapters.value = d.chapters || [];
                 const dl = {}, up = {};
                 for (const c of d.chapters || []) { if (c.page_count > 0) dl[normalizeChapter(c.chapter)] = true; }
-                for (const key of Object.keys(d.upscaled || {})) { up[normalizeChapter(key)] = Boolean(d.upscaled[key]); }
+                for (const key of Object.keys(d.upscaled || {})) { up[normalizeChapter(key)] = d.upscaled[key]; }
                 chapterStatus.value = { downloaded: dl, upscaled: up };
 
                 // Use forcedSourceMeta from the card (covers old downloads without .source_meta.json)
@@ -473,6 +624,7 @@ const app = createApp({
                 if (!forcedSourceMeta?.sourceId && pairedMdManga?.id) {
                     currentMdManga.value = pairedMdManga;
                     if (!currentCover.value && pairedMdManga.cover) currentCover.value = pairedMdManga.cover;
+                    loadMdChapters(pairedMdManga.id);
                 }
                 return;
             }
@@ -503,7 +655,7 @@ const app = createApp({
             currentCover.value = manga.cover;
             chapters.value = [];
             mdChapters.value = [];
-            chapterStatus.value = { downloaded: {}, upscaled: {} };
+            chapterStatus.value = { downloaded: {}, upscaled: {} }; chapterHealth.value = [];
             currentModalTab.value = 'chapters';
             exportSelectedChapters.value = [];
             showModal.value = true;
@@ -520,7 +672,7 @@ const app = createApp({
                             }
                             const upscaled = {};
                             for (const key of Object.keys(d.upscaled || {})) {
-                                upscaled[normalizeChapter(key)] = Boolean(d.upscaled[key]);
+                                upscaled[normalizeChapter(key)] = d.upscaled[key];
                             }
                             chapterStatus.value = { ...chapterStatus.value, downloaded: dl, upscaled };
                         }
@@ -759,7 +911,8 @@ const app = createApp({
         
         // Chapter status
         const isDownloaded = (ch) => chapterStatus.value.downloaded[normalizeChapter(ch)];
-        const isUpscaled = (ch) => chapterStatus.value.upscaled[normalizeChapter(ch)];
+        const isUpscaled = (ch) => chapterStatus.value.upscaled[normalizeChapter(ch)] === true;
+        const isPartialUpscaled = (ch) => chapterStatus.value.upscaled[normalizeChapter(ch)] === 'partial';
         
         // Task helpers
         const getTaskKey = (ch, type, titleOverride) => {
@@ -786,7 +939,7 @@ const app = createApp({
         };
         
         // Actions
-        const downloadChapter = async (group, forceLang = null) => {
+        const downloadChapter = async (group, forceLang = null, { silent = false } = {}) => {
             if (currentSourceContext.value) { await _downloadFromSource(group); return; }
             const title = currentTitle.value;
             if (!title) return;
@@ -815,7 +968,7 @@ const app = createApp({
             
             // Immediate UI update
             activeTasks.value = { ...activeTasks.value, [taskId]: { type: 'download', status: 'starting', progress: 0, total: 0, misses: 0, displayTitle: title, displayChapter: String(chapter) } };
-            showToast(`Descargando capítulo ${chapter}...`, 'info');
+            if (!silent) showToast(`Descargando capítulo ${chapter}...`, 'info');
             
             try {
                 // If we have chapterId, use it. Otherwise use title+chapter only
@@ -856,19 +1009,19 @@ const app = createApp({
             }
         };
         
-        const upscaleChapter = async (ch) => {
+        const upscaleChapter = async (ch, mode = 'full', { silent = false } = {}) => {
             const title = currentTitle.value;
             if (!title) return;
             const taskId = getTaskKey(ch, 'upscale', title);
-            
-            activeTasks.value = { ...activeTasks.value, [taskId]: { type: 'upscale', status: 'starting', progress: 0, total: 0, misses: 0, displayTitle: title, displayChapter: String(ch) } };
-            showToast(`Upscaling capítulo ${ch}...`, 'info');
-            
+
+            activeTasks.value = { ...activeTasks.value, [taskId]: { type: 'upscale', status: 'starting', progress: 0, total: 0, misses: 0, displayTitle: title, displayChapter: String(ch), mode } };
+            if (!silent) showToast(mode === 'eco' ? `Upscale eco cap. ${ch}...` : `Upscaling capítulo ${ch}...`, 'info');
+
             try {
                 const res = await fetch('/api/upscale/upscale_chapter', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title, chapter: ch })
+                    body: JSON.stringify({ title, chapter: ch, mode })
                 });
                 const data = await res.json();
                 if (data.error) {
@@ -886,32 +1039,214 @@ const app = createApp({
                 showToast('Error: ' + e.message, 'error');
                 activeTasks.value = { ...activeTasks.value, [taskId]: { ...activeTasks.value[taskId], status: 'error' } };
             }
-};
+        };
+
+        const cancelUpscale = async (taskId) => {
+            try {
+                await fetch('/api/upscale/cancel/' + encodeURIComponent(taskId), { method: 'POST' });
+                const t = { ...activeTasks.value };
+                delete t[taskId];
+                activeTasks.value = t;
+                showToast('Upscale cancelado', 'info');
+            } catch(e) {}
+        };
+
+        const cancelDownload = async (taskId) => {
+            try {
+                await fetch('/api/download/cancel/' + encodeURIComponent(taskId), { method: 'POST' });
+                const t = { ...activeTasks.value };
+                delete t[taskId];
+                activeTasks.value = t;
+                showToast('Descarga cancelada', 'info');
+            } catch(e) {}
+        };
         
-        const readChapter = (ch, source = 'auto') => {
+        const readChapter = async (ch, source = 'auto') => {
             const title = currentTitle.value;
             if (!title) return;
             currentChapter.value = ch;
-            fetch('/api/reader/read_chapter', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ title, chapter: ch, source })
-            }).then(r => r.json()).then(d => {
-                pages.value = d.pages || [];
-                currentPage.value = 0;
-            });
+            readerZoom.value = 1.0;
+            panY.value = 0;
+            panX.value = 0;
             showReader.value = true;
+            pages.value = [];
+            try {
+                const r = await fetch('/api/reader/read_chapter', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, chapter: ch, source })
+                });
+                const d = await r.json();
+                pages.value = d.pages || [];
+                readerSource.value = d.source || 'original';
+                compareMode.value = false; // reset on chapter change
+                const prog = getLastReadProgress(title);
+                if (prog?.lastChapter === String(ch) && prog.lastPage > 0 && prog.lastPage < pages.value.length) {
+                    currentPage.value = prog.lastPage;
+                } else {
+                    currentPage.value = 0;
+                }
+            } catch(e) { console.error('readChapter error', e); }
         };
 
         const readChapterOriginal = (ch) => readChapter(ch, 'original');
         const readChapterUpscaled = (ch) => readChapter(ch, 'upscaled');
-        
-        // Reader
-        const closeReader = () => { showReader.value = false; pages.value = []; isZoomed.value = false; };
+
+        // Reader controls
+        const closeReader = () => {
+            showReader.value = false; pages.value = [];
+            readerZoom.value = 1.0; panY.value = 0; panX.value = 0; readerBarsHidden.value = false;
+            dragActive = false; compareDragging = false; compareMode.value = false;
+            clearTimeout(readerBarsTimer);
+        };
         const nextPage = () => { if (currentPage.value < pages.value.length - 1) currentPage.value++; };
         const prevPage = () => { if (currentPage.value > 0) currentPage.value--; };
-        const toggleZoom = () => { isZoomed.value = !isZoomed.value; };
+        const toggleZoom = () => {};
         const goToPage = (num) => { const p = parseInt(num) - 1; if (p >= 0 && p < pages.value.length) currentPage.value = p; };
         const onPageLoad = () => {};
+
+        // Chapter navigation from reader
+        const goNextChapter = () => {
+            if (!canGoNextChapter.value) return;
+            const next = readerChapterList.value[readerChapterIndex.value + 1];
+            readChapter(next.chapter, isUpscaled(next.chapter) ? 'upscaled' : 'auto');
+        };
+        const goPrevChapter = () => {
+            if (!canGoPrevChapter.value) return;
+            const prev = readerChapterList.value[readerChapterIndex.value - 1];
+            readChapter(prev.chapter, isUpscaled(prev.chapter) ? 'upscaled' : 'auto');
+        };
+
+        // Bar auto-hide
+        const showBars = () => {
+            readerBarsHidden.value = false;
+            clearTimeout(readerBarsTimer);
+            if (readerMode.value === 'paged') readerBarsTimer = setTimeout(() => { readerBarsHidden.value = true; }, 1200);
+        };
+
+        // Reader settings
+        const cycleFitMode = () => { const modes = ['width','height','original']; const i = modes.indexOf(fitMode.value); fitMode.value = modes[(i+1)%3]; localStorage.setItem('reader-fit', fitMode.value); };
+        const setReaderMode = (mode) => { readerMode.value = mode; localStorage.setItem('reader-mode', mode); };
+        const toggleReaderDir = () => { readingDir.value = readingDir.value === 'rtl' ? 'ltr' : 'rtl'; localStorage.setItem('reader-dir', readingDir.value); };
+        // Drag-to-pan when zoomed
+        const onPanStart = (e) => {
+            if (readerZoom.value <= 1.01) return;
+            dragActive = true;
+            dragHasMoved = false;
+            dragOriginX = e.clientX;
+            dragOriginY = e.clientY;
+            dragStartPanX = panX.value;
+            dragStartPanY = panY.value;
+            e.preventDefault();
+        };
+        const onPanMove = (e) => {
+            if (!dragActive) return;
+            const dx = e.clientX - dragOriginX;
+            const dy = e.clientY - dragOriginY;
+            if (Math.abs(dx) > 4 || Math.abs(dy) > 4) dragHasMoved = true;
+            if (dragHasMoved) {
+                const maxPanYv = (readerZoom.value - 1) * window.innerHeight * 0.6;
+                const maxPanXv = (readerZoom.value - 1) * window.innerWidth  * 0.6;
+                panY.value = Math.max(-maxPanYv, Math.min(maxPanYv, dragStartPanY + dy));
+                panX.value = Math.max(-maxPanXv, Math.min(maxPanXv, dragStartPanX + dx));
+            }
+        };
+        const onPanEnd = (e) => {
+            if (!dragActive) return;
+            dragActive = false;
+            if (!dragHasMoved) {
+                // Treat as page-navigation click
+                const x = e.clientX / window.innerWidth;
+                readingDir.value === 'rtl' ? (x > 0.5 ? prevPage() : nextPage())
+                                           : (x > 0.5 ? nextPage() : prevPage());
+            }
+        };
+
+        // Scroll zoom (paged mode: always; webtoon: only with ctrl)
+        const handleReaderWheel = (e) => {
+            if (readerMode.value === 'webtoon' && !(e.ctrlKey || e.metaKey)) return;
+            e.preventDefault();
+            const next = Math.max(0.5, Math.min(3.0, readerZoom.value + (e.deltaY < 0 ? 0.15 : -0.15)));
+            readerZoom.value = next;
+            if (next <= 1.0) { panY.value = 0; panX.value = 0; }
+        };
+
+        const toggleFullscreen = () => {
+            if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(()=>{});
+            else document.exitFullscreen().catch(()=>{});
+        };
+
+        // ── Compare mode (before/after upscale) ─────────────────────────────
+        const toggleCompare = () => {
+            if (!canCompare.value) { compareMode.value = false; return; }
+            compareMode.value = !compareMode.value;
+            if (compareMode.value) compareX.value = 50;
+        };
+        const onCompareDragStart = (e) => {
+            compareDragging = true;
+            e.stopPropagation();
+            e.preventDefault();
+        };
+        const onCompareDrag = (e) => {
+            if (!compareDragging) return;
+            const content = document.querySelector('.reader-content');
+            if (!content) return;
+            const rect = content.getBoundingClientRect();
+            compareX.value = Math.max(3, Math.min(97, ((e.clientX - rect.left) / rect.width) * 100));
+        };
+        const onCompareDragEnd = () => { compareDragging = false; };
+
+        // ── Mobile library ───────────────────────────────────────────────────
+        const libraryUrlLocal = ref('http://localhost:5001/library');
+        const libraryUrlPhone = ref('');
+        const libraryWslIp = ref('');
+        const libraryFileCount = ref(0);
+        const libraryFwCmd = 'New-NetFirewallRule -DisplayName "MangaUpscaler Web" -Direction Inbound -Protocol TCP -LocalPort 5001 -Action Allow -Profile Any';
+        const libraryProxyCmd = computed(() =>
+            `netsh interface portproxy add v4tov4 listenport=5001 listenaddress=0.0.0.0 connectport=5001 connectaddress=${libraryWslIp.value}`
+        );
+
+        const loadLibraryInfo = async () => {
+            try {
+                const r = await fetch('/api/webdav/status');
+                const d = await r.json();
+                libraryUrlLocal.value = d.library_url_local || 'http://localhost:5001/library';
+                libraryUrlPhone.value = d.library_url_phone || '';
+                libraryWslIp.value = d.server_ip || '';
+                libraryFileCount.value = (d.folders || []).length + (d.files || []).length;
+            } catch (_) {}
+        };
+
+        const saveToLibrary = async (taskId) => {
+            try {
+                const r = await fetch('/api/webdav/save', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ task_id: taskId }),
+                });
+                const d = await r.json();
+                if (d.error) { showToast('Error guardando: ' + d.error, 'error'); return; }
+                showToast(`"${d.filename}" guardado en biblioteca`, 'success');
+                loadLibraryInfo();
+            } catch (e) { showToast('Error guardando en biblioteca', 'error'); }
+        };
+
+        const dismissExportTask = (taskId) => {
+            const t = { ...exportTasks.value };
+            delete t[taskId];
+            exportTasks.value = t;
+        };
+
+        // Webtoon scroll → track current page
+        const onWebtoonScroll = (e) => {
+            const container = e.target;
+            const imgs = container.querySelectorAll('.reader-webtoon-img');
+            const mid = container.scrollTop + container.clientHeight / 2;
+            let closest = 0, closestDist = Infinity;
+            imgs.forEach((img, i) => {
+                const dist = Math.abs(img.offsetTop + img.offsetHeight / 2 - mid);
+                if (dist < closestDist) { closestDist = dist; closest = i; }
+            });
+            currentPage.value = closest;
+        };
         
         const showToast = (msg, type = 'info') => {
             toast.value = { show: true, message: msg, type };
@@ -947,10 +1282,17 @@ const app = createApp({
                                 const t = { ...activeTasks.value };
                                 delete t[taskId];
                                 activeTasks.value = t;
-                                if (currentTitle.value) loadChapters(currentTitle.value);
+                                if (currentTitle.value) {
+                                    loadChapters(currentTitle.value);
+                                    if (task.type === 'upscale') loadChapterHealth(currentTitle.value);
+                                }
                                 // Refresh library so card shows real chapter count
                                 if (task.type === 'download') loadLibrary();
                             }, 2000);
+                        } else if (data.status === 'cancelled') {
+                            const t = { ...activeTasks.value };
+                            delete t[taskId];
+                            activeTasks.value = t;
                         } else if (data.status === 'error' || data.status === 'not_found') {
                             const misses = data.status === 'not_found' ? (task.misses || 0) + 1 : 0;
                             if (data.status === 'error' || misses >= 8) {
@@ -970,11 +1312,49 @@ const app = createApp({
         // Keyboard
         const handleKeydown = (e) => {
             if (!showReader.value) return;
-            if (e.key === 'ArrowRight' || e.key === ' ') nextPage();
-            if (e.key === 'ArrowLeft') prevPage();
+            const isRTL = readingDir.value === 'rtl';
+            const zoomed = readerZoom.value > 1.01;
+
+            if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                if (zoomed) {
+                    const maxPan = (readerZoom.value - 1) * window.innerHeight * 0.6;
+                    panY.value = Math.max(panY.value - 120, -maxPan);
+                }
+                return;
+            }
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                if (zoomed) {
+                    const maxPan = (readerZoom.value - 1) * window.innerHeight * 0.6;
+                    panY.value = Math.min(panY.value + 120, maxPan);
+                }
+                return;
+            }
+
+            if (e.key === 'ArrowRight') { e.preventDefault(); isRTL ? prevPage() : nextPage(); }
+            if (e.key === 'ArrowLeft')  { e.preventDefault(); isRTL ? nextPage() : prevPage(); }
+            if (e.key === ' ') { e.preventDefault(); nextPage(); }
             if (e.key === 'Escape') closeReader();
-            if (e.key === 'z') toggleZoom();
+            if (e.key === 'f') cycleFitMode();
+            if (e.key === 'w') setReaderMode(readerMode.value === 'paged' ? 'webtoon' : 'paged');
+            if (e.key === 'd') toggleReaderDir();
+            if (e.key === 'c') toggleCompare();
+            if (e.key === ']') goNextChapter();
+            if (e.key === '[') goPrevChapter();
         };
+
+        // Reset pan when page changes
+        watch(currentPage, () => { panY.value = 0; panX.value = 0; });
+
+        // Auto-save progress on page change
+        watch(currentPage, (page) => {
+            if (!showReader.value || !currentTitle.value || !currentChapter.value) return;
+            saveReadingProgress(currentTitle.value, currentChapter.value, page);
+            if (pages.value.length > 0 && page >= pages.value.length - 1) {
+                markChapterRead(currentTitle.value, currentChapter.value);
+            }
+        });
         
         const taskQueueList = computed(() => {
             return Object.entries(activeTasks.value).map(([id, task]) => ({
@@ -982,6 +1362,18 @@ const app = createApp({
                 ...task,
                 percent: task.total > 0 ? Math.min(100, Math.round(((task.progress || 0) * 100) / task.total)) : 0
             }));
+        });
+
+        const taskQueueSummary = computed(() => {
+            const list = taskQueueList.value;
+            const dlTasks = list.filter(t => t.type === 'download');
+            const upTasks = list.filter(t => t.type === 'upscale');
+            const totalProgress = list.reduce((s, t) => s + (t.progress || 0), 0);
+            const totalWork     = list.reduce((s, t) => s + (t.total || 0), 0);
+            const aggPercent    = totalWork > 0 ? Math.min(100, Math.round(totalProgress * 100 / totalWork)) : 0;
+            // Pages remaining across all tasks
+            const pagesLeft = list.reduce((s, t) => s + Math.max(0, (t.total || 0) - (t.progress || 0)), 0);
+            return { dl: dlTasks.length, up: upTasks.length, aggPercent, pagesLeft, total: list.length };
         });
 
         // Map canonical title → active task (used to show progress overlays on library cards)
@@ -1049,11 +1441,20 @@ const app = createApp({
             exportSelectedCover.value = null;
             exportUploadedCoverB64.value = '';
             exportUploadedCoverUrl.value = '';
+            exportExcludedPages.value = [];
+            mdexSelectedCover.value = null;
+            mdexVolumes.value = [];
+            mdexCovers.value = [];
+            mdexSearchQuery.value = '';
+            mdexSearchResults.value = [];
+            if (exportSelectedChapters.value.length > 0) loadColorPages();
+            loadMdexVolumes();
         };
 
         const loadColorPages = async () => {
             if (!currentTitle.value || !exportSelectedChapters.value.length) {
                 exportColorPages.value = [];
+                exportExcludedPages.value = [];
                 return;
             }
             exportColorPagesLoading.value = true;
@@ -1064,7 +1465,12 @@ const app = createApp({
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ title: currentTitle.value, chapters: exportSelectedChapters.value })
                 });
-                if (res.ok) exportColorPages.value = await res.json();
+                if (res.ok) {
+                    exportColorPages.value = await res.json();
+                    // Remove exclusions that no longer exist in the current chapter selection
+                    const valid = new Set(exportColorPages.value.map(p => p.filename));
+                    exportExcludedPages.value = exportExcludedPages.value.filter(f => valid.has(f));
+                }
             } catch (e) {}
             exportColorPagesLoading.value = false;
         };
@@ -1074,7 +1480,319 @@ const app = createApp({
             exportSelectedCover.value = null;
             exportUploadedCoverB64.value = '';
             exportUploadedCoverUrl.value = '';
-            if (mode === 'chapter') loadColorPages();
+            mdexSelectedCover.value = null;
+            loadColorPages();
+            if (mode === 'mdex') loadMdexCovers();
+        };
+
+        // ── MangaDex volumes ──────────────────────────────────────────────────
+        // Returns a MangaDex UUID — only from currentMdManga (guaranteed UUID).
+        // currentManga.id is the local folder name; source_meta.mangaId is Suwayomi's internal int — neither is a UUID.
+        const _getMangaId = () => currentMdManga.value?.id || null;
+
+        // Resolve UUID when not already known (library / Mihon manga not in followed list).
+        const _resolveMdexId = async () => {
+            let id = _getMangaId();
+            if (id) return id;
+            const title = currentTitle.value;
+            if (!title) return null;
+            try {
+                const res = await fetch('/api/mangadex/search?q=' + encodeURIComponent(title));
+                const results = await res.json();
+                if (!Array.isArray(results) || !results.length) return null;
+                const exact = results.find(r => canonicalTitle(r.title) === canonicalTitle(title));
+                if (!exact) return null;   // only accept exact match to avoid wrong manga
+                currentMdManga.value = { id: exact.id, title: exact.title, cover: exact.cover, status: exact.status };
+                return exact.id;
+            } catch (e) { return null; }
+        };
+
+        const loadMdexVolumes = async () => {
+            const id = await _resolveMdexId();
+            if (!id) return;
+            mdexVolumesLoading.value = true;
+            mdexVolumes.value = [];
+            try {
+                const [volRes, covRes] = await Promise.all([
+                    fetch(`/api/mangadex/volumes/${id}`),
+                    fetch(`/api/mangadex/covers/${id}`)
+                ]);
+                let volumes = volRes.ok ? await volRes.json() : [];
+                if (!Array.isArray(volumes)) volumes = [];
+                const covers = covRes.ok ? await covRes.json() : [];
+
+                // Only scrape when the API returned zero chapter data (manga fully unlisted).
+                // For partial gaps (covers > api vols), the gap interpolation handles it —
+                // scraping would replace the detailed API chapter lists with coarse ranges.
+                const apiVolCount = volumes.filter(v => v.chapters && v.chapters.length).length;
+                if (apiVolCount === 0) {
+                    try {
+                        const scrapeRes = await fetch(`/api/mangadex/scrape_volumes/${id}`);
+                        if (scrapeRes.ok) {
+                            const scraped = await scrapeRes.json();
+                            if (Array.isArray(scraped) && scraped.length > 0 && !scraped.error) {
+                                volumes = scraped;
+                            }
+                        }
+                    } catch (_) {}
+                }
+
+                // Add volumes that exist only as cover art (no chapters on MangaDex)
+                const knownVols = new Set(volumes.map(v => v.volume));
+                const coverVols = [...new Set(
+                    (Array.isArray(covers) ? covers : [])
+                        .map(c => c.volume)
+                        .filter(v => v && v !== 'none')
+                )];
+                for (const vol of coverVols) {
+                    if (!knownVols.has(vol)) {
+                        volumes.push({ volume: vol, label: `Tomo ${vol}`, chapters: null, count: 0, noChapterData: true });
+                    }
+                }
+
+                // Sort: numeric ascending, "none" last
+                volumes.sort((a, b) => {
+                    const na = parseFloat(a.volume), nb = parseFloat(b.volume);
+                    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+                    return isNaN(na) ? 1 : -1;
+                });
+                mdexVolumes.value = volumes;
+            } catch (e) {}
+            mdexVolumesLoading.value = false;
+        };
+
+        const applyMdexVolume = (vol) => {
+            exportVolumeName.value = vol.label || `Tomo ${vol.volume}`;
+            exportExcludedPages.value = [];
+
+            const localChaps = groupedChapters.value
+                .map(g => ({ norm: normalizeChapter(g.chapter), num: parseFloat(g.chapter) }))
+                .filter(g => !isNaN(g.num));
+
+            let selected;
+            if (vol.noChapterData || !vol.chapters || !vol.chapters.length) {
+                const volNum = parseFloat(vol.volume);
+                const known = mdexVolumes.value.filter(v => !v.noChapterData && v.chapters && v.chapters.length);
+
+                if (known.length === 0) {
+                    // No API chapter data for ANY volume — evenly split local chapters across cover-only volumes
+                    const coverVols = mdexVolumes.value
+                        .filter(v => !isNaN(parseFloat(v.volume)))
+                        .sort((a, b) => parseFloat(a.volume) - parseFloat(b.volume));
+                    const idx = coverVols.findIndex(v => v.volume === vol.volume);
+                    const count = coverVols.length;
+                    const sorted = [...localChaps].sort((a, b) => a.num - b.num);
+
+                    // Separate "main" chapters (integers) from bonus/half chapters (e.g. 23.5, 2.1).
+                    // This lets us compute a fair base size using only main chapters, then assign
+                    // bonus chapters to the volume that contains their parent chapter number.
+                    const mainChaps  = sorted.filter(g => Number.isInteger(g.num));
+                    const bonusChaps = sorted.filter(g => !Number.isInteger(g.num));
+
+                    const base      = Math.floor(mainChaps.length / count);
+                    const remainder = mainChaps.length % count;
+                    // Extra chapters go to the LAST `remainder` volumes so vol 1 isn't bloated
+                    const slices = [];
+                    let offset = 0;
+                    for (let i = 0; i < count; i++) {
+                        const extra = (i >= count - remainder) ? 1 : 0;
+                        slices.push(mainChaps.slice(offset, offset + base + extra).map(g => g.norm));
+                        offset += base + extra;
+                    }
+                    // Assign each bonus chapter to the slice that contains its integer parent
+                    for (const bonus of bonusChaps) {
+                        const parent = Math.floor(bonus.num);
+                        const target = slices.findIndex(s =>
+                            s.some(norm => parseFloat(norm) === parent)
+                        );
+                        (target >= 0 ? slices[target] : slices[slices.length - 1]).push(bonus.norm);
+                    }
+                    selected = slices[idx] || [];
+                } else {
+                    // Some volumes have API data — find bounding API volumes
+                    const prev = [...known].sort((a,b) => parseFloat(b.volume)-parseFloat(a.volume)).find(v => parseFloat(v.volume) < volNum);
+                    const next = [...known].sort((a,b) => parseFloat(a.volume)-parseFloat(b.volume)).find(v => parseFloat(v.volume) > volNum);
+                    const prevMax = prev ? Math.max(...prev.chapters.map(Number).filter(n => !isNaN(n) && n >= 1)) : 0;
+                    const _nextNums = next ? next.chapters.map(Number).filter(n => !isNaN(n) && n >= 1) : [];
+                    const nextMin = _nextNums.length ? Math.min(..._nextNums) : Infinity;
+
+                    // Find all cover-only volumes in this same sub-gap so we can split evenly.
+                    // Without this, every cover-only vol in the gap selects the same chapters.
+                    const prevDataNum = prev ? parseFloat(prev.volume) : -Infinity;
+                    const nextDataNum = next ? parseFloat(next.volume) : Infinity;
+                    const subGapVols = mdexVolumes.value
+                        .filter(v => {
+                            const vn = parseFloat(v.volume);
+                            return !isNaN(vn) && vn > prevDataNum && vn < nextDataNum &&
+                                (v.noChapterData || !v.chapters || !v.chapters.length);
+                        })
+                        .sort((a,b) => parseFloat(a.volume) - parseFloat(b.volume));
+
+                    const gapChaps = [...localChaps]
+                        .filter(g => g.num > prevMax && g.num < nextMin)
+                        .sort((a,b) => a.num - b.num);
+
+                    if (subGapVols.length <= 1) {
+                        selected = gapChaps.map(g => g.norm);
+                    } else {
+                        const idx = subGapVols.findIndex(v => v.volume === vol.volume);
+                        const chunkSize = Math.ceil(gapChaps.length / subGapVols.length);
+                        selected = gapChaps.slice(idx * chunkSize, idx * chunkSize + chunkSize).map(g => g.norm);
+                    }
+                }
+            } else {
+                // Volume has API chapter data.
+                // Filter out special chapters (< 1, e.g. "0.1" prologues) for boundary math.
+                const nums = vol.chapters.map(Number).filter(n => !isNaN(n));
+                const regular = nums.filter(n => n >= 1);
+                const anchor = regular.length ? regular : nums;
+                const minCh = Math.min(...anchor);
+                const maxCh = Math.max(...anchor);
+
+                // Detect whether this volume sits in a gap (cover-only volumes between it
+                // and the nearest volumes that have API data on either side).
+                const volNum = parseFloat(vol.volume);
+                const allWithData = mdexVolumes.value.filter(
+                    v => !v.noChapterData && v.chapters && v.chapters.length && v.volume !== vol.volume
+                );
+                const sortAsc  = (a, b) => parseFloat(a.volume) - parseFloat(b.volume);
+                const sortDesc = (a, b) => parseFloat(b.volume) - parseFloat(a.volume);
+                const prevWithData = [...allWithData].sort(sortDesc).find(v => parseFloat(v.volume) < volNum);
+                const nextWithData = [...allWithData].sort(sortAsc).find(v => parseFloat(v.volume) > volNum);
+                const prevDataNum = prevWithData ? parseFloat(prevWithData.volume) : -Infinity;
+                const nextDataNum = nextWithData ? parseFloat(nextWithData.volume) : Infinity;
+
+                const hasGap = mdexVolumes.value.some(v => {
+                    const vn = parseFloat(v.volume);
+                    return !isNaN(vn) &&
+                        ((vn > prevDataNum && vn < volNum) || (vn > volNum && vn < nextDataNum)) &&
+                        (v.noChapterData || !v.chapters || !v.chapters.length);
+                });
+
+                if (!hasGap) {
+                    // Clean neighbourhood — strict API range
+                    selected = localChaps.filter(g => g.num >= minCh && g.num <= maxCh).map(g => g.norm);
+                } else {
+                    // Isolated volume: neighbours are cover-only.
+                    // Use an anchor-aligned equal-chunk split across all gap volumes so that
+                    // unavailable chapters adjacent to the anchor are also included.
+                    const _regularNums = v => v.chapters.map(Number).filter(n => !isNaN(n) && n >= 1);
+                    const prevMax = prevWithData
+                        ? Math.max(...(_regularNums(prevWithData).length ? _regularNums(prevWithData) : prevWithData.chapters.map(Number).filter(n => !isNaN(n))))
+                        : 0;
+                    const nextRegular = nextWithData ? _regularNums(nextWithData) : [];
+                    const nextMin = nextRegular.length ? Math.min(...nextRegular) : Infinity;
+
+                    const gapVols = mdexVolumes.value
+                        .filter(v => {
+                            const vn = parseFloat(v.volume);
+                            return !isNaN(vn) && vn > prevDataNum && vn < nextDataNum;
+                        })
+                        .sort(sortAsc);
+
+                    const gapChaps = [...localChaps]
+                        .filter(g => g.num > prevMax && g.num < nextMin)
+                        .sort((a, b) => a.num - b.num);
+
+                    if (!gapChaps.length) {
+                        // Fallback: strict range
+                        selected = localChaps.filter(g => g.num >= minCh && g.num <= maxCh).map(g => g.norm);
+                    } else {
+                        // Chunk size: at least 3 to avoid single-chapter slices
+                        const chunkSize = Math.max(Math.ceil(gapChaps.length / gapVols.length), 3);
+
+                        // Find the chunk that contains the anchor (first regular chapter)
+                        const anchorIdx = gapChaps.findIndex(g => g.num >= minCh);
+                        if (anchorIdx < 0) {
+                            // Anchor outside gap — use positional slot
+                            const slot = gapVols.findIndex(v => v.volume === vol.volume);
+                            const start = slot * chunkSize;
+                            selected = gapChaps.slice(start, start + chunkSize).map(g => g.norm);
+                        } else {
+                            const chunkStart = Math.floor(anchorIdx / chunkSize) * chunkSize;
+                            selected = gapChaps.slice(chunkStart, chunkStart + chunkSize).map(g => g.norm);
+                        }
+                    }
+                }
+            }
+
+            if (!selected.length) {
+                exportSelectedChapters.value = [];
+                scheduleExportPreview();
+                showToast(`${vol.label}: ningún capítulo en este rango`, 'warning');
+                return;
+            }
+            exportSelectedChapters.value = selected;
+            scheduleExportPreview();
+            loadColorPages();
+            const totalDefined = vol.chapters ? vol.chapters.length : 0;
+            const missing = totalDefined > 0 && totalDefined > selected.length ? totalDefined - selected.length : 0;
+            const msg = missing > 0
+                ? `${selected.length}/${totalDefined} caps — ${vol.label} (faltan ${missing})`
+                : `${selected.length} caps — ${vol.label}`;
+            showToast(msg, missing > 0 ? 'warning' : 'success');
+        };
+
+        const searchMdexForTomo = async () => {
+            const q = mdexSearchQuery.value.trim();
+            if (!q) return;
+            mdexSearchLoading.value = true;
+            mdexSearchResults.value = [];
+            try {
+                const res = await fetch('/api/mangadex/search?q=' + encodeURIComponent(q));
+                const results = await res.json();
+                mdexSearchResults.value = Array.isArray(results) ? results.slice(0, 8) : [];
+            } catch (e) {}
+            mdexSearchLoading.value = false;
+        };
+
+        const selectMdexEntry = async (entry) => {
+            currentMdManga.value = { id: entry.id, title: entry.title, cover: entry.cover, status: entry.status };
+            mdexSearchResults.value = [];
+            mdexSearchQuery.value = '';
+            mdexVolumes.value = [];
+            mdexCovers.value = [];
+            await loadMdexVolumes();
+            loadMdexCovers();
+        };
+
+        // ── MangaDex covers ───────────────────────────────────────────────────
+        const loadMdexCovers = async () => {
+            const id = await _resolveMdexId();
+            if (!id) return;
+            mdexCoversLoading.value = true;
+            mdexCovers.value = [];
+            try {
+                const r = await fetch(`/api/mangadex/covers/${id}`);
+                if (r.ok) mdexCovers.value = await r.json();
+            } catch (e) {}
+            mdexCoversLoading.value = false;
+        };
+
+        const selectMdexCover = async (cover) => {
+            mdexSelectedCover.value = cover;
+            mdexCoverLoadingId.value = cover.id;
+            exportUploadedCoverB64.value = '';
+            exportUploadedCoverUrl.value = cover.url;
+            try {
+                const r = await fetch('/api/mangadex/cover_b64', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: cover.url }),
+                });
+                if (r.ok) {
+                    const d = await r.json();
+                    exportUploadedCoverB64.value = d.b64;
+                    exportUploadedCoverUrl.value = d.data_url;
+                }
+            } catch (e) {}
+            mdexCoverLoadingId.value = null;
+        };
+
+        const toggleExcludePage = (filename) => {
+            const idx = exportExcludedPages.value.indexOf(filename);
+            if (idx === -1) exportExcludedPages.value.push(filename);
+            else exportExcludedPages.value.splice(idx, 1);
         };
 
         const onCoverUpload = (e) => {
@@ -1105,25 +1823,146 @@ const app = createApp({
                     const res = await fetch('/api/export/preview', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ title: currentTitle.value, chapters: exportSelectedChapters.value, quality: exportQuality.value })
+                        body: JSON.stringify({
+                            title: currentTitle.value,
+                            chapters: exportSelectedChapters.value,
+                            quality: exportQuality.value,
+                            exclude_pages: exportExcludedPages.value,
+                        })
                     });
                     if (res.ok) exportPreview.value = await res.json();
                 } catch (e) {}
+                loadColorPages();
             }, 400);
+        };
+
+        // ── Bulk download / upscale ───────────────────────────────────────────────
+        const bulkFrom = ref('');
+        const bulkTo   = ref('');
+
+        const _bulkRange = () => {
+            const lo = parseFloat(bulkFrom.value), hi = parseFloat(bulkTo.value);
+            if (isNaN(lo) || isNaN(hi)) return null;
+            return { lo: Math.min(lo, hi), hi: Math.max(lo, hi) };
+        };
+
+        const bulkPreview = computed(() => {
+            const r = _bulkRange();
+            if (!r) return null;
+            const inRange = filteredChapters.value.filter(g => {
+                const n = parseFloat(g.chapter);
+                return !isNaN(n) && n >= r.lo && n <= r.hi;
+            });
+            return {
+                dl: inRange.filter(g =>
+                    !isDownloaded(g.chapter) && !isUpscaled(g.chapter) && !isPartialUpscaled(g.chapter)
+                    && !getTask(g.chapter, 'download')).length,
+                up: inRange.filter(g =>
+                    isDownloaded(g.chapter) && !isUpscaled(g.chapter) && !isPartialUpscaled(g.chapter)
+                    && !getTask(g.chapter, 'upscale')).length,
+            };
+        });
+
+        const bulkDownload = async () => {
+            const r = _bulkRange();
+            if (!r) return;
+            const targets = filteredChapters.value.filter(g => {
+                const n = parseFloat(g.chapter);
+                return !isNaN(n) && n >= r.lo && n <= r.hi
+                    && !isDownloaded(g.chapter) && !isUpscaled(g.chapter) && !isPartialUpscaled(g.chapter)
+                    && !getTask(g.chapter, 'download');
+            });
+            if (!targets.length) { showToast('Todos los capítulos del rango ya están descargados', 'info'); return; }
+            showToast(`Descargando ${targets.length} capítulo${targets.length !== 1 ? 's' : ''}...`, 'info');
+            await Promise.all(targets.map(g => downloadChapter(g, selectedLang.value || null, { silent: true })));
+        };
+
+        const bulkUpscale = async (mode = 'full') => {
+            const r = _bulkRange();
+            if (!r) return;
+            const targets = filteredChapters.value.filter(g => {
+                const n = parseFloat(g.chapter);
+                return !isNaN(n) && n >= r.lo && n <= r.hi
+                    && (isDownloaded(g.chapter) || isPartialUpscaled(g.chapter))
+                    && !isUpscaled(g.chapter) && !getTask(g.chapter, 'upscale');
+            });
+            if (!targets.length) { showToast('No hay capítulos descargados sin upscale en ese rango', 'info'); return; }
+            showToast(`Upscaleando ${targets.length} capítulo${targets.length !== 1 ? 's' : ''}...`, 'info');
+            await Promise.all(targets.map(g => upscaleChapter(g.chapter, mode, { silent: true })));
+        };
+
+        // ── Export chapter range (Tomo builder) ──────────────────────────────────
+        const rangeFrom = ref('');
+        const rangeTo = ref('');
+        const rangeAnchor = ref(null);
+
+        const addChapterRange = () => {
+            const from = parseFloat(rangeFrom.value);
+            const to   = parseFloat(rangeTo.value);
+            if (isNaN(from) || isNaN(to)) return;
+            const lo = Math.min(from, to), hi = Math.max(from, to);
+            const toAdd = groupedChapters.value
+                .filter(g => {
+                    const n = parseFloat(g.chapter);
+                    return !isNaN(n) && n >= lo && n <= hi &&
+                           (isDownloaded(g.chapter) || isUpscaled(g.chapter) || isPartialUpscaled(g.chapter));
+                })
+                .map(g => normalizeChapter(g.chapter));
+            if (!toAdd.length) { showToast('No hay capítulos descargados en ese rango', 'warn'); return; }
+            const current = new Set(exportSelectedChapters.value);
+            toAdd.forEach(c => current.add(c));
+            exportSelectedChapters.value = [...current];
+            scheduleExportPreview();
+            loadColorPages();
+        };
+
+        const onRowClickCapture = (group, idx, event) => {
+            const available = isDownloaded(group.chapter) || isUpscaled(group.chapter) || isPartialUpscaled(group.chapter);
+            if (!available) return;
+            if (event.shiftKey && rangeAnchor.value !== null) {
+                // Intercept before the checkbox receives it
+                event.preventDefault();
+                event.stopPropagation();
+                const lo = Math.min(rangeAnchor.value, idx);
+                const hi = Math.max(rangeAnchor.value, idx);
+                const inRange = groupedChapters.value
+                    .slice(lo, hi + 1)
+                    .filter(g => isDownloaded(g.chapter) || isUpscaled(g.chapter) || isPartialUpscaled(g.chapter))
+                    .map(g => normalizeChapter(g.chapter));
+                const current = new Set(exportSelectedChapters.value);
+                inRange.forEach(c => current.add(c));
+                exportSelectedChapters.value = [...current];
+                scheduleExportPreview();
+            } else {
+                // Normal click: let v-model handle it, just record anchor
+                rangeAnchor.value = idx;
+            }
         };
 
         const selectAllExportChapters = () => {
             exportSelectedChapters.value = groupedChapters.value
                 .filter(g => isDownloaded(g.chapter) || isUpscaled(g.chapter))
                 .map(g => normalizeChapter(g.chapter));
+            exportExcludedPages.value = [];
+            rangeAnchor.value = null;
             scheduleExportPreview();
+            loadColorPages();
         };
 
         const selectUpscaledExportChapters = () => {
             exportSelectedChapters.value = groupedChapters.value
-                .filter(g => isUpscaled(g.chapter))
+                .filter(g => isUpscaled(g.chapter) || isPartialUpscaled(g.chapter))
                 .map(g => normalizeChapter(g.chapter));
+            exportExcludedPages.value = [];
+            rangeAnchor.value = null;
             scheduleExportPreview();
+            loadColorPages();
+        };
+
+        const _triggerFileDownload = (url, filename) => {
+            const a = document.createElement('a');
+            a.href = url; a.download = filename;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
         };
 
         const downloadTomo = async () => {
@@ -1131,49 +1970,91 @@ const app = createApp({
                 showToast('Selecciona al menos un capítulo', 'warning');
                 return;
             }
-            exportBusy.value = true;
-            try {
-                const fmt = exportFormat.value || 'cbz';
-                const coverPayload = {};
-                if (exportCoverMode.value === 'chapter' && exportSelectedCover.value?.path) {
-                    coverPayload.cover_path = exportSelectedCover.value.path;
-                } else if (exportCoverMode.value === 'upload' && exportUploadedCoverB64.value) {
-                    coverPayload.cover_data = exportUploadedCoverB64.value;
-                }
+            const fmt = exportFormat.value || 'cbz';
+            const coverPayload = {};
+            if (exportCoverMode.value === 'chapter' && exportSelectedCover.value?.path) {
+                coverPayload.cover_path = exportSelectedCover.value.path;
+            } else if (exportUploadedCoverB64.value) {
+                coverPayload.cover_data = exportUploadedCoverB64.value;
+            }
+            const payload = {
+                title: currentTitle.value,
+                chapters: exportSelectedChapters.value,
+                volume_name: exportVolumeName.value || currentTitle.value,
+                format: fmt,
+                quality: exportQuality.value,
+                downscale_half: exportDownscaleHalf.value,
+                exclude_pages: exportExcludedPages.value,
+                ...coverPayload,
+            };
 
-                const res = await fetch('/api/export/cbz', {
+            try {
+                const res = await fetch('/api/export/start', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        title: currentTitle.value,
-                        chapters: exportSelectedChapters.value,
-                        volume_name: exportVolumeName.value || currentTitle.value,
-                        format: fmt,
-                        quality: exportQuality.value,
-                        ...coverPayload,
-                    })
+                    body: JSON.stringify(payload),
                 });
                 if (!res.ok) {
                     const err = await res.json().catch(() => ({}));
                     showToast('Error: ' + (err.error || res.statusText), 'error');
                     return;
                 }
-                const blob = await res.blob();
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                const safeName = (exportVolumeName.value || currentTitle.value || 'tomo').replace(/[^\w\-. ]/g, '_');
-                a.href = url;
-                a.download = safeName + '.' + fmt;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                URL.revokeObjectURL(url);
-                showToast('Tomo exportado', 'success');
+                const { task_id } = await res.json();
+                const volName = (exportVolumeName.value || currentTitle.value || 'tomo').replace(/[^\w\-. ]/g, '_');
+                exportTasks.value = {
+                    ...exportTasks.value,
+                    [task_id]: { task_id, status: 'queued', progress: 0, total: 0,
+                                 title: currentTitle.value, filename: volName + '.' + fmt },
+                };
+                exportExcludedPages.value = [];
+                scheduleExportPreview();
+                showToast(`Exportando "${volName}" en segundo plano…`, 'info');
             } catch (e) {
                 showToast('Error: ' + e.message, 'error');
-            } finally {
-                exportBusy.value = false;
             }
+        };
+
+        const pollExports = () => {
+            setInterval(async () => {
+                const active = Object.values(exportTasks.value)
+                    .filter(t => t.status === 'queued' || t.status === 'running');
+                for (const task of active) {
+                    try {
+                        const res = await fetch(`/api/export/status/${task.task_id}`);
+                        if (!res.ok) continue;
+                        const data = await res.json();
+                        exportTasks.value = { ...exportTasks.value, [task.task_id]: { ...task, ...data } };
+                        if (data.status === 'complete') {
+                            _triggerFileDownload(`/api/export/file/${task.task_id}`, task.filename || data.filename || 'tomo.cbz');
+                            showToast(`✅ "${task.title || 'Tomo'}" exportado`, 'success');
+                            exportTasks.value = { ...exportTasks.value, [task.task_id]: { ...task, ...data, status: 'ready' } };
+                        } else if (data.status === 'error') {
+                            showToast(`Error exportando "${task.title}": ${data.error || ''}`, 'error');
+                            setTimeout(() => {
+                                const t = { ...exportTasks.value };
+                                delete t[task.task_id];
+                                exportTasks.value = t;
+                            }, 6000);
+                        }
+                    } catch (e) {}
+                }
+            }, 1500);
+        };
+
+        // Sync running export tasks from server on page load (background persistence)
+        const syncExportTasks = async () => {
+            try {
+                const res = await fetch('/api/status');
+                if (!res.ok) return;
+                const data = await res.json();
+                const serverExports = data.exports || {};
+                const active = Object.values(serverExports).filter(t => t.status === 'queued' || t.status === 'running');
+                if (active.length) {
+                    const merged = { ...exportTasks.value };
+                    for (const t of active) merged[t.task_id] = { ...t, filename: t.filename || `${t.volume_name || t.title}.cbz` };
+                    exportTasks.value = merged;
+                }
+            } catch (e) {}
         };
 
         // ── Sources (Suwayomi) ──────────────────────────────────────────────────
@@ -1249,7 +2130,7 @@ const app = createApp({
             currentSourceContext.value = { sourceId, mangaId };
             mdChapters.value = [];
             chapters.value = [];
-            chapterStatus.value = { downloaded: {}, upscaled: {} };
+            chapterStatus.value = { downloaded: {}, upscaled: {} }; chapterHealth.value = [];
             exportSelectedChapters.value = [];
             currentModalTab.value = 'chapters';
             showModal.value = true;
@@ -1291,7 +2172,7 @@ const app = createApp({
                         const dl = {};
                         for (const c of d.chapters) { if (c.page_count > 0) dl[normalizeChapter(c.chapter)] = true; }
                         const up = {};
-                        for (const key of Object.keys(d.upscaled || {})) { up[normalizeChapter(key)] = Boolean(d.upscaled[key]); }
+                        for (const key of Object.keys(d.upscaled || {})) { up[normalizeChapter(key)] = d.upscaled[key]; }
                         chapterStatus.value = { downloaded: dl, upscaled: up };
                     }
                 }
@@ -1371,8 +2252,11 @@ const app = createApp({
             loadLocalLibrary();
             loadMdLibrary();
             pollTasks();
+            pollExports();
+            syncExportTasks();
             checkSuwayomi();
             checkDrive();
+            loadLibraryInfo();
             document.addEventListener('keydown', handleKeydown);
         });
         return {
@@ -1382,24 +2266,43 @@ const app = createApp({
             currentChapter, currentPage, pages, isZoomed, selectedLang, toast,
             stats, groupedChapters, filteredChapters, availableLangs, currentPageUrl, combinedLibrary,
             getLangName, getLangFlag, getUniqueLangs, openManga, openMdManga, openLibraryItem, closeModal, addToLibrary, removeLibraryItem,
-            isDownloaded, isUpscaled, getTask, getActiveTask, getProgressPercent,
-            downloadChapter, upscaleChapter, readChapter, readChapterOriginal, readChapterUpscaled, closeReader,
+            isDownloaded, isUpscaled, isPartialUpscaled, getTask, getActiveTask, getProgressPercent,
+            downloadChapter, upscaleChapter, cancelUpscale, cancelDownload, repairChapter, readChapter, readChapterOriginal, readChapterUpscaled, closeReader,
+            chapterHealth, getChapterHealth, loadChapterHealth,
             nextPage, prevPage, toggleZoom, goToPage, onPageLoad, debouncedSearch,
-            isInLibrary, taskQueueExpanded, taskQueueList, deleteChapter, downloadedLang, normalizeChapter,
+            readerMode, fitMode, readingDir, readerZoom, panY, panX,
+            readerBarsHidden, readerChapterList, readerChapterIndex, canGoPrevChapter, canGoNextChapter,
+            isChapterRead, getLastReadProgress,
+            goNextChapter, goPrevChapter, showBars, cycleFitMode, setReaderMode, toggleReaderDir,
+            onPanStart, onPanMove, onPanEnd, handleReaderWheel, toggleFullscreen, onWebtoonScroll,
+            isInLibrary, taskQueueExpanded, taskQueueList, taskQueueSummary, deleteChapter, downloadedLang, normalizeChapter, toggleChapterRead,
             currentModalTab, openTomoTab,
-            exportVolumeName, exportFormat, exportQuality, exportSelectedChapters, exportBusy, exportPreview,
+            exportVolumeName, exportFormat, exportQuality, exportDownscaleHalf, exportSelectedChapters, exportChapterSet, exportBusy, exportPreview,
+            bulkFrom, bulkTo, bulkPreview, bulkDownload, bulkUpscale,
+            rangeFrom, rangeTo, addChapterRange, onRowClickCapture,
             selectAllExportChapters, selectUpscaledExportChapters,
-            downloadTomo, scheduleExportPreview,
+            downloadTomo, scheduleExportPreview, exportTasks,
             exportCoverMode, exportColorPages, exportColorPagesLoading,
             exportSelectedCover, exportUploadedCoverUrl,
+            exportExcludedPages, toggleExcludePage,
             setCoverMode, onCoverUpload,
+            mdexVolumes, mdexVolumesLoading, mdexCovers, mdexCoversLoading,
+            mdexSelectedCover, mdexCoverLoadingId,
+            mdexSearchQuery, mdexSearchResults, mdexSearchLoading,
+            loadMdexVolumes, applyMdexVolume, loadMdexCovers, selectMdexCover,
+            searchMdexForTomo, selectMdexEntry,
             handleCoverError: (e) => { e.target.style.display = 'none'; if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex'; },
             sources, activeSource, sourceQuery, sourceResults, sourcesLoading, suwayomiOnline, sourceHasNextPage, currentSourceContext,
             globalQuery, globalResults, globalSearchLoading, searchMode,
             checkSuwayomi, loadSources, searchSources, searchAllSources, openSourceManga,
-            activeTasksByTitle, canonicalTitle,
+            activeTasksByTitle, canonicalTitle, seriesReadCounts,
             driveConfigured, driveConnected, driveEmail, driveUploading, driveUploadResult,
             connectDrive, disconnectDrive, uploadToDrive,
+            compareMode, compareX, canCompare, readerSource,
+            currentPageOrigUrl, currentPageUpUrl,
+            toggleCompare, onCompareDragStart, onCompareDrag, onCompareDragEnd,
+            libraryUrlLocal, libraryUrlPhone, libraryWslIp, libraryFileCount, libraryFwCmd, libraryProxyCmd,
+            loadLibraryInfo, saveToLibrary, dismissExportTask,
         };
     }
 });

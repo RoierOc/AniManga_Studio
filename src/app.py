@@ -36,6 +36,7 @@ from api.mangadex import auth_bp
 from api.export import export_bp
 from api.sources import sources_bp
 from api.drive import drive_bp
+from api.webdav import webdav_bp
 
 app.register_blueprint(library_bp, url_prefix='/api/library')
 app.register_blueprint(search_bp, url_prefix='/api/search')
@@ -47,6 +48,16 @@ app.register_blueprint(auth_bp, url_prefix='/api/mangadex')
 app.register_blueprint(export_bp, url_prefix='/api/export')
 app.register_blueprint(sources_bp, url_prefix='/api/sources')
 app.register_blueprint(drive_bp, url_prefix='/api/drive')
+app.register_blueprint(webdav_bp, url_prefix='/api/webdav')
+
+
+@app.route('/library')
+def mobile_library():
+    from flask import Response
+    html_path = BASE_DIR.parent / 'templates' / 'library.html'
+    with open(html_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    return Response(content, mimetype='text/html', headers={'Cache-Control': 'no-cache'})
 
 @app.route('/')
 def index():
@@ -60,13 +71,29 @@ def index():
 def serve_static(filename):
     return send_from_directory(app.static_folder, filename)
 
+@app.route('/uploads/original/<path:filename>')
+def serve_upload_original(filename):
+    """Always serve from MANGA_DIR (used by compare mode to show unscaled page)."""
+    path = Path(MANGA_DIR) / filename
+    if path.exists():
+        return send_from_directory(str(path.parent), path.name)
+    return 'Not found', 404
+
+@app.route('/uploads/upscaled/<path:filename>')
+def serve_upload_upscaled(filename):
+    """Always serve from UPSCALED_DIR (used by compare mode to show upscaled page)."""
+    path = Path(UPSCALED_DIR) / filename
+    if path.exists():
+        return send_from_directory(str(path.parent), path.name)
+    return 'Not found', 404
+
 @app.route('/uploads/<path:filename>')
 def serve_upload(filename):
     # Prefer upscaled version when available; fall back to original
     for d in [UPSCALED_DIR, MANGA_DIR]:
         path = Path(d) / filename
         if path.exists():
-            return send_from_directory(path.parent, path.name)
+            return send_from_directory(str(path.parent), path.name)
 
     parts = filename.split('/')
     if len(parts) >= 2:
@@ -77,10 +104,11 @@ def serve_upload(filename):
             if search_path.is_dir():
                 full_path = search_path / filename_only
                 if full_path.exists():
-                    return send_from_directory(search_path, filename_only)
+                    return send_from_directory(str(search_path), filename_only)
 
     return 'Not found', 404
 
 if __name__ == '__main__':
     print("🚀 Manga Upscaler Pro - http://localhost:5001")
+    print("📡 WebDAV library   - http://localhost:5005/")
     app.run(port=5001, debug=False, host='0.0.0.0')

@@ -3,16 +3,19 @@
 Export API - Package manga chapters into CBZ/CBR comic archives.
 CBZ = ZIP archive (native Python zipfile, no external tools needed).
 CBR = same ZIP content with .cbr extension (accepted by Kuro Reader Pro).
-Images are re-encoded as JPEG at the requested quality (default 85) so that
-4K upscaled files (saved at q=95) are compressed to a distribution-friendly size
-without any visible quality loss at 1080p–1440p viewing.
+Images are re-encoded as JPEG at the requested quality via Pillow + MozJPEG
+lossless post-optimization (optimize=True, progressive=True, then mozjpeg pass).
 """
 
 import base64
 import io
 import re
 import tempfile
+import threading
+import time
+import uuid
 import zipfile
+from urllib.parse import quote
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -22,6 +25,40 @@ from PIL import Image
 
 from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter
 
+# ── Async export task tracking ────────────────────────────────────────────────
+_export_tasks: dict = {}          # task_id → task dict
+_export_lock = threading.Lock()
+_export_semaphore = threading.Semaphore(3)  # max 3 concurrent exports
+_EXPORT_TTL = 7200                # clean up temp files after 2 hours
+
+def get_export_tasks() -> dict:
+    return dict(_export_tasks)
+
+def _set_export(task_id: str, updates: dict):
+    with _export_lock:
+        if task_id in _export_tasks:
+            _export_tasks[task_id].update(updates)
+
+def _cleanup_exports():
+    now = time.time()
+    with _export_lock:
+        to_remove = [k for k, v in list(_export_tasks.items())
+                     if now - v.get('created_at', 0) > _EXPORT_TTL]
+    for k in to_remove:
+        tmp = _export_tasks.get(k, {}).get('tmp_path')
+        if tmp:
+            try:
+                Path(tmp).unlink(missing_ok=True)
+            except Exception:
+                pass
+        _export_tasks.pop(k, None)
+
+try:
+    import mozjpeg_lossless_optimization as _mozjpeg
+    _MOZJPEG = True
+except ImportError:
+    _MOZJPEG = False
+
 export_bp = Blueprint("export", __name__)
 
 _MIME = "application/zip"
@@ -29,7 +66,7 @@ _IMAGE_EXTS = ["jpg", "jpeg", "png", "webp"]
 
 COLOR_DIFF_THRESHOLD = 15
 COLOR_PIXEL_FRACTION = 0.10
-DEFAULT_QUALITY = 85
+DEFAULT_QUALITY = 92
 
 
 def _is_color_image(img_pil, threshold=COLOR_DIFF_THRESHOLD, min_fraction=COLOR_PIXEL_FRACTION):
@@ -60,9 +97,20 @@ def _sort_key(ch):
         return 0.0
 
 
-def _encode_jpeg(img_path: Path, quality: int) -> bytes:
+def _mozjpeg_optimize(data: bytes) -> bytes:
+    if not _MOZJPEG:
+        return data
+    try:
+        return _mozjpeg.optimize(data)
+    except Exception:
+        return data
+
+
+def _encode_jpeg(img_path: Path, quality: int, downscale: int = 1) -> bytes:
     """Load any image and return JPEG bytes at the requested quality.
-    Preserves grayscale mode (L) for B&W pages — 1-channel JPEG is ~3× smaller than RGB."""
+    Preserves grayscale mode (L) for B&W pages — 1-channel JPEG is ~3× smaller than RGB.
+    downscale=2 halves width and height before encoding (for tablet-sized exports).
+    Post-processed with MozJPEG lossless optimization when available."""
     img = Image.open(img_path)
     if img.mode == 'RGBA':
         bg = Image.new('RGB', img.size, (255, 255, 255))
@@ -74,9 +122,11 @@ def _encode_jpeg(img_path: Path, quality: int) -> bytes:
         img = img.convert('L')
     elif img.mode not in ('RGB', 'L'):
         img = img.convert('RGB')
+    if downscale > 1:
+        img = img.resize((max(1, img.width // downscale), max(1, img.height // downscale)), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format='JPEG', quality=quality, optimize=True, progressive=True)
-    return buf.getvalue()
+    return _mozjpeg_optimize(buf.getvalue())
 
 
 def _encode_jpeg_bytes(raw_bytes: bytes, quality: int) -> bytes:
@@ -92,7 +142,7 @@ def _encode_jpeg_bytes(raw_bytes: bytes, quality: int) -> bytes:
         img = img.convert('RGB')
     buf = io.BytesIO()
     img.save(buf, format='JPEG', quality=quality, optimize=True, progressive=True)
-    return buf.getvalue()
+    return _mozjpeg_optimize(buf.getvalue())
 
 
 def _quality_size_factor(quality: int) -> float:
@@ -106,13 +156,15 @@ def _quality_size_factor(quality: int) -> float:
     return 0.35
 
 
-def _collect_images(title: str, chapters: list) -> list:
+def _collect_images(title: str, chapters: list, exclude_pages: set = None) -> list:
     """Return ordered list of (arcname, abs_path) for requested chapters.
     Prefers upscaled images; falls back to originals per-file.
-    arcname always uses .jpg extension (images are re-encoded as JPEG on export)."""
+    arcname always uses .jpg extension (images are re-encoded as JPEG on export).
+    exclude_pages: set of original filenames to skip."""
     manga_root = Path(MANGA_DIR) / title
     up_root = Path(UPSCALED_DIR) / title
     result = []
+    exclude = exclude_pages or set()
 
     for ch in sorted(chapters, key=_sort_key):
         ch_norm = normalize_chapter(ch)
@@ -124,6 +176,8 @@ def _collect_images(title: str, chapters: list) -> list:
         orig_files.sort(key=lambda p: p.name)
 
         for orig in orig_files:
+            if orig.name in exclude:
+                continue
             up_candidate = up_root / orig.name
             up_candidate_jpg = up_root / (orig.stem + ".jpg")
             if up_candidate.exists():
@@ -140,26 +194,29 @@ def _collect_images(title: str, chapters: list) -> list:
     return result
 
 
-def build_archive(data) -> tuple:
-    """Build CBZ/CBR archive from request data. Returns (tmp_path, filename) or raises."""
+def build_archive(data, progress_cb=None) -> tuple:
+    """Build CBZ/CBR archive from request data. Returns (tmp_path, filename) or raises.
+    progress_cb(done, total) is called after each image if provided."""
     title = (data.get("title") or "").strip()
     chapters = data.get("chapters") or []
     volume_name = (data.get("volume_name") or title or "tomo").strip()
     fmt = "cbr" if str(data.get("format", "cbz")).lower() == "cbr" else "cbz"
-    quality = max(70, min(95, int(data.get("quality", DEFAULT_QUALITY))))
+    quality = max(85, min(100, int(data.get("quality", DEFAULT_QUALITY))))
+    downscale = 2 if data.get("downscale_half") else 1
     cover_path = (data.get("cover_path") or "").strip()
     cover_b64 = (data.get("cover_data") or "").strip()
+    exclude_pages = set(data.get("exclude_pages") or [])
 
     if not title:
         raise ValueError("title required")
     if not chapters:
         raise ValueError("select at least one chapter")
 
-    images = _collect_images(title, chapters)
+    images = _collect_images(title, chapters, exclude_pages)
     if not images:
         raise ValueError("No images found for selected chapters")
 
-    safe_name = re.sub(r"[^\w\s\-]", "", volume_name).strip().replace(" ", "_") or "tomo"
+    safe_name = re.sub(r"[^\w\s\-]", "", volume_name).strip() or "tomo"
     filename = f"{safe_name}.{fmt}"
 
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=f".{fmt}")
@@ -168,20 +225,30 @@ def build_archive(data) -> tuple:
             if cover_b64:
                 try:
                     raw = base64.b64decode(cover_b64)
-                    zf.writestr("000_cover.jpg", _encode_jpeg_bytes(raw, quality))
+                    # Detect format from magic bytes — keep original to avoid re-encoding loss
+                    ext = "png" if raw[:8] == b'\x89PNG\r\n\x1a\n' else "jpg"
+                    if ext == "png":
+                        # PNG cover: embed as-is at full quality
+                        zf.writestr(f"000_cover.{ext}", raw)
+                    else:
+                        # JPEG cover: re-encode only to normalize orientation/metadata
+                        zf.writestr("000_cover.jpg", _encode_jpeg_bytes(raw, 95))
                 except Exception:
                     pass
             elif cover_path and Path(cover_path).exists():
                 try:
-                    zf.writestr("000_cover.jpg", _encode_jpeg(Path(cover_path), quality))
+                    zf.writestr("000_cover.jpg", _encode_jpeg(Path(cover_path), quality, downscale))
                 except Exception:
                     zf.write(cover_path, "000_cover.jpg")
 
-            for arcname, img_path in images:
+            total_images = len(images)
+            for done, (arcname, img_path) in enumerate(images, 1):
                 try:
-                    zf.writestr(arcname, _encode_jpeg(img_path, quality))
+                    zf.writestr(arcname, _encode_jpeg(img_path, quality, downscale))
                 except Exception:
                     zf.write(str(img_path), arcname)
+                if progress_cb:
+                    progress_cb(done, total_images)
 
         tmp.flush()
         tmp_path = tmp.name
@@ -208,14 +275,17 @@ def preview_cbz():
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip()
     chapters = data.get("chapters") or []
-    quality = max(70, min(95, int(data.get("quality", DEFAULT_QUALITY))))
+    quality = max(85, min(100, int(data.get("quality", DEFAULT_QUALITY))))
+    exclude_pages = set(data.get("exclude_pages") or [])
 
     if not title or not chapters:
         return jsonify({"pages": 0, "size_mb": 0, "est_mb": 0, "chapters": []})
 
-    images = _collect_images(title, chapters)
+    images = _collect_images(title, chapters, exclude_pages)
     raw_bytes = sum(p.stat().st_size for _, p in images if p.exists())
-    upscaled_count = sum(1 for _, p in images if Path(UPSCALED_DIR) in p.parents)
+    up_root = Path(UPSCALED_DIR) / title
+    upscaled_count = sum(1 for _, p in images if str(p).startswith(str(up_root)))
+    original_count = len(images) - upscaled_count
 
     factor = _quality_size_factor(quality)
     est_bytes = int(raw_bytes * factor)
@@ -225,6 +295,7 @@ def preview_cbz():
         "size_mb": round(raw_bytes / 1_048_576, 1),
         "est_mb": round(est_bytes / 1_048_576, 1),
         "upscaled_pages": upscaled_count,
+        "original_pages": original_count,
         "chapters": chapters,
     })
 
@@ -255,7 +326,7 @@ def get_color_pages():
             try:
                 img = Image.open(img_path)
                 if _is_color_image(img):
-                    url = f"/uploads/{title}/{img_path.name}"
+                    url = f"/uploads/{quote(title, safe='')}/{img_path.name}"
                     color_pages.append({
                         "chapter": ch_norm,
                         "filename": img_path.name,
@@ -267,3 +338,89 @@ def get_color_pages():
                 pass
 
     return jsonify(color_pages)
+
+
+# ── Async export endpoints ────────────────────────────────────────────────────
+
+def _run_export(task_id: str, data: dict):
+    tmp_path = None
+    with _export_semaphore:
+        _set_export(task_id, {'status': 'running'})
+        try:
+            def on_progress(done, total):
+                _set_export(task_id, {'progress': done, 'total': total})
+
+            tmp_path, filename = build_archive(data, progress_cb=on_progress)
+            _set_export(task_id, {
+                'status': 'complete',
+                'tmp_path': tmp_path,
+                'filename': filename,
+                'progress': _export_tasks[task_id].get('total', 0),
+            })
+        except Exception as e:
+            if tmp_path:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            _set_export(task_id, {'status': 'error', 'error': str(e)})
+
+
+@export_bp.route("/start", methods=["POST"])
+def start_export():
+    """Start an async export. Returns {task_id} immediately; poll /export/status/<id>."""
+    _cleanup_exports()
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    if not data.get("chapters"):
+        return jsonify({"error": "select at least one chapter"}), 400
+
+    task_id = uuid.uuid4().hex[:10]
+    with _export_lock:
+        _export_tasks[task_id] = {
+            'task_id': task_id,
+            'status': 'queued',
+            'title': title,
+            'volume_name': (data.get("volume_name") or title).strip(),
+            'progress': 0,
+            'total': 0,
+            'created_at': time.time(),
+            'tmp_path': None,
+            'filename': None,
+            'error': None,
+        }
+    threading.Thread(target=_run_export, args=(task_id, data), daemon=True).start()
+    return jsonify({'task_id': task_id, 'status': 'queued'})
+
+
+@export_bp.route("/status/<task_id>")
+def export_status(task_id):
+    task = _export_tasks.get(task_id)
+    if not task:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({k: v for k, v in task.items() if k != 'tmp_path'})
+
+
+@export_bp.route("/file/<task_id>")
+def export_file(task_id):
+    """Download the completed export file. Schedules temp file deletion after send."""
+    task = _export_tasks.get(task_id)
+    if not task:
+        return jsonify({'error': 'not found'}), 404
+    if task.get('status') != 'complete':
+        return jsonify({'error': 'not ready', 'status': task.get('status')}), 400
+    tmp_path = task.get('tmp_path')
+    filename = task.get('filename', 'export.cbz')
+    if not tmp_path or not Path(tmp_path).exists():
+        return jsonify({'error': 'file missing'}), 404
+
+    fmt = filename.rsplit('.', 1)[-1].lower()
+    mime = 'application/x-cbr' if fmt == 'cbr' else 'application/zip'
+    resp = send_file(tmp_path, mimetype=mime, as_attachment=True,
+                     download_name=filename, max_age=0)
+
+    # Mark consumed so it gets cleaned up on next request
+    _set_export(task_id, {'status': 'downloaded'})
+    return resp

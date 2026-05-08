@@ -14,6 +14,20 @@ FLASK_LOG="/tmp/mangajanai-flask.log"
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'
 RED='\033[0;31m'; BOLD='\033[1m'; RESET='\033[0m'
 
+# ── WSL2: actualizar portproxy al iniciar (por si cambió la IP interna) ───────
+_setup_wsl2_network() {
+    grep -qi "microsoft" /proc/version 2>/dev/null || return
+    local wsl_ip
+    wsl_ip=$(ip addr show 2>/dev/null | grep -oP 'inet \K172\.\d+\.\d+\.\d+' | head -1)
+    [[ -z "$wsl_ip" ]] && return
+    /mnt/c/Windows/System32/netsh.exe interface portproxy delete v4tov4 \
+        listenport=5001 listenaddress=0.0.0.0 >/dev/null 2>&1 || true
+    /mnt/c/Windows/System32/netsh.exe interface portproxy add v4tov4 \
+        listenport=5001 listenaddress=0.0.0.0 \
+        connectport=5001 connectaddress="$wsl_ip" >/dev/null 2>&1 || true
+}
+_setup_wsl2_network
+
 DAEMON=false
 [[ "${1:-}" == "--daemon" ]] && DAEMON=true
 
@@ -88,12 +102,14 @@ start_flask() {
   export MANGA_DIR="$SCRIPT_DIR/../../MangaLibrary"
   export UPSCALED_DIR="$SCRIPT_DIR/../../MangaLibrary_Upscaled"
 
-  LOCAL_IP=$(hostname -I 2>/dev/null | awk '{print $1}' || echo "")
+  WIN_IP=$(/mnt/c/Windows/System32/ipconfig.exe 2>/dev/null \
+           | grep -oP '192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+' | head -1 || true)
   echo ""
   echo -e "${BOLD}  Acceso:${RESET}"
-  echo -e "  ${CYAN}→  http://localhost:5001${RESET}"
-  [ -n "$LOCAL_IP" ] && echo -e "  ${CYAN}→  http://${LOCAL_IP}:5001${RESET}  (red local / Windows)"
-  echo -e "  ${CYAN}→  http://localhost:4567${RESET}  (Suwayomi admin)"
+  echo -e "  ${CYAN}→  http://localhost:5001${RESET}              (app principal)"
+  [ -n "$WIN_IP" ] && echo -e "  ${CYAN}→  http://${WIN_IP}:5001${RESET}    (desde red local)"
+  echo -e "  ${CYAN}→  http://localhost:5001/library${RESET}      (biblioteca móvil)"
+  echo -e "  ${CYAN}→  http://localhost:4567${RESET}              (Suwayomi admin)"
   echo ""
   echo -e "  ${YELLOW}Ctrl+C para detener todo${RESET}"
   echo ""

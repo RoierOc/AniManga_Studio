@@ -26,6 +26,27 @@ from api.runtime import (
 download_bp = Blueprint('download', __name__)
 
 download_status = {}
+_download_cancel_flags: dict = {}
+_dl_semaphore = threading.Semaphore(4)  # max 4 concurrent chapter downloads
+
+
+def _fetch_with_retry(url, retries=3, timeout=30):
+    """GET with exponential backoff on 429 / network errors."""
+    delay = 1.5
+    for attempt in range(retries):
+        try:
+            r = http_requests.get(url, timeout=timeout)
+            if r.status_code == 200:
+                return r
+            if r.status_code == 429:
+                time.sleep(delay * (2 ** attempt))
+                continue
+            # Other non-200: don't retry
+            return r
+        except Exception:
+            if attempt < retries - 1:
+                time.sleep(delay * (2 ** attempt))
+    return None
 
 
 def _canonical_title(value):
@@ -142,6 +163,14 @@ def get_all_download_status_route():
 def get_download_status_route(task_id):
     return jsonify(get_download_status(task_id))
 
+
+@download_bp.route('/cancel/<path:download_id>', methods=['POST'])
+def cancel_download(download_id):
+    _download_cancel_flags[download_id] = True
+    current = download_status.get(download_id, {})
+    set_download_status(download_id, {**current, 'status': 'cancelled'})
+    return jsonify({'status': 'cancel_requested', 'task_id': download_id})
+
 @download_bp.route('/download', methods=['POST'])
 def download_manga():
     data = request.get_json()
@@ -166,6 +195,110 @@ def download_manga():
     
     return jsonify({'status': 'started', 'title': title, 'folder': str(folder), 'task_id': download_id})
 
+def _run_download_chapter(download_id, title, chapter_norm, chapter_id, manga_id):
+    """Background thread: resolve chapter ID if needed, then download all pages."""
+    with _dl_semaphore:
+        folder = Path(MANGA_DIR) / title
+        folder.mkdir(parents=True, exist_ok=True)
+
+        try:
+            # Resolve manga_id if missing
+            if not chapter_id and not manga_id:
+                search_r = http_requests.get(
+                    'https://api.mangadex.org/manga',
+                    params={'title': title, 'limit': 10},
+                    timeout=30,
+                )
+                manga_data = search_r.json().get('data', [])
+                if not manga_data:
+                    set_download_status(download_id, {'status': 'error', 'message': 'Manga no encontrado en MangaDex'})
+                    return
+                target = _canonical_title(title)
+
+                def _score(item):
+                    variants = list((item.get('attributes', {}).get('title') or {}).values())
+                    for v in variants:
+                        c = _canonical_title(v)
+                        if c == target: return 3
+                        if target and target in c: return 2
+                        if c and c in target: return 1
+                    return 0
+
+                manga_data.sort(key=_score, reverse=True)
+                manga_id = manga_data[0]['id']
+
+            # Resolve chapter_id if missing
+            if not chapter_id:
+                chapter_id = _find_chapter_id_with_feed(manga_id, chapter_norm)
+            if not chapter_id:
+                chapter_id = _find_chapter_id_with_chapter_endpoint(manga_id, chapter_norm)
+            if not chapter_id:
+                set_download_status(download_id, {'status': 'error', 'message': f'Capítulo {chapter_norm} no encontrado'})
+                return
+
+            # Fetch at-home server info
+            r = http_requests.get(f'https://api.mangadex.org/at-home/server/{chapter_id}', timeout=30)
+            resp_data = r.json()
+            if resp_data.get('result') != 'ok':
+                set_download_status(download_id, {'status': 'error', 'message': 'Capítulo no disponible'})
+                return
+
+            pages = resp_data.get('chapter', {}).get('data', [])
+            if not pages:
+                set_download_status(download_id, {'status': 'error', 'message': 'No hay páginas'})
+                return
+
+            base = resp_data['baseUrl']
+            hash_val = resp_data['chapter']['hash']
+            _download_cancel_flags[download_id] = False
+
+            set_download_status(download_id, {
+                'status': 'downloading',
+                'title': title,
+                'chapter': chapter_norm,
+                'progress': 0,
+                'total': len(pages),
+            })
+
+            downloaded_count = 0
+            for i, page in enumerate(pages, 1):
+                if _download_cancel_flags.get(download_id):
+                    _download_cancel_flags.pop(download_id, None)
+                    set_download_status(download_id, {
+                        'status': 'cancelled', 'title': title,
+                        'chapter': chapter_norm, 'progress': i - 1, 'total': len(pages),
+                    })
+                    return
+
+                set_download_status(download_id, {
+                    'status': 'downloading', 'title': title,
+                    'chapter': chapter_norm, 'progress': i, 'total': len(pages),
+                })
+
+                img_url = f"{base}/data/{hash_val}/{page}"
+                time.sleep(0.25)
+                resp = _fetch_with_retry(img_url)
+                if resp and resp.status_code == 200:
+                    ext = page.split('.')[-1]
+                    fname = f"{_chapter_file_prefix(chapter_norm)}_{i:03d}.{ext}"
+                    with open(folder / fname, 'wb') as f:
+                        f.write(resp.content)
+                    downloaded_count += 1
+
+            _download_cancel_flags.pop(download_id, None)
+
+            if downloaded_count > 0:
+                set_download_status(download_id, {
+                    'status': 'complete', 'title': title, 'chapter': chapter_norm,
+                    'pages': downloaded_count, 'progress': len(pages), 'total': len(pages),
+                })
+            else:
+                set_download_status(download_id, {'status': 'error', 'message': 'No se pudo descargar ninguna página'})
+
+        except Exception as e:
+            set_download_status(download_id, {'status': 'error', 'message': str(e)})
+
+
 @download_bp.route('/download_chapter', methods=['POST'])
 def download_chapter():
     data = request.get_json()
@@ -177,131 +310,19 @@ def download_chapter():
     if not title or chapter is None:
         return jsonify({'error': 'title and chapter required'}), 400
 
-    download_id = build_task_id(title, chapter, 'download')
     chapter_norm = normalize_chapter(chapter)
+    download_id = build_task_id(title, chapter_norm, 'download')
     set_download_status(download_id, {
-        'status': 'starting',
-        'title': title,
-        'chapter': chapter_norm,
+        'status': 'starting', 'title': title, 'chapter': chapter_norm,
     })
-    
-    # If no chapterId, look it up from MangaDex
-    if not chapter_id:
-        try:
-            # Resolve manga id if missing by searching and picking the closest title
-            if not manga_id:
-                search_r = http_requests.get(
-                    'https://api.mangadex.org/manga',
-                    params={'title': title, 'limit': 10},
-                    timeout=30
-                )
-                search_data = search_r.json()
-                manga_data = search_data.get('data', [])
-                if not manga_data:
-                    message = 'Manga no encontrado en MangaDex'
-                    set_download_status(download_id, {'status': 'error', 'message': message})
-                    return jsonify({'error': message, 'task_id': download_id}), 404
 
-                target_title = _canonical_title(title)
+    threading.Thread(
+        target=_run_download_chapter,
+        args=(download_id, title, chapter_norm, chapter_id, manga_id),
+        daemon=True,
+    ).start()
 
-                def score_candidate(item):
-                    attrs = item.get('attributes', {})
-                    title_map = attrs.get('title', {}) or {}
-                    variants = [v for v in title_map.values() if isinstance(v, str)]
-                    if not variants:
-                        return 0
-                    best = 0
-                    for variant in variants:
-                        canonical = _canonical_title(variant)
-                        if canonical == target_title:
-                            return 3
-                        if target_title and target_title in canonical:
-                            best = max(best, 2)
-                        elif canonical and canonical in target_title:
-                            best = max(best, 1)
-                    return best
-
-                manga_data.sort(key=score_candidate, reverse=True)
-                manga_id = manga_data[0]['id']
-
-            chapter_id = _find_chapter_id_with_feed(manga_id, chapter_norm)
-            if not chapter_id:
-                chapter_id = _find_chapter_id_with_chapter_endpoint(manga_id, chapter_norm)
-
-            if not chapter_id:
-                message = f'Capítulo {chapter} no encontrado'
-                set_download_status(download_id, {'status': 'error', 'message': message})
-                return jsonify({'error': message, 'task_id': download_id, 'mangaId': manga_id}), 404
-
-        except Exception as e:
-            message = 'Error buscando capítulo: ' + str(e)
-            set_download_status(download_id, {'status': 'error', 'message': message})
-            return jsonify({'error': message, 'task_id': download_id}), 500
-
-    folder = Path(MANGA_DIR) / title
-    folder.mkdir(parents=True, exist_ok=True)
-
-    try:
-        r = http_requests.get(f'https://api.mangadex.org/at-home/server/{chapter_id}', timeout=30)
-        resp_data = r.json()
-
-        if resp_data.get('result') != 'ok':
-            set_download_status(download_id, {'status': 'error', 'message': 'Capítulo no disponible'})
-            return jsonify({'error': 'Capítulo no disponible en MangaDex', 'pages': 0, 'task_id': download_id}), 404
-
-        pages = resp_data.get('chapter', {}).get('data', [])
-        if not pages:
-            set_download_status(download_id, {'status': 'error', 'message': 'No hay páginas'})
-            return jsonify({'error': 'No hay páginas disponibles', 'pages': 0, 'task_id': download_id}), 404
-
-        set_download_status(download_id, {
-            'status': 'downloading',
-            'title': title,
-            'chapter': chapter_norm,
-            'progress': 0,
-            'total': len(pages),
-        })
-
-        base = resp_data['baseUrl']
-        hash_val = resp_data['chapter']['hash']
-
-        downloaded_count = 0
-        for i, page in enumerate(pages, 1):
-            set_download_status(download_id, {
-                'status': 'downloading',
-                'title': title,
-                'chapter': chapter_norm,
-                'progress': i,
-                'total': len(pages),
-            })
-            img_url = f"{base}/data/{hash_val}/{page}"
-            time.sleep(0.2)
-
-            r = http_requests.get(img_url)
-            if r.status_code == 200:
-                ext = page.split('.')[-1]
-                filename = f"{_chapter_file_prefix(chapter_norm)}_{i:03d}.{ext}"
-                with open(folder / filename, 'wb') as f:
-                    f.write(r.content)
-                downloaded_count += 1
-
-        if downloaded_count > 0:
-            set_download_status(download_id, {
-                'status': 'complete',
-                'title': title,
-                'chapter': chapter_norm,
-                'pages': downloaded_count,
-                'progress': len(pages),
-                'total': len(pages),
-            })
-            return jsonify({'status': 'started', 'chapter': chapter_norm, 'pages': downloaded_count, 'task_id': download_id})
-
-        set_download_status(download_id, {'status': 'error', 'message': 'No se pudo descargar ninguna página'})
-        return jsonify({'error': 'No se pudo descargar ninguna página', 'pages': 0, 'task_id': download_id}), 500
-
-    except Exception as e:
-        set_download_status(download_id, {'status': 'error', 'message': str(e)})
-        return jsonify({'error': str(e), 'pages': 0, 'task_id': download_id}), 500
+    return jsonify({'status': 'started', 'chapter': chapter_norm, 'task_id': download_id})
 
 @download_bp.route('/download_cli', methods=['POST'])
 def download_cli():
@@ -449,70 +470,85 @@ def download_source_chapter():
 
 def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=None, manga_id=None):
     import json as _json
-    folder = Path(MANGA_DIR) / title
-    folder.mkdir(parents=True, exist_ok=True)
-    # Persist source context so the library can reload chapters from Suwayomi
-    if source_id and manga_id:
-        meta_path = folder / '.source_meta.json'
-        if not meta_path.exists():
-            try:
-                meta_path.write_text(_json.dumps({'sourceId': str(source_id), 'mangaId': int(manga_id)}))
-            except Exception:
-                pass
-    prefix = _chapter_file_prefix(chapter_norm)
-    downloaded = 0
-    total = len(page_urls)
+    with _dl_semaphore:
+        folder = Path(MANGA_DIR) / title
+        folder.mkdir(parents=True, exist_ok=True)
+        # Persist source context so the library can reload chapters from Suwayomi
+        if source_id and manga_id:
+            meta_path = folder / '.source_meta.json'
+            if not meta_path.exists():
+                try:
+                    meta_path.write_text(_json.dumps({'sourceId': str(source_id), 'mangaId': int(manga_id)}))
+                except Exception:
+                    pass
+        prefix = _chapter_file_prefix(chapter_norm)
+        downloaded = 0
+        total = len(page_urls)
+        _download_cancel_flags[download_id] = False
 
-    try:
-        for i, url in enumerate(page_urls, 1):
-            set_download_status(download_id, {
-                'status': 'downloading',
-                'title': title,
-                'chapter': chapter_norm,
-                'progress': i,
-                'total': total,
-                'source': 'external',
-            })
-            try:
-                r = http_requests.get(url, timeout=30)
-                if r.status_code == 200:
-                    # Infer extension from Content-Type or URL
-                    ct = r.headers.get('Content-Type', '')
-                    if 'png' in ct:
-                        ext = 'png'
-                    elif 'webp' in ct:
-                        ext = 'webp'
-                    else:
-                        ext = url.split('?')[0].rsplit('.', 1)[-1].lower()
-                        if ext not in ('jpg', 'jpeg', 'png', 'webp'):
-                            ext = 'jpg'
-                    filename = f"{prefix}_{i:03d}.{ext}"
-                    with open(folder / filename, 'wb') as f:
-                        f.write(r.content)
-                    downloaded += 1
-            except Exception as e:
-                print(f"Error downloading page {i}: {e}", flush=True)
-            time.sleep(0.1)
+        try:
+            for i, url in enumerate(page_urls, 1):
+                if _download_cancel_flags.get(download_id):
+                    _download_cancel_flags.pop(download_id, None)
+                    set_download_status(download_id, {
+                        'status': 'cancelled',
+                        'title': title,
+                        'chapter': chapter_norm,
+                        'progress': i - 1,
+                        'total': total,
+                    })
+                    return
 
-        if downloaded > 0:
-            set_download_status(download_id, {
-                'status': 'complete',
-                'title': title,
-                'chapter': chapter_norm,
-                'pages': downloaded,
-                'progress': total,
-                'total': total,
-                'source': 'external',
-            })
-        else:
-            set_download_status(download_id, {
-                'status': 'error',
-                'message': 'No se pudo descargar ninguna página',
-                'title': title,
-                'chapter': chapter_norm,
-            })
-    except Exception as e:
-        set_download_status(download_id, {'status': 'error', 'message': str(e)})
+                set_download_status(download_id, {
+                    'status': 'downloading',
+                    'title': title,
+                    'chapter': chapter_norm,
+                    'progress': i,
+                    'total': total,
+                    'source': 'external',
+                })
+                try:
+                    r = _fetch_with_retry(url, timeout=30)
+                    if r and r.status_code == 200:
+                        ct = r.headers.get('Content-Type', '')
+                        if 'png' in ct:
+                            ext = 'png'
+                        elif 'webp' in ct:
+                            ext = 'webp'
+                        else:
+                            ext = url.split('?')[0].rsplit('.', 1)[-1].lower()
+                            if ext not in ('jpg', 'jpeg', 'png', 'webp'):
+                                ext = 'jpg'
+                        filename = f"{prefix}_{i:03d}.{ext}"
+                        with open(folder / filename, 'wb') as f:
+                            f.write(r.content)
+                        downloaded += 1
+                except Exception as e:
+                    print(f"Error downloading page {i}: {e}", flush=True)
+                time.sleep(0.1)
+
+            _download_cancel_flags.pop(download_id, None)
+
+            if downloaded > 0:
+                set_download_status(download_id, {
+                    'status': 'complete',
+                    'title': title,
+                    'chapter': chapter_norm,
+                    'pages': downloaded,
+                    'progress': total,
+                    'total': total,
+                    'source': 'external',
+                })
+            else:
+                set_download_status(download_id, {
+                    'status': 'error',
+                    'message': 'No se pudo descargar ninguna página',
+                    'title': title,
+                    'chapter': chapter_norm,
+                })
+        except Exception as e:
+            _download_cancel_flags.pop(download_id, None)
+            set_download_status(download_id, {'status': 'error', 'message': str(e)})
 
 
 def run_download(download_id, manga_id, title, max_chapters):

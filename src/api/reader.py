@@ -50,20 +50,24 @@ def read_chapter():
 
     if source == 'original':
         folder = original_folder
+        resolved = 'original'
     elif source == 'upscaled':
         folder = upscaled_folder
+        resolved = 'upscaled'
     else:
         # Auto: use upscaled only if this specific chapter has pages there
         if upscaled_folder.exists() and chapter_pages(upscaled_folder):
             folder = upscaled_folder
+            resolved = 'upscaled'
         else:
             folder = original_folder
+            resolved = 'original'
 
     if not folder.exists():
         return jsonify({'pages': [], 'error': 'Folder not found'})
 
     pages = chapter_pages(folder)
-    return jsonify({'pages': [f"{actual_folder}/{p}" for p in pages], 'folder': actual_folder, 'source': source})
+    return jsonify({'pages': [f"{actual_folder}/{p}" for p in pages], 'folder': actual_folder, 'source': resolved})
 
 @reader_bp.route('/random')
 def random_chapter():

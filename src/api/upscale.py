@@ -29,14 +29,28 @@ UPSCALE_SCALE = 4
 COLOR_DIFF_THRESHOLD = int(os.environ.get("COLOR_DIFF_THRESHOLD", "15"))
 COLOR_PIXEL_FRACTION = float(os.environ.get("COLOR_PIXEL_FRACTION", "0.10"))
 
-TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "384"))
-TILE_OVERLAP = int(os.environ.get("UPSCALE_TILE_OVERLAP", "24"))
-GPU_BATCH_SIZE = int(os.environ.get("GPU_BATCH_SIZE", "8"))
+TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "512"))
+TILE_OVERLAP = int(os.environ.get("UPSCALE_TILE_OVERLAP", "32"))
+GPU_BATCH_SIZE = int(os.environ.get("GPU_BATCH_SIZE", "16"))
 # Divide 4x output by this factor before saving (2 → effective 2x, ideal for 1440p)
 OUTPUT_DOWNSCALE = int(os.environ.get("UPSCALE_OUTPUT_DOWNSCALE", "1"))
 JPEG_QUALITY = int(os.environ.get("UPSCALE_JPEG_QUALITY", "95"))
-VRAM_LIMIT_PCT = int(os.environ.get("VRAM_LIMIT_PCT", "80"))      # % of total VRAM to use
+VRAM_LIMIT_PCT = int(os.environ.get("VRAM_LIMIT_PCT", "84"))      # % of total VRAM; ~10GB de 11.94GB, deja ~1.9GB libre
 GPU_THROTTLE_MS = int(os.environ.get("GPU_THROTTLE_MS", "10"))    # ms sleep between batches
+
+# Eco/full mode — eco adds throttle so MPV can run alongside
+_ECO_THROTTLE_MS = 80      # ms sleep after each batch of tiles
+_ECO_TILE_THROTTLE_MS = 8  # additional ms sleep between individual tiles in the batch
+_FULL_THROTTLE_MS = 0
+_gpu_throttle_ms = [GPU_THROTTLE_MS]   # mutable; worker reads this after each batch
+_gpu_tile_throttle_ms = [0]            # mutable; worker reads this between tiles
+
+# Eco concurrency limit: max 2 chapters at a time in eco mode.
+# Full mode is unlimited — chapters race for the GPU worker queue.
+_eco_semaphore = threading.Semaphore(4)
+
+# Cancel support — set contains task_ids awaiting cancellation
+_upscale_cancel_requested: set = set()
 
 # Thread pool for async JPEG saves — keeps GPU busy while CPU encodes previous image
 _save_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="jpeg-save")
@@ -109,7 +123,9 @@ def _gpu_worker_loop():
         print(f"GPU worker: VRAM cap {fraction*100:.0f}% ({fraction*total_vram/1024**3:.1f}GB de {total_vram/1024**3:.1f}GB)", flush=True)
         print(f"GPU worker: throttle entre batches = {GPU_THROTTLE_MS}ms", flush=True)
 
-        torch.backends.cudnn.benchmark = True
+        # cudnn.benchmark=False: evita que cuDNN seleccione algoritmos que saturan SM al 100%.
+        # torch.compile omitido: mantenía SM al 100% incluso con throttle activo.
+        torch.backends.cudnn.benchmark = False
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.set_float32_matmul_precision('high')
 
@@ -119,28 +135,15 @@ def _gpu_worker_loop():
         in_channels = getattr(model_desc, 'input_channels', 3)
         _gpu_in_channels[0] = in_channels
 
-        # Warmup pass (cuDNN algorithm selection)
+        # Warmup pass
         dummy = torch.randn(1, in_channels, TILE_SIZE, TILE_SIZE, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
         with torch.inference_mode():
             _ = model(dummy)
         torch.cuda.synchronize()
         del dummy
 
-        # max-autotune-no-cudagraphs: selects optimal CUDA kernels for this GPU without
-        # CUDA graph VRAM pre-allocation. Better than 'default', safer than 'reduce-overhead'.
-        try:
-            model = torch.compile(model, mode='max-autotune-no-cudagraphs')
-            dummy = torch.randn(1, in_channels, TILE_SIZE, TILE_SIZE, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
-            with torch.inference_mode():
-                _ = model(dummy)
-            torch.cuda.synchronize()
-            del dummy
-            print("GPU worker: torch.compile activo (mode=max-autotune-no-cudagraphs)", flush=True)
-        except Exception as ce:
-            print(f"GPU worker: torch.compile omitido ({type(ce).__name__})", flush=True)
-
         _gpu_worker_ready.set()
-        print(f"GPU worker listo — tile={TILE_SIZE}px, overlap={TILE_OVERLAP}px, batch={GPU_BATCH_SIZE}", flush=True)
+        print(f"GPU worker listo — tile={TILE_SIZE}px, overlap={TILE_OVERLAP}px, batch={GPU_BATCH_SIZE} (sin torch.compile)", flush=True)
 
         # ── Main loop: drain queue in batches ──
         while True:
@@ -165,15 +168,30 @@ def _gpu_worker_loop():
                     break
 
             try:
-                batch = torch.cat([p[0] for p in pending], dim=0)
-                with torch.inference_mode():
-                    out = model(batch)
-                torch.cuda.synchronize()
-                if GPU_THROTTLE_MS > 0:
+                tile_t_ms = _gpu_tile_throttle_ms[0]
+                if tile_t_ms > 0:
+                    # Process tiles one by one with a small sleep between each
                     import time
-                    time.sleep(GPU_THROTTLE_MS / 1000.0)
-                for i, (_, fut) in enumerate(pending):
-                    fut.set_result(out[i:i + 1].clone())
+                    results = []
+                    for p_tensor, _ in pending:
+                        with torch.inference_mode():
+                            r = model(p_tensor)
+                        torch.cuda.synchronize()
+                        results.append(r)
+                        time.sleep(tile_t_ms / 1000.0)
+                    for i, (_, fut) in enumerate(pending):
+                        fut.set_result(results[i][0:1].clone())
+                else:
+                    batch = torch.cat([p[0] for p in pending], dim=0)
+                    with torch.inference_mode():
+                        out = model(batch)
+                    torch.cuda.synchronize()
+                    for i, (_, fut) in enumerate(pending):
+                        fut.set_result(out[i:i + 1].clone())
+                t_ms = _gpu_throttle_ms[0]
+                if t_ms > 0:
+                    import time
+                    time.sleep(t_ms / 1000.0)
             except Exception as e:
                 for _, fut in pending:
                     fut.set_exception(e)
@@ -379,12 +397,119 @@ def get_all_status():
     return jsonify(get_upscale_status())
 
 
+@upscale_bp.route('/cancel/<path:upscale_id>', methods=['POST'])
+def cancel_upscale(upscale_id):
+    _upscale_cancel_requested.add(upscale_id)
+    return jsonify({'status': 'cancel_requested', 'task_id': upscale_id})
+
+
+@upscale_bp.route('/repair_chapter', methods=['POST'])
+def repair_chapter():
+    """Upscale only the pages that are present in the download folder but missing from the upscaled folder."""
+    try:
+        data = request.get_json()
+        title = data.get('title')
+        chapter = data.get('chapter')
+        mode = data.get('mode', 'full')
+
+        if not title or chapter is None:
+            return jsonify({'status': 'error', 'message': 'title and chapter required'}), 400
+
+        from api.library import find_manga_folder
+        actual_folder = find_manga_folder(title)
+        input_folder = Path(MANGA_DIR) / actual_folder
+        output_folder = Path(UPSCALED_DIR) / actual_folder
+
+        if not input_folder.exists():
+            return jsonify({'status': 'error', 'message': 'Folder not found'}), 404
+
+        chapter_norm = normalize_chapter(chapter)
+        try:
+            value = Decimal(chapter_norm)
+            int_part = int(value.to_integral_value(rounding='ROUND_FLOOR'))
+            ch_prefix = f"ch{int_part:04d}.{chapter_norm.split('.')[-1]}_" if '.' in chapter_norm else f"ch{int_part:04d}_"
+        except (InvalidOperation, ValueError):
+            ch_prefix = f"ch{chapter_norm}_"
+
+        all_images = sorted(input_folder.glob(ch_prefix + "*.*"))
+
+        # Find images whose stem is absent from the upscaled folder (check all extensions)
+        output_folder.mkdir(parents=True, exist_ok=True)
+        _IMAGE_EXTS = ('jpg', 'jpeg', 'png', 'webp')
+        up_stems = set()
+        for ext in _IMAGE_EXTS:
+            for f in output_folder.glob(f'{ch_prefix}*.{ext}'):
+                up_stems.add(f.stem)
+
+        missing_images = [p for p in all_images if p.stem not in up_stems]
+
+        if not missing_images:
+            return jsonify({'status': 'nothing_to_repair', 'chapter': chapter_norm, 'task_id': None})
+
+        upscale_id = build_task_id(actual_folder, chapter_norm, 'upscale')
+
+        current_status = get_upscale_status(upscale_id)
+        if current_status.get('status') in {'starting', 'started', 'upscaling'}:
+            return jsonify({'status': 'already_running', 'task_id': upscale_id}), 200
+
+        _clear_status_files(upscale_id)
+        set_upscale_status(upscale_id, {
+            'status': 'upscaling',
+            'current': 0,
+            'progress': 0,
+            'total': len(missing_images),
+            'percent': 0,
+            'title': actual_folder,
+            'chapter': chapter_norm,
+            'model': ACTIVE_MODEL_PATH.name,
+            'repair': True,
+        })
+
+        if mode == 'eco':
+            _gpu_throttle_ms[0] = _ECO_THROTTLE_MS
+            _gpu_tile_throttle_ms[0] = _ECO_TILE_THROTTLE_MS
+        else:
+            _gpu_throttle_ms[0] = _FULL_THROTTLE_MS
+            _gpu_tile_throttle_ms[0] = 0
+
+        threading.Thread(
+            target=run_upscale_chapter,
+            args=(input_folder, output_folder, missing_images, upscale_id),
+            kwargs={'eco': mode == 'eco'},
+            daemon=True,
+        ).start()
+
+        return jsonify({
+            'status': 'started',
+            'total': len(missing_images),
+            'chapter': chapter_norm,
+            'task_id': upscale_id,
+            'repair': True,
+        })
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@upscale_bp.route('/mode', methods=['POST'])
+def set_upscale_mode():
+    data = request.get_json(silent=True) or {}
+    mode = data.get('mode', 'full')
+    if mode == 'eco':
+        _gpu_throttle_ms[0] = _ECO_THROTTLE_MS
+        _gpu_tile_throttle_ms[0] = _ECO_TILE_THROTTLE_MS
+    else:
+        _gpu_throttle_ms[0] = _FULL_THROTTLE_MS
+        _gpu_tile_throttle_ms[0] = 0
+    return jsonify({'mode': mode, 'throttle_ms': _gpu_throttle_ms[0], 'tile_throttle_ms': _gpu_tile_throttle_ms[0]})
+
+
 @upscale_bp.route('/upscale_chapter', methods=['POST'])
 def upscale_chapter():
     try:
         data = request.get_json()
         title = data.get('title')
         chapter = data.get('chapter')
+        mode = data.get('mode', 'full')
 
         if not title or chapter is None:
             return jsonify({'status': 'error', 'message': 'title required'}), 400
@@ -449,13 +574,21 @@ def upscale_chapter():
             'scale': UPSCALE_SCALE,
         })
 
+        if mode == 'eco':
+            _gpu_throttle_ms[0] = _ECO_THROTTLE_MS
+            _gpu_tile_throttle_ms[0] = _ECO_TILE_THROTTLE_MS
+        else:
+            _gpu_throttle_ms[0] = _FULL_THROTTLE_MS
+            _gpu_tile_throttle_ms[0] = 0
+
         threading.Thread(
             target=run_upscale_chapter,
             args=(input_folder, output_folder, images, upscale_id),
+            kwargs={'eco': mode == 'eco'},
             daemon=True,
         ).start()
 
-        return jsonify({'status': 'started', 'total': total, 'chapter': chapter_norm, 'upscale_id': upscale_id, 'task_id': upscale_id, 'async': True})
+        return jsonify({'status': 'started', 'total': total, 'chapter': chapter_norm, 'upscale_id': upscale_id, 'task_id': upscale_id, 'async': True, 'mode': mode})
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
@@ -494,7 +627,10 @@ def upscale_manga():
 
 # ── Worker threads (chapter threads submit tiles to GPU worker) ───────────────
 
-def run_upscale_chapter(input_folder, output_folder, images, upscale_id):
+def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=False):
+    if eco:
+        # Only 1 eco chapter runs at a time — acquire before touching the GPU queue
+        _eco_semaphore.acquire()
     try:
         from PIL import Image
 
@@ -507,6 +643,17 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id):
         save_futures = []
 
         for img_path in images:
+            if upscale_id in _upscale_cancel_requested:
+                _upscale_cancel_requested.discard(upscale_id)
+                set_upscale_status(upscale_id, {
+                    'status': 'cancelled',
+                    'current': processed,
+                    'progress': processed,
+                    'total': total,
+                    'model': ACTIVE_MODEL_PATH.name,
+                })
+                return
+
             try:
                 set_upscale_status(upscale_id, {
                     'status': 'upscaling',
@@ -571,6 +718,9 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id):
 
     except Exception as e:
         set_upscale_status(upscale_id, {'status': 'error', 'error': str(e), 'model': ACTIVE_MODEL_PATH.name})
+    finally:
+        if eco:
+            _eco_semaphore.release()
 
 
 def run_upscale_all(input_folder, output_folder, images, upscale_id):

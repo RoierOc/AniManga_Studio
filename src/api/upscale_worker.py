@@ -5,7 +5,9 @@ Upscale worker - runs in a separate process with correct venv
 
 import sys
 import os
+import io
 import shutil
+import time
 from pathlib import Path
 import numpy as np
 import json
@@ -17,16 +19,32 @@ if str(SRC_DIR) not in sys.path:
 
 from api.runtime import MODEL_PATH_EULA_4X
 
+try:
+    import mozjpeg_lossless_optimization as _mozjpeg
+    _MOZJPEG = True
+except ImportError:
+    _MOZJPEG = False
+
+
+def _mozjpeg_optimize(data: bytes) -> bytes:
+    if not _MOZJPEG:
+        return data
+    try:
+        return _mozjpeg.optimize(data)
+    except Exception:
+        return data
+
 ACTIVE_MODEL_PATH = MODEL_PATH_EULA_4X
 UPSCALE_SCALE = 4
-TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "384"))
-TILE_OVERLAP = int(os.environ.get("UPSCALE_TILE_OVERLAP", "24"))
+TILE_SIZE = int(os.environ.get("UPSCALE_TILE_SIZE", "256"))
+TILE_OVERLAP = int(os.environ.get("UPSCALE_TILE_OVERLAP", "16"))
 COLOR_DIFF_THRESHOLD = int(os.environ.get("COLOR_DIFF_THRESHOLD", "15"))
 COLOR_PIXEL_FRACTION = float(os.environ.get("COLOR_PIXEL_FRACTION", "0.10"))
-OUTPUT_DOWNSCALE = int(os.environ.get("UPSCALE_OUTPUT_DOWNSCALE", "1"))
-JPEG_QUALITY = int(os.environ.get("UPSCALE_JPEG_QUALITY", "95"))
-VRAM_LIMIT_PCT = int(os.environ.get("VRAM_LIMIT_PCT", "80"))
-GPU_THROTTLE_MS = int(os.environ.get("GPU_THROTTLE_MS", "10"))
+OUTPUT_DOWNSCALE = int(os.environ.get("UPSCALE_OUTPUT_DOWNSCALE", "2"))
+JPEG_QUALITY = int(os.environ.get("UPSCALE_JPEG_QUALITY", "80"))
+VRAM_LIMIT_PCT = int(os.environ.get("VRAM_LIMIT_PCT", "84"))
+GPU_THROTTLE_MS = int(os.environ.get("GPU_THROTTLE_MS", "80"))
+TILE_THROTTLE_MS = int(os.environ.get("TILE_THROTTLE_MS", "8"))
 
 
 def is_color_page(img_pil, threshold=COLOR_DIFF_THRESHOLD, min_fraction=COLOR_PIXEL_FRACTION):
@@ -39,7 +57,7 @@ def is_color_page(img_pil, threshold=COLOR_DIFF_THRESHOLD, min_fraction=COLOR_PI
     return float(np.mean(max_diff > threshold)) > min_fraction
 
 
-def upscale_tiled(model, img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=UPSCALE_SCALE):
+def upscale_tiled(model, img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=UPSCALE_SCALE, tile_throttle_ms=0):
     """Upscale img_pil in tiles. Handles both grayscale (1ch) and RGB (3ch) models."""
     import torch
     from PIL import Image
@@ -91,6 +109,10 @@ def upscale_tiled(model, img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TI
 
             with torch.inference_mode():
                 out_t = model(t)
+
+            if tile_throttle_ms > 0:
+                torch.cuda.synchronize()
+                time.sleep(tile_throttle_ms / 1000.0)
 
             # out_t: (1, c_out, th*scale, tw*scale)
             out_squeezed = out_t.squeeze(0)  # (c_out, th*scale, tw*scale)
@@ -157,6 +179,7 @@ def main():
         import torch
         from spandrel import ModelLoader
         from PIL import Image
+        Image.MAX_IMAGE_PIXELS = None  # allow large scans without DecompressionBomb error
 
         print(f"DEBUG: PyTorch version: {torch.__version__}", flush=True)
 
@@ -170,7 +193,7 @@ def main():
         torch.cuda.set_per_process_memory_fraction(fraction, 0)
         print(f"DEBUG: VRAM cap {fraction*100:.0f}% ({fraction*total_vram/1024**3:.1f}GB de {total_vram/1024**3:.1f}GB)", flush=True)
 
-        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.benchmark = False
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.set_float32_matmul_precision('high')
 
@@ -184,17 +207,8 @@ def main():
             _ = model(dummy)
         torch.cuda.synchronize()
         del dummy
-
-        try:
-            model = torch.compile(model, mode='max-autotune-no-cudagraphs')
-            dummy = torch.randn(1, in_channels, TILE_SIZE, TILE_SIZE, device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
-            with torch.inference_mode():
-                _ = model(dummy)
-            torch.cuda.synchronize()
-            del dummy
-            print("torch.compile activo (mode=max-autotune-no-cudagraphs)", flush=True)
-        except Exception as ce:
-            print(f"torch.compile omitido ({type(ce).__name__})", flush=True)
+        print(f"DEBUG: Model warmup completo (sin torch.compile)", flush=True)
+        print(f"DEBUG: Tile throttle {TILE_THROTTLE_MS}ms/tile  |  Image throttle {GPU_THROTTLE_MS}ms/img", flush=True)
 
         processed = 0
         skipped_color = 0
@@ -233,10 +247,11 @@ def main():
                     processed += 1
                     continue
 
-                out_pil = upscale_tiled(model, img, in_channels=in_channels)
+                out_pil = upscale_tiled(model, img, in_channels=in_channels,
+                                        tile_throttle_ms=TILE_THROTTLE_MS)
                 torch.cuda.synchronize()
+                torch.cuda.empty_cache()
                 if GPU_THROTTLE_MS > 0:
-                    import time
                     time.sleep(GPU_THROTTLE_MS / 1000.0)
                 if OUTPUT_DOWNSCALE > 1:
                     out_pil = out_pil.resize(
@@ -244,7 +259,9 @@ def main():
                         Image.LANCZOS
                     )
                 out_path = output_folder / (img_path.stem + ".jpg")
-                out_pil.save(out_path, quality=JPEG_QUALITY)
+                _buf = io.BytesIO()
+                out_pil.save(_buf, format='JPEG', quality=JPEG_QUALITY, optimize=True, progressive=True)
+                out_path.write_bytes(_mozjpeg_optimize(_buf.getvalue()))
                 processed += 1
 
                 print(f"DEBUG: Saved {out_path.name}", flush=True)

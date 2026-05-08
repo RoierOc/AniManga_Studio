@@ -6,6 +6,7 @@ Library API - Manage local manga library
 from flask import Blueprint, jsonify, request
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
+from urllib.parse import quote
 import json
 
 from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter
@@ -74,7 +75,7 @@ def search_covers():
         # Skip if already has local cover
         local_covers = list(folder.glob('cover.*')) + list(folder.glob('folder.*'))
         if local_covers:
-            results[folder.name] = f"/uploads/{folder.name}/{local_covers[0].name}"
+            results[folder.name] = f"/uploads/{quote(folder.name, safe='')}/{local_covers[0].name}"
             continue
         
         # Search MangaDex for this manga
@@ -137,13 +138,37 @@ def get_manga(title):
     chapters = get_chapters_from_folder(folder)
     upscaled_folder = Path(UPSCALED_DIR) / title.replace('_', ' ')
     upscaled = {}
-    
-    if upscaled_folder.exists():
-        for f in upscaled_folder.glob('*.jpg'):
+
+    _IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp']
+
+    # Count downloaded pages per chapter prefix
+    dl_by_ch: dict = {}
+    for ext in _IMAGE_EXTS:
+        for f in folder.glob(f'*.{ext}'):
             parts = f.stem.split('_')
-            if len(parts) > 0 and parts[0].startswith('ch'):
-                ch = normalize_chapter(parts[0])
-                upscaled[ch] = True
+            if parts and parts[0].startswith('ch'):
+                dl_by_ch.setdefault(parts[0], set()).add(f.stem)
+
+    # Count upscaled pages per chapter prefix
+    up_by_ch: dict = {}
+    if upscaled_folder.exists():
+        for ext in _IMAGE_EXTS:
+            for f in upscaled_folder.glob(f'*.{ext}'):
+                parts = f.stem.split('_')
+                if parts and parts[0].startswith('ch'):
+                    up_by_ch.setdefault(parts[0], set()).add(f.stem)
+
+    # True = fully upscaled, 'partial' = some pages missing
+    for ch_key in set(dl_by_ch) | set(up_by_ch):
+        dl_count = len(dl_by_ch.get(ch_key, set()))
+        up_count = len(up_by_ch.get(ch_key, set()))
+        ch_norm = normalize_chapter(ch_key)
+        if up_count == 0:
+            pass  # not upscaled at all — omit key
+        elif dl_count > 0 and up_count < dl_count:
+            upscaled[ch_norm] = 'partial'
+        else:
+            upscaled[ch_norm] = True
     
     source_meta = None
     meta_path = folder / '.source_meta.json'
@@ -203,6 +228,89 @@ def get_chapters_from_folder(folder):
     
     chapter_data.sort(key=lambda x: _chapter_sort_key(x['chapter']), reverse=True)
     return chapter_data[:50]
+
+
+@library_bp.route('/chapter_health/<path:title>')
+def chapter_health(title):
+    """Scan a manga's chapters for upscale completeness and download gaps.
+    Returns per-chapter status so the UI can show repair indicators.
+    """
+    actual = find_manga_folder(title)
+
+    dl_folder = Path(MANGA_DIR) / actual
+    up_folder = Path(UPSCALED_DIR) / actual
+
+    if not dl_folder.exists():
+        return jsonify({'error': 'not found'}), 404
+
+    # Collect all downloaded pages grouped by chapter prefix (ch####)
+    _IMAGE_EXTS = ('jpg', 'jpeg', 'png', 'webp')
+    dl_by_ch: dict = {}
+    for ext in _IMAGE_EXTS:
+        for f in dl_folder.glob(f'*.{ext}'):
+            parts = f.stem.split('_')
+            if parts and parts[0].startswith('ch'):
+                ch_key = parts[0]
+                dl_by_ch.setdefault(ch_key, set()).add(f.stem)
+
+    # Collect all upscaled pages grouped by chapter prefix
+    up_by_ch: dict = {}
+    if up_folder.exists():
+        for ext in _IMAGE_EXTS:
+            for f in up_folder.glob(f'*.{ext}'):
+                parts = f.stem.split('_')
+                if parts and parts[0].startswith('ch'):
+                    ch_key = parts[0]
+                    up_by_ch.setdefault(ch_key, set()).add(f.stem)
+
+    all_chapters = sorted(set(dl_by_ch) | set(up_by_ch))
+    result = []
+
+    for ch_key in all_chapters:
+        dl_stems = dl_by_ch.get(ch_key, set())
+        up_stems = up_by_ch.get(ch_key, set())
+        dl_count = len(dl_stems)
+        up_count = len(up_stems)
+
+        missing_up = sorted(dl_stems - up_stems)
+
+        # Detect page number gaps in downloaded pages
+        page_nums = []
+        for stem in dl_stems:
+            parts = stem.split('_')
+            if len(parts) >= 2:
+                try:
+                    page_nums.append(int(parts[-1]))
+                except ValueError:
+                    pass
+        page_nums.sort()
+        gaps = []
+        for i in range(len(page_nums) - 1):
+            if page_nums[i + 1] - page_nums[i] > 1:
+                gaps.extend(range(page_nums[i] + 1, page_nums[i + 1]))
+
+        ch_norm = normalize_chapter(ch_key)
+        status = 'ok'
+        if dl_count == 0 and up_count > 0:
+            status = 'orphan'
+        elif dl_count > 0 and up_count == 0:
+            status = 'not_upscaled'
+        elif missing_up:
+            status = 'partial'
+
+        result.append({
+            'chapter': ch_norm,
+            'ch_key': ch_key,
+            'downloaded': dl_count,
+            'upscaled': up_count,
+            'missing_upscaled': len(missing_up),
+            'missing_pages': missing_up[:20],
+            'download_gaps': gaps[:10],
+            'status': status,
+        })
+
+    result.sort(key=lambda x: _chapter_sort_key(x['chapter']), reverse=True)
+    return jsonify(result)
 
 def find_manga_folder(query):
     query_norm = query.lower().replace('-', ' ').replace('_', ' ')

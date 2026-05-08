@@ -3,8 +3,11 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MangaJaNai</title>
+  <title>MangaUpscaler</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <script src="/static/js/vue.js"></script>
 </head>
 <body>
@@ -15,10 +18,10 @@
     <div class="md-header-inner">
       <a href="/" class="md-logo">
         <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
-          <path d="M4 4h24v24H4V4z" fill="#6184d3"/>
-          <path d="M8 8h16v16H8V8z" fill="white"/>
+          <rect width="32" height="32" rx="7" fill="#6184d3"/>
+          <text x="16" y="24" font-size="21" text-anchor="middle" fill="white" font-family="'Hiragino Mincho ProN','Yu Mincho','MS Mincho',serif" font-weight="700">愛</text>
         </svg>
-        <span>MangaJaNai</span>
+        <span>MangaUpscaler</span>
         <span v-if="taskQueueList.length > 0" class="task-badge">{{ taskQueueList.length }}</span>
       </a>
 
@@ -41,11 +44,6 @@
           <span v-if="suwayomiOnline" class="source-online-dot"></span>
         </button>
       </nav>
-
-      <div class="md-search">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-        <input type="text" v-model="searchQuery" @input="debouncedSearch" placeholder="Buscar manga...">
-      </div>
     </div>
   </header>
 
@@ -54,15 +52,8 @@
 
     <!-- Library View -->
     <div v-if="currentView === 'library'" class="md-section">
-      <div class="md-section-header">
-        <h2 class="md-section-title">Mi Biblioteca</h2>
-        <div class="md-sort">
-          <select>
-            <option>Ordenar por: Actualizado</option>
-            <option>Ordenar por: Título</option>
-            <option>Ordenar por: Último leído</option>
-          </select>
-        </div>
+      <div class="lib-topbar">
+        <span class="lib-count">{{ combinedLibrary.length }} manga</span>
       </div>
 
       <div v-if="combinedLibrary.length > 0" class="md-grid">
@@ -96,13 +87,25 @@
               </div>
             </div>
             </template>
+            <span v-if="item.source === 'mihon'" class="cover-source-badge cover-source-badge--mihon">MIHON</span>
+            <span v-else-if="item.source === 'mangadex'" class="cover-source-badge cover-source-badge--md">MD</span>
           </div>
           <div class="md-card-title">{{ item.title }}</div>
-          <div class="md-card-meta">
-            <span v-if="item.source === 'mihon'" class="card-source-badge card-source-badge--mihon">Mihon</span>
-            <span v-else-if="item.source === 'mangadex'" class="card-source-badge card-source-badge--md">MangaDex</span>
+          <div class="md-card-sub">
             <template v-if="item.downloaded">
-              <span>{{ item.chapter_count || 0 }}</span> cap.
+              <div class="series-prog">
+                <div class="series-prog-bar">
+                  <div class="series-prog-up"
+                       :style="{ width: item.chapter_count > 0 ? Math.min(item.upscaled / item.chapter_count * 100, 100) + '%' : '0%' }"></div>
+                  <div class="series-prog-read"
+                       :style="{ width: item.chapter_count > 0 ? Math.min((seriesReadCounts[canonicalTitle(item.title)] || 0) / item.chapter_count * 100, 100) + '%' : '0%' }"></div>
+                </div>
+                <div class="series-prog-stats">
+                  <span class="sps">↓{{ item.chapter_count }}</span>
+                  <span class="sps sps--up" v-if="item.upscaled > 0">· 4K {{ item.upscaled }}</span>
+                  <span class="sps sps--read" v-if="(seriesReadCounts[canonicalTitle(item.title)] || 0) > 0">· ✓{{ seriesReadCounts[canonicalTitle(item.title)] }}</span>
+                </div>
+              </div>
             </template>
             <template v-else>
               <span class="md-card-meta--pending">En cola</span>
@@ -121,8 +124,11 @@
 
     <!-- MangaDex Explore View -->
     <div v-else-if="currentView === 'mangadex'" class="md-section">
-      <div class="md-section-header">
-        <h2 class="md-section-title">Explorar MangaDex</h2>
+      <div class="md-search-hero">
+        <div class="md-search-hero-inner">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="md-search-hero-icon"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          <input class="md-search-hero-input" type="text" v-model="searchQuery" @input="debouncedSearch" placeholder="Buscar manga en MangaDex..." autofocus>
+        </div>
       </div>
 
       <div v-if="searchResults.length > 0" class="md-grid">
@@ -365,6 +371,13 @@
             <span v-if="stats.downloaded > 0">• {{ stats.downloaded }} descargados</span>
             <span v-if="stats.upscaled > 0">• {{ stats.upscaled }} upscaleados</span>
           </div>
+          <div v-if="getLastReadProgress(currentTitle)?.lastChapter" class="modal-continue-row">
+            <button class="modal-continue-btn"
+                    @click="readChapter(getLastReadProgress(currentTitle).lastChapter, isUpscaled(getLastReadProgress(currentTitle).lastChapter) ? 'upscaled' : 'auto'); showModal=false">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+              Continuar Cap. {{ getLastReadProgress(currentTitle)?.lastChapter }}
+            </button>
+          </div>
           <div class="md-modal-actions">
             <button class="md-btn-primary" :class="{ 'md-btn-added': isInLibrary }" @click="addToLibrary()">
               <svg v-if="!isInLibrary" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
@@ -418,15 +431,40 @@
             {{ getLangFlag(lang) }}
           </button>
         </div>
+        <!-- Bulk download / upscale bar -->
+        <div class="ch-bulk-bar">
+          <div class="ch-bulk-range">
+            <span class="ch-bulk-label">Cap</span>
+            <input class="ch-bulk-input" v-model="bulkFrom" placeholder="1" inputmode="decimal"
+                   @keydown.enter="$refs.bulkToRef.focus()" @focus="$event.target.select()">
+            <span class="ch-bulk-sep">–</span>
+            <input class="ch-bulk-input" v-model="bulkTo" placeholder="20" inputmode="decimal"
+                   ref="bulkToRef" @keydown.enter="bulkDownload()" @focus="$event.target.select()">
+          </div>
+          <div class="ch-bulk-actions">
+            <button class="ch-bulk-btn ch-bulk-btn--dl" @click="bulkDownload()" :disabled="!bulkFrom || !bulkTo">
+              ↓ Descargar<template v-if="bulkPreview?.dl"> ({{ bulkPreview.dl }})</template>
+            </button>
+            <button class="ch-bulk-btn ch-bulk-btn--up" @click="bulkUpscale('full')" :disabled="!bulkFrom || !bulkTo">
+              4x<template v-if="bulkPreview?.up"> ({{ bulkPreview.up }})</template>
+            </button>
+            <button class="ch-bulk-btn ch-bulk-btn--eco" @click="bulkUpscale('eco')" :disabled="!bulkFrom || !bulkTo" title="Upscale eco (GPU limitada)">
+              4x🌿
+            </button>
+          </div>
+        </div>
+
         <div class="md-chapters-list">
 
           <div v-for="group in filteredChapters" :key="group.chapter" class="ch-row"
-               :class="{ 'ch-row--upscaled': isUpscaled(group.chapter), 'ch-row--downloaded': isDownloaded(group.chapter) && !isUpscaled(group.chapter) }">
+               :class="{ 'ch-row--upscaled': isUpscaled(group.chapter), 'ch-row--partial': isPartialUpscaled(group.chapter), 'ch-row--downloaded': isDownloaded(group.chapter) && !isUpscaled(group.chapter) && !isPartialUpscaled(group.chapter) }">
 
             <div class="ch-dot" :class="{
-              'ch-dot--upscaled': isUpscaled(group.chapter),
-              'ch-dot--downloaded': isDownloaded(group.chapter) && !isUpscaled(group.chapter),
-              'ch-dot--active': getTask(group.chapter,'download') || getTask(group.chapter,'upscale')
+              'ch-dot--read':       isChapterRead(group.chapter),
+              'ch-dot--upscaled':   isUpscaled(group.chapter) && !isChapterRead(group.chapter),
+              'ch-dot--partial':    isPartialUpscaled(group.chapter) && !isChapterRead(group.chapter),
+              'ch-dot--downloaded': isDownloaded(group.chapter) && !isUpscaled(group.chapter) && !isPartialUpscaled(group.chapter) && !isChapterRead(group.chapter),
+              'ch-dot--active':     getTask(group.chapter,'download') || getTask(group.chapter,'upscale')
             }"></div>
 
             <div class="ch-info">
@@ -448,26 +486,55 @@
               <template v-if="isUpscaled(group.chapter)">
                 <span class="ch-tag ch-tag--upscaled">4K<span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="ch-tag-lang">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span></span>
                 <button class="md-btn-sm md-btn-4k" @click.stop="readChapterUpscaled(group.chapter)">Leer 4K</button>
+                <button class="ch-btn-read" :class="{ 'ch-btn-read--done': isChapterRead(group.chapter) }"
+                        @click.stop="toggleChapterRead(group.chapter)"
+                        :title="isChapterRead(group.chapter) ? 'Marcar no leído' : 'Marcar leído'">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                </button>
                 <button class="ch-btn-trash" @click.stop="deleteChapter(group.chapter)" title="Borrar">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                 </button>
               </template>
-              <template v-else-if="isDownloaded(group.chapter)">
+              <template v-else-if="isPartialUpscaled(group.chapter) && !getTask(group.chapter,'upscale')">
+                <span class="ch-tag ch-tag--partial" title="Upscale incompleto — hay páginas sin procesar">⚠ Parcial</span>
+                <button class="md-btn-sm md-btn-repair" @click.stop="repairChapter(group.chapter, 'full')" title="Upscalear páginas faltantes">Reparar</button>
+                <button class="md-btn-sm md-btn-repair" @click.stop="repairChapter(group.chapter, 'eco')" title="Reparar en modo eco (GPU limitada)">Reparar🌿</button>
+                <button class="md-btn-sm" @click.stop="readChapterOriginal(group.chapter)" title="Leer (mezcla original + upscale)">Leer</button>
+                <button class="ch-btn-read" :class="{ 'ch-btn-read--done': isChapterRead(group.chapter) }"
+                        @click.stop="toggleChapterRead(group.chapter)"
+                        :title="isChapterRead(group.chapter) ? 'Marcar no leído' : 'Marcar leído'">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                </button>
+                <button class="ch-btn-trash" @click.stop="deleteChapter(group.chapter)" title="Borrar">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                </button>
+              </template>
+              <template v-else-if="isDownloaded(group.chapter) && !isPartialUpscaled(group.chapter)">
                 <span class="ch-tag ch-tag--downloaded">✓<span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="ch-tag-lang">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span></span>
-                <button v-if="!getTask(group.chapter,'upscale')" class="md-btn-sm md-btn-upscale" @click.stop="upscaleChapter(group.chapter)">4x</button>
+                <template v-if="!getTask(group.chapter,'upscale')">
+                  <button class="md-btn-sm md-btn-upscale" @click.stop="upscaleChapter(group.chapter, 'full')" title="Upscale velocidad máxima (GPU 100%)">4x</button>
+                  <button class="md-btn-sm md-btn-upscale-eco" @click.stop="upscaleChapter(group.chapter, 'eco')" title="Upscale eco (GPU limitada — compatible con MPV)">4x🌿</button>
+                </template>
                 <button class="md-btn-sm"
                         :disabled="!!getTask(group.chapter,'upscale')"
                         :title="getTask(group.chapter,'upscale') ? 'Espera a que termine el upscale' : 'Leer original'"
                         @click.stop="readChapterOriginal(group.chapter)">Leer</button>
+                <button class="ch-btn-read" :class="{ 'ch-btn-read--done': isChapterRead(group.chapter) }"
+                        @click.stop="toggleChapterRead(group.chapter)"
+                        :title="isChapterRead(group.chapter) ? 'Marcar no leído' : 'Marcar leído'">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                </button>
                 <button class="ch-btn-trash" @click.stop="deleteChapter(group.chapter)" title="Borrar">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                 </button>
               </template>
               <template v-else-if="getTask(group.chapter,'download')">
                 <span class="ch-tag ch-tag--loading">Descargando...</span>
+                <button class="ch-btn-cancel" @click.stop="cancelDownload(getTaskKey(group.chapter,'download'))" title="Cancelar descarga">✕</button>
               </template>
               <template v-else-if="getTask(group.chapter,'upscale')">
-                <span class="ch-tag ch-tag--loading">Upscaleando...</span>
+                <span class="ch-tag ch-tag--loading">{{ getTask(group.chapter,'upscale').mode === 'eco' ? 'Upscale eco...' : 'Upscaleando...' }}</span>
+                <button class="ch-btn-cancel" @click.stop="cancelUpscale(getTaskKey(group.chapter,'upscale'))" title="Cancelar upscale">✕</button>
               </template>
               <template v-else>
                 <div class="ch-lang-dl" v-if="getUniqueLangs(group.variants).length > 1">
@@ -495,11 +562,18 @@
             <button :class="['tomo-fmt-btn', exportFormat==='cbz'?'active':'']" @click="exportFormat='cbz'">CBZ</button>
             <button :class="['tomo-fmt-btn', exportFormat==='cbr'?'active':'']" @click="exportFormat='cbr'">CBR</button>
           </div>
-          <div class="tomo-quality-toggle" title="Calidad JPEG de exportación">
+          <div class="tomo-quality-toggle" title="Calidad JPEG de exportación (MozJPEG)">
             <span class="tomo-quality-label">Cal.</span>
-            <button v-for="q in [80,85,90]" :key="q"
+            <button v-for="q in [85,92,95,100]" :key="q"
                     :class="['tomo-fmt-btn', exportQuality===q?'active':'']"
-                    @click="exportQuality=q; scheduleExportPreview()">{{ q }}</button>
+                    @click="exportQuality=q; scheduleExportPreview()">{{ q === 100 ? 'Max' : q }}</button>
+          </div>
+          <div class="tomo-quality-toggle" title="Reducir resolución a la mitad al exportar — ideal para tablet">
+            <span class="tomo-quality-label">Res.</span>
+            <button :class="['tomo-fmt-btn', exportDownscaleHalf?'active':'']"
+                    @click="exportDownscaleHalf=!exportDownscaleHalf; scheduleExportPreview()">
+              {{ exportDownscaleHalf ? '½ tablet' : '4× full' }}
+            </button>
           </div>
         </div>
 
@@ -509,6 +583,70 @@
             <button class="tomo-q-btn" @click="selectAllExportChapters()">Todos DL</button>
             <button class="tomo-q-btn tomo-q-btn--4k" @click="selectUpscaledExportChapters()">Solo 4K</button>
             <button class="tomo-q-btn" @click="exportSelectedChapters=[]; scheduleExportPreview()">Ninguno</button>
+            <div class="tomo-range-row" title="Añadir capítulos en un rango al export · Shift+clic en filas para seleccionar rango">
+              <span class="tomo-range-label">Cap</span>
+              <input class="tomo-range-input" v-model="rangeFrom" placeholder="1" inputmode="decimal"
+                     @keydown.enter="rangeTo ? addChapterRange() : $refs.rangeToInput.focus()"
+                     @focus="$event.target.select()">
+              <span class="tomo-range-sep">–</span>
+              <input class="tomo-range-input" v-model="rangeTo" placeholder="10" inputmode="decimal"
+                     ref="rangeToInput"
+                     @keydown.enter="addChapterRange()"
+                     @focus="$event.target.select()">
+              <button class="tomo-q-btn tomo-q-btn--range" @click="addChapterRange()" :disabled="!rangeFrom || !rangeTo">+</button>
+            </div>
+          </div>
+          <!-- MangaDex header: link + manual search -->
+          <div class="tomo-mdex-header">
+            <a v-if="currentMdManga && currentMdManga.id"
+               :href="`https://mangadex.org/title/${currentMdManga.id}`"
+               target="_blank" rel="noopener" class="tomo-mdex-link"
+               title="Ver en MangaDex">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42L17.59 5H14V3zm-1 2H5a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2v-8h-2v8H5V7h8V5z"/></svg>
+              MangaDex
+            </a>
+            <div class="tomo-mdex-search-wrap">
+              <input v-model="mdexSearchQuery"
+                     class="tomo-mdex-search-input"
+                     placeholder="Buscar manga en MangaDex…"
+                     @keydown.enter="searchMdexForTomo()"
+                     @keydown.escape="mdexSearchResults=[]" />
+              <button class="tomo-mdex-search-btn" @click="searchMdexForTomo()" :disabled="mdexSearchLoading">
+                <span v-if="mdexSearchLoading" class="md-spinner-sm"></span>
+                <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0016 9.5 6.5 6.5 0 109.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+              </button>
+            </div>
+            <!-- Search results dropdown -->
+            <div v-if="mdexSearchResults.length" class="tomo-mdex-results">
+              <button v-for="r in mdexSearchResults" :key="r.id"
+                      class="tomo-mdex-result-item"
+                      @click="selectMdexEntry(r)">
+                <img v-if="r.cover" :src="r.cover" class="tomo-mdex-result-thumb" loading="lazy" />
+                <div class="tomo-mdex-result-info">
+                  <span class="tomo-mdex-result-title">{{ r.title }}</span>
+                  <span class="tomo-mdex-result-meta">{{ r.status }}</span>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          <!-- MangaDex volume presets -->
+          <div v-if="mdexVolumes.length > 0" class="tomo-vol-row">
+            <span class="tomo-vol-label">Tomos MangaDex:</span>
+            <div class="tomo-vol-pills">
+              <button v-for="vol in mdexVolumes" :key="vol.volume"
+                      class="tomo-vol-pill"
+                      :class="{ 'tomo-vol-pill--estimated': vol.noChapterData }"
+                      :title="vol.noChapterData
+                          ? `${vol.label} — rango estimado (sin caps en MangaDex)`
+                          : `Caps ${vol.chapters[0]}–${vol.chapters[vol.chapters.length-1]} · ${vol.count} caps`"
+                      @click="applyMdexVolume(vol)">
+                {{ vol.label }}
+              </button>
+            </div>
+          </div>
+          <div v-else-if="mdexVolumesLoading" class="tomo-vol-row">
+            <span class="md-spinner-sm"></span><span class="tomo-vol-label"> Cargando tomos...</span>
           </div>
           <span class="tomo-sel-count" v-if="exportSelectedChapters.length > 0">
             {{ exportSelectedChapters.length }} cap. seleccionados
@@ -530,6 +668,9 @@
                       :disabled="exportSelectedChapters.length === 0">De los capítulos</button>
               <button :class="['tomo-cov-mode', exportCoverMode==='upload'?'active':'']"
                       @click="setCoverMode('upload')">Subir imagen</button>
+              <button v-if="mdexVolumes.length > 0 || mdexCovers.length > 0"
+                      :class="['tomo-cov-mode', exportCoverMode==='mdex'?'active':'']"
+                      @click="setCoverMode('mdex')">Portadas MangaDex</button>
             </div>
           </div>
 
@@ -553,6 +694,33 @@
             </div>
           </div>
 
+          <!-- MangaDex covers gallery -->
+          <div v-if="exportCoverMode === 'mdex'" class="tomo-cov-pages">
+            <div v-if="mdexCoversLoading" class="tomo-cov-loading">
+              <div class="md-spinner-sm"></div> Cargando portadas MangaDex...
+            </div>
+            <div v-else-if="mdexCovers.length === 0" class="tomo-cov-empty">
+              No se encontraron portadas para este manga
+            </div>
+            <div v-else class="tomo-cov-grid tomo-cov-grid--covers">
+              <div v-for="cover in mdexCovers" :key="cover.id"
+                   class="tomo-cov-thumb"
+                   :class="{
+                     'selected': mdexSelectedCover && mdexSelectedCover.id === cover.id,
+                     'tomo-cov-thumb--loading': mdexCoverLoadingId === cover.id
+                   }"
+                   @click="selectMdexCover(cover)"
+                   :title="`Tomo ${cover.volume}${cover.description ? ' · ' + cover.description : ''}`">
+                <img :src="cover.url256" :alt="`Tomo ${cover.volume}`" loading="lazy">
+                <div class="tomo-cov-thumb-label">
+                  T.{{ cover.volume }}
+                  <span v-if="mdexCoverLoadingId === cover.id" class="tomo-cov-fetching">↓</span>
+                  <span v-else-if="mdexSelectedCover && mdexSelectedCover.id === cover.id">✓</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <!-- Upload area -->
           <div v-if="exportCoverMode === 'upload'" class="tomo-cov-upload">
             <label class="tomo-upload-area">
@@ -570,6 +738,33 @@
           </div>
         </div>
 
+        <!-- Excluir páginas a color -->
+        <div v-if="exportSelectedChapters.length > 0 && (exportColorPagesLoading || exportColorPages.length > 0)" class="tomo-exclude-section">
+          <div class="tomo-exclude-header">
+            <span class="tomo-cover-title">Excluir páginas a color</span>
+            <span v-if="exportColorPagesLoading" class="tomo-excl-hint">
+              <span class="md-spinner-sm"></span> Buscando...
+            </span>
+            <template v-else-if="exportColorPages.length > 0">
+              <span class="tomo-excl-hint">
+                {{ exportExcludedPages.length > 0 ? exportExcludedPages.length + ' excluida' + (exportExcludedPages.length > 1 ? 's' : '') : 'Clic para excluir' }}
+              </span>
+              <button v-if="exportExcludedPages.length > 0" class="tomo-excl-clear" @click="exportExcludedPages.splice(0); scheduleExportPreview()">Limpiar</button>
+            </template>
+          </div>
+          <div v-if="!exportColorPagesLoading && exportColorPages.length > 0" class="tomo-cov-grid">
+            <div v-for="(page, i) in exportColorPages" :key="i"
+                 class="tomo-cov-thumb"
+                 :class="{ 'tomo-excl-thumb--excluded': exportExcludedPages.includes(page.filename) }"
+                 @click="toggleExcludePage(page.filename)"
+                 :title="page.label">
+              <img :src="page.url" :alt="page.label" loading="lazy">
+              <div class="tomo-cov-thumb-label">Cap. {{ page.chapter }}</div>
+              <div v-if="exportExcludedPages.includes(page.filename)" class="tomo-excl-mark">✕</div>
+            </div>
+          </div>
+        </div>
+
         <!-- Chapter table -->
         <div class="tomo-list">
 
@@ -581,22 +776,24 @@
             <span>Acción</span>
           </div>
 
-          <div v-for="group in groupedChapters" :key="group.chapter"
+          <div v-for="(group, idx) in groupedChapters" :key="group.chapter"
                class="tomo-row"
+               @click.capture="onRowClickCapture(group, idx, $event)"
                :class="{
                  'tomo-row--sel':  exportSelectedChapters.includes(normalizeChapter(group.chapter)),
                  'tomo-row--up':   isUpscaled(group.chapter),
-                 'tomo-row--dl':   isDownloaded(group.chapter) && !isUpscaled(group.chapter),
+                 'tomo-row--part': isPartialUpscaled(group.chapter),
+                 'tomo-row--dl':   isDownloaded(group.chapter) && !isUpscaled(group.chapter) && !isPartialUpscaled(group.chapter),
                  'tomo-row--busy': getTask(group.chapter,'download') || getTask(group.chapter,'upscale'),
-                 'tomo-row--miss': !isDownloaded(group.chapter) && !isUpscaled(group.chapter) && !getTask(group.chapter,'download') && !getTask(group.chapter,'upscale')
+                 'tomo-row--miss': !isDownloaded(group.chapter) && !isUpscaled(group.chapter) && !isPartialUpscaled(group.chapter) && !getTask(group.chapter,'download') && !getTask(group.chapter,'upscale')
                }">
 
             <!-- Checkbox col -->
-            <label class="tomo-check" :class="{'tomo-check--off': !isDownloaded(group.chapter) && !isUpscaled(group.chapter)}">
+            <label class="tomo-check" :class="{'tomo-check--off': !isDownloaded(group.chapter) && !isUpscaled(group.chapter) && !isPartialUpscaled(group.chapter)}">
               <input type="checkbox"
                      :value="normalizeChapter(group.chapter)"
                      v-model="exportSelectedChapters"
-                     :disabled="!isDownloaded(group.chapter) && !isUpscaled(group.chapter)"
+                     :disabled="!isDownloaded(group.chapter) && !isUpscaled(group.chapter) && !isPartialUpscaled(group.chapter)"
                      @change="scheduleExportPreview()">
             </label>
 
@@ -610,6 +807,10 @@
             <div class="tomo-status-col">
               <template v-if="isUpscaled(group.chapter)">
                 <span class="tomo-badge tomo-badge--up">4K</span>
+                <span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="tomo-flag">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span>
+              </template>
+              <template v-else-if="isPartialUpscaled(group.chapter)">
+                <span class="tomo-badge tomo-badge--part">⚠ Parcial</span>
                 <span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="tomo-flag">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span>
               </template>
               <template v-else-if="isDownloaded(group.chapter)">
@@ -638,15 +839,22 @@
 
             <!-- Actions col -->
             <div v-else class="tomo-act-col">
+              <!-- Repair partial upscale -->
+              <button v-if="isPartialUpscaled(group.chapter)"
+                      class="tomo-act tomo-act--repair"
+                      @click.stop="repairChapter(group.chapter, 'full')"
+                      title="Completar upscale (páginas faltantes)">
+                Reparar
+              </button>
               <!-- Upscale if downloaded but not upscaled -->
-              <button v-if="isDownloaded(group.chapter) && !isUpscaled(group.chapter)"
+              <button v-if="isDownloaded(group.chapter) && !isUpscaled(group.chapter) && !isPartialUpscaled(group.chapter)"
                       class="tomo-act tomo-act--up"
                       @click.stop="upscaleChapter(group.chapter)"
                       title="Upscale a 4K">
                 4K↑
               </button>
               <!-- Download language pills for missing chapters -->
-              <template v-if="!isDownloaded(group.chapter) && !isUpscaled(group.chapter)">
+              <template v-if="!isDownloaded(group.chapter) && !isUpscaled(group.chapter) && !isPartialUpscaled(group.chapter)">
                 <button v-for="v in getUniqueLangs(group.variants)" :key="v.language"
                         class="tomo-lang-btn"
                         @click.stop="downloadChapter(group, v.language)"
@@ -681,17 +889,45 @@
                   &nbsp;· ~{{ exportPreview.size_mb }} MB
                 </template>
                 <span v-if="exportPreview.upscaled_pages > 0" class="tomo-est-4k">&nbsp;· {{ exportPreview.upscaled_pages }} 4K</span>
+                <span v-if="exportPreview.original_pages > 0" class="tomo-est-warn" :title="exportPreview.original_pages + ' páginas no están upscaleadas y se exportarán a resolución original'">
+                  &nbsp;⚠ {{ exportPreview.original_pages }} sin upscale
+                </span>
               </span>
             </template>
             <span v-else class="tomo-est-hint">Selecciona capítulos para exportar</span>
           </div>
           <button class="tomo-dl-btn"
-                  :disabled="exportSelectedChapters.length === 0 || exportBusy"
+                  :disabled="exportSelectedChapters.length === 0"
                   @click="downloadTomo()">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
-            <span v-if="exportBusy">Preparando...</span>
-            <span v-else>Descargar .{{ exportFormat }}</span>
+            <span>Exportar .{{ exportFormat }}</span>
           </button>
+
+          <!-- Active export tasks -->
+          <div v-if="Object.keys(exportTasks).length" class="export-tasks-list">
+            <div v-for="(task, tid) in exportTasks" :key="tid" class="export-task-row">
+              <span class="export-task-icon">📦</span>
+              <div class="export-task-info">
+                <span class="export-task-name">{{ task.title || 'Exportando…' }}</span>
+                <div class="export-task-bar">
+                  <div class="export-task-fill"
+                       :style="{ width: task.total > 0 ? Math.round(task.progress/task.total*100)+'%' : (task.status==='queued'?'5%':'60%') }"></div>
+                </div>
+                <div class="export-task-bottom">
+                  <span class="export-task-status">
+                    {{ task.status === 'queued' ? 'En cola…' : task.status === 'running' ? `${task.progress||0}/${task.total||'?'} págs` : task.status === 'ready' ? '✅ Descargado' : task.status === 'error' ? '❌ Error' : task.status }}
+                  </span>
+                  <div v-if="task.status === 'ready'" class="export-task-actions">
+                    <button class="export-task-save-btn" @click="saveToLibrary(tid).then(() => dismissExportTask(tid))" title="Guardar en biblioteca móvil">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
+                      Guardar en biblioteca
+                    </button>
+                    <button class="export-task-dismiss-btn" @click="dismissExportTask(tid)" title="Descartar">✕</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- ── Google Drive export ── -->
@@ -753,6 +989,79 @@
           </div>
         </div>
 
+        <!-- ── Biblioteca móvil ── -->
+        <div class="mobile-lib-section">
+
+          <!-- Header -->
+          <div class="mobile-lib-header">
+            <div class="mobile-lib-icon">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z"/></svg>
+            </div>
+            <div class="mobile-lib-info">
+              <span class="mobile-lib-title">Biblioteca móvil</span>
+              <span class="mobile-lib-sub">
+                {{ libraryFileCount ? libraryFileCount + ' serie' + (libraryFileCount !== 1 ? 's' : '') + ' · ' : '' }}Documentos\Mangas
+              </span>
+            </div>
+            <a :href="libraryUrlLocal" target="_blank" class="mobile-lib-open-btn" title="Abrir biblioteca">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+              Abrir
+            </a>
+          </div>
+
+          <!-- URLs de acceso -->
+          <div class="mobile-lib-urls">
+            <div class="mobile-lib-url-row">
+              <span class="mobile-lib-device-label">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M20 18c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/></svg>
+                PC
+              </span>
+              <code class="mobile-lib-url">{{ libraryUrlLocal }}</code>
+              <button class="mobile-lib-copy-btn"
+                      @click="() => { navigator.clipboard.writeText(libraryUrlLocal); showToast('URL copiada', 'success'); }"
+                      title="Copiar">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+              </button>
+            </div>
+            <div class="mobile-lib-url-row mobile-lib-url-row--phone">
+              <span class="mobile-lib-device-label">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z"/></svg>
+                Celular
+              </span>
+              <code class="mobile-lib-url">{{ libraryUrlPhone || '…' }}</code>
+              <button class="mobile-lib-copy-btn"
+                      @click="() => { navigator.clipboard.writeText(libraryUrlPhone); showToast('URL copiada', 'success'); }"
+                      title="Copiar">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- Configuración de red (colapsable) -->
+          <details class="mobile-lib-setup">
+            <summary>
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+              ¿El celular no puede conectar?
+            </summary>
+            <p>Ejecuta en <strong>PowerShell (Admin)</strong> — solo una vez:</p>
+            <div class="mobile-lib-cmd-block">
+              <code>{{ libraryProxyCmd }}</code>
+              <button class="mobile-lib-copy-btn" style="flex-shrink:0"
+                      @click="() => { navigator.clipboard.writeText(libraryProxyCmd); showToast('Copiado', 'success'); }">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+              </button>
+            </div>
+            <div class="mobile-lib-cmd-block" style="margin-top:5px">
+              <code>{{ libraryFwCmd }}</code>
+              <button class="mobile-lib-copy-btn" style="flex-shrink:0"
+                      @click="() => { navigator.clipboard.writeText(libraryFwCmd); showToast('Copiado', 'success'); }">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
+              </button>
+            </div>
+          </details>
+
+        </div>
+
       </div>
       <!-- ── END TOMO TAB ── -->
 
@@ -760,39 +1069,164 @@
   </div>
 
   <!-- READER -->
-  <div v-if="showReader" class="md-reader">
-    <div class="md-reader-header">
-      <button class="md-reader-back" @click="closeReader">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
-        Volver
+  <div v-if="showReader"
+       :class="['reader', `reader--${readerMode}`, `reader--fit-${fitMode}`]"
+       @mousemove="e => { showBars(); onPanMove(e); }"
+       @mouseup="onPanEnd"
+       @mouseleave="onPanEnd"
+       @wheel="handleReaderWheel">
+
+    <!-- TOP BAR -->
+    <div class="reader-topbar" :class="{ 'reader-bar--hidden': readerBarsHidden }">
+      <button class="reader-back" @click="closeReader" title="Volver (Esc)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
       </button>
-      <div class="md-reader-title">{{ currentTitle }} - Ch. {{ currentChapter }}</div>
-      <div class="md-reader-pages">{{ currentPage + 1 }} / {{ pages.length }}</div>
+      <div class="reader-title-block">
+        <span class="reader-manga-title">{{ currentTitle }}</span>
+        <span class="reader-ch-label-top">Cap. {{ currentChapter }}</span>
+      </div>
+      <div class="reader-tools">
+        <button class="reader-tool" @click="cycleFitMode" :title="'Ajuste (F): ' + fitMode">
+          <svg v-if="fitMode==='width'" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 21h18v-2H3v2zm3-4h12v-2H6v2zm-3-4h18v-2H3v2zm3-4h12V7H6v2zM3 3v2h18V3H3z"/></svg>
+          <svg v-else-if="fitMode==='height'" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M16 18h2V6h-2v12zm-4 3l4-4H8l4 4zm0-18L8 7h8l-4-4zM6 6H4v12h2V6z"/></svg>
+          <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h8v2H5v4H3V3zm18 0v6h-2V5h-6V3h8zM3 21v-6h2v4h6v2H3zm18 0h-8v-2h6v-4h2v6z"/></svg>
+          <span class="reader-tool-label">{{ fitMode === 'width' ? 'Ancho' : fitMode === 'height' ? 'Alto' : '1:1' }}</span>
+        </button>
+        <button v-if="readerMode==='paged'" class="reader-tool" @click="toggleReaderDir" :title="'Dirección (D): ' + readingDir.toUpperCase()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 10v5h2v-5h4v5h2V8H9v2zm10 7H5v-3l-4 4 4 4v-3h14v-2z"/></svg>
+          <span class="reader-tool-label">{{ readingDir.toUpperCase() }}</span>
+        </button>
+        <button class="reader-tool" @click="setReaderMode(readerMode==='paged'?'webtoon':'paged')" :title="readerMode==='paged'?'Modo tira (W)':'Modo página (W)'">
+          <svg v-if="readerMode==='paged'" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 5h18v2H3zm0 4h18v2H3zm0 4h18v2H3zm0 4h18v2H3z"/></svg>
+          <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M4 4h16v16H4V4zm2 2v12h12V6H6z"/></svg>
+          <span class="reader-tool-label">{{ readerMode==='paged' ? 'Tira' : 'Página' }}</span>
+        </button>
+        <span v-if="readerZoom !== 1.0" class="reader-zoom-badge" @click="readerZoom=1.0; panY=0; panX=0" title="Reset zoom (clic)">{{ Math.round(readerZoom*100) }}%</span>
+        <button class="reader-tool" @click="toggleFullscreen" title="Pantalla completa">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+        </button>
+        <button v-if="canCompare || compareMode"
+                class="reader-tool reader-tool--compare"
+                :class="{ 'reader-tool--active': compareMode }"
+                @click="toggleCompare"
+                title="Comparar original vs 4K (C)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h5v2h2V1h-2v2zm0 15H5l5-6v6zm9-15h-5v2h5v13l-5-6v8h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
+          <span class="reader-tool-label">{{ compareMode ? 'Salir A/B' : 'A/B' }}</span>
+        </button>
+      </div>
     </div>
-    <div class="md-reader-content" :class="{ zoomed: isZoomed }">
-      <img v-if="currentPageUrl" :src="currentPageUrl" @load="onPageLoad" @click="nextPage" alt="Page">
+
+    <!-- PAGED CONTENT -->
+    <template v-if="readerMode==='paged'">
+      <div class="reader-content"
+           :style="{ cursor: compareMode ? 'col-resize' : readerZoom > 1.01 ? 'grab' : 'pointer' }"
+           @mousedown="e => { if (!compareMode) onPanStart(e); }"
+           @mousemove="onCompareDrag"
+           @mouseup="onCompareDragEnd"
+           @mouseleave="onCompareDragEnd">
+        <div v-if="canGoPrevChapter" class="reader-ch-ghost reader-ch-ghost--prev" @click.stop="goPrevChapter">
+          <span>‹ Cap. {{ readerChapterList[readerChapterIndex-1]?.chapter }}</span>
+        </div>
+
+        <!-- Compare overlay (original left / upscaled right) -->
+        <div v-if="compareMode && canCompare" class="reader-compare-wrap"
+             :style="{ transform: `translateX(${panX}px) translateY(${panY}px) scale(${readerZoom})` }">
+          <!-- Upscaled (full, base layer) -->
+          <img :src="currentPageUpUrl" class="reader-compare-img reader-compare-img--up" draggable="false" alt="">
+          <!-- Original (clipped to left of divider) -->
+          <img :src="currentPageOrigUrl" class="reader-compare-img reader-compare-img--orig"
+               :style="{ clipPath: `inset(0 ${100-compareX}% 0 0)` }"
+               draggable="false" alt="">
+          <!-- Divider handle -->
+          <div class="reader-compare-divider" :style="{ left: compareX + '%' }"
+               @mousedown.stop="onCompareDragStart">
+            <div class="reader-compare-handle">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l-5-5v-4l5-5zm8 0l5 5v4l-5 5V5z"/></svg>
+            </div>
+          </div>
+          <!-- Labels -->
+          <span class="reader-compare-label reader-compare-label--l">ORIGINAL</span>
+          <span class="reader-compare-label reader-compare-label--r">4K</span>
+        </div>
+
+        <!-- Normal page image -->
+        <img v-else-if="currentPageUrl" :src="currentPageUrl" class="reader-page-img"
+             :style="{ transform: `translateX(${panX}px) translateY(${panY}px) scale(${readerZoom})` }"
+             draggable="false" alt="">
+
+        <div v-if="canGoNextChapter" class="reader-ch-ghost reader-ch-ghost--next" @click.stop="goNextChapter">
+          <span>Cap. {{ readerChapterList[readerChapterIndex+1]?.chapter }} ›</span>
+        </div>
+      </div>
+    </template>
+
+    <!-- WEBTOON CONTENT -->
+    <template v-else-if="readerMode==='webtoon'">
+      <div class="reader-webtoon" @scroll.passive="onWebtoonScroll">
+        <img v-for="(pg, i) in pages" :key="i"
+             :src="'/uploads/' + encodeURIComponent(pg)"
+             class="reader-webtoon-img"
+             loading="lazy"
+             draggable="false" alt="">
+      </div>
+    </template>
+
+    <!-- BOTTOM BAR -->
+    <div class="reader-bottombar" :class="{ 'reader-bar--hidden': readerBarsHidden && readerMode==='paged' }">
+      <div class="reader-ch-nav">
+        <button class="reader-ch-btn" :disabled="!canGoPrevChapter" @click="goPrevChapter">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
+          Cap. anterior
+        </button>
+        <span class="reader-pos-label">{{ currentPage+1 }} / {{ pages.length }}</span>
+        <button class="reader-ch-btn" :disabled="!canGoNextChapter" @click="goNextChapter">
+          Cap. siguiente
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+        </button>
+      </div>
+      <template v-if="readerMode==='paged'">
+        <input class="reader-scrubber" type="range" :min="1" :max="pages.length || 1" :value="currentPage+1" @input="goToPage($event.target.value)">
+        <div class="reader-thumbs">
+          <div v-for="(pg, i) in pages" :key="i"
+               :ref="el => { if (el && i===currentPage) el.scrollIntoView({block:'nearest',inline:'center',behavior:'smooth'}); }"
+               class="reader-thumb"
+               :class="{ 'reader-thumb--active': i===currentPage }"
+               @click="goToPage(i+1)">
+            <img :src="'/uploads/' + encodeURIComponent(pg)" loading="lazy" draggable="false" alt="">
+            <span>{{ i+1 }}</span>
+          </div>
+        </div>
+      </template>
     </div>
-    <div class="md-reader-nav">
-      <button @click="prevPage" :disabled="currentPage === 0">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 7.41L14 6l-6 6 6 6 1.41-1.41L10.83 12z"/></svg>
-      </button>
-      <input type="range" :min="1" :max="pages.length" :value="currentPage + 1" @input="goToPage($event.target.value)">
-      <button @click="nextPage" :disabled="currentPage >= pages.length - 1">
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
-      </button>
-    </div>
+
   </div>
 
   <!-- TASK QUEUE PANEL (fijo abajo) -->
   <div v-if="taskQueueList.length > 0 && !showReader" class="task-queue">
     <div class="task-queue-header" @click="taskQueueExpanded = !taskQueueExpanded">
-      <div class="task-queue-title">
-        <div class="tq-spinner"></div>
-        <span>{{ taskQueueList.length }} tarea{{ taskQueueList.length > 1 ? 's' : '' }} en progreso</span>
+      <div class="tq-header-top">
+        <div class="task-queue-title">
+          <div class="tq-spinner"></div>
+          <span v-if="taskQueueSummary.dl" class="tq-pill tq-pill--dl">
+            ↓ {{ taskQueueSummary.dl }}
+          </span>
+          <span v-if="taskQueueSummary.up" class="tq-pill tq-pill--up">
+            4K {{ taskQueueSummary.up }}
+          </span>
+        </div>
+        <div class="tq-header-right">
+          <span class="tq-agg-pct">{{ taskQueueSummary.aggPercent }}%</span>
+          <svg class="tq-chevron" :class="{ rotated: taskQueueExpanded }" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/>
+          </svg>
+        </div>
       </div>
-      <svg class="tq-chevron" :class="{ rotated: taskQueueExpanded }" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/>
-      </svg>
+      <!-- Aggregate progress bar — always visible in collapsed state -->
+      <div class="tq-agg-bar">
+        <div class="tq-agg-fill"
+             :class="taskQueueSummary.up && !taskQueueSummary.dl ? 'tq-agg-fill--up' : ''"
+             :style="{ width: taskQueueSummary.aggPercent + '%' }"></div>
+      </div>
     </div>
     <div v-if="taskQueueExpanded" class="task-queue-body">
       <div v-for="task in taskQueueList" :key="task.id" class="tq-item">
@@ -805,7 +1239,7 @@
             <span class="tq-title">{{ task.displayTitle || '...' }}</span>
             <span class="tq-chapter">Cap. {{ task.displayChapter }}</span>
             <span class="tq-type-badge" :class="task.type === 'download' ? 'tq-type-badge--dl' : 'tq-type-badge--up'">
-              {{ task.type === 'download' ? 'Descarga' : 'Upscale' }}
+              {{ task.type === 'download' ? 'Descarga' : (task.mode === 'eco' ? 'Upscale 🌿' : 'Upscale') }}
             </span>
           </div>
           <div class="tq-progress-row">
@@ -813,6 +1247,9 @@
               <div class="tq-bar-fill" :class="task.type === 'upscale' ? 'tq-bar-fill--up' : ''" :style="{ width: task.percent + '%' }"></div>
             </div>
             <span class="tq-pct">{{ task.percent }}%</span>
+            <button class="tq-cancel-btn"
+                    @click="task.type === 'upscale' ? cancelUpscale(task.id) : cancelDownload(task.id)"
+                    title="Cancelar">✕</button>
           </div>
         </div>
       </div>
@@ -823,6 +1260,6 @@
   <div v-if="toast.show" class="md-toast" :class="toast.type">{{ toast.message }}</div>
 
 </div>
-<script src="/static/js/app.js?v=20260425-9"></script>
+<script src="/static/js/app.js?v=20260505-4"></script>
 </body>
 </html>

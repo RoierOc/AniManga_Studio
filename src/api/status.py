@@ -21,11 +21,16 @@ def get_upscale_status_route(upscale_id):
 def get_all_status():
     from api.download import get_download_status as get_dl_status
     from api.upscale import get_upscale_status
+    from api.export import get_export_tasks
 
     dl_status = get_dl_status()
     up_status = get_upscale_status()
+    export_tasks = {k: {x: v[x] for x in v if x != 'tmp_path'}
+                    for k, v in get_export_tasks().items()
+                    if v.get('status') not in ('downloaded',)}
 
     return jsonify({
         'downloads': dl_status,
-        'upscale': up_status
+        'upscale': up_status,
+        'exports': export_tasks,
     })
