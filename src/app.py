@@ -37,6 +37,10 @@ from api.export import export_bp
 from api.sources import sources_bp
 from api.drive import drive_bp
 from api.webdav import webdav_bp
+from api.cbz import cbz_bp
+from api.anilist import anilist_bp
+from api.anime import anime_bp
+from api.subtitle import subtitle_bp
 
 app.register_blueprint(library_bp, url_prefix='/api/library')
 app.register_blueprint(search_bp, url_prefix='/api/search')
@@ -49,6 +53,10 @@ app.register_blueprint(export_bp, url_prefix='/api/export')
 app.register_blueprint(sources_bp, url_prefix='/api/sources')
 app.register_blueprint(drive_bp, url_prefix='/api/drive')
 app.register_blueprint(webdav_bp, url_prefix='/api/webdav')
+app.register_blueprint(cbz_bp, url_prefix='/api/cbz')
+app.register_blueprint(anilist_bp, url_prefix='/api/anilist')
+app.register_blueprint(anime_bp, url_prefix='/api/anime')
+app.register_blueprint(subtitle_bp, url_prefix='/api/subtitle')
 
 
 @app.route('/library')
@@ -67,6 +75,11 @@ def index():
         content = f.read()
     return Response(content, mimetype='text/html', headers={'Cache-Control': 'no-cache'})
 
+@app.route('/sw.js')
+def serve_sw():
+    return send_from_directory(app.static_folder, 'sw.js',
+                               mimetype='application/javascript')
+
 @app.route('/static/<path:filename>')
 def serve_static(filename):
     return send_from_directory(app.static_folder, filename)
@@ -77,6 +90,11 @@ def serve_upload_original(filename):
     path = Path(MANGA_DIR) / filename
     if path.exists():
         return send_from_directory(str(path.parent), path.name)
+    # Upscaled pages are always .jpg; originals may be .png or .webp — try alternatives
+    for ext in ('.png', '.webp', '.jpg', '.jpeg'):
+        alt = path.with_suffix(ext)
+        if alt != path and alt.exists():
+            return send_from_directory(str(alt.parent), alt.name)
     return 'Not found', 404
 
 @app.route('/uploads/upscaled/<path:filename>')
@@ -109,6 +127,6 @@ def serve_upload(filename):
     return 'Not found', 404
 
 if __name__ == '__main__':
-    print("🚀 Manga Upscaler Pro - http://localhost:5001")
+    print("🚀 Manga Upscaler Pro - http://localhost:5100")
     print("📡 WebDAV library   - http://localhost:5005/")
-    app.run(port=5001, debug=False, host='0.0.0.0')
+    app.run(port=5101, debug=False, host='127.0.0.1')

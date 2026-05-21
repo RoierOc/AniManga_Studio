@@ -3,13 +3,33 @@
 Library API - Manage local manga library
 """
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, Response
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
 import json
+import requests as _http
+import threading
 
 from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter
+
+_COVER_CACHE_FILE = Path(MANGA_DIR) / '.cover_cache.json'
+
+
+def _load_cover_cache() -> dict:
+    try:
+        if _COVER_CACHE_FILE.exists():
+            return json.loads(_COVER_CACHE_FILE.read_text(encoding='utf-8'))
+    except Exception:
+        pass
+    return {}
+
+
+def _save_cover_cache(cache: dict):
+    try:
+        _COVER_CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False), encoding='utf-8')
+    except Exception:
+        pass
 
 
 def _chapter_sort_key(value):
@@ -22,45 +42,85 @@ library_bp = Blueprint('library', __name__)
 
 @library_bp.route('')
 def get_library():
+    # Build a title→cover lookup from local_library.json + disk cover cache
+    lib_covers: dict = _load_cover_cache()
+    lib_json = Path(MANGA_DIR) / 'local_library.json'
+    if lib_json.exists():
+        try:
+            for entry in json.loads(lib_json.read_text()):
+                title = (entry.get('title') or '').lower().strip()
+                cover = entry.get('cover')
+                if title and cover:
+                    lib_covers[title] = cover
+        except Exception:
+            pass
+
     folders = []
     for f in Path(MANGA_DIR).iterdir():
-        if f.is_dir():
-            images = list(f.glob('*.png')) + list(f.glob('*.jpg')) + list(f.glob('*.webp'))
-            upscaled = list(Path(UPSCALED_DIR).joinpath(f.name).glob('*.jpg'))
-            
-            # Count chapters, not pages
-            chapters_count = 0
-            if images:
-                chapters = set()
-                for img in images:
-                    parts = img.stem.split('_')
-                    if len(parts) > 0 and parts[0].startswith('ch'):
-                        chapters.add(parts[0])
-                chapters_count = len(chapters)
-            
-            source_meta = None
-            meta_path = f / '.source_meta.json'
-            if meta_path.exists():
-                try:
-                    source_meta = json.loads(meta_path.read_text())
-                except Exception:
-                    pass
+        if not f.is_dir():
+            continue
 
-            cover = source_meta.get('thumbnailUrl') if source_meta else None
+        images = list(f.glob('*.png')) + list(f.glob('*.jpg')) + list(f.glob('*.webp'))
+        upscaled = list(Path(UPSCALED_DIR).joinpath(f.name).glob('*.jpg'))
 
-            folders.append({
-                'id': f.name,
-                'name': f.name,
-                'chapter_count': chapters_count,
-                'image_count': len(images),
-                'page_count': sum(1 for img in images if img.suffix in ('.jpg', '.png', '.webp')),
-                'upscaled': len(upscaled),
-                'cover': cover,
-                'source_meta': source_meta,
-            })
-    
+        # Count chapters, not pages
+        chapters_count = 0
+        if images:
+            chapters = set()
+            for img in images:
+                parts = img.stem.split('_')
+                if parts and parts[0].startswith('ch'):
+                    chapters.add(parts[0])
+            chapters_count = len(chapters)
+
+        source_meta = None
+        meta_path = f / '.source_meta.json'
+        if meta_path.exists():
+            try:
+                source_meta = json.loads(meta_path.read_text())
+            except Exception:
+                pass
+
+        # Cover priority: local file → source_meta thumbnail → URL cache
+        local_cover = next(
+            (p for p in (f / 'cover.jpg', f / 'cover.png', f / 'cover.webp') if p.exists()),
+            None
+        )
+        if local_cover:
+            cover = f"/api/library/cover/{quote(f.name, safe='')}"
+        else:
+            cover = (source_meta or {}).get('thumbnailUrl')
+            if not cover:
+                cover = lib_covers.get(f.name.lower().strip())
+
+        folders.append({
+            'id': f.name,
+            'name': f.name,
+            'chapter_count': chapters_count,
+            'image_count': len(images),
+            'page_count': sum(1 for img in images if img.suffix in ('.jpg', '.png', '.webp')),
+            'upscaled': len(upscaled),
+            'cover': cover,
+            'source_meta': source_meta,
+        })
+
     folders.sort(key=lambda x: x['name'].lower())
     return jsonify(folders)
+
+
+@library_bp.route('/cache_cover', methods=['POST'])
+def cache_cover():
+    """Save a cover URL discovered by the frontend into the disk cache."""
+    data = request.get_json(silent=True) or {}
+    title = (data.get('title') or '').strip().lower()
+    url = (data.get('url') or '').strip()
+    if not title or not url:
+        return jsonify({'ok': False}), 400
+    cache = _load_cover_cache()
+    cache[title] = url
+    _save_cover_cache(cache)
+    return jsonify({'ok': True})
+
 
 @library_bp.route('/search-covers')
 def search_covers():
@@ -227,7 +287,7 @@ def get_chapters_from_folder(folder):
                 })
     
     chapter_data.sort(key=lambda x: _chapter_sort_key(x['chapter']), reverse=True)
-    return chapter_data[:50]
+    return chapter_data
 
 
 @library_bp.route('/chapter_health/<path:title>')
@@ -312,6 +372,78 @@ def chapter_health(title):
     result.sort(key=lambda x: _chapter_sort_key(x['chapter']), reverse=True)
     return jsonify(result)
 
+@library_bp.route('/meta/<path:title>', methods=['PUT'])
+def edit_metadata(title):
+    """Edit manga folder name and/or cover image."""
+    data = request.get_json(silent=True) or {}
+    new_title = (data.get('new_title') or '').strip()
+    cover_b64 = (data.get('cover_b64') or '').strip()
+    cover_url = (data.get('cover_url') or '').strip()
+
+    folder = Path(MANGA_DIR) / title
+    if not folder.exists():
+        return jsonify({'error': 'not found'}), 404
+
+    # Update cover image
+    if cover_b64:
+        import base64 as _b64
+        raw = cover_b64.split(',')[-1]  # strip "data:image/...;base64," prefix
+        (folder / 'cover.jpg').write_bytes(_b64.b64decode(raw))
+    elif cover_url and cover_url.startswith('http'):
+        try:
+            r = _http.get(cover_url, timeout=10)
+            if r.status_code == 200:
+                ct = r.headers.get('content-type', '')
+                ext = 'webp' if 'webp' in ct else 'png' if 'png' in ct else 'jpg'
+                (folder / f'cover.{ext}').write_bytes(r.content)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
+
+    # Rename folder
+    if new_title and new_title != title:
+        new_folder = Path(MANGA_DIR) / new_title
+        if new_folder.exists():
+            return jsonify({'error': 'Ya existe una carpeta con ese nombre'}), 409
+        folder.rename(new_folder)
+        up_folder = Path(UPSCALED_DIR) / title
+        if up_folder.exists():
+            up_folder.rename(Path(UPSCALED_DIR) / new_title)
+        return jsonify({'ok': True, 'new_title': new_title})
+
+    return jsonify({'ok': True})
+
+
+@library_bp.route('/scan_corrupt/<path:title>')
+def scan_corrupt(title):
+    """Check all downloaded images in a manga folder for corruption."""
+    from PIL import Image, UnidentifiedImageError
+
+    folder = Path(MANGA_DIR) / title
+    if not folder.exists():
+        return jsonify({'error': 'not found'}), 404
+
+    _IMAGE_EXTS = ('jpg', 'jpeg', 'png', 'webp')
+    all_images = []
+    for ext in _IMAGE_EXTS:
+        all_images.extend(folder.glob(f'*.{ext}'))
+    all_images.sort()
+
+    corrupt = []
+    checked = 0
+    for img_path in all_images:
+        checked += 1
+        try:
+            if img_path.stat().st_size < 64:
+                corrupt.append({'file': img_path.name, 'error': 'Archivo demasiado pequeño (truncado)'})
+                continue
+            with Image.open(img_path) as img:
+                img.verify()
+        except Exception as e:
+            corrupt.append({'file': img_path.name, 'error': str(e)[:120]})
+
+    return jsonify({'checked': checked, 'corrupt': corrupt})
+
+
 def find_manga_folder(query):
     query_norm = query.lower().replace('-', ' ').replace('_', ' ')
     candidates = []
@@ -342,3 +474,78 @@ def find_manga_folder(query):
         return candidates[0][1]
     
     return query
+
+# ── Offline cover cache ───────────────────────────────────────────────────────
+
+_offline_cover_status = {"running": False, "done": 0, "total": 0, "errors": 0}
+
+
+@library_bp.route('/cover/<path:title>')
+def serve_local_cover(title):
+    """Serve a locally-downloaded cover image."""
+    folder = Path(MANGA_DIR) / title
+    for ext in ('jpg', 'png', 'webp'):
+        p = folder / f'cover.{ext}'
+        if p.exists():
+            mime = {'jpg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp'}[ext]
+            return Response(p.read_bytes(), mimetype=mime,
+                            headers={'Cache-Control': 'public, max-age=86400'})
+    return 'not found', 404
+
+
+@library_bp.route('/offline_covers_status')
+def offline_covers_status():
+    return jsonify(_offline_cover_status)
+
+
+@library_bp.route('/download_covers_offline', methods=['POST'])
+def download_covers_offline():
+    """Download all missing cover images to disk so the library works offline."""
+    if _offline_cover_status["running"]:
+        return jsonify({"ok": False, "message": "Ya en progreso"}), 409
+
+    # Collect manga folders + their current cover URL
+    lib_covers = _load_cover_cache()
+    lib_json = Path(MANGA_DIR) / 'local_library.json'
+    if lib_json.exists():
+        try:
+            for entry in json.loads(lib_json.read_text()):
+                t = (entry.get('title') or '').lower().strip()
+                c = entry.get('cover')
+                if t and c:
+                    lib_covers[t] = c
+        except Exception:
+            pass
+
+    targets = []
+    for folder in Path(MANGA_DIR).iterdir():
+        if not folder.is_dir():
+            continue
+        # Skip if local cover already exists
+        if any((folder / f'cover.{e}').exists() for e in ('jpg', 'png', 'webp')):
+            continue
+        url = lib_covers.get(folder.name.lower().strip())
+        if url and url.startswith('http'):
+            targets.append((folder, url))
+
+    if not targets:
+        return jsonify({"ok": True, "message": "Todas las portadas ya están descargadas", "done": 0})
+
+    def _run():
+        _offline_cover_status.update({"running": True, "done": 0, "total": len(targets), "errors": 0})
+        for folder, url in targets:
+            try:
+                r = _http.get(url, timeout=15)
+                if r.status_code == 200:
+                    ct = r.headers.get('content-type', '')
+                    ext = 'webp' if 'webp' in ct else 'png' if 'png' in ct else 'jpg'
+                    (folder / f'cover.{ext}').write_bytes(r.content)
+                    _offline_cover_status["done"] += 1
+                else:
+                    _offline_cover_status["errors"] += 1
+            except Exception:
+                _offline_cover_status["errors"] += 1
+        _offline_cover_status["running"] = False
+
+    threading.Thread(target=_run, daemon=True).start()
+    return jsonify({"ok": True, "total": len(targets), "message": f"Descargando {len(targets)} portadas..."})

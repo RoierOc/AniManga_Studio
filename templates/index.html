@@ -5,7 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MangaUpscaler</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="manifest" href="/static/manifest.json">
+  <meta name="theme-color" content="#6184d3">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260520-9">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <script src="/static/js/vue.js"></script>
@@ -26,22 +30,31 @@
       </a>
 
       <nav class="md-nav">
-        <button class="md-nav-link" :class="{ active: currentView === 'library' }" @click="currentView = 'library'">
+        <button class="md-nav-link" :class="{ active: currentView === 'library' }" @click="gotoView('library')">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z"/></svg>
           Biblioteca
         </button>
-        <button class="md-nav-link" :class="{ active: currentView === 'mangadex' }" @click="currentView = 'mangadex'">
+        <button class="md-nav-link" :class="{ active: currentView === 'mangadex' }" @click="gotoView('mangadex')">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
           MangaDex
         </button>
-        <button class="md-nav-link" :class="{ active: currentView === 'followed' }" @click="currentView = 'followed'">
+        <button class="md-nav-link" :class="{ active: currentView === 'followed' }" @click="gotoView('followed')">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
           Seguidos
         </button>
-        <button class="md-nav-link" :class="{ active: currentView === 'sources' }" @click="currentView = 'sources'; checkSuwayomi()">
+        <button class="md-nav-link" :class="{ active: currentView === 'sources' }" @click="gotoView('sources', checkSuwayomi)">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
           Mihon
           <span v-if="suwayomiOnline" class="source-online-dot"></span>
+        </button>
+        <button class="md-nav-link" :class="{ active: currentView === 'local' }" @click="gotoView('local')">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-2 3l-6 3.75L6 7h12zm0 10H6V9.25l6 3.75 6-3.75V17z"/></svg>
+          Local
+          <span v-if="cbzManga.length > 0" class="source-online-dot"></span>
+        </button>
+        <button class="md-nav-link" :class="{ active: currentView === 'anime' }" @click="gotoView('anime')">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          Anime
         </button>
       </nav>
     </div>
@@ -53,11 +66,31 @@
     <!-- Library View -->
     <div v-if="currentView === 'library'" class="md-section">
       <div class="lib-topbar">
-        <span class="lib-count">{{ combinedLibrary.length }} manga</span>
+        <div class="lib-search-row">
+          <div class="lib-search-box">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" class="lib-search-icon"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            <input class="lib-search-input" type="text" v-model="libSearch" placeholder="Buscar en biblioteca…">
+            <button v-if="libSearch" class="lib-search-clear" @click="libSearch=''">×</button>
+          </div>
+          <div class="lib-filters">
+            <button :class="['lib-filter-btn', libFilter==='all' && 'active']" @click="libFilter='all'">Todo</button>
+            <button :class="['lib-filter-btn', libFilter==='downloaded' && 'active']" @click="libFilter='downloaded'">Descargados</button>
+            <button :class="['lib-filter-btn', libFilter==='upscaled' && 'active']" @click="libFilter='upscaled'">4K</button>
+            <button :class="['lib-filter-btn', libFilter==='saved' && 'active']" @click="libFilter='saved'">Guardados</button>
+          </div>
+          <span class="lib-count">{{ filteredLibrary.length }}<template v-if="filteredLibrary.length !== combinedLibrary.length"> / {{ combinedLibrary.length }}</template> manga</span>
+          <button class="lib-offline-btn" @click="downloadCoversOffline()"
+                  :title="offlineCoverStatus.running ? `Descargando ${offlineCoverStatus.done}/${offlineCoverStatus.total}...` : 'Guardar portadas para uso sin internet'"
+                  :disabled="offlineCoverStatus.running">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+            <span v-if="offlineCoverStatus.running">{{ offlineCoverStatus.done }}/{{ offlineCoverStatus.total }}</span>
+            <span v-else>Offline</span>
+          </button>
+        </div>
       </div>
 
-      <div v-if="combinedLibrary.length > 0" class="md-grid">
-        <div v-for="item in combinedLibrary" :key="item.key"
+      <div v-if="filteredLibrary.length > 0" class="md-grid">
+        <div v-for="item in filteredLibrary" :key="item.key"
              :class="['md-card', activeTasksByTitle[canonicalTitle(item.title)] ? 'md-card--active-task' : '']"
              @click="openLibraryItem(item)">
           <div class="md-cover-wrapper">
@@ -114,48 +147,196 @@
         </div>
       </div>
 
-      <div v-else class="md-empty">
+      <div v-else-if="combinedLibrary.length === 0" class="md-empty">
         <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor" opacity="0.3"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z"/></svg>
         <h3>Tu biblioteca está vacía</h3>
         <p>Agrega manga desde MangaDex para comenzar a leer</p>
         <button class="md-btn-primary" @click="currentView = 'mangadex'">Explorar MangaDex</button>
       </div>
+      <div v-else class="md-empty">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor" opacity="0.3"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5z"/></svg>
+        <h3>Sin resultados</h3>
+        <p>Ningún manga coincide con tu búsqueda o filtro</p>
+        <button class="md-btn-secondary" @click="libSearch=''; libFilter='all'">Limpiar filtros</button>
+      </div>
     </div>
 
     <!-- MangaDex Explore View -->
     <div v-else-if="currentView === 'mangadex'" class="md-section">
-      <div class="md-search-hero">
+      <div class="md-search-hero" v-show="mdViewTab === 'search'">
         <div class="md-search-hero-inner">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="md-search-hero-icon"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
           <input class="md-search-hero-input" type="text" v-model="searchQuery" @input="debouncedSearch" placeholder="Buscar manga en MangaDex..." autofocus>
         </div>
       </div>
 
-      <div v-if="searchResults.length > 0" class="md-grid">
-        <div v-for="manga in searchResults" :key="manga.id" class="md-card" @click="openMdManga(manga)">
-          <div class="md-cover-wrapper">
-            <img v-if="manga.cover" :src="manga.cover" :alt="manga.title" loading="lazy" @load="$event.target.classList.add('img-loaded')" @error="handleCoverError">
-            <div v-else class="md-cover-placeholder">
-              <span>{{ (manga.title || '?').charAt(0).toUpperCase() }}</span>
+      <!-- View tabs: Buscar / Popular / Recientes / Top Rated -->
+      <div class="sources-mode-tabs" style="margin-bottom:16px">
+        <button :class="['sources-tab', mdViewTab === 'search' ? 'sources-tab--active' : '']"
+                @click="loadMdPopular('search')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:5px"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5z"/></svg>
+          Buscar
+        </button>
+        <button :class="['sources-tab', mdViewTab === 'followed' ? 'sources-tab--active' : '']"
+                @click="loadMdPopular('followed')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:5px"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+          Popular
+        </button>
+        <button :class="['sources-tab', mdViewTab === 'latest' ? 'sources-tab--active' : '']"
+                @click="loadMdPopular('latest')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:5px"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm4.24 16L11 13V7h1.5v5.25l4.5 2.67-1.01 1.74-.76-.66z"/></svg>
+          Recientes
+        </button>
+        <button :class="['sources-tab', mdViewTab === 'rating' ? 'sources-tab--active' : '']"
+                @click="loadMdPopular('rating')">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:5px"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+          Top MangaDex
+        </button>
+        <button :class="['sources-tab', mdViewTab === 'anilist' ? 'sources-tab--active' : 'sources-tab--anilist']"
+                @click="switchToAnilistTab()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:5px"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zm4.24 16L11 13V7h1.5v5.25l4.5 2.67-1.01 1.74-.76-.66z"/></svg>
+          AniList
+        </button>
+      </div>
+
+      <!-- ── Genre / rating filter panel ── -->
+      <div class="md-filter-panel">
+        <!-- Content rating row -->
+        <div class="md-filter-row">
+          <span class="md-filter-label">Clasificación:</span>
+          <button v-for="r in [{id:'safe',label:'Seguro'},{id:'suggestive',label:'Sugestivo'},{id:'erotica',label:'Erótico'},{id:'pornographic',label:'Adulto'}]"
+                  :key="r.id"
+                  :class="['md-rating-chip', mdContentRating.includes(r.id) ? 'md-rating-chip--on' : '']"
+                  @click="toggleMdRating(r.id)">{{ r.label }}</button>
+        </div>
+        <!-- Genre toggle button -->
+        <div class="md-filter-row" style="margin-top:8px">
+          <button class="md-filter-toggle" @click="mdShowTagFilter = !mdShowTagFilter">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:5px"><path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/></svg>
+            Géneros{{ mdSelectedTags.length ? ' (' + mdSelectedTags.length + ')' : '' }}
+            <span style="margin-left:4px">{{ mdShowTagFilter ? '▲' : '▼' }}</span>
+          </button>
+          <button v-if="mdSelectedTags.length > 0" class="md-filter-clear" @click="mdSelectedTags = []; debouncedSearch()">✕ Limpiar</button>
+        </div>
+        <!-- Tag chips -->
+        <div v-if="mdShowTagFilter" class="md-tag-panel">
+          <template v-for="group in ['genre','theme','format','content']" :key="group">
+            <div v-if="mdTags.filter(t => t.group === group).length" class="md-tag-group">
+              <span class="md-tag-group-label">{{ {genre:'Género',theme:'Temática',format:'Formato',content:'Contenido'}[group] }}</span>
+              <button v-for="tag in mdTags.filter(t => t.group === group)" :key="tag.id"
+                      :class="['md-tag-chip', mdSelectedTags.includes(tag.id) ? 'md-tag-chip--on' : '']"
+                      @click="toggleMdTag(tag.id)">{{ tag.name }}</button>
             </div>
-          </div>
-          <div class="md-card-title">{{ manga.title }}</div>
-          <div class="md-card-meta">
-            <span>{{ manga.status || 'En curso' }}</span>
-          </div>
+          </template>
         </div>
       </div>
 
-      <div v-else-if="searchQuery.length >= 2" class="md-loading">
-        <div class="md-spinner"></div>
-        <p>Buscando "{{ searchQuery }}"...</p>
-      </div>
+      <!-- Search results -->
+      <template v-if="mdViewTab === 'search'">
+        <div v-if="searchResults.length > 0" class="md-grid">
+          <div v-for="manga in searchResults" :key="manga.id" class="md-card" @click="openMdManga(manga)">
+            <div class="md-cover-wrapper">
+              <img v-if="manga.cover" :src="manga.cover" :alt="manga.title" loading="lazy" @load="$event.target.classList.add('img-loaded')" @error="handleCoverError">
+              <div v-else class="md-cover-placeholder"><span>{{ (manga.title || '?').charAt(0).toUpperCase() }}</span></div>
+              <span v-if="manga.mal_id && anilistScores[manga.mal_id]?.score"
+                    class="anilist-score-badge" :class="getBadgeClass(anilistScores[manga.mal_id].score)">
+                ★ {{ (anilistScores[manga.mal_id].score / 10).toFixed(1) }}
+              </span>
+            </div>
+            <div class="md-card-title">{{ manga.title }}</div>
+            <div class="md-card-meta"><span>{{ manga.status || 'En curso' }}</span></div>
+          </div>
+        </div>
+        <div v-else-if="searchQuery.length >= 2 || mdSelectedTags.length > 0" class="md-loading">
+          <div class="md-spinner"></div>
+          <p>Buscando...</p>
+        </div>
+        <div v-else class="md-empty">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor" opacity="0.3"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          <h3>¿Qué quieres leer?</h3>
+          <p>Busca un título, filtra por género, o explora Popular, Recientes y Top Rated</p>
+        </div>
+      </template>
 
-      <div v-else class="md-empty">
-        <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor" opacity="0.3"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-        <h3>¿Qué quieres leer?</h3>
-        <p>Busca manga por título en MangaDex</p>
-      </div>
+      <!-- AniList Top -->
+      <template v-else-if="mdViewTab === 'anilist'">
+        <!-- Sort row -->
+        <div class="al-sort-row">
+          <button v-for="s in [{id:'SCORE_DESC',label:'Puntuación'},{id:'POPULARITY_DESC',label:'Popularidad'},{id:'TRENDING_DESC',label:'Tendencia'}]"
+                  :key="s.id"
+                  :class="['al-sort-btn', anilistTopSort === s.id ? 'active' : '']"
+                  @click="anilistTopSort = s.id; loadAnilistTop()">{{ s.label }}</button>
+        </div>
+        <!-- Genre + tag chips -->
+        <div class="al-chips-wrap" v-if="anilistGenres.length">
+          <div class="al-chip-search-row">
+            <input class="al-chip-search" v-model="anilistChipSearch"
+                   placeholder="Buscar género o tag… (ej: Yuri, Isekai, Romance)">
+            <button v-if="anilistGenreFilter" class="al-chip-clear"
+                    @click="anilistGenreFilter=''; loadAnilistTop()">✕ {{ anilistGenreFilter }}</button>
+          </div>
+          <div class="al-genre-row">
+            <button class="al-genre-chip" :class="{ active: !anilistGenreFilter }"
+                    @click="anilistGenreFilter = ''; loadAnilistTop()">Todos</button>
+            <button v-for="g in filteredAnilistChips" :key="g.name"
+                    class="al-genre-chip"
+                    :class="{ active: anilistGenreFilter === g.name, 'al-genre-chip--tag': g.type === 'tag' }"
+                    :title="g.category"
+                    @click="anilistGenreFilter = g.name; loadAnilistTop()">{{ g.name }}</button>
+          </div>
+        </div>
+        <!-- Loading -->
+        <div v-if="anilistTopLoading && !anilistTop.length" class="md-loading">
+          <div class="md-spinner"></div>
+          <p>Cargando desde AniList...</p>
+        </div>
+        <!-- Grid -->
+        <div v-else-if="anilistTop.length > 0" class="md-grid">
+          <div v-for="manga in anilistTop" :key="manga.al_id" class="md-card" @click="openAnilistManga(manga)">
+            <div class="md-cover-wrapper">
+              <img v-if="manga.cover" :src="manga.cover" :alt="manga.title" loading="lazy"
+                   @load="$event.target.classList.add('img-loaded')" @error="handleCoverError">
+              <div v-else class="md-cover-placeholder"><span>{{ (manga.title || '?').charAt(0).toUpperCase() }}</span></div>
+              <span v-if="manga.score" class="anilist-score-badge" :class="getBadgeClass(manga.score)">
+                ★ {{ (manga.score / 10).toFixed(1) }}
+              </span>
+            </div>
+            <div class="md-card-title">{{ manga.title }}</div>
+            <div class="md-card-meta al-card-genres">{{ manga.genres.slice(0,2).join(' · ') || (manga.status || '') }}</div>
+          </div>
+        </div>
+        <!-- Load more -->
+        <button v-if="anilistTopHasMore && !anilistTopLoading" class="al-load-more"
+                @click="loadMoreAnilistTop()">Cargar más</button>
+        <div v-if="anilistTopLoading && anilistTop.length" class="md-loading" style="padding:16px 0">
+          <div class="md-spinner"></div>
+        </div>
+      </template>
+
+      <!-- Popular / Latest / Rating results -->
+      <template v-else>
+        <div v-if="mdPopularLoading" class="md-loading">
+          <div class="md-spinner"></div>
+          <p>Cargando desde MangaDex...</p>
+        </div>
+        <div v-else-if="mdPopular.length > 0" class="md-grid">
+          <div v-for="manga in mdPopular" :key="manga.id" class="md-card" @click="openMdManga(manga)">
+            <div class="md-cover-wrapper">
+              <img v-if="manga.cover" :src="manga.cover" :alt="manga.title" loading="lazy" @load="$event.target.classList.add('img-loaded')" @error="handleCoverError">
+              <div v-else class="md-cover-placeholder"><span>{{ (manga.title || '?').charAt(0).toUpperCase() }}</span></div>
+              <span v-if="manga.mal_id && anilistScores[manga.mal_id]?.score"
+                    class="anilist-score-badge" :class="getBadgeClass(anilistScores[manga.mal_id].score)">
+                ★ {{ (anilistScores[manga.mal_id].score / 10).toFixed(1) }}
+              </span>
+            </div>
+            <div class="md-card-title">{{ manga.title }}</div>
+            <div class="md-card-meta"><span>{{ manga.status || 'En curso' }}</span></div>
+          </div>
+        </div>
+        <div v-else class="md-empty">
+          <p>Sin resultados</p>
+        </div>
+      </template>
     </div>
 
     <!-- Followed MangaDex Library View -->
@@ -171,6 +352,10 @@
             <div v-else class="md-cover-placeholder">
               <span>{{ (manga.title || '?').charAt(0).toUpperCase() }}</span>
             </div>
+            <span v-if="manga.mal_id && anilistScores[manga.mal_id]?.score"
+                  class="anilist-score-badge" :class="getBadgeClass(anilistScores[manga.mal_id].score)">
+              ★ {{ (anilistScores[manga.mal_id].score / 10).toFixed(1) }}
+            </span>
           </div>
           <div class="md-card-title">{{ manga.title }}</div>
           <div class="md-card-meta">
@@ -182,6 +367,39 @@
       <div v-else class="md-loading">
         <div class="md-spinner"></div>
         <p>Cargando biblioteca...</p>
+      </div>
+    </div>
+
+    <!-- Local Comics View (CBZ / CBR) -->
+    <div v-else-if="currentView === 'local'" class="md-section">
+      <div class="md-section-header">
+        <h2 class="md-section-title">Cómics Locales</h2>
+        <button class="md-btn md-btn-sm" @click="loadCbzLibrary">↻ Actualizar</button>
+      </div>
+      <div v-if="cbzLoading" class="md-loading">
+        <div class="md-spinner"></div>
+        <p>Leyendo archivos...</p>
+      </div>
+      <div v-else-if="cbzManga.length > 0" class="md-grid">
+        <div v-for="manga in cbzManga" :key="manga.title" class="md-card" @click="openCbzManga(manga)">
+          <div class="md-cover-wrapper">
+            <img :src="`/api/cbz/cover?manga=${encodeURIComponent(manga.title)}`" :alt="manga.title"
+                 loading="lazy" @load="$event.target.classList.add('img-loaded')"
+                 @error="$event.target.style.display='none'; $event.target.nextElementSibling && ($event.target.nextElementSibling.style.display='flex')">
+            <div class="md-cover-placeholder" style="display:none">
+              <span>{{ (manga.title || '?').charAt(0).toUpperCase() }}</span>
+            </div>
+          </div>
+          <div class="md-card-title">{{ manga.title }}</div>
+          <div class="md-card-meta">
+            <span>{{ manga.volume_count }} {{ manga.volume_count === 1 ? 'volumen' : 'volúmenes' }}</span>
+          </div>
+        </div>
+      </div>
+      <div v-else class="md-empty">
+        <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor" opacity="0.3"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-2 3l-6 3.75L6 7h12zm0 10H6V9.25l6 3.75 6-3.75V17z"/></svg>
+        <h3>Sin archivos locales</h3>
+        <p>Coloca archivos CBZ o CBR en <code>Documentos\Mangas</code> en Windows</p>
       </div>
     </div>
 
@@ -228,6 +446,11 @@
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:5px"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
               Fuente específica
             </button>
+            <button :class="['sources-tab', searchMode === 'popular' ? 'sources-tab--active' : '']"
+                    @click="searchMode = 'popular'; sourcePopular = []">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:5px"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+              Populares
+            </button>
           </div>
 
           <!-- Global search bar -->
@@ -247,7 +470,7 @@
           </div>
 
           <!-- Source-specific search bar -->
-          <div v-else class="sources-search-bar">
+          <div v-else-if="searchMode === 'source'" class="sources-search-bar">
             <select v-model="activeSource" class="sources-selector">
               <option :value="null" disabled>Seleccionar fuente...</option>
               <option v-for="s in sources" :key="s.id" :value="s">{{ s.name }} ({{ s.lang }})</option>
@@ -265,6 +488,21 @@
               :disabled="!activeSource || !sourceQuery.trim() || sourcesLoading"
               @click="searchSources"
             >Buscar</button>
+          </div>
+
+          <!-- Popular mode: source cards with Popular button -->
+          <div v-else-if="searchMode === 'popular'" class="sources-popular-grid">
+            <div v-for="src in sources" :key="src.id" class="sources-popular-card">
+              <img v-if="src.iconUrl" :src="src.iconUrl" class="sources-popular-icon" @error="$event.target.style.display='none'" loading="lazy">
+              <div class="sources-popular-info">
+                <span class="sources-popular-name">{{ src.name }}</span>
+                <span class="source-lang-badge" style="margin-left:6px">{{ src.lang.toUpperCase() }}</span>
+              </div>
+              <button class="md-btn md-btn-sm" @click="loadSourcesPopular(src)"
+                      :disabled="sourcePopularLoading && activeSource?.id === src.id">
+                {{ sourcePopularLoading && activeSource?.id === src.id ? '...' : 'Popular ↓' }}
+              </button>
+            </div>
           </div>
 
           <!-- ── Global results ── -->
@@ -309,7 +547,7 @@
           </template>
 
           <!-- ── Source-specific results ── -->
-          <template v-else>
+          <template v-else-if="searchMode === 'source'">
             <div v-if="sourcesLoading" class="md-loading">
               <div class="md-spinner"></div>
               <p>Buscando en {{ activeSource?.name }}...</p>
@@ -344,11 +582,807 @@
             </div>
           </template>
 
+          <!-- ── Popular results ── -->
+          <template v-else-if="searchMode === 'popular'">
+            <div v-if="sourcePopularLoading" class="md-loading">
+              <div class="md-spinner"></div>
+              <p>Cargando populares de {{ activeSource?.name }}...</p>
+            </div>
+            <template v-else-if="sourcePopular.length > 0">
+              <div class="sources-group-header" style="margin-bottom:12px">
+                <span class="sources-group-name">Populares · {{ activeSource?.name }}</span>
+                <span class="source-lang-badge">{{ activeSource?.lang?.toUpperCase() }}</span>
+                <span class="sources-group-count">{{ sourcePopular.length }} manga</span>
+              </div>
+              <div class="md-grid">
+                <div v-for="manga in sourcePopular" :key="manga.id" class="md-card" @click="openSourceManga(manga, activeSource)">
+                  <div class="md-cover-wrapper">
+                    <img v-if="manga.thumbnailUrl" :src="manga.thumbnailUrl" :alt="manga.title" loading="lazy" @load="$event.target.classList.add('img-loaded')" @error="handleCoverError">
+                    <div v-else class="md-cover-placeholder"><span>{{ (manga.title || '?').charAt(0).toUpperCase() }}</span></div>
+                  </div>
+                  <div class="md-card-title">{{ manga.title }}</div>
+                  <div class="md-card-meta">
+                    <span class="source-badge">{{ activeSource?.name }}</span>
+                  </div>
+                </div>
+              </div>
+            </template>
+            <div v-else class="md-empty">
+              <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor" opacity="0.3"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+              <h3>Populares por fuente</h3>
+              <p>Haz clic en "Popular ↓" en cualquier fuente para ver su contenido más popular</p>
+            </div>
+          </template>
+
         </template>
       </template>
     </div>
 
+    <!-- ══════════════════════ ANIME VIEW ══════════════════════ -->
+    <div v-else-if="currentView === 'anime'" class="md-section anime-section">
+
+      <!-- Sub-nav -->
+      <div class="anime-subnav">
+        <button class="anime-subnav-btn" :class="{ active: animeView === 'search' }" @click="switchToAnimeView('search')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          Buscar Anime
+        </button>
+        <button class="anime-subnav-btn" :class="{ active: animeView === 'detail' }" @click="animeView = 'detail'" v-if="animeCurrentAnime">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z"/></svg>
+          Torrents
+        </button>
+        <button class="anime-subnav-btn" :class="{ active: animeView === 'downloads' }" @click="switchToAnimeView('downloads')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+          Descargas
+          <span v-if="qbtConnected" class="source-online-dot"></span>
+        </button>
+        <button class="anime-subnav-btn" :class="{ active: animeView === 'seasonal' }" @click="switchToAnimeView('seasonal')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17 12h-5v5h5v-5zM16 1v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-1V1h-2zm3 18H5V8h14v11z"/></svg>
+          Temporada
+        </button>
+        <button class="anime-subnav-btn" :class="{ active: animeView === 'library' }" @click="switchToAnimeView('library')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z"/></svg>
+          Mi Anime
+          <span v-if="animeLibrary.length > 0" class="source-online-dot" style="background:#4ade80"></span>
+        </button>
+      </div>
+
+      <!-- ── SEARCH VIEW ── -->
+      <div v-if="animeView === 'search'">
+        <div class="anime-search-bar">
+          <input class="anime-search-input" type="text" v-model="animeQuery"
+                 placeholder="Buscar anime… (AniList + Nyaa)"
+                 @keyup.enter="searchAnime">
+          <button class="anime-search-btn" @click="searchAnime" :disabled="animeLoading">
+            <svg v-if="!animeLoading" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5z"/></svg>
+            <div v-else class="md-spinner" style="width:16px;height:16px;border-width:2px"></div>
+          </button>
+        </div>
+
+        <!-- AniList down → fallback direct Nyaa search -->
+        <div v-if="animeAnilistDown" class="anilist-down-banner">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/></svg>
+          <div>
+            <strong>AniList no disponible</strong> — puedes buscar directamente en Nyaa:
+            <div class="anime-search-bar" style="margin-top:8px">
+              <input class="anime-search-input" type="text" v-model="animeTorrentQuery"
+                     placeholder="Ej: Frieren, Attack on Titan S4…"
+                     @keyup.enter="searchNyaaDirect">
+              <button class="anime-search-btn" @click="searchNyaaDirect">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div v-else-if="animeResults.length === 0 && !animeLoading" class="anime-empty">
+          <svg width="56" height="56" viewBox="0 0 24 24" fill="currentColor" opacity="0.25"><path d="M8 5v14l11-7z"/></svg>
+          <p>Busca un anime para ver torrents disponibles en Nyaa</p>
+          <p style="font-size:11px;opacity:.6">Las temporadas aparecen como entradas separadas en AniList</p>
+        </div>
+
+        <div v-else class="anime-grid">
+          <div v-for="anime in animeResults" :key="anime.al_id" class="anime-card" @click="openAnime(anime)">
+            <div class="anime-card-cover">
+              <img v-if="anime.cover" :src="anime.cover" :alt="anime.title" loading="lazy" @error="$event.target.style.display='none'">
+              <div v-else class="anime-cover-placeholder">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" opacity="0.3"><path d="M8 5v14l11-7z"/></svg>
+              </div>
+              <span v-if="anime.score" class="anime-score-badge" :class="getBadgeClass(anime.score)">★ {{ (anime.score / 10).toFixed(1) }}</span>
+              <span v-if="anime.format && anime.format !== 'TV'" class="anime-format-badge">{{ animeFormatLabel(anime.format) }}</span>
+              <span v-if="anime.status === 'RELEASING'" class="anime-airing-badge">Al aire</span>
+              <span v-if="anime.season_label" class="anime-season-badge">{{ anime.season_label }}</span>
+            </div>
+            <div class="anime-card-info">
+              <div class="anime-card-title">{{ anime.title }}</div>
+              <div class="anime-card-meta">
+                <span v-if="anime.episodes">{{ anime.episodes }} ep.</span>
+                <span v-if="anime.next_episode" class="anime-next-ep">Ep. {{ anime.next_episode }} próximo</span>
+              </div>
+              <div class="anime-card-genres">
+                <span v-for="g in anime.genres" :key="g" class="anime-genre-tag">{{ g }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── DETAIL / TORRENTS VIEW ── -->
+      <div v-else-if="animeView === 'detail' && animeCurrentAnime">
+        <div class="anime-detail-header">
+          <img v-if="animeCurrentAnime.cover" :src="animeCurrentAnime.cover" class="anime-detail-cover" :alt="animeCurrentAnime.title">
+          <div class="anime-detail-info">
+            <h2 class="anime-detail-title">{{ animeCurrentAnime.title }}</h2>
+            <div class="anime-detail-meta">
+              <span v-if="animeCurrentAnime.score" class="anilist-score-badge" :class="getBadgeClass(animeCurrentAnime.score)">★ {{ (animeCurrentAnime.score / 10).toFixed(1) }}</span>
+              <span v-if="animeCurrentAnime.format" class="anime-format-badge">{{ animeFormatLabel(animeCurrentAnime.format) }}</span>
+              <span v-if="animeCurrentAnime.episodes && typeof animeCurrentAnime.episodes === 'number'">{{ animeCurrentAnime.episodes }} ep.</span>
+              <span v-if="animeCurrentAnime.status">{{ animeCurrentAnime.status }}</span>
+            </div>
+            <div class="anime-detail-genres">
+              <span v-for="g in animeCurrentAnime.genres" :key="g" class="anime-genre-tag">{{ g }}</span>
+            </div>
+            <div class="anime-detail-links">
+              <a v-if="animeCurrentAnime.al_id"
+                 :href="'https://anilist.co/anime/' + animeCurrentAnime.al_id"
+                 target="_blank" rel="noopener" class="anime-ext-link anime-ext-link--al">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M14 3v2H7v14h14v-7h2v9H5V3h9zm5-3l3 3-9 9-3-1 1-3 9-8z"/></svg>
+                AniList
+              </a>
+              <a v-if="animeCurrentAnime.mal_id"
+                 :href="'https://myanimelist.net/anime/' + animeCurrentAnime.mal_id"
+                 target="_blank" rel="noopener" class="anime-ext-link anime-ext-link--mal">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M14 3v2H7v14h14v-7h2v9H5V3h9zm5-3l3 3-9 9-3-1 1-3 9-8z"/></svg>
+                MAL
+              </a>
+              <button class="anime-ext-link anime-track-btn"
+                      :class="{ 'anime-track-btn--tracked': isInAnimeLibrary(animeCurrentAnime) }"
+                      @click="addAnimeToLibrary(animeCurrentAnime)">
+                <svg v-if="isInAnimeLibrary(animeCurrentAnime)" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z"/></svg>
+                <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2zm0 15l-5-2.18L7 18V5h10v13z"/></svg>
+                {{ isInAnimeLibrary(animeCurrentAnime) ? 'En Mi Anime ✓' : 'Añadir a Mi Anime' }}
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="anime-nyaa-bar">
+          <input class="anime-search-input" type="text" v-model="animeTorrentQuery"
+                 placeholder="Búsqueda en Nyaa…" @keyup.enter="searchAnimeTorrents">
+          <button class="anime-search-btn" @click="searchAnimeTorrents" :disabled="animeTorrentsLoading">
+            <svg v-if="!animeTorrentsLoading" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5z"/></svg>
+            <div v-else class="md-spinner" style="width:16px;height:16px;border-width:2px"></div>
+          </button>
+        </div>
+        <!-- Target episode badge (when coming from Mi Anime) -->
+        <div v-if="targetEpisodeNum !== null" class="target-ep-bar">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="opacity:.7"><path d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z"/></svg>
+          <span>Registrar como episodio:</span>
+          <div class="target-ep-stepper">
+            <button class="target-ep-step" @click="targetEpisodeNum = Math.max(1, targetEpisodeNum - 1)">−</button>
+            <span class="target-ep-num">{{ targetEpisodeNum }}</span>
+            <button class="target-ep-step" @click="targetEpisodeNum = targetEpisodeNum + 1">+</button>
+          </div>
+          <button class="target-ep-clear" @click="targetEpisodeNum = null" title="Quitar filtro — mostrar todos los episodios">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            Ver todos
+          </button>
+        </div>
+
+        <!-- Filters bar -->
+        <div v-if="animeTorrents.length > 0" class="anime-torrent-filters">
+          <!-- Language pills -->
+          <div class="anime-filter-group">
+            <button class="anime-filter-btn anime-filter-btn--lang"
+                    :class="{ active: animeLangFilter === 'all' }"
+                    @click="animeLangFilter = 'all'">
+              Todos <span class="anime-filter-count">{{ animeLangCounts.all }}</span>
+            </button>
+            <button class="anime-filter-btn anime-filter-btn--lang anime-filter-btn--esp"
+                    :class="{ active: animeLangFilter === 'esp' }"
+                    @click="animeLangFilter = 'esp'">
+              🌐 ESP <span class="anime-filter-count">{{ animeLangCounts.esp }}</span>
+            </button>
+            <button class="anime-filter-btn anime-filter-btn--lang anime-filter-btn--eng"
+                    :class="{ active: animeLangFilter === 'eng' }"
+                    @click="animeLangFilter = 'eng'">
+              🇬🇧 ENG <span class="anime-filter-count">{{ animeLangCounts.eng }}</span>
+            </button>
+            <button v-if="animeLangCounts.other > 0"
+                    class="anime-filter-btn anime-filter-btn--lang"
+                    :class="{ active: animeLangFilter === 'other' }"
+                    @click="animeLangFilter = 'other'">
+              🌍 Otros <span class="anime-filter-count">{{ animeLangCounts.other }}</span>
+            </button>
+          </div>
+          <!-- Dead-torrent toggle -->
+          <button class="anime-filter-btn anime-filter-btn--dead"
+                  :class="{ active: animeHideDead }"
+                  @click="animeHideDead = !animeHideDead"
+                  title="Ocultar torrents sin seeders">
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
+            Solo vivos
+          </button>
+          <!-- Tipo -->
+          <div class="anime-filter-group">
+            <button v-for="ep in ['all','episodes','batch']" :key="ep"
+                    class="anime-filter-btn" :class="{ active: animeEpFilter === ep }"
+                    @click="animeEpFilter = ep">
+              {{ ep === 'all' ? 'Todos' : ep === 'episodes' ? 'Episodios' : 'Batch' }}
+            </button>
+          </div>
+          <div v-if="animeQualities.length > 1" class="anime-filter-group">
+            <button class="anime-filter-btn" :class="{ active: !animeQualityFilter }" @click="animeQualityFilter = ''">Todas</button>
+            <button v-for="q in animeQualities" :key="q" class="anime-filter-btn" :class="{ active: animeQualityFilter === q }" @click="animeQualityFilter = q">{{ q }}</button>
+          </div>
+          <div v-if="animeGroups.length > 1" class="anime-filter-group">
+            <select class="anime-group-select" v-model="animeGroupFilter">
+              <option value="">Todos los grupos</option>
+              <option v-for="g in animeGroups" :key="g" :value="g">{{ g }}</option>
+            </select>
+          </div>
+          <span class="anime-result-count">{{ groupedAnimeEpisodes.length }} {{ animeEpFilter === 'batch' ? 'batches' : 'episodios' }}</span>
+        </div>
+
+        <!-- Loading / empty -->
+        <div v-if="animeTorrentsLoading" class="md-loading"><div class="md-spinner"></div><p>Buscando en Nyaa…</p></div>
+        <div v-else-if="groupedAnimeEpisodes.length === 0 && !animeTorrentsLoading && animeTorrents.length > 0" class="anime-empty">
+          <template v-if="animeLangFilter === 'esp' && animeLangCounts.eng > 0">
+            <p>No hay torrents en español para esta búsqueda.</p>
+            <button class="anime-empty-action" @click="animeLangFilter = 'eng'">Ver en inglés ({{ animeLangCounts.eng }})</button>
+          </template>
+          <template v-else-if="animeLangFilter !== 'all'">
+            <p>Sin resultados con este filtro.</p>
+            <button class="anime-empty-action" @click="animeLangFilter = 'all'">Mostrar todos los idiomas</button>
+          </template>
+          <template v-else-if="animeHideDead">
+            <p>Todos los torrents encontrados están sin seeders.</p>
+            <button class="anime-empty-action" @click="animeHideDead = false">Mostrar sin seeders también</button>
+          </template>
+          <template v-else>
+            <p>No se encontraron torrents. Intenta cambiar la búsqueda.</p>
+          </template>
+        </div>
+        <div v-else-if="groupedAnimeEpisodes.length === 0 && !animeTorrentsLoading" class="anime-empty">
+          <p>No se encontraron torrents. Intenta cambiar la búsqueda.</p>
+        </div>
+
+        <!-- Grouped episode list -->
+        <div v-else class="ep-group-list">
+          <div v-for="group in groupedAnimeEpisodes" :key="group.episode" class="ep-group"
+               :class="{ 'ep-group--batch': group.episode === 0, 'ep-group--expanded': isEpExpanded(group.episode) }">
+
+            <!-- Primary row -->
+            <div class="ep-primary">
+
+              <!-- Episode number -->
+              <div class="ep-num" :class="{ 'ep-num--movie': animeCurrentAnime?.format === 'MOVIE' || animeCurrentAnime?.format === 'MUSIC' }">
+                <template v-if="animeCurrentAnime?.format === 'MOVIE' || animeCurrentAnime?.format === 'MUSIC'">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z"/></svg>
+                </template>
+                <template v-else-if="group.episode === 0">BATCH</template>
+                <template v-else-if="group.episode === -1">?</template>
+                <template v-else>
+                  <span class="ep-num-label">EP</span>
+                  <span class="ep-num-value">{{ String(group.episode).padStart(2,'0') }}</span>
+                </template>
+              </div>
+
+              <!-- Info block -->
+              <div class="ep-info">
+                <!-- Tags row -->
+                <div class="ep-tags">
+                  <span v-if="group.torrents[0].isSpanish" class="ep-tag ep-tag--esp">🌐 ESP / Multi</span>
+                  <span v-else-if="group.torrents[0].isEnglish" class="ep-tag ep-tag--eng">🇬🇧 ENG</span>
+                  <span v-if="group.torrents[0].quality" class="ep-tag ep-tag--quality">{{ group.torrents[0].quality }}</span>
+                  <span v-if="group.torrents[0].trusted" class="ep-tag ep-tag--trusted">✓ Confiable</span>
+                  <span v-if="group.torrents[0].group" class="ep-tag ep-tag--group">{{ group.torrents[0].group }}</span>
+                </div>
+                <!-- Title -->
+                <div class="ep-title">{{ group.torrents[0].title }}</div>
+                <!-- Stats row -->
+                <div class="ep-stats">
+                  <span class="ep-seed-pill"
+                        :class="group.torrents[0].seeders > 20 ? 'seed-hot' : group.torrents[0].seeders > 5 ? 'seed-ok' : group.torrents[0].seeders > 0 ? 'seed-low' : 'seed-dead'">
+                    ▲ {{ group.torrents[0].seeders }} seeds
+                  </span>
+                  <span class="ep-stat-sep">·</span>
+                  <span class="ep-leech-text">▼ {{ group.torrents[0].leechers }}</span>
+                  <span v-if="group.torrents[0].size" class="ep-stat-sep">·</span>
+                  <span v-if="group.torrents[0].size" class="ep-filesize">{{ group.torrents[0].size }}</span>
+                </div>
+              </div>
+
+              <!-- Action buttons -->
+              <div class="ep-btns">
+                <button class="ep-dl-btn"
+                        :class="{ 'ep-dl-btn--adding': isAdding(group.torrents[0].info_hash || group.torrents[0].torrent_url), 'ep-dl-btn--added': isAdded(group.torrents[0].info_hash || group.torrents[0].torrent_url) }"
+                        @click.stop="addToQbt(group.torrents[0])"
+                        :disabled="group.torrents[0].seeders === 0 || isAdding(group.torrents[0].info_hash || group.torrents[0].torrent_url)">
+                  <svg v-if="isAdding(group.torrents[0].info_hash || group.torrents[0].torrent_url)" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" class="ep-dl-spin"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
+                  <svg v-else-if="isAdded(group.torrents[0].info_hash || group.torrents[0].torrent_url)" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                  <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                  <span v-if="isAdding(group.torrents[0].info_hash || group.torrents[0].torrent_url)">Añadiendo…</span>
+                  <span v-else-if="isAdded(group.torrents[0].info_hash || group.torrents[0].torrent_url)">¡Agregado!</span>
+                  <span v-else>Descargar</span>
+                </button>
+                <button v-if="group.torrents.length > 1"
+                        class="ep-opts-btn"
+                        @click.stop="toggleEpGroup(group.episode)">
+                  <template v-if="isEpExpanded(group.episode)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg>
+                    Ocultar
+                  </template>
+                  <template v-else>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg>
+                    {{ group.torrents.length - 1 }} más
+                  </template>
+                </button>
+                <a v-if="group.torrents[0].view_url"
+                   :href="group.torrents[0].view_url" target="_blank" rel="noopener"
+                   class="ep-nyaa-link" title="Ver en Nyaa" @click.stop>
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+                  Nyaa
+                </a>
+              </div>
+            </div>
+
+            <!-- Alternatives panel -->
+            <div v-if="isEpExpanded(group.episode)" class="ep-alts-panel">
+              <div class="ep-alts-title">Otras opciones</div>
+              <div class="ep-alts-list">
+                <div v-for="t in group.torrents.slice(1)" :key="t.info_hash || t.torrent_url"
+                     class="ep-alt" :class="{ 'ep-alt--dead': t.seeders === 0 }">
+                  <div class="ep-alt-tags">
+                    <span v-if="t.isSpanish" class="ep-tag ep-tag--esp" style="font-size:9px">ESP/Multi</span>
+                    <span v-if="t.quality" class="ep-tag ep-tag--quality" style="font-size:9px">{{ t.quality }}</span>
+                    <span v-if="t.group" class="ep-tag ep-tag--group" style="font-size:9px">{{ t.group }}</span>
+                  </div>
+                  <div class="ep-alt-name">{{ t.title }}</div>
+                  <div class="ep-alt-stats">
+                    <span class="ep-seed-pill"
+                          :class="t.seeders > 20 ? 'seed-hot' : t.seeders > 5 ? 'seed-ok' : t.seeders > 0 ? 'seed-low' : 'seed-dead'"
+                          style="font-size:10px;padding:2px 8px">
+                      ▲ {{ t.seeders }}
+                    </span>
+                    <span v-if="t.size" class="ep-filesize">{{ t.size }}</span>
+                  </div>
+                  <a v-if="t.view_url" :href="t.view_url" target="_blank" rel="noopener"
+                     class="ep-alt-nyaa" title="Ver en Nyaa" @click.stop>
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M19 19H5V5h7V3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></svg>
+                  </a>
+                  <button class="ep-alt-dl"
+                          :class="{ 'ep-alt-dl--adding': isAdding(t.info_hash || t.torrent_url), 'ep-alt-dl--added': isAdded(t.info_hash || t.torrent_url) }"
+                          @click.stop="addToQbt(t)"
+                          :disabled="t.seeders === 0 || isAdding(t.info_hash || t.torrent_url)"
+                          :title="t.seeders === 0 ? 'Sin seeds' : 'Descargar'">
+                    <svg v-if="isAdding(t.info_hash || t.torrent_url)" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" class="ep-dl-spin"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
+                    <svg v-else-if="isAdded(t.info_hash || t.torrent_url)" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      <!-- ── DOWNLOADS VIEW ── -->
+      <div v-else-if="animeView === 'downloads'" class="anime-downloads">
+        <div class="qbt-status-bar" :class="qbtConnected ? 'qbt-ok' : 'qbt-err'">
+          <span v-if="qbtConnected">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            qBittorrent {{ qbtVersion }} conectado
+          </span>
+          <span v-else>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.47 2 2 6.47 2 12s4.47 10 10 10 10-4.47 10-10S17.53 2 12 2zm5 13.59L15.59 17 12 13.41 8.41 17 7 15.59 10.59 12 7 8.41 8.41 7 12 10.59 15.59 7 17 8.41 13.41 12 17 15.59z"/></svg>
+            qBittorrent no conectado
+          </span>
+          <button class="qbt-config-toggle" @click="qbtConfigShow = !qbtConfigShow">{{ qbtConfigShow ? 'Cerrar' : 'Configurar' }}</button>
+          <button v-if="qbtConnected" class="qbt-refresh-btn" @click="loadQbtTorrents" :disabled="qbtLoading">↻</button>
+        </div>
+        <div v-if="qbtConfigShow" class="qbt-config-panel">
+          <div class="qbt-config-row">
+            <label>URL WebUI</label>
+            <input class="qbt-config-input" type="text" v-model="qbtUrl" placeholder="http://localhost:8080">
+          </div>
+          <div class="qbt-config-row">
+            <label>Usuario</label>
+            <input class="qbt-config-input" type="text" v-model="qbtUsername" placeholder="admin">
+          </div>
+          <div class="qbt-config-row">
+            <label>Contraseña</label>
+            <input class="qbt-config-input" type="password" v-model="qbtPassword" placeholder="adminadmin">
+          </div>
+          <button class="md-btn" @click="configureQbt">Conectar</button>
+          <p class="qbt-config-hint">Instala <strong>qBittorrent</strong> y activa su WebUI en Herramientas → Preferencias → WebUI.</p>
+        </div>
+        <div v-if="qbtLoading && qbtTorrents.length === 0" class="md-loading"><div class="md-spinner"></div></div>
+        <div v-else-if="!qbtConnected && !qbtConfigShow" class="anime-empty">
+          <svg width="56" height="56" viewBox="0 0 24 24" fill="currentColor" opacity="0.25"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+          <p>Conecta qBittorrent para ver y gestionar descargas</p>
+          <button class="md-btn" @click="qbtConfigShow = true">Configurar qBittorrent</button>
+        </div>
+        <div v-else-if="qbtConnected && qbtTorrents.length === 0" class="anime-empty">
+          <p>No hay descargas activas en qBittorrent</p>
+        </div>
+        <div v-else class="qbt-torrent-list">
+          <div v-for="t in qbtTorrents" :key="t.hash" class="qbt-torrent-item">
+            <div class="qbt-torrent-header">
+              <div class="qbt-torrent-name" :title="t.name">{{ t.name }}</div>
+              <div class="qbt-torrent-actions">
+                <button v-if="t.state.includes('paused') || t.state.includes('Paused')" class="qbt-action-btn qbt-resume-btn" @click="qbtAction('resume', t.hash)">▶</button>
+                <button v-else class="qbt-action-btn qbt-pause-btn" @click="qbtAction('pause', t.hash)">⏸</button>
+                <button class="qbt-action-btn qbt-delete-btn" @click="qbtAction('delete', t.hash, false)">✕</button>
+              </div>
+            </div>
+            <div class="qbt-torrent-bar">
+              <div class="qbt-bar-fill" :style="{ width: t.progress + '%' }" :class="t.progress >= 100 ? 'qbt-bar-done' : ''"></div>
+            </div>
+            <div class="qbt-torrent-meta">
+              <span class="qbt-state-badge" :class="'qbt-state--' + t.state">{{ qbtStateLabel(t.state) }}</span>
+              <span>{{ t.progress }}%</span>
+              <span>{{ formatBytes(t.size) }}</span>
+              <span v-if="t.dlspeed > 0" class="qbt-speed">↓ {{ formatSpeed(t.dlspeed) }}</span>
+              <span v-if="t.eta && t.eta < 8640000">ETA {{ formatEta(t.eta) }}</span>
+              <span class="qbt-seeds">▲ {{ t.num_seeds }} / ▼ {{ t.num_leechs }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── LIBRARY VIEW ── -->
+      <div v-else-if="animeView === 'library'" class="allib-section">
+
+        <div v-if="animeLibraryLoading" class="md-loading"><div class="md-spinner"></div></div>
+
+        <!-- Empty state -->
+        <div v-else-if="animeLibrary.length === 0" class="anime-empty">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor" opacity="0.2"><path d="M20 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z"/></svg>
+          <p>Descarga episodios desde la búsqueda para que aparezcan aquí</p>
+          <button class="md-btn" @click="switchToAnimeView('search')">Buscar Anime</button>
+        </div>
+
+        <!-- Anime detail in library -->
+        <div v-else-if="animeLibraryDetail">
+          <div class="allib-detail-header">
+            <button class="allib-back-btn" @click="animeLibraryDetail = null">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+              Volver
+            </button>
+            <div class="allib-detail-info">
+              <img v-if="animeLibraryDetail.cover" :src="animeLibraryDetail.cover" class="allib-detail-cover" :alt="animeLibraryDetail.title">
+              <div class="allib-detail-meta">
+                <h2 class="allib-detail-title">{{ animeLibraryDetail.title }}</h2>
+                <div class="allib-detail-stats">
+                  <span v-if="animeLibraryDetail.format" class="anime-format-badge">{{ animeFormatLabel(animeLibraryDetail.format) }}</span>
+                  <span class="allib-stat-done">{{ animeLibraryDetail.downloaded_count }} descargados</span>
+                  <span v-if="animeLibraryDetail.total_episodes"> / {{ animeLibraryDetail.total_episodes }} ep.</span>
+                </div>
+                <div v-if="animeLibraryDetail.total_episodes" class="allib-detail-bar-wrap">
+                  <div class="allib-detail-bar">
+                    <div class="allib-detail-bar-fill"
+                         :style="{ width: Math.min(100, animeLibraryDetail.downloaded_count / animeLibraryDetail.total_episodes * 100) + '%' }"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <button class="allib-del-all-btn" @click="removeFromAnimeLibrary(animeLibraryDetail.id)"
+                    title="Eliminar de la biblioteca">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+              Eliminar anime
+            </button>
+          </div>
+
+          <!-- Episode grid -->
+          <div class="epgrid">
+            <div v-for="ep in animeLibraryDetail.episodes.filter(e => e.num !== 0)" :key="ep.num"
+                 class="ep-card"
+                 :class="{
+                   'ep-card--done':    (ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone),
+                   'ep-card--dl':      (ep.in_qbt && ep.progress < 100 && !libDetailHasBatch) || (ep.num > 0 && libDetailHasBatch && !libDetailBatchDone),
+                   'ep-card--missing': !ep.in_qbt && !(ep.num > 0 && libDetailHasBatch),
+                   'ep-card--watched': ep.watched,
+                 }">
+
+              <!-- ── Thumbnail ───────────────────────────────────────────── -->
+              <div class="ep-card-thumb"
+                   @click="((ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone)) && playEpisode(animeLibraryDetail, ep)">
+
+                <!-- Blurred cover art background (fallback when no frame extracted) -->
+                <div class="ep-card-bg"
+                     :style="animeLibraryDetail.cover ? `background-image:url('${animeLibraryDetail.cover}')` : ''">
+                </div>
+
+                <!-- Extracted video frame thumbnail (fades in over cover bg) -->
+                <img v-if="(ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone)"
+                     class="ep-card-thumb-img"
+                     :src="`/api/anime/thumb/${animeLibraryDetail.id}/${ep.num}`"
+                     @load="$event.target.classList.add('ep-card-thumb-img--loaded')"
+                     @error="$event.target.style.display='none'"
+                     loading="lazy"
+                     alt="">
+
+                <!-- EP number or format icon (bottom-left) -->
+                <div class="ep-card-num">
+                  <template v-if="animeLibraryDetail.format === 'MOVIE' || animeLibraryDetail.format === 'MUSIC'">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor" style="opacity:.9"><path d="M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z"/></svg>
+                  </template>
+                  <template v-else>
+                    <span class="ep-card-num-label">EP</span>
+                    <span class="ep-card-num-val">{{ String(ep.num).padStart(2,'0') }}</span>
+                  </template>
+                </div>
+
+                <!-- Watched chip (top-right) -->
+                <div v-if="ep.watched" class="ep-card-chip ep-card-chip--watched">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                  Visto
+                </div>
+                <!-- ESP badge (top-right, translation done) -->
+                <div v-else-if="subTasks[subTaskKey(animeLibraryDetail.id, ep.num)]?.status === 'done'"
+                     class="ep-card-chip ep-card-chip--esp">ESP ✓</div>
+
+                <!-- Download progress bar (bottom of thumb) -->
+                <div v-if="(ep.in_qbt && ep.progress < 100 && !libDetailHasBatch) || (ep.num > 0 && libDetailHasBatch && !libDetailBatchDone)"
+                     class="ep-card-dl-overlay">
+                  <div class="ep-card-dl-bar"
+                       :style="{ width: (libDetailHasBatch ? libDetailBatchEp?.progress : ep.progress) + '%' }"></div>
+                  <span class="ep-card-dl-pct">{{ libDetailHasBatch ? libDetailBatchEp?.progress : ep.progress }}%</span>
+                </div>
+
+                <!-- Translation overlay (bottom of thumb, while translating) -->
+                <div v-else-if="((ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone)) &&
+                                  subTasks[subTaskKey(animeLibraryDetail.id, ep.num)] &&
+                                  !['done','error','cancelled'].includes(subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].status)"
+                     class="ep-card-tr-overlay">
+                  <div class="ep-card-tr-row">
+                    <span v-if="subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].engine"
+                          class="ep-card-tr-engine"
+                          :class="subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].engine === 'ollama'
+                                  ? 'ep-card-tr-engine--ollama' : 'ep-card-tr-engine--gemini'">
+                      {{ subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].engine === 'ollama' ? '🦙 Qwen' : '✨ Gemini' }}
+                    </span>
+                    <span class="ep-card-tr-msg">{{ subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].message }}</span>
+                    <button class="ep-card-tr-cancel" @click.stop="cancelTranslation(animeLibraryDetail.id, ep.num)">
+                      <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                    </button>
+                  </div>
+                  <div class="ep-card-tr-bar-bg">
+                    <div class="ep-card-tr-bar-fill"
+                         :style="{ width: subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].progress + '%' }"></div>
+                  </div>
+                </div>
+
+                <!-- Play hover overlay (done episodes) -->
+                <div v-else-if="(ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone)"
+                     class="ep-card-play-hover">
+                  <svg width="38" height="38" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                </div>
+              </div>
+
+              <!-- ── Footer ─────────────────────────────────────────────── -->
+              <div class="ep-card-foot">
+                <div class="ep-card-title">{{ animeEpLabel(animeLibraryDetail, ep) }}</div>
+
+                <div class="ep-card-actions">
+                  <!-- Downloaded state -->
+                  <template v-if="(ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone)">
+                    <!-- Left: translate pill -->
+                    <button v-if="!subTasks[subTaskKey(animeLibraryDetail.id, ep.num)] ||
+                                   ['done','error','cancelled'].includes(subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].status)"
+                            class="ep-card-btn ep-card-btn--sub"
+                            :class="subTasks[subTaskKey(animeLibraryDetail.id, ep.num)]?.status === 'done'
+                                    ? 'ep-card-btn--sub-done' : ''"
+                            @click="translateSubs(animeLibraryDetail, ep)"
+                            :title="subTasks[subTaskKey(animeLibraryDetail.id, ep.num)]?.status === 'done' ? 'Re-traducir' : 'Traducir al español'">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/>
+                      </svg>
+                      <span>{{ subTasks[subTaskKey(animeLibraryDetail.id, ep.num)]?.status === 'done' ? 'ESP ✓' : 'Sub ES' }}</span>
+                    </button>
+                    <div v-else class="ep-card-sub-translating">
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="opacity:.6"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>
+                      <span>Traduciendo…</span>
+                    </div>
+
+                    <!-- Right: watched + delete -->
+                    <div class="ep-card-actions-right">
+                      <button class="ep-card-icon-btn" :class="ep.watched ? 'ep-card-icon-btn--active' : ''"
+                              @click="toggleWatched(animeLibraryDetail, ep)"
+                              :title="ep.watched ? 'Marcar como no visto' : 'Marcar como visto'">
+                        <svg v-if="ep.watched" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46A11.804 11.804 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27z"/></svg>
+                        <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+                      </button>
+                      <button class="ep-card-icon-btn ep-card-icon-btn--danger"
+                              @click="deleteEpisode(animeLibraryDetail, ep)" title="Borrar episodio">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                      </button>
+                    </div>
+                  </template>
+
+                  <!-- Downloading -->
+                  <template v-else-if="(ep.in_qbt && ep.progress < 100) || (ep.num > 0 && libDetailHasBatch && !libDetailBatchDone)">
+                    <span class="ep-card-status-dl">↓ Descargando</span>
+                  </template>
+
+                  <!-- Missing: search -->
+                  <template v-else>
+                    <button class="ep-card-btn ep-card-btn--search" @click="searchEpisodeInNyaa(animeLibraryDetail, ep.num)">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+                      Buscar
+                    </button>
+                  </template>
+                </div>
+              </div>
+
+            </div>
+
+          </div>
+        </div>
+
+        <!-- Library grid -->
+        <div v-else class="allib-grid">
+          <div v-for="a in animeLibrary" :key="a.id" class="allib-card" @click="openAnimeLibraryDetail(a)">
+            <div class="allib-card-img">
+              <img v-if="a.cover" :src="a.cover" :alt="a.title">
+              <div v-else class="allib-card-placeholder">{{ (a.title || '?')[0].toUpperCase() }}</div>
+            </div>
+            <div class="allib-card-info">
+              <div class="allib-card-title">{{ a.title }}</div>
+              <div class="allib-card-eps">
+                <span class="allib-card-count">{{ a.downloaded_count }}</span>
+                <span v-if="a.total_episodes" class="allib-card-total"> / {{ a.total_episodes }} eps</span>
+                <span v-else class="allib-card-total"> eps</span>
+              </div>
+              <div v-if="a.total_episodes && a.total_episodes > 0" class="allib-card-bar">
+                <div class="allib-card-bar-fill"
+                     :style="{ width: Math.min(100, a.downloaded_count / a.total_episodes * 100) + '%' }"></div>
+              </div>
+              <!-- Mini episode dots (first 12) -->
+              <div class="allib-card-dots">
+                <span v-for="ep in a.episodes.filter(e => e.num !== 0).slice(0, 16)" :key="ep.num"
+                      class="allib-card-dot"
+                      :class="{ 'allib-dot--done': ep.in_qbt && ep.progress >= 100, 'allib-dot--dl': ep.in_qbt && ep.progress < 100 }"></span>
+              </div>
+            </div>
+            <button class="allib-card-del" @click.stop="removeFromAnimeLibrary(a.id)"
+                    title="Eliminar de biblioteca">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ── SEASONAL VIEW ── -->
+      <div v-else-if="animeView === 'seasonal'" class="seasonal-section">
+
+        <!-- Header: season nav + sort + genres -->
+        <div class="seasonal-header">
+          <div class="seasonal-top">
+            <div class="seasonal-nav">
+              <button class="seasonal-nav-btn" @click="seasonNav(-1)" title="Temporada anterior">‹</button>
+              <select class="seasonal-select" :value="animeSeasonSeason" @change="onSeasonChange($event)">
+                <option value="WINTER">Invierno</option>
+                <option value="SPRING">Primavera</option>
+                <option value="SUMMER">Verano</option>
+                <option value="FALL">Otoño</option>
+              </select>
+              <select class="seasonal-select" :value="animeSeasonYear" @change="onYearChange($event)">
+                <option v-for="y in seasonYears" :key="y" :value="y">{{ y }}</option>
+              </select>
+              <button class="seasonal-nav-btn" @click="seasonNav(1)" title="Temporada siguiente">›</button>
+            </div>
+            <div class="seasonal-sorts">
+              <button :class="['seasonal-sort-btn', { active: animeSeasonSort === 'score' }]"
+                      @click="animeSeasonSort = 'score'; loadSeasonalAnime()">★ Puntuación</button>
+              <button :class="['seasonal-sort-btn', { active: animeSeasonSort === 'popularity' }]"
+                      @click="animeSeasonSort = 'popularity'; loadSeasonalAnime()">♥ Popularidad</button>
+              <button :class="['seasonal-sort-btn', { active: animeSeasonSort === 'trending' }]"
+                      @click="animeSeasonSort = 'trending'; loadSeasonalAnime()">↑ Tendencia</button>
+            </div>
+          </div>
+          <div class="seasonal-genres">
+            <button :class="['seasonal-genre-btn', { active: !animeSeasonGenreFilter }]"
+                    @click="animeSeasonGenreFilter = ''">Todos</button>
+            <button v-for="g in seasonalGenres" :key="g"
+                    :class="['seasonal-genre-btn', { active: animeSeasonGenreFilter === g }]"
+                    @click="animeSeasonGenreFilter = g">{{ g }}</button>
+          </div>
+        </div>
+
+        <!-- Loading -->
+        <div v-if="animeSeasonalLoading" class="md-loading"><div class="md-spinner"></div></div>
+
+        <!-- Empty -->
+        <div v-else-if="filteredSeasonalAnime.length === 0" class="anime-empty">
+          <p>Sin resultados para esta temporada.</p>
+        </div>
+
+        <!-- Grid -->
+        <div v-else class="seasonal-grid">
+          <div v-for="anime in filteredSeasonalAnime" :key="anime.al_id || anime.mal_id"
+               class="anime-card seasonal-card" @click="openAnime(anime)">
+            <div class="anime-card-cover">
+              <img v-if="anime.cover" :src="anime.cover" :alt="anime.title" loading="lazy">
+              <div v-else class="anime-cover-placeholder">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="currentColor" style="opacity:.3"><path d="M21 3H3v18h18V3zm-9 14l-5-5 1.41-1.41L12 14.17l7.59-7.59L21 8l-9 9z"/></svg>
+              </div>
+              <!-- Score badge -->
+              <span v-if="anime.score" class="anime-score-badge" :class="getBadgeClass(anime.score)">
+                ★ {{ (anime.score / 10).toFixed(1) }}
+              </span>
+              <!-- Releasing badge -->
+              <span v-if="anime.status === 'RELEASING'" class="anime-airing-badge">EN EMISIÓN</span>
+              <!-- Hover overlay with action -->
+              <div class="seasonal-card-overlay">
+                <button class="seasonal-add-btn"
+                        :class="{ 'seasonal-add-btn--tracked': isInAnimeLibrary(anime) }"
+                        @click.stop="addAnimeToLibrary(anime)">
+                  {{ isInAnimeLibrary(anime) ? '✓ En Mi Anime' : '+ Mi Anime' }}
+                </button>
+              </div>
+            </div>
+            <div class="anime-card-info">
+              <div class="anime-card-title">{{ anime.title }}</div>
+              <div class="anime-card-meta">
+                <span v-if="anime.episodes" class="seasonal-ep-count">{{ anime.episodes }} ep</span>
+                <span v-if="anime.next_episode" class="anime-next-ep">· EP {{ anime.next_episode }}</span>
+              </div>
+              <div class="anime-card-genres">
+                <span v-for="g in anime.genres.slice(0, 3)" :key="g" class="anime-genre-tag">{{ g }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </div><!-- /anime view -->
+
   </main>
+
+  <!-- CBZ Volumes Modal -->
+  <div v-if="showCbzModal" class="md-modal-overlay" @click.self="showCbzModal=false">
+    <div class="md-modal" style="max-width:520px">
+      <button class="md-modal-close" @click="showCbzModal=false">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+      <div class="md-modal-header" style="padding-bottom:12px">
+        <div class="md-modal-cover">
+          <img :src="`/api/cbz/cover?manga=${encodeURIComponent(cbzCurrentManga?.title || '')}`" :alt="cbzCurrentManga?.title"
+               @error="$event.target.style.display='none'">
+          <div v-if="!cbzCurrentManga?.title" class="md-cover-placeholder-lg">
+            <span>?</span>
+          </div>
+        </div>
+        <div class="md-modal-info">
+          <h2>{{ cbzCurrentManga?.title }}</h2>
+          <p style="color:var(--text-muted);font-size:13px;margin-top:4px">
+            {{ cbzCurrentManga?.volume_count }} {{ cbzCurrentManga?.volume_count === 1 ? 'volumen' : 'volúmenes' }}
+          </p>
+        </div>
+      </div>
+      <div style="padding:0 24px 24px">
+        <div v-if="cbzVolumesLoading" class="md-loading" style="padding:20px 0">
+          <div class="md-spinner"></div>
+        </div>
+        <div v-else class="cbz-volumes-list">
+          <div v-for="vol in cbzVolumes" :key="vol.name" class="cbz-volume-row" @click="readCbzVolume(vol)">
+            <div class="cbz-volume-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" opacity="0.6"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z"/></svg>
+            </div>
+            <div class="cbz-volume-info">
+              <div class="cbz-volume-name">{{ vol.name }}</div>
+              <div class="cbz-volume-meta">{{ vol.page_count }} páginas · {{ vol.ext.replace('.','').toUpperCase() }}</div>
+            </div>
+            <button class="md-btn md-btn-sm">Leer</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <!-- MODAL del manga -->
   <div v-if="showModal" class="md-modal-overlay" @click.self="closeModal">
@@ -365,7 +1399,11 @@
           </div>
         </div>
         <div class="md-modal-info">
-          <h2>{{ currentTitle }}</h2>
+          <h2>{{ currentTitle }}
+            <button class="meta-edit-btn" @click="openEditMeta()" title="Editar metadatos">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+            </button>
+          </h2>
           <div class="md-modal-stats">
             <span v-if="stats.total > 0">{{ stats.total }} capítulos</span>
             <span v-if="stats.downloaded > 0">• {{ stats.downloaded }} descargados</span>
@@ -401,6 +1439,29 @@
               Borrar
             </button>
           </div>
+        </div>
+      </div>
+
+      <!-- ── Metadata: synopsis, author, tags ── -->
+      <div v-if="currentMdDetail || currentMdManga" class="md-modal-meta">
+        <!-- Author / Year / Rating -->
+        <div class="md-meta-row" v-if="currentMdDetail?.author || currentMdDetail?.year || currentMdDetail?.contentRating">
+          <span v-if="currentMdDetail?.author" class="md-meta-item">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-1px;margin-right:3px"><path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/></svg>
+            {{ currentMdDetail.author }}
+          </span>
+          <span v-if="currentMdDetail?.year" class="md-meta-item">{{ currentMdDetail.year }}</span>
+          <span v-if="currentMdDetail?.contentRating" class="md-meta-rating"
+                :class="'md-meta-rating--' + currentMdDetail.contentRating">
+            {{ {safe:'Seguro',suggestive:'Sugestivo',erotica:'Erótico',pornographic:'Adulto'}[currentMdDetail.contentRating] || currentMdDetail.contentRating }}
+          </span>
+        </div>
+        <!-- Synopsis -->
+        <div v-if="currentMdDetail?.description" class="md-meta-desc">{{ currentMdDetail.description }}</div>
+        <!-- Tags -->
+        <div v-if="currentMdDetail?.tags?.length" class="md-meta-tags">
+          <span v-for="tag in currentMdDetail.tags.filter(t => t.group === 'genre' || t.group === 'theme')"
+                :key="tag.id" class="md-meta-tag">{{ tag.name }}</span>
         </div>
       </div>
 
@@ -452,9 +1513,29 @@
               4x🌿
             </button>
           </div>
+          <div class="ch-model-selector">
+            <span class="ch-model-label">Modelo:</span>
+            <button class="ch-model-btn" :class="{ active: upscaleModel === 'eula' }"
+                    @click="setUpscaleModel('eula')" title="eula-digimanga — B&W general">
+              eula
+            </button>
+            <button class="ch-model-btn" :class="{ active: upscaleModel === 'mangajanai' }"
+                    @click="setUpscaleModel('mangajanai')" title="MangaJaNai V1 — B&W con tramas de puntos">
+              MangaJaNai
+            </button>
+          </div>
         </div>
 
+        <div v-if="mdChaptersLoading" class="md-empty" style="padding:24px 0">Cargando capítulos...</div>
+
         <div class="md-chapters-list">
+
+          <div v-if="!mdChaptersLoading && filteredChapters.length === 0 && currentMdManga" class="md-empty" style="padding:24px 16px;text-align:center">
+            Sin capítulos disponibles en MangaDex
+            <template v-if="currentMdDetail?.links?.raw">
+              <br><a :href="currentMdDetail.links.raw" target="_blank" rel="noopener" style="color:var(--accent);font-size:0.85em;margin-top:6px;display:inline-block">Ver fuente original ↗</a>
+            </template>
+          </div>
 
           <div v-for="group in filteredChapters" :key="group.chapter" class="ch-row"
                :class="{ 'ch-row--upscaled': isUpscaled(group.chapter), 'ch-row--partial': isPartialUpscaled(group.chapter), 'ch-row--downloaded': isDownloaded(group.chapter) && !isUpscaled(group.chapter) && !isPartialUpscaled(group.chapter) }">
@@ -468,7 +1549,7 @@
             }"></div>
 
             <div class="ch-info">
-              <span class="ch-num">Cap. {{ group.chapter }}</span>
+              <span class="ch-num">{{ formatChapter(group.chapter) }}</span>
               <span class="ch-pages">{{ group.variants[0]?.page_count || '?' }} pág.</span>
             </div>
 
@@ -499,7 +1580,7 @@
                 <span class="ch-tag ch-tag--partial" title="Upscale incompleto — hay páginas sin procesar">⚠ Parcial</span>
                 <button class="md-btn-sm md-btn-repair" @click.stop="repairChapter(group.chapter, 'full')" title="Upscalear páginas faltantes">Reparar</button>
                 <button class="md-btn-sm md-btn-repair" @click.stop="repairChapter(group.chapter, 'eco')" title="Reparar en modo eco (GPU limitada)">Reparar🌿</button>
-                <button class="md-btn-sm" @click.stop="readChapterOriginal(group.chapter)" title="Leer (mezcla original + upscale)">Leer</button>
+                <button class="md-btn-sm" @click.stop="readChapter(group.chapter, 'auto')" title="Leer (usa páginas upscaleadas disponibles)">Leer</button>
                 <button class="ch-btn-read" :class="{ 'ch-btn-read--done': isChapterRead(group.chapter) }"
                         @click.stop="toggleChapterRead(group.chapter)"
                         :title="isChapterRead(group.chapter) ? 'Marcar no leído' : 'Marcar leído'">
@@ -512,8 +1593,9 @@
               <template v-else-if="isDownloaded(group.chapter) && !isPartialUpscaled(group.chapter)">
                 <span class="ch-tag ch-tag--downloaded">✓<span v-if="downloadedLang[normalizeChapter(group.chapter)]" class="ch-tag-lang">{{ getLangFlag(downloadedLang[normalizeChapter(group.chapter)]) }}</span></span>
                 <template v-if="!getTask(group.chapter,'upscale')">
-                  <button class="md-btn-sm md-btn-upscale" @click.stop="upscaleChapter(group.chapter, 'full')" title="Upscale velocidad máxima (GPU 100%)">4x</button>
-                  <button class="md-btn-sm md-btn-upscale-eco" @click.stop="upscaleChapter(group.chapter, 'eco')" title="Upscale eco (GPU limitada — compatible con MPV)">4x🌿</button>
+                  <button class="md-btn-sm md-btn-upscale" @click.stop="upscaleChapter(group.chapter, 'full')" title="Upscale 4x — calidad máxima (~5.5s/pág)">4x</button>
+                  <button class="md-btn-sm md-btn-upscale-eco" @click.stop="upscaleChapter(group.chapter, 'eco')" title="Upscale 4x eco (GPU limitada — compatible con MPV)">4x🌿</button>
+                  <button class="md-btn-sm md-btn-upscale-fast" @click.stop="upscaleChapter(group.chapter, 'full', { fast: true })" title="Upscale 2x rápido — pre-encoge la entrada, ~4x más veloz (~1.5s/pág)">2x⚡</button>
                 </template>
                 <button class="md-btn-sm"
                         :disabled="!!getTask(group.chapter,'upscale')"
@@ -533,7 +1615,7 @@
                 <button class="ch-btn-cancel" @click.stop="cancelDownload(getTaskKey(group.chapter,'download'))" title="Cancelar descarga">✕</button>
               </template>
               <template v-else-if="getTask(group.chapter,'upscale')">
-                <span class="ch-tag ch-tag--loading">{{ getTask(group.chapter,'upscale').mode === 'eco' ? 'Upscale eco...' : 'Upscaleando...' }}</span>
+                <span class="ch-tag ch-tag--loading">{{ getTask(group.chapter,'upscale').fast ? 'Upscale 2x⚡...' : getTask(group.chapter,'upscale').mode === 'eco' ? 'Upscale eco...' : 'Upscaleando...' }}</span>
                 <button class="ch-btn-cancel" @click.stop="cancelUpscale(getTaskKey(group.chapter,'upscale'))" title="Cancelar upscale">✕</button>
               </template>
               <template v-else>
@@ -549,6 +1631,46 @@
             </div>
 
           </div>
+        </div>
+
+        <!-- Corrupt page scan -->
+        <div class="corrupt-scan-section">
+          <button class="corrupt-scan-btn" @click="scanCorruptPages()" :disabled="corruptScanBusy">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+            {{ corruptScanBusy ? 'Escaneando...' : 'Detectar páginas corruptas' }}
+          </button>
+          <div v-if="corruptScanResult" class="corrupt-scan-result">
+            <span v-if="corruptScanResult.corrupt?.length === 0" class="corrupt-ok">
+              Sin errores ({{ corruptScanResult.checked }} páginas revisadas)
+            </span>
+            <template v-else>
+              <span class="corrupt-warn">{{ corruptScanResult.corrupt?.length }} páginas corruptas de {{ corruptScanResult.checked }}</span>
+              <ul class="corrupt-list">
+                <li v-for="c in corruptScanResult.corrupt" :key="c.file">
+                  <span class="corrupt-filename">{{ c.file }}</span>
+                  <span class="corrupt-error">{{ c.error }}</span>
+                </li>
+              </ul>
+            </template>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Metadata edit inline panel ── -->
+      <div v-if="editMetaShow" class="meta-edit-panel">
+        <div class="meta-edit-header">
+          <span>Editar metadatos</span>
+          <button class="meta-edit-close" @click="editMetaShow = false">✕</button>
+        </div>
+        <label class="meta-edit-label">Título</label>
+        <input class="meta-edit-input" v-model="editMetaTitle" placeholder="Título de la carpeta">
+        <label class="meta-edit-label">URL de portada (opcional)</label>
+        <input class="meta-edit-input" v-model="editMetaCoverUrl" placeholder="https://...">
+        <div class="meta-edit-actions">
+          <button class="meta-edit-save" @click="saveEditMeta()" :disabled="editMetaBusy || !editMetaTitle.trim()">
+            {{ editMetaBusy ? 'Guardando...' : 'Guardar' }}
+          </button>
+          <button class="meta-edit-cancel" @click="editMetaShow = false">Cancelar</button>
         </div>
       </div>
 
@@ -799,7 +1921,7 @@
 
             <!-- Info col -->
             <div class="tomo-ch-info">
-              <span class="tomo-ch-num">Cap. {{ group.chapter }}</span>
+              <span class="tomo-ch-num">{{ formatChapter(group.chapter) }}</span>
               <span class="tomo-ch-pages">{{ group.variants[0]?.page_count || '?' }}p</span>
             </div>
 
@@ -915,9 +2037,13 @@
                 </div>
                 <div class="export-task-bottom">
                   <span class="export-task-status">
-                    {{ task.status === 'queued' ? 'En cola…' : task.status === 'running' ? `${task.progress||0}/${task.total||'?'} págs` : task.status === 'ready' ? '✅ Descargado' : task.status === 'error' ? '❌ Error' : task.status }}
+                    {{ task.status === 'queued' ? 'En cola…' : task.status === 'running' ? `${task.progress||0}/${task.total||'?'} págs` : task.status === 'ready' ? '✅ Listo' : task.status === 'error' ? '❌ Error' : task.status }}
                   </span>
                   <div v-if="task.status === 'ready'" class="export-task-actions">
+                    <button class="export-task-dl-btn" @click="downloadExportFile(tid)" title="Descargar a Descargas">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                      Descargar
+                    </button>
                     <button class="export-task-save-btn" @click="saveToLibrary(tid).then(() => dismissExportTask(tid))" title="Guardar en biblioteca móvil">
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z"/></svg>
                       Guardar en biblioteca
@@ -1164,7 +2290,7 @@
     <template v-else-if="readerMode==='webtoon'">
       <div class="reader-webtoon" @scroll.passive="onWebtoonScroll">
         <img v-for="(pg, i) in pages" :key="i"
-             :src="'/uploads/' + encodeURIComponent(pg)"
+             :src="pg.startsWith('/') ? pg : '/uploads/' + encodeURIComponent(pg)"
              class="reader-webtoon-img"
              loading="lazy"
              draggable="false" alt="">
@@ -1192,7 +2318,7 @@
                class="reader-thumb"
                :class="{ 'reader-thumb--active': i===currentPage }"
                @click="goToPage(i+1)">
-            <img :src="'/uploads/' + encodeURIComponent(pg)" loading="lazy" draggable="false" alt="">
+            <img :src="pg.startsWith('/') ? pg : '/uploads/' + encodeURIComponent(pg)" loading="lazy" draggable="false" alt="">
             <span>{{ i+1 }}</span>
           </div>
         </div>
@@ -1256,10 +2382,33 @@
     </div>
   </div>
 
+  <!-- SUBTITLE TRACK PICKER MODAL -->
+  <div v-if="subTrackModal" class="sub-modal-backdrop" @click.self="subTrackModal = null">
+    <div class="sub-modal">
+      <div class="sub-modal-title">Seleccionar pista de subtítulos</div>
+      <div class="sub-modal-file">{{ subTrackModal.ep.num > 0 ? 'Ep ' + subTrackModal.ep.num : 'BATCH' }}</div>
+      <div class="sub-modal-tracks">
+        <button v-for="t in subTrackModal.tracks" :key="t.sub_index"
+                class="sub-modal-track-btn"
+                @click="startTranslate(subTrackModal.anime, subTrackModal.ep, t.sub_index)">
+          <span class="sub-track-lang">{{ t.language.toUpperCase() }}</span>
+          <span class="sub-track-codec">{{ t.codec.toUpperCase() }}</span>
+          <span v-if="t.title" class="sub-track-title">{{ t.title }}</span>
+        </button>
+      </div>
+      <button class="sub-modal-cancel" @click="subTrackModal = null">Cancelar</button>
+    </div>
+  </div>
+
   <!-- TOAST -->
   <div v-if="toast.show" class="md-toast" :class="toast.type">{{ toast.message }}</div>
 
 </div>
-<script src="/static/js/app.js?v=20260505-4"></script>
+<script src="/static/js/app.js?v=20260520-9"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }
+</script>
 </body>
 </html>

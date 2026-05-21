@@ -22,11 +22,32 @@ _SESSION.headers.update({
 
 MANGA_DIR = str(MANGA_DIR)
 
-# MangaDex credentials
-CLIENT_ID = "REDACTED_ROTATE_REQUIRED"
-CLIENT_SECRET = "REDACTED_ROTATE_REQUIRED"
-USERNAME = "REDACTED_ROTATE_REQUIRED"
-PASSWORD = "REDACTED_ROTATE_REQUIRED"
+# MangaDex credentials — env vars take priority; fallback reads .env from project root
+def _load_env_file():
+    """Read key=value pairs from .env without requiring python-dotenv."""
+    from pathlib import Path as _Path
+    env_file = _Path(__file__).resolve().parents[2] / ".env"
+    pairs = {}
+    try:
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            pairs[k.strip()] = v.strip()
+    except Exception:
+        pass
+    return pairs
+
+_env = _load_env_file()
+
+def _credential(key):
+    return os.environ.get(key) or _env.get(key, "")
+
+CLIENT_ID     = _credential("MANGADEX_CLIENT_ID")
+CLIENT_SECRET = _credential("MANGADEX_CLIENT_SECRET")
+USERNAME      = _credential("MANGADEX_USERNAME")
+PASSWORD      = _credential("MANGADEX_PASSWORD")
 
 # Token cache
 _token_cache = {
@@ -167,50 +188,193 @@ def get_library():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-@auth_bp.route('/search')
-def search():
-    """Search MangaDex — public endpoint, no auth required"""
-    query = request.args.get("q", "")
-    if len(query) < 2:
-        return jsonify([])
+_search_cache: dict = {}  # cache_key → (results, timestamp)
+_SEARCH_TTL = 300          # 5 minutes
+_tags_cache: list = []
+_tags_cache_ts: float = 0
+_TAGS_TTL = 3600           # 1 hour
 
+_ALL_RATINGS = ["safe", "suggestive", "erotica", "pornographic"]
+
+
+def _parse_manga_list(data_items: list) -> list:
+    """Shared serializer for manga list API responses."""
+    results = []
+    for m in data_items:
+        attrs = m["attributes"]
+        title = _first_title(attrs)
+        cover_url = None
+        for rel in m.get("relationships", []):
+            if rel.get("type") == "cover_art":
+                fn = rel.get("attributes", {}).get("fileName")
+                if fn:
+                    cover_url = f"https://uploads.mangadex.org/covers/{m['id']}/{fn}.256.jpg"
+                break
+        links = attrs.get("links") or {}
+        results.append({
+            "id": m["id"],
+            "title": title,
+            "cover": cover_url,
+            "status": attrs.get("status"),
+            "year": attrs.get("year"),
+            "contentRating": attrs.get("contentRating"),
+            "mal_id": links.get("mal"),
+            "al_id":  links.get("al"),
+        })
+    return results
+
+
+@auth_bp.route('/tags')
+def get_tags():
+    """Return all MangaDex tags, cached 1 hour."""
+    global _tags_cache, _tags_cache_ts
+    if _tags_cache and time.time() - _tags_cache_ts < _TAGS_TTL:
+        return jsonify(_tags_cache)
     try:
-        r = _SESSION.get(
-            "https://api.mangadex.org/manga",
-            params={"title": query, "limit": 20, "includes[]": "cover_art"},
-            timeout=15
-        )
+        r = _SESSION.get("https://api.mangadex.org/manga/tag", timeout=10)
         if r.status_code != 200:
             return jsonify([])
-        data = r.json()
-        results = []
-        
-        for m in data.get("data", []):
-            attrs = m["attributes"]
-            title = _first_title(attrs)
-            
-            cover_url = None
-            for rel in m.get("relationships", []):
-                if rel.get("type") == "cover_art":
-                    filename = rel.get("attributes", {}).get("fileName")
-                    if filename:
-                        cover_url = f"https://uploads.mangadex.org/covers/{m['id']}/{filename}.256.jpg"
-                    break
-            
-            results.append({
-                "id": m["id"],
-                "title": title,
-                "cover": cover_url,
-                "status": attrs.get("status"),
-                "year": attrs.get("year"),
-                "last_chapter": attrs.get("lastChapter")
-            })
-        
-        return jsonify(results)
+        tags = []
+        for t in r.json().get("data", []):
+            attrs = t["attributes"]
+            name = attrs.get("name", {}).get("en") or next(iter(attrs.get("name", {}).values()), "")
+            if name:
+                tags.append({"id": t["id"], "name": name, "group": attrs.get("group", "genre")})
+        tags.sort(key=lambda x: (x["group"], x["name"]))
+        _tags_cache = tags
+        _tags_cache_ts = time.time()
+        return jsonify(tags)
+    except Exception:
+        return jsonify([])
 
+
+@auth_bp.route('/manga/<manga_id>')
+def manga_detail(manga_id):
+    """Full metadata for a single manga (synopsis, author, tags)."""
+    try:
+        r = _SESSION.get(
+            f"https://api.mangadex.org/manga/{manga_id}",
+            params={"includes[]": ["cover_art", "author", "artist"]},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return jsonify({"error": "Not found"}), 404
+        data = r.json().get("data", {})
+        attrs = data.get("attributes", {})
+
+        desc_map = attrs.get("description") or {}
+        description = desc_map.get("en") or next(iter(desc_map.values()), "") if desc_map else ""
+
+        cover_url = author = artist = None
+        for rel in data.get("relationships", []):
+            t = rel.get("type")
+            if t == "cover_art":
+                fn = rel.get("attributes", {}).get("fileName")
+                if fn:
+                    cover_url = f"https://uploads.mangadex.org/covers/{data['id']}/{fn}.512.jpg"
+            elif t == "author" and not author:
+                author = rel.get("attributes", {}).get("name")
+            elif t == "artist" and not artist:
+                artist = rel.get("attributes", {}).get("name")
+
+        tags = []
+        for t in attrs.get("tags", []):
+            name = t.get("attributes", {}).get("name", {}).get("en")
+            if name:
+                tags.append({"id": t["id"], "name": name, "group": t.get("attributes", {}).get("group", "genre")})
+
+        return jsonify({
+            "id": data["id"],
+            "title": _first_title(attrs),
+            "description": description,
+            "status": attrs.get("status"),
+            "year": attrs.get("year"),
+            "contentRating": attrs.get("contentRating"),
+            "cover": cover_url,
+            "author": author,
+            "artist": artist,
+            "tags": tags,
+            "lastChapter": attrs.get("lastChapter"),
+            "lastVolume": attrs.get("lastVolume"),
+            "links": attrs.get("links") or {},
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@auth_bp.route('/search')
+def search():
+    """Search MangaDex — public, no auth. Supports tag and content-rating filters."""
+    query   = request.args.get("q", "").strip()
+    tags    = request.args.getlist("tags[]")
+    ratings = request.args.getlist("rating[]") or _ALL_RATINGS
+
+    if len(query) < 2 and not tags:
+        return jsonify([])
+
+    cache_key = f"{query.lower()}|{'|'.join(sorted(tags))}|{'|'.join(sorted(ratings))}"
+    if cache_key in _search_cache:
+        results, ts = _search_cache[cache_key]
+        if time.time() - ts < _SEARCH_TTL:
+            return jsonify(results)
+
+    try:
+        params = {
+            "limit": 30,
+            "includes[]": ["cover_art"],
+            "contentRating[]": ratings,
+        }
+        if query:
+            params["title"] = query
+        if tags:
+            params["includedTags[]"] = tags
+
+        r = _SESSION.get("https://api.mangadex.org/manga", params=params, timeout=15)
+        if r.status_code != 200:
+            return jsonify([])
+        results = _parse_manga_list(r.json().get("data", []))
+        _search_cache[cache_key] = (results, time.time())
+        return jsonify(results)
     except Exception as e:
         print(f"MangaDex search error: {e}")
         return jsonify([])
+
+@auth_bp.route('/popular')
+def popular():
+    """Popular/trending/top-rated manga. Supports tag and content-rating filters."""
+    kind    = request.args.get("type", "followed")
+    page    = max(1, int(request.args.get("page", 1)))
+    tags    = request.args.getlist("tags[]")
+    ratings = request.args.getlist("rating[]") or _ALL_RATINGS
+    limit   = 50
+    offset  = (page - 1) * limit
+
+    order = {
+        "followed": {"followedCount": "desc"},
+        "latest":   {"latestUploadedChapter": "desc"},
+        "rating":   {"rating": "desc"},
+    }.get(kind, {"followedCount": "desc"})
+
+    params = {
+        "limit": limit,
+        "offset": offset,
+        "includes[]": ["cover_art"],
+        "contentRating[]": ratings,
+        **{f"order[{k}]": v for k, v in order.items()},
+    }
+    if tags:
+        params["includedTags[]"] = tags
+
+    try:
+        r = _SESSION.get("https://api.mangadex.org/manga", params=params, timeout=15)
+        if r.status_code != 200:
+            return jsonify({"error": "MangaDex API error", "code": r.status_code}), 502
+        data = r.json()
+        results = _parse_manga_list(data.get("data", []))
+        return jsonify({"results": results, "total": data.get("total", 0), "page": page})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 @auth_bp.route('/chapters/<manga_id>')
 def get_chapters(manga_id):
@@ -231,6 +395,7 @@ def get_chapters(manga_id):
                     "limit": 500,
                     "offset": offset,
                     "includes[]": "scanlation_group",
+                    "contentRating[]": _ALL_RATINGS,
                     "translatedLanguage[]": ["en", "es", "es-xl", "es-la", "ja", "ko", "pt", "pt-br", "zh", "zh-hk", "ru", "fr", "de", "it", "vi", "id", "th", "pl", "tr", "hu", "ar", "cs", "uk", "bg", "el", "he", "ms", "ro", "sv", "fa", "hi", "bn", "tl"]
                 }
             )
@@ -250,7 +415,8 @@ def get_chapters(manga_id):
         
         for ch in all_chapters:
             attrs = ch["attributes"]
-            chapter = attrs.get("chapter") or "0"
+            chapter_raw = attrs.get("chapter")
+            chapter = chapter_raw if chapter_raw is not None else "one_shot"
             lang = attrs.get("translatedLanguage", "unknown")
             volume = attrs.get("volume")
             pages = attrs.get("pages", 0)
@@ -499,41 +665,54 @@ def update_manga_data():
 @auth_bp.route('/volumes/<manga_id>')
 def get_volumes(manga_id):
     """Return volume → chapter list mapping.
-    Uses /feed (all languages, paginated) so external/official chapters are included —
-    the /aggregate endpoint silently omits chapters hosted outside MangaDex.
-    Response: [{ volume, chapters: ["1","2",...] }, ...] sorted by volume number."""
+    Priority: aggregate (matches website display) → feed fallback for external chapters.
+    Response: [{ volume, chapters: ["1","2",...], feedFallback? }, ...] sorted by volume number.
+    feedFallback=true is set when aggregate had no data and we fell back to the feed,
+    so the frontend knows to also attempt the scraper for a more accurate result."""
     try:
         volume_chapters = {}  # vol_key → set of chapter number strings
-        offset = 0
-        limit = 500
-        while True:
-            r = _SESSION.get(
-                f"https://api.mangadex.org/manga/{manga_id}/feed",
-                params={"limit": limit, "offset": offset,
-                        "order[chapter]": "asc", "order[volume]": "asc"},
-                timeout=20,
-            )
-            if not r.ok:
-                break
-            data = r.json()
-            batch = data.get("data", [])
-            for ch in batch:
-                attrs = ch.get("attributes", {})
-                vol  = str(attrs.get("volume") or "none")
-                chap = attrs.get("chapter")
-                if chap is not None:
-                    volume_chapters.setdefault(vol, set()).add(str(chap))
-            total = data.get("total", 0)
-            offset += limit
-            if offset >= total or not batch:
-                break
 
-        # Fallback to aggregate if feed returned nothing
-        if not volume_chapters:
-            r = _SESSION.get(f"https://api.mangadex.org/manga/{manga_id}/aggregate", timeout=10)
-            data = r.json() if r.ok else {}
-            for vol_key, vol_data in (data.get("volumes", {}) or {}).items():
-                volume_chapters[vol_key] = set(vol_data.get("chapters", {}).keys())
+        # Prefer aggregate: it mirrors what MangaDex website shows per volume,
+        # avoiding cross-language volume assignment conflicts from the feed.
+        agg_r = _SESSION.get(
+            f"https://api.mangadex.org/manga/{manga_id}/aggregate",
+            timeout=10,
+        )
+        if agg_r.ok:
+            agg_data = agg_r.json()
+            for vol_key, vol_data in (agg_data.get("volumes", {}) or {}).items():
+                chaps = set(vol_data.get("chapters", {}).keys())
+                if chaps:
+                    volume_chapters[vol_key] = chaps
+
+        agg_had_data = bool(volume_chapters)
+
+        # Fall back to full feed if aggregate returned no chapter data
+        # (e.g. all chapters hosted externally / not indexed by MangaDex).
+        if not agg_had_data:
+            offset = 0
+            limit = 500
+            while True:
+                r = _SESSION.get(
+                    f"https://api.mangadex.org/manga/{manga_id}/feed",
+                    params={"limit": limit, "offset": offset,
+                            "order[chapter]": "asc", "order[volume]": "asc"},
+                    timeout=20,
+                )
+                if not r.ok:
+                    break
+                data = r.json()
+                batch = data.get("data", [])
+                for ch in batch:
+                    attrs = ch.get("attributes", {})
+                    vol  = str(attrs.get("volume") or "none")
+                    chap = attrs.get("chapter")
+                    if chap is not None:
+                        volume_chapters.setdefault(vol, set()).add(str(chap))
+                total = data.get("total", 0)
+                offset += limit
+                if offset >= total or not batch:
+                    break
 
         def _ch_sort_key(x):
             try: return float(x)
@@ -542,12 +721,15 @@ def get_volumes(manga_id):
         result = []
         for vol_key, chap_set in volume_chapters.items():
             chapters = sorted(chap_set, key=_ch_sort_key)
-            result.append({
+            entry = {
                 "volume": vol_key,
                 "label": f"Tomo {vol_key}" if vol_key != "none" else "Sin tomo",
                 "chapters": chapters,
                 "count": len(chapters),
-            })
+            }
+            if not agg_had_data:
+                entry["feedFallback"] = True
+            result.append(entry)
 
         def _vol_sort(v):
             try: return (0, float(v["volume"]))
@@ -593,29 +775,34 @@ def scrape_volumes(manga_id):
                     continue
 
                 vol_label = lines[0]
-                ch_text = lines[1]
+                ch_text   = lines[1]
 
-                if vol_label.startswith("Volume "):
-                    vol_key = vol_label[len("Volume "):].strip()
-                elif vol_label in ("No Volume", "Sin Volumen", "No volume"):
-                    vol_key = "none"
+                # Extract volume key language-agnostically: just find the number in the
+                # first cell (works for "Volume 2", "Volumen 2", "第2巻", etc.).
+                # If the cell has no number it's a "No Volume" row in whatever language.
+                vol_num_m = re.search(r'(\d+(?:\.\d+)?)', vol_label)
+                if vol_num_m:
+                    vol_key = vol_num_m.group(1)
                 else:
-                    continue
+                    # Accept any "no volume" label (no digits in the first cell)
+                    vol_key = "none"
 
-                # Parse chapter numbers from "Ch. 37 - 44", "Ch. 22", "Ch. 0, 36"
-                ch_nums = re.findall(r"\d+(?:\.\d+)?", ch_text)
-                if not ch_nums:
-                    continue
-
-                # Store only min and max — sufficient for range-based selection
-                min_ch, max_ch = ch_nums[0], ch_nums[-1]
+                # The second cell must contain a chapter number — skip unrelated grid rows.
+                ch_range_m = re.search(r'(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)', ch_text)
+                if ch_range_m:
+                    min_ch, max_ch = ch_range_m.group(1), ch_range_m.group(2)
+                else:
+                    single_m = re.search(r'(\d+(?:\.\d+)?)', ch_text)
+                    if not single_m:
+                        continue
+                    min_ch = max_ch = single_m.group(1)
                 chapters = [min_ch] if min_ch == max_ch else [min_ch, max_ch]
 
                 results.append({
                     "volume": vol_key,
                     "label": f"Tomo {vol_key}" if vol_key != "none" else "Sin tomo",
                     "chapters": chapters,
-                    "count": int(lines[2]) if len(lines) > 2 and lines[2].isdigit() else len(ch_nums),
+                    "count": int(lines[2]) if len(lines) > 2 and lines[2].isdigit() else len(chapters),
                     "fromScrape": True,
                 })
             browser.close()

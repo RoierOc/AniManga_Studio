@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start everything: Suwayomi + Flask
+# Start everything: Suwayomi + Flask + Windows relay
 # Usage:
 #   ./start.sh           — foreground (Ctrl+C para parar)
 #   ./start.sh --daemon  — background, persiste al cerrar terminal
@@ -10,43 +10,53 @@ SUWAYOMI_LOG="/tmp/suwayomi.log"
 SUWAYOMI_PID="/tmp/suwayomi.pid"
 FLASK_PID="/tmp/mangajanai-flask.pid"
 FLASK_LOG="/tmp/mangajanai-flask.log"
+RELAY_PID="/tmp/mangajanai-relay.pid"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; CYAN='\033[0;36m'
 RED='\033[0;31m'; BOLD='\033[1m'; RESET='\033[0m'
 
-# ── WSL2: actualizar portproxy al iniciar (por si cambió la IP interna) ───────
-_setup_wsl2_network() {
+# ── Windows relay (node.exe): expone puerto 5100 en TODOS los adaptadores ─────
+# Flask corre en 127.0.0.1:5101; el relay (proceso Windows nativo) escucha en
+# 0.0.0.0:5100 y reenvía — esto cubre WiFi, hotspot y localhost sin portproxy.
+start_relay() {
     grep -qi "microsoft" /proc/version 2>/dev/null || return
-    local wsl_ip
-    wsl_ip=$(ip addr show 2>/dev/null | grep -oP 'inet \K172\.\d+\.\d+\.\d+' | head -1)
-    [[ -z "$wsl_ip" ]] && return
-    /mnt/c/Windows/System32/netsh.exe interface portproxy delete v4tov4 \
-        listenport=5001 listenaddress=0.0.0.0 >/dev/null 2>&1 || true
-    /mnt/c/Windows/System32/netsh.exe interface portproxy add v4tov4 \
-        listenport=5001 listenaddress=0.0.0.0 \
-        connectport=5001 connectaddress="$wsl_ip" >/dev/null 2>&1 || true
+    local node_bin=""
+    if command -v node.exe &>/dev/null; then
+        node_bin="node.exe"
+    elif [[ -x "/mnt/c/Program Files/nodejs/node.exe" ]]; then
+        node_bin="/mnt/c/Program Files/nodejs/node.exe"
+    else
+        echo -e "${YELLOW}  ⚠  node.exe no encontrado — hotspot puede no funcionar${RESET}"
+        return
+    fi
+    # Kill existing relay
+    if [ -f "$RELAY_PID" ] && kill -0 "$(cat "$RELAY_PID")" 2>/dev/null; then
+        kill "$(cat "$RELAY_PID")" 2>/dev/null || true
+    fi
+    local relay_win
+    relay_win=$(wslpath -w "$SCRIPT_DIR/relay.js" 2>/dev/null) || return
+    "$node_bin" "$relay_win" >/dev/null 2>&1 &
+    echo $! > "$RELAY_PID"
+    echo -e "${GREEN}  ✓  Relay Windows iniciado (WiFi + Hotspot)${RESET}"
 }
-_setup_wsl2_network
 
 DAEMON=false
 [[ "${1:-}" == "--daemon" ]] && DAEMON=true
 
 # ── Re-launch as daemon ───────────────────────────────────────────────────────
 if $DAEMON; then
-  # If already running, just print status
   if [ -f "$FLASK_PID" ] && kill -0 "$(cat "$FLASK_PID")" 2>/dev/null; then
     echo -e "${GREEN}  ✓  MangaJaNai ya está corriendo (PID $(cat "$FLASK_PID"))${RESET}"
-    echo -e "  ${CYAN}→  http://localhost:5001${RESET}"
+    echo -e "  ${CYAN}→  http://localhost:5100${RESET}"
     exit 0
   fi
   echo -e "${BOLD}${CYAN}  Iniciando MangaJaNai en background...${RESET}"
-  # Use setsid + nohup to fully detach from terminal
   nohup setsid bash "$0" > "$FLASK_LOG" 2>&1 &
   BGPID=$!
   sleep 2
   if kill -0 $BGPID 2>/dev/null; then
     echo -e "${GREEN}  ✓  Corriendo en background (log: ${FLASK_LOG})${RESET}"
-    echo -e "  ${CYAN}→  http://localhost:5001${RESET}"
+    echo -e "  ${CYAN}→  http://localhost:5100${RESET}"
     echo -e "  Usa ${YELLOW}./stop.sh${RESET} para parar"
   else
     echo -e "${RED}  ✗  Falló el arranque, revisa: $FLASK_LOG${RESET}"
@@ -103,12 +113,13 @@ start_flask() {
   export UPSCALED_DIR="$SCRIPT_DIR/../../MangaLibrary_Upscaled"
 
   WIN_IP=$(/mnt/c/Windows/System32/ipconfig.exe 2>/dev/null \
-           | grep -oP '192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+' | head -1 || true)
+           | grep -oP '192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+' | grep -v "137\." | head -1 || true)
   echo ""
   echo -e "${BOLD}  Acceso:${RESET}"
-  echo -e "  ${CYAN}→  http://localhost:5001${RESET}              (app principal)"
-  [ -n "$WIN_IP" ] && echo -e "  ${CYAN}→  http://${WIN_IP}:5001${RESET}    (desde red local)"
-  echo -e "  ${CYAN}→  http://localhost:5001/library${RESET}      (biblioteca móvil)"
+  echo -e "  ${CYAN}→  http://localhost:5100${RESET}              (app principal)"
+  [ -n "$WIN_IP" ] && echo -e "  ${CYAN}→  http://${WIN_IP}:5100${RESET}    (WiFi casa)"
+  echo -e "  ${CYAN}→  http://192.0.2.1:5100${RESET}         (Mobile Hotspot)"
+  echo -e "  ${CYAN}→  http://localhost:5100/library${RESET}      (biblioteca móvil)"
   echo -e "  ${CYAN}→  http://localhost:4567${RESET}              (Suwayomi admin)"
   echo ""
   echo -e "  ${YELLOW}Ctrl+C para detener todo${RESET}"
@@ -118,7 +129,7 @@ start_flask() {
   cd "$SCRIPT_DIR/src"
   exec "$PYTHON_BIN" -c "
 from app import app
-app.run(port=5001, debug=False, threaded=True, host='0.0.0.0')
+app.run(port=5101, debug=False, threaded=True, host='127.0.0.1')
 "
 }
 
@@ -130,6 +141,10 @@ cleanup() {
     kill "$(cat "$SUWAYOMI_PID")" 2>/dev/null && echo -e "${GREEN}  ✓  Suwayomi detenido${RESET}"
     rm -f "$SUWAYOMI_PID"
   fi
+  if [ -f "$RELAY_PID" ] && kill -0 "$(cat "$RELAY_PID")" 2>/dev/null; then
+    kill "$(cat "$RELAY_PID")" 2>/dev/null && echo -e "${GREEN}  ✓  Relay detenido${RESET}"
+    rm -f "$RELAY_PID"
+  fi
   rm -f "$FLASK_PID"
   echo -e "${GREEN}  ✓  Flask detenido${RESET}"
   echo ""
@@ -140,5 +155,6 @@ trap cleanup EXIT INT TERM
 # ── Main ──────────────────────────────────────────────────────────────────────
 echo -e "  Iniciando servicios...\n"
 start_suwayomi
-echo -e "${GREEN}  ✓  Flask arrancando en puerto 5001...${RESET}"
+start_relay
+echo -e "${GREEN}  ✓  Flask arrancando en puerto 5100...${RESET}"
 start_flask

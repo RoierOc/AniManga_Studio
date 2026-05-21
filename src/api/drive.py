@@ -16,7 +16,7 @@ SCOPES = ["https://www.googleapis.com/auth/drive.file",
           "openid"]
 TOKEN_PATH = Path.home() / ".mangajanai_gdrive_token.json"
 CREDS_FILE = Path(__file__).resolve().parent.parent.parent / "google_credentials.json"
-REDIRECT_URI = "http://localhost:5001/api/drive/callback"
+REDIRECT_URI = "http://localhost:5100/api/drive/callback"
 DRIVE_FOLDER = "MangaJaNai"
 
 os.environ["OAUTHLIB_INSECURE_TRANSPORT"] = "1"
@@ -130,13 +130,13 @@ def callback():
         auth_response = request.url.replace("http://", "https://", 1)
         flow.fetch_token(authorization_response=auth_response)
         TOKEN_PATH.write_text(flow.credentials.to_json())
-        return redirect("http://localhost:5001/?drive=connected")
+        return redirect("http://localhost:5100/?drive=connected")
     except Exception as e:
         import traceback
         traceback.print_exc()
         return (f"<h2 style='font-family:sans-serif'>Error conectando Drive</h2>"
                 f"<pre style='color:red'>{e}</pre>"
-                f"<a href='http://localhost:5001'>← Volver a MangaJaNai</a>"), 400
+                f"<a href='http://localhost:5100'>← Volver a MangaJaNai</a>"), 400
 
 
 @drive_bp.route("/disconnect", methods=["POST"])

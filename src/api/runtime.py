@@ -46,6 +46,18 @@ MODEL_PATH_DWTP_4X = Path(
     )
 ).expanduser()
 
+_MANGAJANAI_DIR = Path("/Manga_Upscaler_project/MODEL_TEST/models")
+MODEL_PATH_MANGAJANAI_1200 = Path(
+    os.environ.get("MODEL_PATH_MANGAJANAI_1200",
+                   str(_MANGAJANAI_DIR / "4x_MangaJaNai_1200p_V1_ESRGAN_70k.pth"))
+)
+MODEL_PATH_MANGAJANAI_1400 = Path(
+    os.environ.get("MODEL_PATH_MANGAJANAI_1400",
+                   str(_MANGAJANAI_DIR / "4x_MangaJaNai_1400p_V1_ESRGAN_105k.pth"))
+)
+# Height threshold: pages shorter than this use 1200p model, taller use 1400p
+MANGAJANAI_HEIGHT_THRESHOLD = int(os.environ.get("MANGAJANAI_HEIGHT_THRESHOLD", "1290"))
+
 PYTHON_EXECUTABLE = os.environ.get("PYTHON_EXECUTABLE", sys.executable)
 
 
@@ -57,6 +69,9 @@ def normalize_chapter(chapter) -> str:
     raw = str(chapter).strip()
     if not raw:
         return ""
+
+    if raw.lower() == "one_shot":
+        return "one_shot"
 
     if raw.lower().startswith("ch"):
         raw = raw[2:]

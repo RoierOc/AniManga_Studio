@@ -19,9 +19,13 @@ if [ -f "/tmp/mangajanai-flask.pid" ] && kill -0 "$(cat /tmp/mangajanai-flask.pi
 fi
 
 # Fallback: kill by process name if PID file is stale
-if pkill -f "app.run(port=5001" 2>/dev/null; then
+if pkill -f "app.run(port=5101" 2>/dev/null; then
   echo -e "${GREEN}✓  Flask detenido (fallback)${RESET}"
   stopped=1
+fi
+if [ -f "/tmp/mangajanai-relay.pid" ] && kill -0 "$(cat /tmp/mangajanai-relay.pid)" 2>/dev/null; then
+  kill "$(cat /tmp/mangajanai-relay.pid)" && echo -e "${GREEN}✓  Relay detenido${RESET}"
+  rm -f /tmp/mangajanai-relay.pid
 fi
 
 if [ $stopped -eq 0 ]; then

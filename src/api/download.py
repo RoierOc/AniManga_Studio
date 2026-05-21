@@ -5,6 +5,7 @@ Download API - Download manga from MangaDex
 
 from flask import Blueprint, jsonify, request
 from pathlib import Path
+import json
 import time
 import threading
 import requests as http_requests
@@ -25,7 +26,33 @@ from api.runtime import (
 
 download_bp = Blueprint('download', __name__)
 
-download_status = {}
+_STATUS_FILE = Path(MANGA_DIR) / '.download_status.json'
+_IN_FLIGHT = {'downloading', 'started', 'starting'}
+
+
+def _load_download_status() -> dict:
+    try:
+        if _STATUS_FILE.exists():
+            data = json.loads(_STATUS_FILE.read_text(encoding='utf-8'))
+            for v in data.values():
+                if isinstance(v, dict) and v.get('status') in _IN_FLIGHT:
+                    v['status'] = 'interrupted'
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def _persist_download_status():
+    try:
+        _STATUS_FILE.write_text(
+            json.dumps(download_status, ensure_ascii=False), encoding='utf-8'
+        )
+    except Exception:
+        pass
+
+
+download_status: dict = _load_download_status()
 _download_cancel_flags: dict = {}
 _dl_semaphore = threading.Semaphore(4)  # max 4 concurrent chapter downloads
 
@@ -94,7 +121,10 @@ def _find_chapter_id_with_feed(manga_id, chapter_norm):
 
         for ch in chapters_found:
             ch_num = ch.get('attributes', {}).get('chapter', '')
-            if _chapter_matches(ch_num, chapter_norm):
+            if chapter_norm == "one_shot":
+                if ch_num is None or ch_num == '':
+                    return ch.get('id')
+            elif _chapter_matches(ch_num, chapter_norm):
                 return ch.get('id')
 
         offset += len(chapters_found)
@@ -137,7 +167,10 @@ def _find_chapter_id_with_chapter_endpoint(manga_id, chapter_norm):
 def set_download_status(task_id, status):
     payload = dict(status)
     payload.setdefault('task_id', task_id)
+    old_status = download_status.get(task_id, {}).get('status')
     download_status[task_id] = payload
+    if payload.get('status') != old_status:
+        _persist_download_status()
 
 def get_download_status(task_id=None):
     if task_id is None:
@@ -146,6 +179,8 @@ def get_download_status(task_id=None):
 
 def _chapter_file_prefix(chapter):
     chapter_norm = normalize_chapter(chapter)
+    if chapter_norm == "one_shot":
+        return "ch0000"
     try:
         value = Decimal(chapter_norm)
         int_part = int(value.to_integral_value(rounding='ROUND_FLOOR'))

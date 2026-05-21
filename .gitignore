@@ -34,6 +34,9 @@ suwayomi/data/
 *.pth
 *.safetensors
 
+# Environment secrets
+.env
+
 # Local configuration and public repository metadata.
 /.*/
 !/.github/

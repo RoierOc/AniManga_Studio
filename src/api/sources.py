@@ -180,6 +180,45 @@ def search():
         return jsonify({"error": str(e)}), 500
 
 
+# ── Popular / Latest ─────────────────────────────────────────────────────────
+
+@sources_bp.route("/popular", methods=["GET"])
+def popular():
+    """Fetch popular or latest manga from a Suwayomi source."""
+    source_id = (request.args.get("source") or "").strip()
+    page      = max(1, int(request.args.get("page", 1)))
+    kind      = request.args.get("type", "POPULAR").upper()   # POPULAR | LATEST
+    if kind not in ("POPULAR", "LATEST"):
+        kind = "POPULAR"
+    if not source_id:
+        return jsonify({"error": "source required"}), 400
+    try:
+        data = _gql(
+            """
+            mutation FetchPopular($source: LongString!, $type: FetchSourceMangaType!, $page: Int!) {
+              fetchSourceManga(input: { source: $source, type: $type, page: $page }) {
+                mangas { id title thumbnailUrl inLibrary }
+                hasNextPage
+              }
+            }
+            """,
+            {"source": source_id, "type": kind, "page": page},
+        )
+        results = data["fetchSourceManga"]
+        mangas = [
+            {
+                "id": m["id"],
+                "title": m["title"],
+                "thumbnailUrl": SUWAYOMI_BASE + m["thumbnailUrl"] if m.get("thumbnailUrl") else None,
+                "inLibrary": m.get("inLibrary", False),
+            }
+            for m in results["mangas"]
+        ]
+        return jsonify({"results": mangas, "hasNextPage": results["hasNextPage"], "page": page})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 # ── Manga details + chapters ──────────────────────────────────────────────────
 
 @sources_bp.route("/manga/<int:manga_id>", methods=["GET"])

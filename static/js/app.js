@@ -7,7 +7,11 @@ const app = createApp({
     setup() {
         // Views
         const currentView = ref('library');
-        
+
+        // Library search & filter
+        const libSearch = ref('');
+        const libFilter = ref('all'); // 'all' | 'downloaded' | 'upscaled' | 'saved'
+
         // Data
         const library = ref([]);
         const localLibrary = ref([]);
@@ -16,6 +20,7 @@ const app = createApp({
         const searchResults = ref([]);
         const chapters = ref([]);
         const mdChapters = ref([]);
+        const mdChaptersLoading = ref(false);
         const chapterStatus = ref({ downloaded: {}, upscaled: {} });
         
         // Modal
@@ -69,6 +74,8 @@ const app = createApp({
         const exportSelectedChapters = ref([]);
         const exportChapterSet = computed(() => new Set(exportSelectedChapters.value.map(c => normalizeChapter(c))));
         const exportBusy = ref(false);
+        const upscaleModel = ref('eula');        // 'eula' | 'mangajanai'
+        const upscaleModelLabel = ref('eula-digimanga (B&W)');
         const exportPreview = ref({ pages: 0, size_mb: 0, upscaled_pages: 0, original_pages: 0 });
         const chapterHealth = ref([]);   // [{chapter, status, missing_upscaled, download_gaps}]
         let exportPreviewTimer = null;
@@ -181,7 +188,101 @@ const app = createApp({
         const globalQuery = ref('');
         const globalResults = ref([]);   // [{source:{id,name,lang}, results:[...]}]
         const globalSearchLoading = ref(false);
-        const searchMode = ref('global'); // 'global' | 'source'
+        const searchMode = ref('global'); // 'global' | 'source' | 'popular'
+
+        // MangaDex popular/trending tabs
+        const mdViewTab = ref('search');   // 'search' | 'popular' | 'latest' | 'rating' | 'anilist'
+        const mdPopular = ref([]);
+        const mdPopularLoading = ref(false);
+
+        // AniList integration
+        const anilistScores = ref({});          // malId (string) → { score, genres, al_id, popularity }
+        const anilistTop = ref([]);
+        const anilistTopLoading = ref(false);
+        const anilistTopHasMore = ref(false);
+        const anilistTopPage = ref(1);
+        const anilistGenres = ref([]);       // [{name, type, category}]
+        const anilistGenreFilter = ref('');  // selected name (string)
+        const anilistTopSort = ref('SCORE_DESC');
+        const anilistChipSearch = ref('');   // text filter for chips
+
+        // MangaDex genre filters
+        const mdTags = ref([]);
+        const mdSelectedTags = ref([]);    // array of tag IDs
+        const mdContentRating = ref(['safe', 'suggestive', 'erotica', 'pornographic']);
+        const mdShowTagFilter = ref(false);
+
+        // Full manga detail (synopsis, author, tags)
+        const currentMdDetail = ref(null);
+
+        // CBZ / Local Comics
+        const cbzManga = ref([]);
+        const cbzLoading = ref(false);
+        const cbzCurrentManga = ref(null);
+        const cbzVolumes = ref([]);
+        const cbzVolumesLoading = ref(false);
+        const showCbzModal = ref(false);
+
+        // Suwayomi popular
+        const sourcePopular = ref([]);
+        const sourcePopularLoading = ref(false);
+        const offlineCoverStatus = ref({ running: false, done: 0, total: 0, errors: 0 });
+        let _offlinePollTimer = null;
+
+        // Metadata edit
+        const editMetaShow = ref(false);
+        const editMetaTitle = ref('');
+        const editMetaCoverUrl = ref('');
+        const editMetaBusy = ref(false);
+
+        // Corrupt page scan
+        const corruptScanResult = ref(null);
+        const corruptScanBusy = ref(false);
+
+        // ── Anime / Nyaa ────────────────────────────────────────────────────────
+        const animeView = ref('library');          // 'library' | 'search' | 'detail' | 'downloads'
+        const animeQuery = ref('');
+        const animeResults = ref([]);
+        const animeLoading = ref(false);
+        const animeAnilistDown = ref(false);
+        const animeCurrentAnime = ref(null);
+        const animeTorrents = ref([]);
+        const animeTorrentsLoading = ref(false);
+        const animeTorrentQuery = ref('');
+        const animeTorrentCategory = ref('1_2');
+        const animeLangFilter = ref('all');       // 'all' | 'esp' | 'eng' | 'other'
+        const animeHideDead  = ref(true);         // hide seeders === 0 by default
+        const animeQualityFilter = ref('');
+        const animeGroupFilter = ref('');
+        const animeEpFilter = ref('all');         // 'all' | 'episodes' | 'batch'
+        const targetEpisodeNum = ref(null);       // episode number when navigating from Mi Anime
+        const qbtConnected = ref(false);
+        const qbtVersion = ref('');
+        const qbtUrl = ref('http://localhost:8080');
+        const qbtUsername = ref('admin');
+        const qbtPassword = ref('adminadmin');
+        const qbtConfigShow = ref(false);
+        const qbtTorrents = ref([]);
+        const qbtLoading = ref(false);
+        let qbtPollTimer = null;
+        let libPollTimer  = null;
+        const qbtAddingHashes = ref(new Set());
+        const qbtAddedHashes  = ref(new Set());
+        const animeLibrary = ref([]);
+        const animeLibraryLoading = ref(false);
+        const animeLibraryDetail  = ref(null);
+
+        // Seasonal
+        const animeSeasonalResults  = ref([]);
+        const animeSeasonalLoading  = ref(false);
+        const animeSeasonSort       = ref('score');   // 'score' | 'popularity' | 'trending'
+        const animeSeasonSeason     = ref('');
+        const animeSeasonYear       = ref(0);
+        const animeSeasonGenreFilter = ref('');
+        const SEASON_ES = { WINTER: 'Invierno', SPRING: 'Primavera', SUMMER: 'Verano', FALL: 'Otoño' };
+        const SEASONS   = ['WINTER', 'SPRING', 'SUMMER', 'FALL'];
+
+        const _navStack = [];           // SPA back-button stack
 
         // Search debounce
         let searchTimeout = null;
@@ -190,6 +291,7 @@ const app = createApp({
             if (value === null || value === undefined) return '';
             let raw = String(value).trim().toLowerCase();
             if (!raw) return '';
+            if (raw === 'one_shot') return 'one_shot';
             if (raw.startsWith('ch')) raw = raw.slice(2);
             const num = Number(raw);
             if (!Number.isNaN(num) && Number.isFinite(num)) {
@@ -198,6 +300,24 @@ const app = createApp({
             }
             const stripped = raw.replace(/^0+/, '');
             return stripped || '0';
+        };
+
+        const formatChapter = (ch) => ch === 'one_shot' ? 'One Shot' : 'Cap. ' + ch;
+
+        const animeFormatLabel = (fmt) => {
+            const map = { TV: 'TV', TV_SHORT: 'TV Short', MOVIE: 'Película', OVA: 'OVA', ONA: 'ONA', SPECIAL: 'Especial', MUSIC: 'Video Musical' };
+            return map[fmt] || fmt || '';
+        };
+
+        const animeEpLabel = (anime, ep) => {
+            const fmt = anime?.format || '';
+            // MOVIE/MUSIC always override the raw torrent filename stored in ep.title
+            if (fmt === 'MOVIE') return 'Película';
+            if (fmt === 'MUSIC') return 'Video Musical';
+            if (ep.title) return ep.title;
+            if (fmt === 'OVA') return 'OVA ' + ep.num;
+            if (fmt === 'SPECIAL') return 'Especial ' + ep.num;
+            return 'Episodio ' + ep.num;
         };
 
         const sanitizeTitleForId = (value) => {
@@ -281,7 +401,122 @@ const app = createApp({
             output.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
             return output;
         });
-        
+
+        const filteredAnilistChips = computed(() => {
+            const q = anilistChipSearch.value.trim().toLowerCase();
+            if (!q) return anilistGenres.value;
+            return anilistGenres.value.filter(g => g.name.toLowerCase().includes(q));
+        });
+
+        const filteredAnimeTorrents = computed(() => {
+            let list = animeTorrents.value;
+            // Minimum 1 seeder filter (on by default)
+            if (animeHideDead.value) list = list.filter(t => t.seeders > 0);
+            // Language filter
+            if (animeLangFilter.value === 'esp')
+                list = list.filter(t => isSpanishOrMulti(t.title));
+            else if (animeLangFilter.value === 'eng')
+                list = list.filter(t => isEnglishSub(t.title));
+            else if (animeLangFilter.value === 'other')
+                list = list.filter(t => !isSpanishOrMulti(t.title) && !isEnglishSub(t.title));
+            if (animeQualityFilter.value)   list = list.filter(t => t.quality === animeQualityFilter.value);
+            if (animeGroupFilter.value)     list = list.filter(t => t.group === animeGroupFilter.value);
+            if (animeEpFilter.value === 'batch')    list = list.filter(t => t.episode === 0);
+            else if (animeEpFilter.value === 'episodes') list = list.filter(t => t.episode > 0);
+            // Global sort: ESP first → ENG → others, then seeders desc
+            return [...list].sort((a, b) => {
+                const aEsp = isSpanishOrMulti(a.title), bEsp = isSpanishOrMulti(b.title);
+                const aEng = isEnglishSub(a.title),     bEng = isEnglishSub(b.title);
+                if (aEsp !== bEsp) return aEsp ? -1 : 1;
+                if (aEng !== bEng) return aEng ? -1 : 1;
+                return b.seeders - a.seeders;
+            });
+        });
+
+        // Counts per language bucket (from raw results, ignoring dead filter)
+        const animeLangCounts = computed(() => {
+            const all  = animeTorrents.value.filter(t => animeHideDead.value ? t.seeders > 0 : true);
+            return {
+                all:   all.length,
+                esp:   all.filter(t => isSpanishOrMulti(t.title)).length,
+                eng:   all.filter(t => isEnglishSub(t.title)).length,
+                other: all.filter(t => !isSpanishOrMulti(t.title) && !isEnglishSub(t.title)).length,
+            };
+        });
+
+        const animeGroups = computed(() => {
+            const groups = new Set(animeTorrents.value.map(t => t.group).filter(Boolean));
+            return [...groups].sort();
+        });
+
+        const animeQualities = computed(() => {
+            const q = new Set(animeTorrents.value.map(t => t.quality).filter(Boolean));
+            return [...q].sort();
+        });
+
+        const isSpanishOrMulti = (title) =>
+            /\b(esp|espa[nñ]ol|castellano|multi|lat|latino|multi.?sub|sub.?esp|dual)\b/i.test(title);
+
+        const isEnglishSub = (title) => {
+            if (isSpanishOrMulti(title)) return false;
+            return /\b(eng(?:lish)?[\s._-]?(?:sub(?:bed)?|dub(?:bed)?)?|english[\s._-]?(?:sub(?:bed)?|dubbed)?|\[en\]|\[eng\])\b/i.test(title);
+        };
+
+        const animeExpandedEps = ref(new Set());
+        const toggleEpGroup = (ep) => {
+            const s = new Set(animeExpandedEps.value);
+            if (s.has(ep)) s.delete(ep); else s.add(ep);
+            animeExpandedEps.value = s;
+        };
+        const isEpExpanded = (ep) => animeExpandedEps.value.has(ep);
+
+        const groupedAnimeEpisodes = computed(() => {
+            let list = filteredAnimeTorrents.value.map(t => ({
+                ...t,
+                isSpanish: isSpanishOrMulti(t.title),
+                isEnglish: isEnglishSub(t.title),
+            }));
+            const map = {};
+            for (const t of list) {
+                const key = t.episode;
+                if (!map[key]) map[key] = [];
+                map[key].push(t);
+            }
+            // Spanish/multi first → English → rest, then by seeders desc
+            for (const key in map) {
+                map[key].sort((a, b) => {
+                    if (a.isSpanish !== b.isSpanish) return a.isSpanish ? -1 : 1;
+                    if (a.isEnglish !== b.isEnglish) return a.isEnglish ? -1 : 1;
+                    return b.seeders - a.seeders;
+                });
+            }
+            // Batch (0) first, then episodes asc, unknowns (-1) last
+            let groups = Object.entries(map)
+                .map(([k, torrents]) => ({ episode: Number(k), torrents }))
+                .sort((a, b) => {
+                    if (a.episode === 0) return -1;
+                    if (b.episode === 0) return 1;
+                    if (a.episode === -1) return 1;
+                    if (b.episode === -1) return -1;
+                    return a.episode - b.episode;
+                });
+            // When coming from Mi Anime for a specific episode, show only that ep + batches
+            if (targetEpisodeNum.value !== null) {
+                groups = groups.filter(g => g.episode === 0 || g.episode === targetEpisodeNum.value);
+            }
+            return groups;
+        });
+
+        const filteredLibrary = computed(() => {
+            let items = combinedLibrary.value;
+            const q = libSearch.value.trim().toLowerCase();
+            if (q) items = items.filter(i => i.title.toLowerCase().includes(q));
+            if (libFilter.value === 'downloaded') items = items.filter(i => i.downloaded);
+            else if (libFilter.value === 'upscaled')  items = items.filter(i => i.upscaled > 0);
+            else if (libFilter.value === 'saved')     items = items.filter(i => !i.downloaded);
+            return items;
+        });
+
         const groupedChapters = computed(() => {
             const src = mdChapters.value.length > 0 ? mdChapters.value : chapters.value;
             if (!src?.length) return [];
@@ -354,28 +589,40 @@ const app = createApp({
             return out;
         });
 
+        const LANG_PRIORITY = ['en', 'es', 'es-la', 'pt-br', 'fr', 'de', 'it', 'ko', 'zh', 'ja', 'ru', 'vi', 'th', 'id', 'tr', 'pl', 'cs', 'hu', 'ro', 'sv', 'uk'];
+        const langPrio = (code) => { const i = LANG_PRIORITY.indexOf(code); return i >= 0 ? i : 99; };
+
         const availableLangs = computed(() => {
             const langs = new Set();
             for (const ch of mdChapters.value) if (ch.language) langs.add(ch.language);
-            return Array.from(langs).sort();
+            return Array.from(langs).sort((a, b) => langPrio(a) - langPrio(b));
         });
         
         const currentPageUrl = computed(() => {
             if (!pages.value.length) return '';
-            return '/uploads/' + encodeURIComponent(pages.value[currentPage.value]);
+            const p = pages.value[currentPage.value];
+            if (p.startsWith('/')) return p;   // CBZ or other absolute path
+            return '/uploads/' + encodeURIComponent(p);
         });
 
         // Compare mode — explicit original / upscaled URLs for the same page path
         const currentPageOrigUrl = computed(() => {
             if (!pages.value.length) return '';
-            return '/uploads/original/' + encodeURIComponent(pages.value[currentPage.value]);
+            const p = pages.value[currentPage.value];
+            if (p.startsWith('/')) return p;
+            return '/uploads/original/' + encodeURIComponent(p);
         });
         const currentPageUpUrl = computed(() => {
             if (!pages.value.length) return '';
-            return '/uploads/upscaled/' + encodeURIComponent(pages.value[currentPage.value]);
+            const p = pages.value[currentPage.value];
+            if (p.startsWith('/')) return p;
+            return '/uploads/upscaled/' + encodeURIComponent(p);
         });
         const canCompare = computed(() =>
-            readerSource.value === 'upscaled' && readerMode.value === 'paged'
+            readerMode.value === 'paged' &&
+            (readerSource.value === 'upscaled' ||
+             isUpscaled(currentChapter.value) ||
+             isPartialUpscaled(currentChapter.value))
         );
         
         // Load library WITH covers (PARALLEL for speed)
@@ -414,12 +661,14 @@ const app = createApp({
                 if (!v.language || seen.has(v.language)) return false;
                 seen.add(v.language);
                 return true;
-            });
+            }).sort((a, b) => langPrio(a.language) - langPrio(b.language));
         };
         
         // Load covers from MangaDex — skip Mihon manga (they come from a different source)
         const loadCoverForManga = async (manga) => {
             if (manga.cachedCover) return manga.cachedCover;
+            // Backend already resolved a cover (from local_library.json or disk cache) — use it
+            if (manga.cover) { manga.cachedCover = manga.cover; return manga.cover; }
             // For Suwayomi/Mihon manga use the stored thumbnail URL (no MangaDex lookup)
             if (manga.source_meta?.sourceId) {
                 // Use stored thumbnail if available
@@ -464,12 +713,19 @@ const app = createApp({
                 const searchRes = await fetch('/api/mangadex/search?q=' + encodeURIComponent(manga.name));
                 const searchData = await searchRes.json();
                 if (searchData?.[0]?.cover) {
-                    manga.cachedCover = searchData[0].cover;
+                    const coverUrl = searchData[0].cover;
+                    manga.cachedCover = coverUrl;
                     const idx = library.value.findIndex(m => m.id === manga.id);
                     if (idx >= 0) {
                         library.value = [...library.value];
-                        library.value[idx].cachedCover = searchData[0].cover;
+                        library.value[idx].cachedCover = coverUrl;
                     }
+                    // Persist to disk so backend returns it directly on next load
+                    fetch('/api/library/cache_cover', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title: manga.name, url: coverUrl }),
+                    }).catch(() => {});
                 }
             } catch (e) {
                 console.log('Error loading cover for', manga.name, e.message);
@@ -479,7 +735,75 @@ const app = createApp({
         
         const loadLocalLibrary = () => fetch('/api/mangadex/local_library').then(r => r.json()).then(d => localLibrary.value = d || []);
         const loadMdLibrary = () => fetch('/api/mangadex/library').then(r => r.json()).then(d => mdLibrary.value = d || []);
+
+        const _pollOfflineStatus = () => {
+            fetch('/api/library/offline_covers_status').then(r => r.json()).then(d => {
+                offlineCoverStatus.value = d;
+                if (d.running) {
+                    _offlinePollTimer = setTimeout(_pollOfflineStatus, 800);
+                } else {
+                    _offlinePollTimer = null;
+                    if (d.done > 0) loadLibrary();  // refresh covers in grid
+                }
+            }).catch(() => { _offlinePollTimer = null; });
+        };
+
+        const downloadCoversOffline = async () => {
+            const r = await fetch('/api/library/download_covers_offline', { method: 'POST' }).catch(() => null);
+            if (!r?.ok) { showToast('Error al iniciar descarga', 'error'); return; }
+            const d = await r.json();
+            if (!d.ok) { showToast(d.message || 'Error', 'error'); return; }
+            if (d.total === 0) { showToast('Todas las portadas ya están guardadas', 'info'); return; }
+            showToast(`Descargando ${d.total} portadas...`, 'info');
+            offlineCoverStatus.value = { running: true, done: 0, total: d.total, errors: 0 };
+            _pollOfflineStatus();
+        };
         
+        const openEditMeta = () => {
+            editMetaTitle.value = currentTitle.value;
+            editMetaCoverUrl.value = '';
+            editMetaShow.value = true;
+        };
+
+        const saveEditMeta = async () => {
+            editMetaBusy.value = true;
+            try {
+                const body = {};
+                if (editMetaTitle.value !== currentTitle.value) body.new_title = editMetaTitle.value;
+                if (editMetaCoverUrl.value) body.cover_url = editMetaCoverUrl.value;
+                const res = await fetch(`/api/library/meta/${encodeURIComponent(currentTitle.value)}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body),
+                });
+                const d = await res.json();
+                if (!res.ok) { showToast(d.error || 'Error', 'error'); return; }
+                editMetaShow.value = false;
+                if (d.new_title) {
+                    currentTitle.value = d.new_title;
+                    if (currentManga.value) currentManga.value = { ...currentManga.value, name: d.new_title, id: d.new_title };
+                }
+                await loadLibrary();
+                showToast('Guardado', 'success');
+            } finally {
+                editMetaBusy.value = false;
+            }
+        };
+
+        const scanCorruptPages = async () => {
+            corruptScanBusy.value = true;
+            corruptScanResult.value = null;
+            try {
+                const res = await fetch(`/api/library/scan_corrupt/${encodeURIComponent(currentTitle.value)}`);
+                corruptScanResult.value = await res.json();
+                if (corruptScanResult.value.corrupt?.length === 0) showToast('Sin páginas corruptas', 'success');
+            } catch (_) {
+                showToast('Error al escanear', 'error');
+            } finally {
+                corruptScanBusy.value = false;
+            }
+        };
+
         const loadChapters = (title) => {
             fetch('/api/library/' + encodeURIComponent(title))
                 .then(r => r.json()).catch(() => ({ chapters: [], upscaled: {} }))
@@ -542,18 +866,46 @@ const app = createApp({
         };
 
         const loadMdChapters = (mangaId) => {
+            mdChaptersLoading.value = true;
             fetch('/api/mangadex/chapters/' + mangaId).then(r => r.json()).catch(() => [])
-                .then(d => { if (Array.isArray(d)) mdChapters.value = d; });
+                .then(d => { if (Array.isArray(d)) mdChapters.value = d; })
+                .finally(() => { mdChaptersLoading.value = false; });
         };
         
         // Search
+        const _mdSearchParams = () => {
+            const p = new URLSearchParams();
+            if (searchQuery.value.length >= 2) p.set('q', searchQuery.value);
+            mdSelectedTags.value.forEach(id => p.append('tags[]', id));
+            mdContentRating.value.forEach(r => p.append('rating[]', r));
+            return p;
+        };
+
         const debouncedSearch = () => {
             clearTimeout(searchTimeout);
             searchTimeout = setTimeout(() => {
-                if (searchQuery.value.length < 2) { searchResults.value = []; return; }
-                fetch('/api/mangadex/search?q=' + encodeURIComponent(searchQuery.value))
+                const hasQuery = searchQuery.value.length >= 2;
+                const hasTags  = mdSelectedTags.value.length > 0;
+                if (!hasQuery && !hasTags) { searchResults.value = []; return; }
+                fetch('/api/mangadex/search?' + _mdSearchParams())
                     .then(r => r.json()).then(d => searchResults.value = d || []);
             }, 300);
+        };
+
+        const toggleMdTag = (tagId) => {
+            const idx = mdSelectedTags.value.indexOf(tagId);
+            if (idx === -1) mdSelectedTags.value.push(tagId);
+            else mdSelectedTags.value.splice(idx, 1);
+            if (mdViewTab.value === 'search') debouncedSearch();
+            else loadMdPopular(mdViewTab.value);
+        };
+
+        const toggleMdRating = (rating) => {
+            const idx = mdContentRating.value.indexOf(rating);
+            if (idx === -1) mdContentRating.value.push(rating);
+            else if (mdContentRating.value.length > 1) mdContentRating.value.splice(idx, 1);
+            if (mdViewTab.value === 'search') debouncedSearch();
+            else loadMdPopular(mdViewTab.value);
         };
         
         // Open local manga
@@ -658,14 +1010,22 @@ const app = createApp({
             chapterStatus.value = { downloaded: {}, upscaled: {} }; chapterHealth.value = [];
             currentModalTab.value = 'chapters';
             exportSelectedChapters.value = [];
+            currentMdDetail.value = null;
             showModal.value = true;
             loadMdChapters(manga.id);
-            // Also check local chapters
+            // Load full metadata (synopsis, author, tags) in background
+            fetch(`/api/mangadex/manga/${manga.id}`)
+                .then(r => r.ok ? r.json() : null)
+                .then(d => { if (d && !d.error) currentMdDetail.value = d; })
+                .catch(() => {});
+            // Also check local chapters (needed for Tomo builder when manga was
+            // downloaded locally but opened from MangaDex search/followed view)
             if (manga.title) {
                 fetch('/api/library/' + encodeURIComponent(manga.title))
                     .then(r => r.json()).catch(() => ({}))
                     .then(d => {
                         if (d.chapters?.length) {
+                            chapters.value = d.chapters;
                             const dl = {};
                             for (const c of d.chapters) {
                                 if (c.page_count > 0) dl[normalizeChapter(c.chapter)] = true;
@@ -683,13 +1043,13 @@ const app = createApp({
         const openLibraryItem = (item) => {
             if (!item) return;
             if (item.localManga) {
-                // Any locally-downloaded manga shows its local chapters; never fall through
-                // to MangaDex search. MangaDex metadata (cover, link) can still be shown
-                // via item.mdManga without loading an unrelated chapter list.
+                // Skip MangaDex search only if a Suwayomi/Mihon source or a paired MD entry is already known.
+                // Otherwise fall through so the chapter list auto-loads from MangaDex by title search.
+                const hasSuwayomi = !!(item.source_meta?.sourceId);
+                const hasMdPair   = !!(item.mdManga?.id);
                 openManga(item.localManga, {
-                    skipMangaDexLookup: true,
+                    skipMangaDexLookup: hasSuwayomi || hasMdPair,
                     forcedSourceMeta: item.source_meta || null,
-                    // Pass mdManga so the modal can show a MangaDex link if available
                     pairedMdManga: item.mdManga || null,
                 });
                 return;
@@ -705,6 +1065,8 @@ const app = createApp({
             currentManga.value = null;
             currentMdManga.value = null;
             currentSourceContext.value = null;
+            editMetaShow.value = false;
+            corruptScanResult.value = null;
         };
         
         // Add to local library
@@ -967,8 +1329,8 @@ const app = createApp({
             }
             
             // Immediate UI update
-            activeTasks.value = { ...activeTasks.value, [taskId]: { type: 'download', status: 'starting', progress: 0, total: 0, misses: 0, displayTitle: title, displayChapter: String(chapter) } };
-            if (!silent) showToast(`Descargando capítulo ${chapter}...`, 'info');
+            activeTasks.value = { ...activeTasks.value, [taskId]: { type: 'download', status: 'starting', progress: 0, total: 0, misses: 0, displayTitle: title, displayChapter: chapter === 'one_shot' ? 'One Shot' : String(chapter) } };
+            if (!silent) showToast(`Descargando ${chapter === 'one_shot' ? 'One Shot' : 'capítulo ' + chapter}...`, 'info');
             
             try {
                 // If we have chapterId, use it. Otherwise use title+chapter only
@@ -1009,19 +1371,22 @@ const app = createApp({
             }
         };
         
-        const upscaleChapter = async (ch, mode = 'full', { silent = false } = {}) => {
+        const upscaleChapter = async (ch, mode = 'full', { silent = false, fast = false } = {}) => {
             const title = currentTitle.value;
             if (!title) return;
             const taskId = getTaskKey(ch, 'upscale', title);
 
-            activeTasks.value = { ...activeTasks.value, [taskId]: { type: 'upscale', status: 'starting', progress: 0, total: 0, misses: 0, displayTitle: title, displayChapter: String(ch), mode } };
-            if (!silent) showToast(mode === 'eco' ? `Upscale eco cap. ${ch}...` : `Upscaling capítulo ${ch}...`, 'info');
+            activeTasks.value = { ...activeTasks.value, [taskId]: { type: 'upscale', status: 'starting', progress: 0, total: 0, misses: 0, displayTitle: title, displayChapter: String(ch), mode, fast } };
+            if (!silent) {
+                const label = fast ? '2x⚡' : (mode === 'eco' ? 'eco' : '4x');
+                showToast(`Upscale ${label} cap. ${ch}...`, 'info');
+            }
 
             try {
                 const res = await fetch('/api/upscale/upscale_chapter', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ title, chapter: ch, mode })
+                    body: JSON.stringify({ title, chapter: ch, mode, fast_mode: fast })
                 });
                 const data = await res.json();
                 if (data.error) {
@@ -1181,35 +1546,42 @@ const app = createApp({
             compareMode.value = !compareMode.value;
             if (compareMode.value) compareX.value = 50;
         };
+        const onCompareDrag = (e) => {
+            if (!compareDragging) return;
+            const wrap = document.querySelector('.reader-compare-wrap');
+            if (!wrap) return;
+            const rect = wrap.getBoundingClientRect();
+            compareX.value = Math.max(3, Math.min(97, ((e.clientX - rect.left) / rect.width) * 100));
+        };
+        const _onCompareDocMouseUp = () => {
+            compareDragging = false;
+            document.removeEventListener('mousemove', onCompareDrag);
+            document.removeEventListener('mouseup', _onCompareDocMouseUp);
+        };
         const onCompareDragStart = (e) => {
             compareDragging = true;
             e.stopPropagation();
             e.preventDefault();
-        };
-        const onCompareDrag = (e) => {
-            if (!compareDragging) return;
-            const content = document.querySelector('.reader-content');
-            if (!content) return;
-            const rect = content.getBoundingClientRect();
-            compareX.value = Math.max(3, Math.min(97, ((e.clientX - rect.left) / rect.width) * 100));
+            document.addEventListener('mousemove', onCompareDrag);
+            document.addEventListener('mouseup', _onCompareDocMouseUp);
         };
         const onCompareDragEnd = () => { compareDragging = false; };
 
         // ── Mobile library ───────────────────────────────────────────────────
-        const libraryUrlLocal = ref('http://localhost:5001/library');
+        const libraryUrlLocal = ref('http://localhost:5100/library');
         const libraryUrlPhone = ref('');
         const libraryWslIp = ref('');
         const libraryFileCount = ref(0);
-        const libraryFwCmd = 'New-NetFirewallRule -DisplayName "MangaUpscaler Web" -Direction Inbound -Protocol TCP -LocalPort 5001 -Action Allow -Profile Any';
+        const libraryFwCmd = 'New-NetFirewallRule -DisplayName "MangaUpscaler Web" -Direction Inbound -Protocol TCP -LocalPort 5100 -Action Allow -Profile Any';
         const libraryProxyCmd = computed(() =>
-            `netsh interface portproxy add v4tov4 listenport=5001 listenaddress=0.0.0.0 connectport=5001 connectaddress=${libraryWslIp.value}`
+            `netsh interface portproxy add v4tov4 listenport=5100 listenaddress=0.0.0.0 connectport=5100 connectaddress=${libraryWslIp.value}`
         );
 
         const loadLibraryInfo = async () => {
             try {
                 const r = await fetch('/api/webdav/status');
                 const d = await r.json();
-                libraryUrlLocal.value = d.library_url_local || 'http://localhost:5001/library';
+                libraryUrlLocal.value = d.library_url_local || 'http://localhost:5100/library';
                 libraryUrlPhone.value = d.library_url_phone || '';
                 libraryWslIp.value = d.server_ip || '';
                 libraryFileCount.value = (d.folders || []).length + (d.files || []).length;
@@ -1235,6 +1607,13 @@ const app = createApp({
             exportTasks.value = t;
         };
 
+        const downloadExportFile = (taskId) => {
+            const task = exportTasks.value[taskId];
+            if (!task) return;
+            _triggerFileDownload(`/api/export/file/${taskId}`, task.filename || 'tomo.cbz');
+            dismissExportTask(taskId);
+        };
+
         // Webtoon scroll → track current page
         const onWebtoonScroll = (e) => {
             const container = e.target;
@@ -1253,61 +1632,82 @@ const app = createApp({
             setTimeout(() => toast.value.show = false, 3000);
         };
         
-        // Poll tasks
-        const pollTasks = () => {
-            setInterval(async () => {
+        // SSE — replaces pollTasks + pollExports setIntervals
+        const initSSE = () => {
+            const sse = new EventSource('/api/status/stream');
+
+            sse.onmessage = (event) => {
+                let data;
+                try { data = JSON.parse(event.data); } catch (e) { return; }
+
+                // ── Downloads & upscales ──────────────────────────────────────
                 const keys = Object.keys(activeTasks.value);
-                if (!keys.length) return;
-                
                 for (const taskId of keys) {
                     const task = activeTasks.value[taskId];
                     if (!task || task.status === 'complete') continue;
-                    
-                    try {
-                        const endpoint = task.type === 'download' ? '/api/status/download/' : '/api/status/upscale/';
-                        const res = await fetch(endpoint + encodeURIComponent(taskId));
-                        const data = await res.json();
-                        
-                        if (data.status === 'downloading' || data.status === 'upscaleing' || data.status === 'upscaling' || data.status === 'starting' || data.status === 'started') {
-                            const progressValue = data.progress ?? data.current ?? 0;
-                            const totalValue = data.total || 1;
-                            activeTasks.value = {
-                                ...activeTasks.value,
-                                [taskId]: { ...task, status: data.status, progress: progressValue, total: totalValue, percent: data.percent, misses: 0 }
-                            };
-                        } else if (data.status === 'complete') {
-                            activeTasks.value = { ...activeTasks.value, [taskId]: { ...task, status: 'complete', progress: task.total || 1 } };
-                            showToast(task.type === 'download' ? '✅ Descarga completa' : '🔥 Upscale completo', 'success');
-                            setTimeout(() => {
-                                const t = { ...activeTasks.value };
-                                delete t[taskId];
-                                activeTasks.value = t;
-                                if (currentTitle.value) {
-                                    loadChapters(currentTitle.value);
-                                    if (task.type === 'upscale') loadChapterHealth(currentTitle.value);
-                                }
-                                // Refresh library so card shows real chapter count
-                                if (task.type === 'download') loadLibrary();
-                            }, 2000);
-                        } else if (data.status === 'cancelled') {
-                            const t = { ...activeTasks.value };
-                            delete t[taskId];
-                            activeTasks.value = t;
-                        } else if (data.status === 'error' || data.status === 'not_found') {
-                            const misses = data.status === 'not_found' ? (task.misses || 0) + 1 : 0;
-                            if (data.status === 'error' || misses >= 8) {
-                                showToast(task.type === 'download' ? 'Error en descarga' : 'Error en upscale', 'error');
-                                const t = { ...activeTasks.value };
-                                delete t[taskId];
-                                activeTasks.value = t;
-                            } else {
-                                activeTasks.value = { ...activeTasks.value, [taskId]: { ...task, misses } };
-                            }
+
+                    const pool = task.type === 'download' ? (data.downloads || {}) : (data.upscale || {});
+                    const st = pool[taskId];
+
+                    if (!st) {
+                        const misses = (task.misses || 0) + 1;
+                        if (misses >= 8) {
+                            showToast(task.type === 'download' ? 'Error en descarga' : 'Error en upscale', 'error');
+                            const t = { ...activeTasks.value }; delete t[taskId]; activeTasks.value = t;
+                        } else {
+                            activeTasks.value = { ...activeTasks.value, [taskId]: { ...task, misses } };
                         }
-                    } catch (e) {}
+                        continue;
+                    }
+
+                    if (['downloading','upscaling','upscaleing','starting','started'].includes(st.status)) {
+                        activeTasks.value = {
+                            ...activeTasks.value,
+                            [taskId]: { ...task, status: st.status, progress: st.progress ?? st.current ?? 0, total: st.total || 1, percent: st.percent, misses: 0 }
+                        };
+                    } else if (st.status === 'complete') {
+                        activeTasks.value = { ...activeTasks.value, [taskId]: { ...task, status: 'complete', progress: task.total || 1 } };
+                        showToast(task.type === 'download' ? '✅ Descarga completa' : '🔥 Upscale completo', 'success');
+                        setTimeout(() => {
+                            const t = { ...activeTasks.value }; delete t[taskId]; activeTasks.value = t;
+                            if (currentTitle.value) {
+                                loadChapters(currentTitle.value);
+                                if (task.type === 'upscale') loadChapterHealth(currentTitle.value);
+                            }
+                            if (task.type === 'download') loadLibrary();
+                        }, 2000);
+                    } else if (st.status === 'cancelled') {
+                        const t = { ...activeTasks.value }; delete t[taskId]; activeTasks.value = t;
+                    } else if (st.status === 'error') {
+                        showToast(task.type === 'download' ? 'Error en descarga' : 'Error en upscale', 'error');
+                        const t = { ...activeTasks.value }; delete t[taskId]; activeTasks.value = t;
+                    }
                 }
-            }, 500);
+
+                // ── Exports ───────────────────────────────────────────────────
+                const activeExports = Object.values(exportTasks.value).filter(t => t.status === 'queued' || t.status === 'running');
+                for (const task of activeExports) {
+                    const st = (data.exports || {})[task.task_id];
+                    if (!st) continue;
+                    exportTasks.value = { ...exportTasks.value, [task.task_id]: { ...task, ...st } };
+                    if (st.status === 'complete') {
+                        showToast(`✅ "${task.title || 'Tomo'}" exportado — listo para descargar`, 'success');
+                        exportTasks.value = { ...exportTasks.value, [task.task_id]: { ...task, ...st, status: 'ready' } };
+                    } else if (st.status === 'error') {
+                        showToast(`Error exportando "${task.title}": ${st.error || ''}`, 'error');
+                        setTimeout(() => {
+                            const t = { ...exportTasks.value }; delete t[task.task_id]; exportTasks.value = t;
+                        }, 6000);
+                    }
+                }
+            };
+
+            sse.onerror = () => { /* EventSource auto-reconnects */ };
         };
+
+        // Keep stub names so callers in onMounted still work during the transition
+        const pollTasks = () => {};
+        const pollExports = () => {};
         
         // Keyboard
         const handleKeydown = (e) => {
@@ -1513,19 +1913,31 @@ const app = createApp({
             mdexVolumesLoading.value = true;
             mdexVolumes.value = [];
             try {
+                // Load volumes, covers, and chapter list in parallel.
+                // The chapter list must be ready before volumes become interactive so that
+                // applyMdexVolume's localChaps filter has data to work with.
+                const chapPromise = mdChapters.value.length
+                    ? Promise.resolve()
+                    : fetch('/api/mangadex/chapters/' + id).then(r => r.json()).catch(() => [])
+                        .then(d => { if (Array.isArray(d)) mdChapters.value = d; });
+
                 const [volRes, covRes] = await Promise.all([
                     fetch(`/api/mangadex/volumes/${id}`),
                     fetch(`/api/mangadex/covers/${id}`)
                 ]);
+                await chapPromise;
+
                 let volumes = volRes.ok ? await volRes.json() : [];
                 if (!Array.isArray(volumes)) volumes = [];
                 const covers = covRes.ok ? await covRes.json() : [];
 
-                // Only scrape when the API returned zero chapter data (manga fully unlisted).
-                // For partial gaps (covers > api vols), the gap interpolation handles it —
-                // scraping would replace the detailed API chapter lists with coarse ranges.
+                // Scrape when: (a) API returned zero chapter data (manga fully unlisted), OR
+                // (b) aggregate was empty and we fell back to the feed — feed volume assignments
+                // can be wrong when multiple scanlation groups tag chapters with different volumes.
+                // The scraper reads the canonical MangaDex website display, which is always correct.
                 const apiVolCount = volumes.filter(v => v.chapters && v.chapters.length).length;
-                if (apiVolCount === 0) {
+                const feedFallback = volumes.some(v => v.feedFallback);
+                if (apiVolCount === 0 || feedFallback) {
                     try {
                         const scrapeRes = await fetch(`/api/mangadex/scrape_volumes/${id}`);
                         if (scrapeRes.ok) {
@@ -1565,7 +1977,11 @@ const app = createApp({
             exportVolumeName.value = vol.label || `Tomo ${vol.volume}`;
             exportExcludedPages.value = [];
 
-            const localChaps = groupedChapters.value
+            // Prefer locally downloaded chapters for the Tomo builder — they represent what
+            // the user actually has. When opened from MangaDex search, groupedChapters uses
+            // the sparse API list (e.g. 9 out of 133 chapters), which leaves most volumes empty.
+            const chapSrc = chapters.value.length > 0 ? chapters.value : groupedChapters.value;
+            const localChaps = chapSrc
                 .map(g => ({ norm: normalizeChapter(g.chapter), num: parseFloat(g.chapter) }))
                 .filter(g => !isNaN(g.num));
 
@@ -1589,15 +2005,16 @@ const app = createApp({
                     const mainChaps  = sorted.filter(g => Number.isInteger(g.num));
                     const bonusChaps = sorted.filter(g => !Number.isInteger(g.num));
 
-                    const base      = Math.floor(mainChaps.length / count);
-                    const remainder = mainChaps.length % count;
-                    // Extra chapters go to the LAST `remainder` volumes so vol 1 isn't bloated
+                    const base = Math.floor(mainChaps.length / count);
+                    // All extra chapters go to the LAST volume: vol 1..V-1 get exactly base
+                    // chapters each, and the last volume absorbs any remainder. This is more
+                    // accurate than spreading 1 extra across the last N volumes, which bloats
+                    // early volumes that almost always have a uniform chapter count.
                     const slices = [];
-                    let offset = 0;
                     for (let i = 0; i < count; i++) {
-                        const extra = (i >= count - remainder) ? 1 : 0;
-                        slices.push(mainChaps.slice(offset, offset + base + extra).map(g => g.norm));
-                        offset += base + extra;
+                        const start  = i * base;
+                        const end    = (i === count - 1) ? mainChaps.length : start + base;
+                        slices.push(mainChaps.slice(start, end).map(g => g.norm));
                     }
                     // Assign each bonus chapter to the slice that contains its integer parent
                     for (const bonus of bonusChaps) {
@@ -1641,78 +2058,20 @@ const app = createApp({
                     }
                 }
             } else {
-                // Volume has API chapter data.
+                // Volume has API chapter data — use strict API range.
                 // Filter out special chapters (< 1, e.g. "0.1" prologues) for boundary math.
                 const nums = vol.chapters.map(Number).filter(n => !isNaN(n));
                 const regular = nums.filter(n => n >= 1);
                 const anchor = regular.length ? regular : nums;
                 const minCh = Math.min(...anchor);
                 const maxCh = Math.max(...anchor);
-
-                // Detect whether this volume sits in a gap (cover-only volumes between it
-                // and the nearest volumes that have API data on either side).
-                const volNum = parseFloat(vol.volume);
-                const allWithData = mdexVolumes.value.filter(
-                    v => !v.noChapterData && v.chapters && v.chapters.length && v.volume !== vol.volume
-                );
-                const sortAsc  = (a, b) => parseFloat(a.volume) - parseFloat(b.volume);
-                const sortDesc = (a, b) => parseFloat(b.volume) - parseFloat(a.volume);
-                const prevWithData = [...allWithData].sort(sortDesc).find(v => parseFloat(v.volume) < volNum);
-                const nextWithData = [...allWithData].sort(sortAsc).find(v => parseFloat(v.volume) > volNum);
-                const prevDataNum = prevWithData ? parseFloat(prevWithData.volume) : -Infinity;
-                const nextDataNum = nextWithData ? parseFloat(nextWithData.volume) : Infinity;
-
-                const hasGap = mdexVolumes.value.some(v => {
-                    const vn = parseFloat(v.volume);
-                    return !isNaN(vn) &&
-                        ((vn > prevDataNum && vn < volNum) || (vn > volNum && vn < nextDataNum)) &&
-                        (v.noChapterData || !v.chapters || !v.chapters.length);
-                });
-
-                if (!hasGap) {
-                    // Clean neighbourhood — strict API range
-                    selected = localChaps.filter(g => g.num >= minCh && g.num <= maxCh).map(g => g.norm);
-                } else {
-                    // Isolated volume: neighbours are cover-only.
-                    // Use an anchor-aligned equal-chunk split across all gap volumes so that
-                    // unavailable chapters adjacent to the anchor are also included.
-                    const _regularNums = v => v.chapters.map(Number).filter(n => !isNaN(n) && n >= 1);
-                    const prevMax = prevWithData
-                        ? Math.max(...(_regularNums(prevWithData).length ? _regularNums(prevWithData) : prevWithData.chapters.map(Number).filter(n => !isNaN(n))))
-                        : 0;
-                    const nextRegular = nextWithData ? _regularNums(nextWithData) : [];
-                    const nextMin = nextRegular.length ? Math.min(...nextRegular) : Infinity;
-
-                    const gapVols = mdexVolumes.value
-                        .filter(v => {
-                            const vn = parseFloat(v.volume);
-                            return !isNaN(vn) && vn > prevDataNum && vn < nextDataNum;
-                        })
-                        .sort(sortAsc);
-
-                    const gapChaps = [...localChaps]
-                        .filter(g => g.num > prevMax && g.num < nextMin)
-                        .sort((a, b) => a.num - b.num);
-
-                    if (!gapChaps.length) {
-                        // Fallback: strict range
-                        selected = localChaps.filter(g => g.num >= minCh && g.num <= maxCh).map(g => g.norm);
-                    } else {
-                        // Chunk size: at least 3 to avoid single-chapter slices
-                        const chunkSize = Math.max(Math.ceil(gapChaps.length / gapVols.length), 3);
-
-                        // Find the chunk that contains the anchor (first regular chapter)
-                        const anchorIdx = gapChaps.findIndex(g => g.num >= minCh);
-                        if (anchorIdx < 0) {
-                            // Anchor outside gap — use positional slot
-                            const slot = gapVols.findIndex(v => v.volume === vol.volume);
-                            const start = slot * chunkSize;
-                            selected = gapChaps.slice(start, start + chunkSize).map(g => g.norm);
-                        } else {
-                            const chunkStart = Math.floor(anchorIdx / chunkSize) * chunkSize;
-                            selected = gapChaps.slice(chunkStart, chunkStart + chunkSize).map(g => g.norm);
-                        }
-                    }
+                const inRange = localChaps.filter(g => g.num >= minCh && g.num <= maxCh);
+                if (inRange.length > 0) {
+                    selected = inRange.map(g => g.norm);
+                } else if (!vol.fromScrape) {
+                    // Aggregate data lists every chapter — use it directly when localChaps is empty
+                    // (manga not downloaded yet, or user is browsing from MangaDex search).
+                    selected = vol.chapters.map(c => normalizeChapter(String(c))).filter(c => c !== '');
                 }
             }
 
@@ -1877,6 +2236,26 @@ const app = createApp({
             await Promise.all(targets.map(g => downloadChapter(g, selectedLang.value || null, { silent: true })));
         };
 
+        const setUpscaleModel = async (key) => {
+            try {
+                const res = await fetch('/api/upscale/set_model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ model: key }),
+                });
+                const data = await res.json();
+                if (data.status === 'ok') {
+                    upscaleModel.value = key;
+                    upscaleModelLabel.value = data.label;
+                    showToast(`Modelo: ${data.label}`, 'success');
+                } else {
+                    showToast(`Error al cambiar modelo: ${data.message}`, 'error');
+                }
+            } catch (e) {
+                showToast('Error al cambiar modelo', 'error');
+            }
+        };
+
         const bulkUpscale = async (mode = 'full') => {
             const r = _bulkRange();
             if (!r) return;
@@ -2014,32 +2393,7 @@ const app = createApp({
             }
         };
 
-        const pollExports = () => {
-            setInterval(async () => {
-                const active = Object.values(exportTasks.value)
-                    .filter(t => t.status === 'queued' || t.status === 'running');
-                for (const task of active) {
-                    try {
-                        const res = await fetch(`/api/export/status/${task.task_id}`);
-                        if (!res.ok) continue;
-                        const data = await res.json();
-                        exportTasks.value = { ...exportTasks.value, [task.task_id]: { ...task, ...data } };
-                        if (data.status === 'complete') {
-                            _triggerFileDownload(`/api/export/file/${task.task_id}`, task.filename || data.filename || 'tomo.cbz');
-                            showToast(`✅ "${task.title || 'Tomo'}" exportado`, 'success');
-                            exportTasks.value = { ...exportTasks.value, [task.task_id]: { ...task, ...data, status: 'ready' } };
-                        } else if (data.status === 'error') {
-                            showToast(`Error exportando "${task.title}": ${data.error || ''}`, 'error');
-                            setTimeout(() => {
-                                const t = { ...exportTasks.value };
-                                delete t[task.task_id];
-                                exportTasks.value = t;
-                            }, 6000);
-                        }
-                    } catch (e) {}
-                }
-            }, 1500);
-        };
+        // pollExports is now handled inside initSSE via the SSE stream
 
         // Sync running export tasks from server on page load (background persistence)
         const syncExportTasks = async () => {
@@ -2246,25 +2600,857 @@ const app = createApp({
             }
         };
 
+        // ── MangaDex Popular / Trending ───────────────────────────────────────────
+
+        const loadMdTags = async () => {
+            try {
+                const r = await fetch('/api/mangadex/tags');
+                if (r.ok) mdTags.value = await r.json();
+            } catch (e) {}
+        };
+
+        const loadMdPopular = async (type) => {
+            mdViewTab.value = type;
+            if (type === 'search') { mdPopular.value = []; return; }
+            mdPopularLoading.value = true;
+            mdPopular.value = [];
+            try {
+                const p = new URLSearchParams({ type });
+                mdSelectedTags.value.forEach(id => p.append('tags[]', id));
+                mdContentRating.value.forEach(r => p.append('rating[]', r));
+                const r = await fetch(`/api/mangadex/popular?${p}`);
+                if (!r.ok) throw new Error(r.statusText);
+                const d = await r.json();
+                mdPopular.value = d.results || [];
+            } catch (e) {
+                showToast('Error cargando populares: ' + e.message, 'error');
+            } finally {
+                mdPopularLoading.value = false;
+            }
+        };
+
+        // ── AniList ───────────────────────────────────────────────────────────────
+
+        const fetchAnilistScores = async (mal_ids) => {
+            const newIds = mal_ids.filter(id => id && !anilistScores.value[String(id)]);
+            if (!newIds.length) return;
+            try {
+                const res = await fetch('/api/anilist/scores', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mal_ids: newIds }),
+                });
+                const d = await res.json();
+                anilistScores.value = { ...anilistScores.value, ...d };
+            } catch (_) {}
+        };
+
+        const loadAnilistGenres = async () => {
+            if (anilistGenres.value.length) return;
+            try {
+                const res = await fetch('/api/anilist/genres');
+                anilistGenres.value = await res.json();
+            } catch (_) {}
+        };
+
+        const loadAnilistTop = async (page = 1) => {
+            anilistTopLoading.value = true;
+            if (page === 1) anilistTop.value = [];
+            anilistTopPage.value = page;
+            try {
+                const p = new URLSearchParams({ sort: anilistTopSort.value, page });
+                if (anilistGenreFilter.value) {
+                    const entry = anilistGenres.value.find(g => g.name === anilistGenreFilter.value);
+                    if (entry?.type === 'tag') p.set('tag', anilistGenreFilter.value);
+                    else p.set('genre', anilistGenreFilter.value);
+                }
+                const res = await fetch(`/api/anilist/top?${p}`);
+                const d = await res.json();
+                if (page === 1) {
+                    anilistTop.value = d.results || [];
+                } else {
+                    anilistTop.value = [...anilistTop.value, ...(d.results || [])];
+                }
+                anilistTopHasMore.value = d.hasNextPage || false;
+            } catch (_) {
+                showToast('Error cargando AniList', 'error');
+            } finally {
+                anilistTopLoading.value = false;
+            }
+        };
+
+        const loadMoreAnilistTop = () => loadAnilistTop(anilistTopPage.value + 1);
+
+        const switchToAnilistTab = () => {
+            mdViewTab.value = 'anilist';
+            loadAnilistGenres();
+            if (!anilistTop.value.length) loadAnilistTop();
+        };
+
+        const openAnilistManga = async (alManga) => {
+            const query = alManga.title || alManga.title_romaji;
+            if (!query) return;
+            showToast('Buscando en MangaDex...', 'info');
+            try {
+                const res = await fetch(`/api/mangadex/search?q=${encodeURIComponent(query)}`);
+                const results = await res.json();
+                if (results?.length) {
+                    openMdManga(results[0]);
+                } else {
+                    showToast('No encontrado en MangaDex', 'info');
+                }
+            } catch (_) {
+                showToast('Error buscando en MangaDex', 'error');
+            }
+        };
+
+        const getBadgeClass = (score) => {
+            if (!score) return '';
+            if (score >= 75) return 'badge--green';
+            if (score >= 60) return 'badge--yellow';
+            return 'badge--gray';
+        };
+
+        // ── CBZ / Local Comics ────────────────────────────────────────────────────
+
+        const loadCbzLibrary = async () => {
+            cbzLoading.value = true;
+            try {
+                const r = await fetch('/api/cbz/list');
+                cbzManga.value = r.ok ? await r.json() : [];
+            } catch (e) {
+                cbzManga.value = [];
+            } finally {
+                cbzLoading.value = false;
+            }
+        };
+
+        const openCbzManga = async (manga) => {
+            cbzCurrentManga.value = manga;
+            cbzVolumes.value = [];
+            showCbzModal.value = true;
+            cbzVolumesLoading.value = true;
+            try {
+                const r = await fetch(`/api/cbz/volumes?manga=${encodeURIComponent(manga.title)}`);
+                if (r.ok) cbzVolumes.value = await r.json();
+            } catch (e) {
+                showToast('Error cargando volúmenes', 'error');
+            } finally {
+                cbzVolumesLoading.value = false;
+            }
+        };
+
+        const readCbzVolume = async (volume) => {
+            const manga = cbzCurrentManga.value;
+            if (!manga) return;
+            try {
+                const r = await fetch(`/api/cbz/pages?manga=${encodeURIComponent(manga.title)}&volume=${encodeURIComponent(volume.name)}`);
+                if (!r.ok) throw new Error(r.statusText);
+                const data = await r.json();
+                currentTitle.value = manga.title;
+                currentChapter.value = volume.name;
+                pages.value = data.pages;
+                currentPage.value = 0;
+                readerSource.value = 'original';
+                showCbzModal.value = false;
+                showReader.value = true;
+            } catch (e) {
+                showToast('Error abriendo volumen: ' + e.message, 'error');
+            }
+        };
+
+        // ── Anime / Nyaa ──────────────────────────────────────────────────────────
+
+        const formatBytes = (b) => {
+            if (!b) return '0 B';
+            if (b < 1024) return b + ' B';
+            if (b < 1048576) return (b / 1024).toFixed(1) + ' KB';
+            if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+            return (b / 1073741824).toFixed(2) + ' GB';
+        };
+
+        const formatSpeed = (bps) => {
+            if (!bps) return '0 KB/s';
+            if (bps < 1048576) return Math.round(bps / 1024) + ' KB/s';
+            return (bps / 1048576).toFixed(1) + ' MB/s';
+        };
+
+        const formatEta = (secs) => {
+            if (!secs || secs >= 8640000) return '∞';
+            if (secs < 60) return secs + 's';
+            if (secs < 3600) return Math.floor(secs / 60) + 'm ' + (secs % 60) + 's';
+            return Math.floor(secs / 3600) + 'h ' + Math.floor((secs % 3600) / 60) + 'm';
+        };
+
+        const qbtStateLabel = (state) => {
+            const map = {
+                downloading: 'Descargando', uploading: 'Subiendo',
+                stalledDL: 'Sin seeds', stalledUP: 'Pausado',
+                pausedDL: 'Pausado', pausedUP: 'Completado/Pausado',
+                checkingDL: 'Verificando', checkingUP: 'Verificando',
+                queuedDL: 'En cola', queuedUP: 'En cola',
+                error: 'Error', missingFiles: 'Archivos faltantes',
+                forcedDL: 'Descargando', forcedUP: 'Subiendo',
+            };
+            return map[state] || state;
+        };
+
+        const searchAnime = async () => {
+            const q = animeQuery.value.trim();
+            if (q.length < 2) return;
+            animeLoading.value = true;
+            animeAnilistDown.value = false;
+            animeResults.value = [];
+            try {
+                const res = await fetch(`/api/anime/search?q=${encodeURIComponent(q)}`);
+                const d = await res.json();
+                if (Array.isArray(d)) {
+                    animeResults.value = d;
+                }
+            } catch (e) {
+                showToast('Error buscando anime', 'error');
+            } finally {
+                animeLoading.value = false;
+            }
+        };
+
+        // Direct Nyaa search (bypasses AniList)
+        const searchNyaaDirect = async () => {
+            const q = animeTorrentQuery.value.trim() || animeQuery.value.trim();
+            if (!q) return;
+            animeCurrentAnime.value = { title: q, title_romaji: q, cover: null, genres: [], score: null, episodes: null, status: null };
+            animeView.value = 'detail';
+            animeTorrentQuery.value = q;
+            await searchAnimeTorrents();
+        };
+
+        const searchAnimeTorrents = async () => {
+            const q = animeTorrentQuery.value.trim();
+            if (!q) return;
+            animeTorrentsLoading.value = true;
+            animeTorrents.value = [];
+            try {
+                const p = new URLSearchParams({ q, category: animeTorrentCategory.value });
+                const res = await fetch(`/api/anime/torrents?${p}`);
+                animeTorrents.value = await res.json();
+            } catch (e) {
+                showToast('Error buscando en Nyaa', 'error');
+            } finally {
+                animeTorrentsLoading.value = false;
+            }
+        };
+
+        // Fetch multiple title variants in parallel and merge results (dedup by info_hash)
+        const _nyaaMultiFetch = async (queries) => {
+            const category = animeTorrentCategory.value;
+            const results = await Promise.all(
+                queries.map(q =>
+                    fetch(`/api/anime/torrents?${new URLSearchParams({ q, category })}`)
+                        .then(r => r.json()).catch(() => [])
+                )
+            );
+            const seen = new Set();
+            const merged = [];
+            for (const list of results) {
+                for (const t of list) {
+                    const key = t.info_hash || t.title;
+                    if (!seen.has(key)) { seen.add(key); merged.push(t); }
+                }
+            }
+            return merged;
+        };
+
+        // ── SPA navigation helpers ────────────────────────────────────────────────
+        const gotoView = (view, afterFn) => {
+            if (currentView.value === view) return;
+            const prev = currentView.value;
+            _navStack.push(() => { currentView.value = prev; });
+            history.pushState({ depth: _navStack.length }, '');
+            currentView.value = view;
+            if (afterFn) afterFn();
+        };
+
+        const isAdding = (key) => qbtAddingHashes.value.has(key);
+        const isAdded  = (key) => qbtAddedHashes.value.has(key);
+
+        const openAnime = async (anime) => {
+            const prevView  = animeView.value;
+            const prevAnime = animeCurrentAnime.value;
+            _navStack.push(() => {
+                animeView.value = prevView;
+                animeCurrentAnime.value = prevAnime;
+            });
+            history.pushState({ depth: _navStack.length }, '');
+            animeCurrentAnime.value = anime;
+            animeView.value = 'detail';
+            animeTorrents.value = [];
+            animeLangFilter.value = 'all';
+            animeHideDead.value = true;
+            animeQualityFilter.value = '';
+            animeGroupFilter.value = '';
+            animeEpFilter.value = 'all';
+            targetEpisodeNum.value = null;
+            // Collect all unique non-empty title variants (romaji, english, generic title)
+            const variants = [...new Set(
+                [anime.title_romaji, anime.title_english, anime.title]
+                .map(t => (t || '').trim()).filter(Boolean)
+            )];
+            animeTorrentQuery.value = variants[0] || '';
+            animeTorrentsLoading.value = true;
+            try {
+                animeTorrents.value = await _nyaaMultiFetch(variants);
+            } catch (e) {
+                showToast('Error buscando en Nyaa', 'error');
+            } finally {
+                animeTorrentsLoading.value = false;
+            }
+        };
+
+        const addToQbt = async (torrent) => {
+            if (!qbtConnected.value) {
+                showToast('qBittorrent no conectado — ve a Descargas para configurarlo', 'error');
+                return;
+            }
+            const key = torrent.info_hash || torrent.torrent_url;
+            if (qbtAddingHashes.value.has(key)) return;      // prevent double-click
+
+            const addingSet = new Set(qbtAddingHashes.value);
+            addingSet.add(key);
+            qbtAddingHashes.value = addingSet;
+
+            try {
+                const res = await fetch('/api/anime/qbt/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ magnet: torrent.magnet || '', torrent_url: torrent.torrent_url, anime_title: animeCurrentAnime.value?.title || '' }),
+                });
+                const d = await res.json();
+                if (d.ok) {
+                    showToast('Torrent agregado ✓', 'success');
+                    const added = new Set(qbtAddedHashes.value);
+                    added.add(key);
+                    qbtAddedHashes.value = added;
+                    setTimeout(() => {
+                        const s = new Set(qbtAddedHashes.value);
+                        s.delete(key);
+                        qbtAddedHashes.value = s;
+                    }, 2500);
+                    // Register in anime library
+                    if (animeCurrentAnime.value) {
+                        const a = animeCurrentAnime.value;
+                        fetch('/api/anime/library/add', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                al_id: a.al_id, mal_id: a.mal_id,
+                                title: a.title, title_romaji: a.title_romaji || '',
+                                cover: a.cover || '',
+                                total_episodes: a.episodes || null,
+                                format: a.format || '',
+                                // Batch torrent (episode=0): register as ep 0 → all individual eps show as downloaded via libDetailHasBatch
+                                episode: torrent.episode === 0 ? 0 : (targetEpisodeNum.value !== null ? targetEpisodeNum.value : torrent.episode),
+                                torrent_title: torrent.title,
+                                info_hash: torrent.info_hash || '',
+                            }),
+                        }).catch(() => {});
+                    }
+                } else {
+                    showToast('qBittorrent: ' + (d.msg || d.error || 'Error'), 'error');
+                }
+            } catch (e) {
+                showToast('Error conectando qBittorrent', 'error');
+            } finally {
+                const s = new Set(qbtAddingHashes.value);
+                s.delete(key);
+                qbtAddingHashes.value = s;
+            }
+        };
+
+        const checkQbt = async () => {
+            try {
+                const res = await fetch('/api/anime/qbt/status');
+                const d = await res.json();
+                qbtConnected.value = d.connected;
+                qbtVersion.value = d.version || '';
+                if (d.url) qbtUrl.value = d.url;
+            } catch (_) {}
+        };
+
+        const configureQbt = async () => {
+            try {
+                const res = await fetch('/api/anime/qbt/configure', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: qbtUrl.value, username: qbtUsername.value, password: qbtPassword.value }),
+                });
+                const d = await res.json();
+                qbtConnected.value = d.connected;
+                if (d.connected) {
+                    qbtConfigShow.value = false;
+                    showToast('qBittorrent conectado ✓', 'success');
+                    loadQbtTorrents();
+                } else {
+                    showToast('No se pudo conectar a qBittorrent', 'error');
+                }
+            } catch (e) {
+                showToast('Error configurando qBittorrent', 'error');
+            }
+        };
+
+        const loadQbtTorrents = async () => {
+            qbtLoading.value = true;
+            try {
+                const res = await fetch('/api/anime/qbt/list');
+                qbtTorrents.value = await res.json();
+            } catch (_) {
+                qbtTorrents.value = [];
+            } finally {
+                qbtLoading.value = false;
+            }
+        };
+
+        const qbtAction = async (action, hash, deleteFiles = false) => {
+            try {
+                await fetch('/api/anime/qbt/action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action, hash, delete_files: deleteFiles }),
+                });
+                await loadQbtTorrents();
+            } catch (e) {
+                showToast('Error: ' + e.message, 'error');
+            }
+        };
+
+        const switchToAnimeView = async (view) => {
+            const prev = animeView.value;
+            if (view !== prev) {
+                _navStack.push(() => { animeView.value = prev; });
+                history.pushState({ depth: _navStack.length }, '');
+            }
+            animeView.value = view;
+            if (view === 'downloads') {
+                if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
+                await checkQbt();
+                await loadQbtTorrents();
+                if (qbtPollTimer) clearInterval(qbtPollTimer);
+                qbtPollTimer = setInterval(loadQbtTorrents, 5000);
+            } else if (view === 'library') {
+                if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
+                await loadAnimeLibrary();
+                if (libPollTimer) clearInterval(libPollTimer);
+                libPollTimer = setInterval(() => loadAnimeLibrary(true), 3500);
+            } else if (view === 'seasonal') {
+                if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
+                if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
+                await loadSeasonalAnime();
+            } else {
+                if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
+                if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
+            }
+        };
+
+        const loadAnimeLibrary = async (silent = false) => {
+            if (!silent) animeLibraryLoading.value = true;
+            try {
+                const res = await fetch('/api/anime/library');
+                animeLibrary.value = await res.json();
+                if (animeLibraryDetail.value) {
+                    animeLibraryDetail.value = animeLibrary.value.find(a => a.id === animeLibraryDetail.value.id) || animeLibraryDetail.value;
+                }
+            } catch (_) {
+                if (!silent) animeLibrary.value = [];
+            } finally {
+                if (!silent) animeLibraryLoading.value = false;
+            }
+        };
+
+        const playEpisode = async (anime, ep) => {
+            if ((!ep.in_qbt || ep.progress < 100) && !(ep.num > 0 && libDetailBatchDone.value)) return;
+            try {
+                const r = await fetch('/api/anime/play', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash }),
+                });
+                let d;
+                try { d = await r.json(); } catch (_) {
+                    showToast(`Error al reproducir: HTTP ${r.status} — reinicia el servidor`, 'error');
+                    return;
+                }
+                if (d.error) {
+                    showToast('Error al reproducir: ' + d.error, 'error');
+                } else {
+                    showToast('Reproduciendo en MPV…', 'success');
+                    await loadAnimeLibrary();
+                }
+            } catch (e) {
+                showToast('Error al reproducir: ' + e.message, 'error');
+            }
+        };
+
+        const toggleWatched = async (anime, ep) => {
+            try {
+                const r = await fetch(`/api/anime/library/${anime.id}/watched`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ episode: ep.num }),
+                });
+                const d = await r.json();
+                if (d.ok) await loadAnimeLibrary();
+            } catch (e) {
+                showToast('Error al actualizar estado visto', 'error');
+            }
+        };
+
+        // ── Subtitle translation ──────────────────────────────────────────────────
+        // Key format: "{animeId}_{epNum}" — persisted to localStorage across reloads
+        const subTaskKey = (animeId, epNum) => `${animeId}_${epNum}`;
+        const _loadSubTasks = () => { try { return JSON.parse(localStorage.getItem('subTasks') || '{}'); } catch { return {}; } };
+        const subTasks = ref(_loadSubTasks());
+        watch(subTasks, (val) => { try { localStorage.setItem('subTasks', JSON.stringify(val)); } catch {} }, { deep: true });
+
+        const subTrackModal = ref(null); // {anime, ep, tracks} when picker is open
+
+        const _subPoll = (key, taskId) => {
+            const iv = setInterval(async () => {
+                try {
+                    const r = await fetch(`/api/subtitle/status/${taskId}`);
+                    const d = await r.json();
+                    // Preserve task_id so cancel button always has it
+                    subTasks.value = { ...subTasks.value, [key]: { ...d, task_id: taskId } };
+                    if (d.status === 'done' || d.status === 'error' || d.status === 'cancelled') {
+                        clearInterval(iv);
+                        if (d.status === 'done')
+                            showToast(`✓ Subtítulos ESP añadidos: ${d.output?.split('/').pop() || ''}`, 'success');
+                        else if (d.status === 'error')
+                            showToast(`Error traduciendo: ${d.message}`, 'error');
+                    }
+                } catch { clearInterval(iv); }
+            }, 1500);
+        };
+
+        const startTranslate = async (anime, ep, subIndex = 0) => {
+            subTrackModal.value = null;
+            const key = subTaskKey(anime.id, ep.num);
+            subTasks.value = { ...subTasks.value, [key]: { status: 'starting', progress: 0, message: 'Iniciando…' } };
+            try {
+                const r = await fetch('/api/subtitle/translate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        info_hash: ep.info_hash,
+                        episode:   ep.num,
+                        anime_id:  anime.id,
+                        sub_index: subIndex,
+                    }),
+                });
+                const d = await r.json();
+                if (!r.ok) {
+                    subTasks.value = { ...subTasks.value, [key]: { status: 'error', progress: 0, message: d.error || 'Error' } };
+                    showToast(d.error || 'Error al traducir', 'error');
+                    return;
+                }
+                // Store task_id immediately so cancel button works from the first poll
+                subTasks.value = { ...subTasks.value, [key]: { ...subTasks.value[key], task_id: d.task_id } };
+                _subPoll(key, d.task_id);
+            } catch (e) {
+                subTasks.value = { ...subTasks.value, [key]: { status: 'error', progress: 0, message: String(e) } };
+                showToast('Error de conexión', 'error');
+            }
+        };
+
+        const translateSubs = async (anime, ep) => {
+            // First fetch available subtitle tracks
+            const params = new URLSearchParams({
+                info_hash: ep.info_hash, episode: ep.num, anime_id: anime.id
+            });
+            try {
+                const r = await fetch(`/api/subtitle/tracks?${params}`);
+                const d = await r.json();
+                if (!r.ok) { showToast(d.error || 'No se encontró el archivo', 'error'); return; }
+                const tracks = d.tracks || [];
+                const engTracks = tracks.filter(t => t.language === 'eng' || t.language === 'und');
+                if (engTracks.length === 1) {
+                    // Single track → start immediately
+                    await startTranslate(anime, ep, engTracks[0].sub_index);
+                } else if (tracks.length === 1) {
+                    await startTranslate(anime, ep, tracks[0].sub_index);
+                } else if (tracks.length > 1) {
+                    // Multiple tracks → show picker
+                    subTrackModal.value = { anime, ep, tracks };
+                } else {
+                    showToast('No se encontraron subtítulos en el archivo', 'error');
+                }
+            } catch (e) {
+                showToast('Error al obtener pistas de subtítulos', 'error');
+            }
+        };
+
+        const cancelTranslation = async (animeId, epNum) => {
+            const key = subTaskKey(animeId, epNum);
+            const taskId = subTasks.value[key]?.task_id;
+            // If no task_id yet (cancelled during 'starting' phase), mark cancelled locally
+            if (!taskId) {
+                subTasks.value = { ...subTasks.value, [key]: { ...subTasks.value[key], status: 'cancelled', message: 'Cancelado' } };
+                showToast('Traducción cancelada', 'info');
+                return;
+            }
+            try {
+                await fetch(`/api/subtitle/cancel/${taskId}`, { method: 'POST' });
+                subTasks.value = { ...subTasks.value, [key]: { ...subTasks.value[key], status: 'cancelled', message: 'Cancelado' } };
+                showToast('Traducción cancelada', 'info');
+            } catch (e) {
+                showToast('Error al cancelar', 'error');
+            }
+        };
+
+        const removeFromAnimeLibrary = async (animeId, deleteFiles = false) => {
+            try {
+                await fetch(`/api/anime/library/${animeId}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ delete_files: deleteFiles }),
+                });
+                if (animeLibraryDetail.value?.id === animeId) animeLibraryDetail.value = null;
+                await loadAnimeLibrary();
+                showToast('Eliminado de la biblioteca', 'success');
+            } catch (e) {
+                showToast('Error al eliminar', 'error');
+            }
+        };
+
+        const deleteEpisode = async (anime, ep) => {
+            if (!confirm(`¿Borrar episodio ${ep.num} de "${anime.title}"?\nEsto lo eliminará de la biblioteca y de qBittorrent.`)) return;
+            try {
+                const r = await fetch(`/api/anime/library/${anime.id}/episode/${ep.num}`, {
+                    method: 'DELETE',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ delete_files: true }),
+                });
+                const d = await r.json();
+                if (d.ok) {
+                    await loadAnimeLibrary();
+                    showToast(`Episodio ${ep.num} eliminado`, 'success');
+                } else {
+                    showToast(d.error || 'Error al eliminar', 'error');
+                }
+            } catch (e) {
+                showToast('Error al eliminar: ' + e.message, 'error');
+            }
+        };
+
+        const openAnimeLibraryDetail = (anime) => {
+            const prev = animeLibraryDetail.value;
+            _navStack.push(() => { animeLibraryDetail.value = prev; });
+            history.pushState({ depth: _navStack.length }, '');
+            animeLibraryDetail.value = anime;
+        };
+
+        const isInAnimeLibrary = (anime) => {
+            if (!anime) return false;
+            return animeLibrary.value.some(a =>
+                (anime.al_id  && a.al_id  === anime.al_id)  ||
+                (anime.mal_id && a.mal_id === anime.mal_id) ||
+                (anime.title  && a.title  === anime.title)
+            );
+        };
+
+        const addAnimeToLibrary = async (anime) => {
+            try {
+                const res = await fetch('/api/anime/library/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        al_id: anime.al_id, mal_id: anime.mal_id,
+                        title: anime.title, title_romaji: anime.title_romaji || '',
+                        cover: anime.cover || '',
+                        total_episodes: anime.episodes || null,
+                        format: anime.format || '',
+                        track_only: true,
+                    }),
+                });
+                const d = await res.json();
+                if (d.ok) {
+                    showToast(`"${anime.title}" añadido a Mi Anime`, 'success');
+                    await loadAnimeLibrary();
+                }
+            } catch (e) {
+                showToast('Error al añadir a biblioteca', 'error');
+            }
+        };
+
+        const libDetailBatchEp = computed(() =>
+            animeLibraryDetail.value?.episodes?.find(e => e.num === 0 && e.in_qbt) || null
+        );
+        const libDetailHasBatch = computed(() => !!libDetailBatchEp.value);
+        const libDetailBatchDone = computed(() => (libDetailBatchEp.value?.progress ?? 0) >= 100);
+
+        const seasonLabel = computed(() => {
+            const s = animeSeasonSeason.value;
+            const y = animeSeasonYear.value;
+            return (s && y) ? `${SEASON_ES[s] || s} ${y}` : 'Temporada actual';
+        });
+
+        const seasonYears = computed(() => {
+            const cur = new Date().getFullYear();
+            const arr = [];
+            for (let y = cur + 1; y >= 1990; y--) arr.push(y);
+            return arr;
+        });
+
+        const filteredSeasonalAnime = computed(() => {
+            let list = animeSeasonalResults.value;
+            if (animeSeasonGenreFilter.value)
+                list = list.filter(a => a.genres.includes(animeSeasonGenreFilter.value));
+            return list;
+        });
+
+        const seasonalGenres = computed(() => {
+            const s = new Set();
+            animeSeasonalResults.value.forEach(a => a.genres.forEach(g => s.add(g)));
+            return [...s].sort();
+        });
+
+        const loadSeasonalAnime = async () => {
+            animeSeasonalLoading.value = true;
+            try {
+                const p = new URLSearchParams({ sort: animeSeasonSort.value });
+                if (animeSeasonSeason.value) p.set('season', animeSeasonSeason.value);
+                if (animeSeasonYear.value)   p.set('year',   animeSeasonYear.value);
+                const r = await fetch(`/api/anime/seasonal?${p}`);
+                const d = await r.json();
+                animeSeasonalResults.value = d.results || [];
+                // Only set on initial load — don't overwrite a user-chosen season/year
+                if (!animeSeasonSeason.value) animeSeasonSeason.value = d.season || '';
+                if (!animeSeasonYear.value)   animeSeasonYear.value   = d.year   || 0;
+            } catch { animeSeasonalResults.value = []; }
+            finally  { animeSeasonalLoading.value = false; }
+        };
+
+        const seasonNav = (dir) => {
+            const idx = SEASONS.indexOf(animeSeasonSeason.value);
+            if (idx === -1) { loadSeasonalAnime(); return; }
+            let ni = idx + dir;
+            if (ni < 0)              { ni = 3; animeSeasonYear.value--; }
+            else if (ni > 3)         { ni = 0; animeSeasonYear.value++; }
+            animeSeasonSeason.value = SEASONS[ni];
+            loadSeasonalAnime();
+        };
+
+        const onSeasonChange = (e) => { animeSeasonSeason.value = e.target.value; loadSeasonalAnime(); };
+        const onYearChange   = (e) => { animeSeasonYear.value = Number(e.target.value); loadSeasonalAnime(); };
+
+        const searchEpisodeInNyaa = async (anime, epNum) => {
+            // Map library anime to the shape openAnime expects
+            animeCurrentAnime.value = { ...anime, episodes: anime.total_episodes };
+            const prev = animeView.value;
+            _navStack.push(() => { animeView.value = prev; animeLibraryDetail.value = anime; });
+            history.pushState({ depth: _navStack.length }, '');
+            animeView.value = 'detail';
+            animeLibraryDetail.value = null;
+            animeTorrents.value = [];
+            animeLangFilter.value = 'all';
+            animeHideDead.value = true;
+            animeQualityFilter.value = '';
+            animeGroupFilter.value = '';
+            animeEpFilter.value = 'all';
+            // MOVIE/MUSIC don't have episode numbers — don't pre-filter
+            const fmt = anime.format || '';
+            targetEpisodeNum.value = (fmt === 'MOVIE' || fmt === 'MUSIC') ? null : (epNum > 0 ? epNum : null);
+
+            // Search all title variants so batches and alternate names are included
+            const variants = [...new Set(
+                [anime.title_romaji, anime.title]
+                .map(t => (t || '').trim()).filter(Boolean)
+            )];
+            animeTorrentQuery.value = variants[0] || '';
+            animeTorrentsLoading.value = true;
+            try {
+                animeTorrents.value = await _nyaaMultiFetch(variants);
+            } catch (e) {
+                showToast('Error buscando en Nyaa', 'error');
+            } finally {
+                animeTorrentsLoading.value = false;
+            }
+        };
+
+        // ── Suwayomi Popular ──────────────────────────────────────────────────────
+
+        const loadSourcesPopular = async (source) => {
+            sourcePopularLoading.value = true;
+            sourcePopular.value = [];
+            searchMode.value = 'popular';
+            activeSource.value = source;
+            try {
+                const r = await fetch(`/api/sources/popular?source=${source.id}&type=POPULAR`);
+                const d = await r.json();
+                if (d.error) throw new Error(d.error);
+                sourcePopular.value = d.results || [];
+            } catch (e) {
+                showToast('Error cargando populares: ' + e.message, 'error');
+            } finally {
+                sourcePopularLoading.value = false;
+            }
+        };
+
         // Init
+        // Auto-fetch AniList scores when search/popular results arrive
+        watch(currentView, (val) => {
+            if (val === 'anime') {
+                loadAnimeLibrary();
+                if (libPollTimer) clearInterval(libPollTimer);
+                libPollTimer = setInterval(() => loadAnimeLibrary(true), 3500);
+            } else {
+                if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
+                if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
+            }
+        });
+        watch(searchResults, (val) => {
+            const ids = val.filter(m => m.mal_id).map(m => m.mal_id);
+            if (ids.length) fetchAnilistScores(ids);
+        });
+        watch(mdPopular, (val) => {
+            const ids = val.filter(m => m.mal_id).map(m => m.mal_id);
+            if (ids.length) fetchAnilistScores(ids);
+        });
+        watch(mdLibrary, (val) => {
+            const ids = val.filter(m => m.mal_id).map(m => m.mal_id);
+            if (ids.length) fetchAnilistScores(ids);
+        });
+
         onMounted(() => {
             loadLibrary();
             loadLocalLibrary();
             loadMdLibrary();
-            pollTasks();
-            pollExports();
+            initSSE();
             syncExportTasks();
             checkSuwayomi();
             checkDrive();
+            checkQbt();
             loadLibraryInfo();
+            loadCbzLibrary();
+            loadMdTags();
             document.addEventListener('keydown', handleKeydown);
+            // On reload: reconnect polls for subtitle tasks that were in progress and have a task_id
+            const _terminal = new Set(['done', 'error', 'cancelled']);
+            Object.entries(subTasks.value).forEach(([key, t]) => {
+                if (!_terminal.has(t.status) && t.task_id) {
+                    _subPoll(key, t.task_id);
+                }
+            });
+            // SPA history: seed an initial state so back button stays within the app
+            history.replaceState({ depth: 0 }, '');
+            window.addEventListener('popstate', () => {
+                if (_navStack.length > 0) _navStack.pop()();
+            });
         });
         return {
             currentView, library, localLibrary, mdLibrary, searchQuery, searchResults,
-            chapters, mdChapters, chapterStatus, showModal, showReader,
+            chapters, mdChapters, mdChaptersLoading, chapterStatus, showModal, showReader,
             currentManga, currentMdManga, currentTitle, currentCover, currentCoverUrl,
             currentChapter, currentPage, pages, isZoomed, selectedLang, toast,
-            stats, groupedChapters, filteredChapters, availableLangs, currentPageUrl, combinedLibrary,
+            stats, groupedChapters, filteredChapters, availableLangs, currentPageUrl, combinedLibrary, filteredLibrary, libSearch, libFilter,
             getLangName, getLangFlag, getUniqueLangs, openManga, openMdManga, openLibraryItem, closeModal, addToLibrary, removeLibraryItem,
             isDownloaded, isUpscaled, isPartialUpscaled, getTask, getActiveTask, getProgressPercent,
             downloadChapter, upscaleChapter, cancelUpscale, cancelDownload, repairChapter, readChapter, readChapterOriginal, readChapterUpscaled, closeReader,
@@ -2275,10 +3461,11 @@ const app = createApp({
             isChapterRead, getLastReadProgress,
             goNextChapter, goPrevChapter, showBars, cycleFitMode, setReaderMode, toggleReaderDir,
             onPanStart, onPanMove, onPanEnd, handleReaderWheel, toggleFullscreen, onWebtoonScroll,
-            isInLibrary, taskQueueExpanded, taskQueueList, taskQueueSummary, deleteChapter, downloadedLang, normalizeChapter, toggleChapterRead,
+            isInLibrary, taskQueueExpanded, taskQueueList, taskQueueSummary, deleteChapter, downloadedLang, normalizeChapter, formatChapter, toggleChapterRead,
             currentModalTab, openTomoTab,
             exportVolumeName, exportFormat, exportQuality, exportDownscaleHalf, exportSelectedChapters, exportChapterSet, exportBusy, exportPreview,
             bulkFrom, bulkTo, bulkPreview, bulkDownload, bulkUpscale,
+            upscaleModel, upscaleModelLabel, setUpscaleModel,
             rangeFrom, rangeTo, addChapterRange, onRowClickCapture,
             selectAllExportChapters, selectUpscaledExportChapters,
             downloadTomo, scheduleExportPreview, exportTasks,
@@ -2295,6 +3482,19 @@ const app = createApp({
             sources, activeSource, sourceQuery, sourceResults, sourcesLoading, suwayomiOnline, sourceHasNextPage, currentSourceContext,
             globalQuery, globalResults, globalSearchLoading, searchMode,
             checkSuwayomi, loadSources, searchSources, searchAllSources, openSourceManga,
+            sourcePopular, sourcePopularLoading, loadSourcesPopular,
+            offlineCoverStatus, downloadCoversOffline,
+            editMetaShow, editMetaTitle, editMetaCoverUrl, editMetaBusy, openEditMeta, saveEditMeta,
+            corruptScanResult, corruptScanBusy, scanCorruptPages,
+            anilistScores, anilistTop, anilistTopLoading, anilistTopHasMore, anilistTopPage,
+            anilistGenres, anilistGenreFilter, anilistTopSort, anilistChipSearch, filteredAnilistChips,
+            fetchAnilistScores, loadAnilistGenres, loadAnilistTop, loadMoreAnilistTop,
+            switchToAnilistTab, openAnilistManga, getBadgeClass,
+            mdViewTab, mdPopular, mdPopularLoading, loadMdPopular, loadMdTags,
+            mdTags, mdSelectedTags, mdContentRating, mdShowTagFilter, toggleMdTag, toggleMdRating,
+            currentMdDetail,
+            cbzManga, cbzLoading, cbzCurrentManga, cbzVolumes, cbzVolumesLoading, showCbzModal,
+            loadCbzLibrary, openCbzManga, readCbzVolume,
             activeTasksByTitle, canonicalTitle, seriesReadCounts,
             driveConfigured, driveConnected, driveEmail, driveUploading, driveUploadResult,
             connectDrive, disconnectDrive, uploadToDrive,
@@ -2302,7 +3502,28 @@ const app = createApp({
             currentPageOrigUrl, currentPageUpUrl,
             toggleCompare, onCompareDragStart, onCompareDrag, onCompareDragEnd,
             libraryUrlLocal, libraryUrlPhone, libraryWslIp, libraryFileCount, libraryFwCmd, libraryProxyCmd,
-            loadLibraryInfo, saveToLibrary, dismissExportTask,
+            loadLibraryInfo, saveToLibrary, dismissExportTask, downloadExportFile,
+            animeView, animeQuery, animeResults, animeLoading, animeAnilistDown, animeCurrentAnime,
+            searchNyaaDirect,
+            animeTorrents, animeTorrentsLoading, animeTorrentQuery, animeTorrentCategory,
+            animeLangFilter, animeHideDead, animeLangCounts,
+            animeQualityFilter, animeGroupFilter, animeEpFilter, targetEpisodeNum,
+            filteredAnimeTorrents, animeGroups, animeQualities,
+            qbtConnected, qbtVersion, qbtUrl, qbtUsername, qbtPassword, qbtConfigShow, qbtTorrents, qbtLoading,
+            qbtAddingHashes, qbtAddedHashes, isAdding, isAdded,
+            searchAnime, searchAnimeTorrents, openAnime, addToQbt, checkQbt, configureQbt,
+            loadQbtTorrents, qbtAction, switchToAnimeView,
+            formatBytes, formatSpeed, formatEta, qbtStateLabel, animeFormatLabel, animeEpLabel,
+            groupedAnimeEpisodes, animeExpandedEps, toggleEpGroup, isEpExpanded, isSpanishOrMulti, isEnglishSub,
+            animeLibrary, animeLibraryLoading, animeLibraryDetail,
+            loadAnimeLibrary, removeFromAnimeLibrary, openAnimeLibraryDetail, searchEpisodeInNyaa,
+            isInAnimeLibrary, addAnimeToLibrary, libDetailHasBatch, libDetailBatchDone, libDetailBatchEp,
+            playEpisode, toggleWatched, deleteEpisode,
+            subTasks, subTrackModal, translateSubs, startTranslate, subTaskKey, cancelTranslation,
+            animeSeasonalResults, animeSeasonalLoading, animeSeasonSort, animeSeasonGenreFilter,
+            animeSeasonSeason, animeSeasonYear, seasonLabel, seasonYears, filteredSeasonalAnime, seasonalGenres,
+            loadSeasonalAnime, seasonNav, onSeasonChange, onYearChange, SEASON_ES,
+            gotoView,
         };
     }
 });

@@ -6,14 +6,16 @@ Serves individual files and whole manga folders as ZIP archives.
 
 import io
 import json
+import os
 import re
 import shutil
 import socket
 import subprocess
+import tempfile
 import zipfile
 from pathlib import Path
 
-from flask import Blueprint, jsonify, request, send_file
+from flask import Blueprint, after_this_request, jsonify, request, send_file
 
 _SETTINGS_FILE = Path(__file__).resolve().parents[2] / "library_settings.json"
 
@@ -128,8 +130,8 @@ def webdav_status():
         "export_dir": str(export_dir),
         "server_ip": lan_ip,
         "wsl_ip": wsl_ip,
-        "library_url_local": "http://localhost:5001/library",
-        "library_url_phone": f"http://{lan_ip}:5001/library",
+        "library_url_local": "http://localhost:5100/library",
+        "library_url_phone": f"http://{lan_ip}:5100/library",
         "folders": items["folders"],
         "files": items["files"],
     })
@@ -181,6 +183,52 @@ def download_folder(foldername):
     )
 
 
+@webdav_bp.route("/all")
+def download_all():
+    """Stream all CBZ/CBR files across all manga folders as one ZIP archive."""
+    export_dir = get_export_dir().resolve()
+    all_files: list[tuple[Path, str]] = []
+
+    for item in sorted(export_dir.iterdir(), key=lambda x: x.name.lower()):
+        if item.is_dir() and not item.name.startswith("."):
+            cbz = sorted(
+                [f for f in item.iterdir() if f.is_file() and f.suffix.lower() in (".cbz", ".cbr")],
+                key=lambda f: f.name.lower(),
+            )
+            for f in cbz:
+                all_files.append((f, item.name + "/" + f.name))
+        elif item.is_file() and item.suffix.lower() in (".cbz", ".cbr"):
+            all_files.append((item, item.name))
+
+    if not all_files:
+        return "Empty library", 404
+
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".zip")
+    os.close(tmp_fd)
+    try:
+        with zipfile.ZipFile(tmp_path, "w", zipfile.ZIP_STORED) as zf:
+            for f_path, arc_name in all_files:
+                zf.write(str(f_path), arc_name)
+    except Exception as exc:
+        os.unlink(tmp_path)
+        return str(exc), 500
+
+    @after_this_request
+    def _cleanup(response):
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+        return response
+
+    return send_file(
+        tmp_path,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="Biblioteca_Manga.zip",
+    )
+
+
 @webdav_bp.route("/save", methods=["POST"])
 def save_to_library():
     from api.export import get_export_tasks
@@ -206,7 +254,7 @@ def save_to_library():
     while dest.exists():
         dest = dest_dir / f"{Path(filename).stem}_{counter}{Path(filename).suffix}"
         counter += 1
-    shutil.copy2(tmp_path, dest)
+    shutil.move(tmp_path, dest)
     return jsonify({"saved": True, "filename": dest.name, "path": str(dest)})
 
 

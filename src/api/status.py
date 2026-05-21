@@ -1,11 +1,53 @@
 #!/usr/bin/env python3
 """
-Status API - Get download/upscale status
+Status API - Get download/upscale status + SSE stream.
 """
 
-from flask import Blueprint, jsonify
+import json
+import time
+
+from flask import Blueprint, Response, jsonify, stream_with_context
 
 status_bp = Blueprint('status', __name__)
+
+
+def _all_status():
+    from api.download import get_download_status as get_dl_status
+    from api.upscale import get_upscale_status
+    from api.export import get_export_tasks
+
+    dl_status = get_dl_status()
+    up_status = get_upscale_status()
+    export_tasks = {
+        k: {x: v[x] for x in v if x != 'tmp_path'}
+        for k, v in get_export_tasks().items()
+        if v.get('status') not in ('downloaded',)
+    }
+    return {'downloads': dl_status, 'upscale': up_status, 'exports': export_tasks}
+
+
+@status_bp.route('/stream')
+def stream_status():
+    """Server-Sent Events stream — pushes aggregated status every 500 ms."""
+    def generate():
+        while True:
+            try:
+                payload = _all_status()
+                yield f"data: {json.dumps(payload)}\n\n"
+            except Exception:
+                yield "data: {}\n\n"
+            time.sleep(0.5)
+
+    return Response(
+        stream_with_context(generate()),
+        mimetype='text/event-stream',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no',
+            'Connection': 'keep-alive',
+        },
+    )
+
 
 @status_bp.route('/download/<download_id>')
 def get_download_status(download_id):
@@ -18,19 +60,5 @@ def get_upscale_status_route(upscale_id):
     return jsonify(get_upscale_status(upscale_id))
 
 @status_bp.route('')
-def get_all_status():
-    from api.download import get_download_status as get_dl_status
-    from api.upscale import get_upscale_status
-    from api.export import get_export_tasks
-
-    dl_status = get_dl_status()
-    up_status = get_upscale_status()
-    export_tasks = {k: {x: v[x] for x in v if x != 'tmp_path'}
-                    for k, v in get_export_tasks().items()
-                    if v.get('status') not in ('downloaded',)}
-
-    return jsonify({
-        'downloads': dl_status,
-        'upscale': up_status,
-        'exports': export_tasks,
-    })
+def get_all_status_route():
+    return jsonify(_all_status())
