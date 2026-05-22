@@ -8,7 +8,9 @@ import os
 import re
 import time
 import json
+import string
 import subprocess
+import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path as _Path
 from urllib.parse import urlencode, quote
@@ -30,6 +32,14 @@ _SEASONAL_TTL = 600  # 10 min
 
 _THUMBS_DIR = _Path.home() / '.cache' / 'manga-upscaler' / 'thumbs'
 
+def _clear_thumb_cache():
+    if _THUMBS_DIR.exists():
+        for f in _THUMBS_DIR.glob('*.jpg'):
+            try: f.unlink()
+            except Exception: pass
+
+threading.Thread(target=_clear_thumb_cache, daemon=True).start()
+
 # ── Anime library persistence ──────────────────────────────────────────────────
 
 def _lib_path() -> _Path:
@@ -47,9 +57,157 @@ def _lib_write(data: dict):
     p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
 
 
+_backfill_done = False
+
+def _backfill_anime_metadata():
+    """Backfill total_episodes / format / al_id for local anime entries that lack them.
+    Runs once in background on first library request. Keys that are numeric strings
+    are AniList IDs — fetch metadata from AniList to fill missing fields."""
+    global _backfill_done
+    lib = _lib_read()
+    to_fetch = [(k, v) for k, v in lib.items()
+                if v.get('local_path') and not v.get('total_episodes') and k.isdigit()]
+    if not to_fetch:
+        _backfill_done = True
+        return
+
+    changed = False
+    q = '''query($id:Int){Media(id:$id,type:ANIME){
+        episodes format status
+        title{romaji english}
+        coverImage{large}
+    }}'''
+    for al_id_str, _ in to_fetch:
+        try:
+            r = _http.post(_ANILIST, json={'query': q, 'variables': {'id': int(al_id_str)}}, timeout=8)
+            media = (r.json().get('data') or {}).get('Media') or {}
+            if not media:
+                continue
+            t = media.get('title') or {}
+            if media.get('episodes') and not lib[al_id_str].get('total_episodes'):
+                lib[al_id_str]['total_episodes'] = media['episodes']
+                changed = True
+            if media.get('format') and not lib[al_id_str].get('format'):
+                lib[al_id_str]['format'] = media['format']
+                changed = True
+            if not lib[al_id_str].get('al_id'):
+                lib[al_id_str]['al_id'] = int(al_id_str)
+                changed = True
+            if not lib[al_id_str].get('title_romaji') and t.get('romaji'):
+                lib[al_id_str]['title_romaji'] = t['romaji']
+                changed = True
+        except Exception:
+            pass
+
+    if changed:
+        _lib_write(lib)
+    _backfill_done = True
+
+
+# ── Scan paths (local anime folders) ─────────────────────────────────────────
+
+def _scanpaths_path() -> _Path:
+    return _Path(os.environ.get('MANGA_DIR', str(_Path.home() / 'MangaLibrary'))) / 'anime_scan_paths.json'
+
+def _scanpaths_read() -> dict:
+    try:
+        return json.loads(_scanpaths_path().read_text(encoding='utf-8'))
+    except Exception:
+        return {'paths': [], 'mappings': {}}
+
+def _scanpaths_write(data: dict):
+    p = _scanpaths_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+
+
+def _list_anime_folders(root: str) -> list:
+    if _is_wsl() and re.match(r'^[A-Za-z]:[/\\]', root):
+        root = _win_to_wsl(root)
+    p = _Path(root)
+    if not p.exists():
+        return []
+    return sorted(str(sub) for sub in p.iterdir() if sub.is_dir())
+
+
+_SHORT_VIDEO_SECS = 600  # < 10 min → auto-special
+
+# Duration cache: path → (mtime, duration_secs)
+# Keyed by absolute path; invalidated when file mtime changes.
+_dur_cache: dict = {}
+
+
+def _video_duration(path: str) -> float:
+    """Return video duration in seconds via ffprobe, cached by file mtime."""
+    try:
+        mtime = _Path(path).stat().st_mtime
+    except Exception:
+        return 0.0
+    cached = _dur_cache.get(path)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    try:
+        out = subprocess.check_output(
+            ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
+             '-of', 'default=noprint_wrappers=1:nokey=1', path],
+            stderr=subprocess.DEVNULL, timeout=10,
+        ).decode().strip()
+        dur = float(out)
+    except Exception:
+        dur = 0.0
+    _dur_cache[path] = (mtime, dur)
+    return dur
+
+
+def _scan_local_episodes(folder_path: str, overrides: dict = None) -> list:
+    """Scan a local folder for video files.
+    overrides: {filename: 'special'|'hidden'|'episode'} — manual type assignments.
+    Files with no override and duration < 10 min are auto-classified as special.
+    A manual override='episode' forces normal treatment even if short.
+    """
+    wsl_path = folder_path
+    if _is_wsl() and re.match(r'^[A-Za-z]:[/\\]', folder_path):
+        wsl_path = _win_to_wsl(folder_path)
+    p = _Path(wsl_path)
+    if not p.exists():
+        return []
+    files = sorted(f for f in p.rglob('*') if f.is_file() and f.suffix.lower() in _VIDEO_EXTS)
+    overrides = overrides or {}
+    seen: set = set()
+    episodes = []
+    sp_counter = 0
+    for f in files:
+        manual = overrides.get(f.name)  # None | 'episode' | 'special' | 'hidden'
+        if manual == 'hidden':
+            continue
+
+        # Determine effective type: manual override > duration heuristic
+        if manual == 'special':
+            ep_type = 'special'
+        elif manual == 'episode':
+            ep_type = 'episode'  # force normal even if short
+        else:
+            dur = _video_duration(str(f))
+            ep_type = 'special' if 0 < dur < _SHORT_VIDEO_SECS else 'episode'
+
+        if ep_type == 'special':
+            sp_counter += 1
+            episodes.append({'num': sp_counter, 'path': str(f), 'ep_type': 'special', 'filename': f.name})
+            continue
+
+        ep_num = _parse_episode(f.stem)
+        if ep_num <= 0:
+            ep_num = len([e for e in episodes if e['ep_type'] == 'episode']) + 1
+        while ep_num in seen:
+            ep_num += 1
+        seen.add(ep_num)
+        episodes.append({'num': ep_num, 'path': str(f), 'ep_type': 'episode', 'filename': f.name})
+    return sorted(episodes, key=lambda e: (e['ep_type'] != 'episode', e['num']))
+
+
 # ── MPV / video helpers ────────────────────────────────────────────────────────
 
-_VIDEO_EXTS = {'.mkv', '.mp4', '.avi', '.mov', '.wmv', '.m4v', '.webm', '.flv', '.ts'}
+_VIDEO_EXTS = {'.mkv', '.mp4', '.avi', '.mov', '.wmv', '.m4v', '.webm', '.flv', '.ts', '.m2ts'}
 
 
 def _win_to_wsl(path: str) -> str:
@@ -75,11 +233,37 @@ def _find_video(content_path: str, episode: int) -> str:
             return ''
         if episode <= 0:
             return str(candidates[0])
+        # Use _parse_episode for accurate matching (avoids false positives from hex hashes)
         for f in candidates:
-            if re.search(rf'(?<!\d)0*{episode}(?!\d)', f.stem):
+            if _parse_episode(f.stem) == episode:
                 return str(f)
         return str(candidates[0])
     return ''
+
+
+def _local_ep_title(stem: str, ep_type: str) -> str:
+    """Human-readable title for a local video file."""
+    if ep_type == 'episode':
+        # Plain episode pattern (E01, 01, 001) → empty so animeEpLabel shows "Episodio N"
+        if re.match(r'^E?\d{1,3}(v\d+)?$', stem, re.I):
+            return ''
+        return _clean_ep_title(stem)
+    # Special: strip SP- prefix then humanize
+    s = re.sub(r'^SP[-_]', '', stem, flags=re.I)
+    s = _clean_ep_title(s)
+    s = s.replace('-', ' ').replace('_', ' ')
+    s = re.sub(r'([A-Za-z])(\d)', r'\1 \2', s)  # NCOP1 → NCOP 1
+    return re.sub(r'\s+', ' ', s).strip() or _clean_ep_title(stem)
+
+
+def _clean_ep_title(stem: str) -> str:
+    """Strip fansub group tags, quality/hash brackets from a filename stem."""
+    s = re.sub(r'^\[[^\]]{1,30}\]\s*', '', stem)   # leading [Group]
+    # Remove all [...] that are NOT just a bare episode number
+    s = re.sub(r'\s*\[(?!\d{1,3}\])[^\]]*\]', '', s)
+    # Remove (...) quality/resolution metadata
+    s = re.sub(r'\s*\([^)]*(?:\d{3,4}p|BD|Hi10|Blu)[^)]*\)', '', s, flags=re.I)
+    return s.strip(' -_.')
 
 
 def _is_wsl() -> bool:
@@ -90,11 +274,10 @@ def _is_wsl() -> bool:
         return False
 
 
-_MPV_EXE_WIN  = r'C:\Program Files (x86)\mpv\mpv.exe'
-_MPV_EXE_UNIX = '/mnt/c/Program Files (x86)/mpv/mpv.exe'
+_CMD_EXE = '/mnt/c/Windows/System32/cmd.exe'
 
 def _launch_mpv(file_path: str) -> bool:
-    """Open the video file with MPV, preferring Spanish subtitles."""
+    """Open the video file with the default Windows app (mpv)."""
     if _is_wsl():
         try:
             win_path = subprocess.check_output(
@@ -102,22 +285,16 @@ def _launch_mpv(file_path: str) -> bool:
             ).decode().strip()
         except Exception:
             win_path = file_path
-        try:
-            # Launch MPV directly so we can pass --slang for subtitle language
-            subprocess.Popen(
-                ['cmd.exe', '/c', 'start', '', _MPV_EXE_WIN,
-                 '--slang=es,spa', '--alang=ja,jpn,en,eng', win_path],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            return True
-        except Exception:
-            # Fallback: open with default Windows app
+        for cmd in [_CMD_EXE, 'cmd.exe']:
             try:
-                subprocess.Popen(['cmd.exe', '/c', 'start', '', win_path],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.Popen(
+                    [cmd, '/c', 'start', '', win_path],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
                 return True
             except Exception:
-                return False
+                continue
+        return False
     else:
         try:
             subprocess.Popen(['xdg-open', file_path],
@@ -534,6 +711,11 @@ def qbt_action():
 
 @anime_bp.route('/library')
 def anime_library_get():
+    global _backfill_done
+    if not _backfill_done:
+        threading.Thread(target=_backfill_anime_metadata, daemon=True).start()
+        _backfill_done = True  # prevent re-spawning; thread sets it True when done
+
     lib = _lib_read()
     try:
         torrents_raw = _q('get', '/torrents/info').json()
@@ -572,9 +754,63 @@ def anime_library_get():
 
     result = []
     for anime_id, anime in lib.items():
+        watched_map = anime.get('watched', {})
+        local_path = anime.get('local_path', '')
+        if local_path:
+            overrides = anime.get('episode_overrides', {})
+            local_eps = _scan_local_episodes(local_path, overrides)
+            regular_count = sum(1 for ep in local_eps if ep.get('ep_type', 'episode') == 'episode')
+            episodes_out = [
+                {
+                    'num':        ep['num'],
+                    'title':      _local_ep_title(_Path(ep['path']).stem, ep.get('ep_type', 'episode')),
+                    'info_hash':  '',
+                    'progress':   100,
+                    'state':      'local',
+                    'size':       0,
+                    'in_qbt':     False,
+                    'in_local':   True,
+                    'local_path': ep['path'],   # specific file path for direct playback
+                    'added_on':   0,
+                    'watched':    bool(watched_map.get(str(ep['num']))),
+                    'ep_type':    ep.get('ep_type', 'episode'),
+                    'filename':   ep.get('filename', _Path(ep['path']).name),
+                }
+                for ep in local_eps
+            ]
+            series_total = anime.get('total_episodes') or 0
+
+            # Add placeholder entries for episodes not yet downloaded
+            if series_total > 0:
+                known_ep_nums = {e['num'] for e in episodes_out if e.get('ep_type', 'episode') == 'episode'}
+                for n in range(1, series_total + 1):
+                    if n not in known_ep_nums:
+                        episodes_out.append({
+                            'num': n, 'title': '', 'info_hash': '', 'progress': 0,
+                            'state': 'missing', 'size': 0,
+                            'in_qbt': False, 'in_local': False,
+                            'added_on': 0, 'watched': False,
+                            'ep_type': 'episode',
+                        })
+                episodes_out.sort(key=lambda e: (e.get('ep_type', 'episode') != 'episode', e['num']))
+
+            result.append({
+                'id': anime_id,
+                'al_id': anime.get('al_id'),
+                'mal_id': anime.get('mal_id'),
+                'title': anime.get('title', ''),
+                'title_romaji': anime.get('title_romaji', ''),
+                'cover': anime.get('cover', ''),
+                'total_episodes': series_total or regular_count,
+                'format': anime.get('format', ''),
+                'episodes': episodes_out,
+                'downloaded_count': regular_count,
+                'is_local': True,
+            })
+            continue
+
         total = anime.get('total_episodes') or 0
         ep_map = anime.get('episodes', {})
-        watched_map = anime.get('watched', {})
         episodes_out = []
         for ep_str, ep_data in ep_map.items():
             try:
@@ -755,12 +991,304 @@ def anime_episode_remove(anime_id, ep_num):
     return jsonify({'ok': True})
 
 
+@anime_bp.route('/library/<anime_id>/ep_override', methods=['POST'])
+def anime_ep_override(anime_id):
+    """Set or clear a manual type override for a local episode file.
+    Body: {filename: str, type: 'episode'|'special'|'hidden'}
+    """
+    data = request.get_json(silent=True) or {}
+    filename = (data.get('filename') or '').strip()
+    ep_type  = data.get('type', 'episode')
+    if not filename:
+        return jsonify({'error': 'filename required'}), 400
+    if ep_type not in ('episode', 'special', 'hidden'):
+        return jsonify({'error': 'type must be episode, special or hidden'}), 400
+
+    lib = _lib_read()
+    if anime_id not in lib:
+        return jsonify({'error': 'not found'}), 404
+
+    overrides = lib[anime_id].setdefault('episode_overrides', {})
+    if ep_type == 'episode':
+        overrides.pop(filename, None)   # reset → remove override
+    else:
+        overrides[filename] = ep_type
+
+    if not overrides:
+        lib[anime_id].pop('episode_overrides', None)
+
+    _lib_write(lib)
+    return jsonify({'ok': True})
+
+
+@anime_bp.route('/scanpaths', methods=['GET'])
+def anime_get_scanpaths():
+    return jsonify(_scanpaths_read().get('paths', []))
+
+
+@anime_bp.route('/scanpaths', methods=['POST'])
+def anime_add_scanpath():
+    body = request.get_json(silent=True) or {}
+    path = (body.get('path') or '').strip()
+    if not path:
+        return jsonify({'error': 'path required'}), 400
+    data = _scanpaths_read()
+    paths = data.get('paths', [])
+    if path not in paths:
+        paths.append(path)
+        data['paths'] = paths
+        _scanpaths_write(data)
+    return jsonify({'ok': True})
+
+
+@anime_bp.route('/scanpaths', methods=['DELETE'])
+def anime_remove_scanpath():
+    body = request.get_json(silent=True) or {}
+    path = (body.get('path') or '').strip()
+    data = _scanpaths_read()
+    data['paths'] = [p for p in data.get('paths', []) if p != path]
+    _scanpaths_write(data)
+    return jsonify({'ok': True})
+
+
+@anime_bp.route('/scan/folders', methods=['GET'])
+def anime_scan_folders():
+    data = _scanpaths_read()
+    mappings = data.get('mappings', {})
+    lib = _lib_read()
+    result = []
+    for root in data.get('paths', []):
+        for folder in _list_anime_folders(root):
+            folder_name = _Path(folder).name
+            mapped_id = mappings.get(folder)
+            matched = lib.get(mapped_id) if mapped_id else None
+            result.append({
+                'folder': folder,
+                'name': folder_name,
+                'mapped_id': mapped_id,
+                'matched_title': matched.get('title', '') if matched else '',
+                'matched_cover': matched.get('cover', '') if matched else '',
+                'suggestion': None,  # fetched lazily via /scan/suggest
+            })
+    return jsonify(result)
+
+
+def _normalize(s: str) -> str:
+    return re.sub(r'[^a-z0-9]', '', (s or '').lower())
+
+
+def _clean_folder_name(name: str) -> str:
+    """Strip season/quality/episode suffixes from folder names for AniList search."""
+    s = name
+    # Remove anything in square brackets: [1080p], [BD], [Multiple Subtitle], etc.
+    s = re.sub(r'\[.*?\]', ' ', s)
+    # Remove anything in parentheses that looks like metadata: (2014), (BD), (1080p)
+    s = re.sub(r'\(\s*(?:\d{4}|\d{3,4}p|BD|BluRay|Web-DL)\s*\)', ' ', s, flags=re.I)
+    # Remove episode ranges: "- 01 ~ 13", "01-13", "+ Special" at end
+    s = re.sub(r'[-–+]\s*\d{1,3}\s*[~\-–]\s*\d{1,3}.*$', '', s)
+    s = re.sub(r'\+\s*special.*$', '', s, flags=re.I)
+    # Remove season/part suffixes
+    s = re.sub(r'\s+(?:(?:season|s)\s*\d+|\d+(?:st|nd|rd|th)\s+season|part\s*\d+)\b.*$', '', s, flags=re.I)
+    return s.strip(' -_.')
+
+
+@anime_bp.route('/scan/suggest', methods=['GET'])
+def anime_scan_suggest():
+    """Return the best AniList match for a folder name (called lazily per row)."""
+    folder_name = request.args.get('name', '').strip()
+    if not folder_name:
+        return jsonify(None)
+    try:
+        search_name = _clean_folder_name(folder_name)
+        q = '''query($s:String){Page(perPage:5){media(search:$s,type:ANIME,sort:SEARCH_MATCH){
+            id title{romaji english}coverImage{large}}}}'''
+        r = _http.post(_ANILIST, json={'query': q, 'variables': {'s': search_name}}, timeout=8)
+        items = ((r.json().get('data') or {}).get('Page') or {}).get('media') or []
+        if not items:
+            return jsonify(None)
+
+        norm_folder = _normalize(folder_name)
+        norm_clean  = _normalize(search_name)
+
+        def _score(item):
+            t = item.get('title') or {}
+            candidates = [t.get('romaji', ''), t.get('english', '') or '']
+            for c in candidates:
+                nc = _normalize(c)
+                if nc in (norm_folder, norm_clean):
+                    return 3  # exact match
+            for c in candidates:
+                nc = _normalize(c)
+                if nc and (nc in norm_clean or norm_clean in nc):
+                    return 2  # substring match
+            return 1  # best AniList relevance, no title match
+
+        best = max(items, key=_score)
+        t = best.get('title') or {}
+        return jsonify({
+            'id': best['id'],
+            'title': t.get('english') or t.get('romaji', ''),
+            'cover': (best.get('coverImage') or {}).get('large', ''),
+        })
+    except Exception:
+        pass
+    return jsonify(None)
+
+
+@anime_bp.route('/browse', methods=['GET'])
+def anime_browse():
+    path = request.args.get('path', '').strip()
+
+    def _to_win(p: str) -> str:
+        if not _is_wsl():
+            return p
+        try:
+            return subprocess.check_output(
+                ['wslpath', '-w', p], stderr=subprocess.DEVNULL, timeout=3
+            ).decode().strip()
+        except Exception:
+            return p
+
+    def _dir_entry(p: _Path) -> dict:
+        return {'name': p.name, 'path': str(p), 'win_path': _to_win(str(p))}
+
+    if not path:
+        # Root: show available Windows drives under /mnt/
+        if _is_wsl():
+            drives = []
+            for letter in string.ascii_lowercase:
+                mp = _Path(f'/mnt/{letter}')
+                if mp.exists() and mp.is_dir():
+                    drives.append({
+                        'name': f'{letter.upper()}:',
+                        'path': str(mp),
+                        'win_path': f'{letter.upper()}:\\',
+                        'is_drive': True,
+                    })
+            return jsonify({'path': '', 'win_path': '', 'parent': None, 'items': drives})
+        else:
+            items = [_dir_entry(p) for p in sorted(_Path('/').iterdir()) if p.is_dir()]
+            return jsonify({'path': '/', 'win_path': '/', 'parent': None, 'items': items})
+
+    # Convert Windows path if needed
+    if _is_wsl() and re.match(r'^[A-Za-z]:[/\\]', path):
+        path = _win_to_wsl(path)
+
+    p = _Path(path)
+    if not p.exists() or not p.is_dir():
+        return jsonify({'error': 'not found'}), 404
+
+    items = []
+    try:
+        for sub in sorted(p.iterdir()):
+            if sub.is_dir() and not sub.name.startswith('.'):
+                items.append(_dir_entry(sub))
+    except PermissionError:
+        pass
+
+    parent = str(p.parent) if str(p.parent) != str(p) else None
+    return jsonify({
+        'path': str(p),
+        'win_path': _to_win(str(p)),
+        'parent': parent,
+        'items': items,
+    })
+
+
+@anime_bp.route('/scan/match', methods=['POST'])
+def anime_scan_match():
+    body = request.get_json(silent=True) or {}
+    folder     = (body.get('folder') or '').strip()
+    anilist_id = str(body.get('anilist_id', '')).strip()
+    title      = (body.get('title') or '').strip()
+    cover      = (body.get('cover') or '').strip()
+    if not folder or not anilist_id:
+        return jsonify({'error': 'folder and anilist_id required'}), 400
+    data = _scanpaths_read()
+    data.setdefault('mappings', {})[folder] = anilist_id
+    _scanpaths_write(data)
+
+    # Fetch full AniList metadata so we store episodes/format/romaji
+    al_meta = {}
+    try:
+        q = '''query($id:Int){Media(id:$id,type:ANIME){
+            episodes format status
+            title{romaji english native}
+            coverImage{large}
+        }}'''
+        r = _http.post(_ANILIST, json={'query': q, 'variables': {'id': int(anilist_id)}}, timeout=8)
+        al_media = (r.json().get('data') or {}).get('Media') or {}
+        if al_media:
+            t = al_media.get('title') or {}
+            al_meta = {
+                'title':         t.get('english') or t.get('romaji') or title,
+                'title_romaji':  t.get('romaji') or '',
+                'title_native':  t.get('native') or '',
+                'cover':         (al_media.get('coverImage') or {}).get('large') or cover,
+                'total_episodes': al_media.get('episodes'),
+                'format':        al_media.get('format') or '',
+                'status':        al_media.get('status') or '',
+            }
+    except Exception:
+        pass
+
+    lib = _lib_read()
+    if anilist_id not in lib:
+        lib[anilist_id] = {'title': title, 'cover': cover, 'episodes': {}}
+    lib[anilist_id]['local_path'] = folder
+    lib[anilist_id]['al_id'] = int(anilist_id)
+    for k, v in al_meta.items():
+        if v and (not lib[anilist_id].get(k)):
+            lib[anilist_id][k] = v
+    # Always update total_episodes and format from AniList (they may improve)
+    if al_meta.get('total_episodes'):
+        lib[anilist_id]['total_episodes'] = al_meta['total_episodes']
+    if al_meta.get('format'):
+        lib[anilist_id]['format'] = al_meta['format']
+    _lib_write(lib)
+    return jsonify({'ok': True})
+
+
+@anime_bp.route('/scan/unmatch', methods=['POST'])
+def anime_scan_unmatch():
+    body = request.get_json(silent=True) or {}
+    folder = (body.get('folder') or '').strip()
+    if not folder:
+        return jsonify({'error': 'folder required'}), 400
+    data = _scanpaths_read()
+    anilist_id = data.get('mappings', {}).pop(folder, None)
+    _scanpaths_write(data)
+    if anilist_id:
+        lib = _lib_read()
+        if anilist_id in lib and lib[anilist_id].get('local_path') == folder:
+            lib[anilist_id].pop('local_path', None)
+            if not lib[anilist_id].get('episodes'):
+                lib.pop(anilist_id, None)
+        _lib_write(lib)
+    return jsonify({'ok': True})
+
+
 @anime_bp.route('/play', methods=['POST'])
 def anime_play():
     try:
         data = request.get_json(silent=True) or {}
-        anime_id  = data.get('anime_id', '')
-        episode   = data.get('episode', -1)
+        anime_id   = data.get('anime_id', '')
+        episode    = data.get('episode', -1)
+        local_path = (data.get('local_path') or '').strip()
+
+        if local_path:
+            video = _find_video(local_path, int(episode))
+            if not video:
+                return jsonify({'error': f'no video found in: {local_path}'}), 404
+            if not _launch_mpv(video):
+                return jsonify({'error': 'failed to launch mpv'}), 500
+            if anime_id:
+                lib = _lib_read()
+                if anime_id in lib:
+                    lib[anime_id].setdefault('watched', {})[str(episode)] = True
+                    _lib_write(lib)
+            return jsonify({'ok': True, 'path': video})
+
         info_hash = (data.get('info_hash') or '').lower()
         if not info_hash:
             return jsonify({'error': 'info_hash required'}), 400
@@ -939,17 +1467,7 @@ def anime_watched_toggle(anime_id):
 
 # ── Episode thumbnail extraction ───────────────────────────────────────────────
 
-def _ffprobe_duration(path: str) -> float:
-    """Return video duration in seconds, or 0 on failure."""
-    try:
-        out = subprocess.check_output(
-            ['ffprobe', '-v', 'quiet', '-show_entries', 'format=duration',
-             '-of', 'default=noprint_wrappers=1:nokey=1', path],
-            stderr=subprocess.DEVNULL, timeout=10,
-        ).decode().strip()
-        return float(out)
-    except Exception:
-        return 0.0
+_ffprobe_duration = _video_duration  # alias used by thumb endpoint
 
 
 def _secs_to_hms(secs: float) -> str:
@@ -962,50 +1480,61 @@ def _secs_to_hms(secs: float) -> str:
 @anime_bp.route('/thumb/<anime_id>/<int:episode>')
 def anime_thumb(anime_id, episode):
     _THUMBS_DIR.mkdir(parents=True, exist_ok=True)
-    cache_path = _THUMBS_DIR / f'{anime_id}_{episode}.jpg'
+    is_special = request.args.get('special') == '1'
+    cache_key   = f'{anime_id}_sp{episode}.jpg' if is_special else f'{anime_id}_{episode}.jpg'
+    cache_path  = _THUMBS_DIR / cache_key
 
     # Serve cached thumb if it exists (no expiry — video files don't change)
     if cache_path.exists() and cache_path.stat().st_size > 0:
         return send_file(str(cache_path), mimetype='image/jpeg',
                          max_age=604800)  # 7 days
 
-    # Resolve info_hash from library (episode directly, or batch ep 0)
     lib = _lib_read()
     anime = lib.get(anime_id)
     if not anime:
         return ('', 404)
 
-    ep_map = anime.get('episodes', {})
-    ep_data = ep_map.get(str(episode)) or ep_map.get('0') or {}
-    info_hash = (ep_data.get('info_hash') or '').lower()
-    if not info_hash:
-        return ('', 404)
+    # Local-path anime: find video directly from folder
+    local_path = anime.get('local_path', '')
+    if local_path:
+        if is_special:
+            scanned  = _scan_local_episodes(local_path, anime.get('episode_overrides', {}))
+            specials = [e for e in scanned if e.get('ep_type') == 'special']
+            matched  = next((e for e in specials if e['num'] == episode), None)
+            video    = matched['path'] if matched else ''
+        else:
+            video = _find_video(local_path, episode)
+        if not video:
+            return ('', 404)
+    else:
+        ep_map = anime.get('episodes', {})
+        ep_data = ep_map.get(str(episode)) or ep_map.get('0') or {}
+        info_hash = (ep_data.get('info_hash') or '').lower()
+        if not info_hash:
+            return ('', 404)
+        try:
+            torrents = _q('get', '/torrents/info', params={'hashes': info_hash}).json()
+        except Exception:
+            return ('', 502)
+        if not torrents:
+            batch_hash = (ep_map.get('0') or {}).get('info_hash', '').lower()
+            if batch_hash and batch_hash != info_hash:
+                try:
+                    torrents = _q('get', '/torrents/info', params={'hashes': batch_hash}).json()
+                except Exception:
+                    pass
+        if not torrents:
+            return ('', 404)
+        content_path = torrents[0].get('content_path') or torrents[0].get('save_path', '')
+        if not content_path:
+            return ('', 404)
+        video = _find_video(content_path, episode)
+        if not video:
+            return ('', 404)
 
-    # Get content path from qBittorrent; fall back to ep-0 (batch) hash if needed
-    try:
-        torrents = _q('get', '/torrents/info', params={'hashes': info_hash}).json()
-    except Exception:
-        return ('', 502)
-    if not torrents:
-        batch_hash = (ep_map.get('0') or {}).get('info_hash', '').lower()
-        if batch_hash and batch_hash != info_hash:
-            try:
-                torrents = _q('get', '/torrents/info', params={'hashes': batch_hash}).json()
-            except Exception:
-                pass
-    if not torrents:
-        return ('', 404)
-    content_path = torrents[0].get('content_path') or torrents[0].get('save_path', '')
-    if not content_path:
-        return ('', 404)
-
-    video = _find_video(content_path, episode)
-    if not video:
-        return ('', 404)
-
-    # Get duration and seek to 25%
+    # Get duration and seek to 50% (midpoint)
     duration = _ffprobe_duration(video)
-    seek_secs = duration * 0.25 if duration > 0 else 30.0
+    seek_secs = duration * 0.50 if duration > 0 else 30.0
     seek_ts = _secs_to_hms(seek_secs)
 
     try:

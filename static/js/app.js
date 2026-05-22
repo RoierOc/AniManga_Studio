@@ -10,7 +10,11 @@ const app = createApp({
 
         // Library search & filter
         const libSearch = ref('');
-        const libFilter = ref('all'); // 'all' | 'downloaded' | 'upscaled' | 'saved'
+        const libFilter = ref('all'); // 'all' | 'downloaded' | 'upscaled' | 'saved' | 'updates'
+
+        // Manga chapter updates
+        const mangaUpdates = ref([]);
+        const updatesLoading = ref(false);
 
         // Data
         const library = ref([]);
@@ -272,6 +276,21 @@ const app = createApp({
         const animeLibraryLoading = ref(false);
         const animeLibraryDetail  = ref(null);
 
+        // Scan paths (local anime folders)
+        const scanPathsShow      = ref(false);
+        const scanPaths          = ref([]);
+        const scanNewPath        = ref('');
+        const scanFolders        = ref([]);
+        const scanFoldersLoading = ref(false);
+
+        // File browser
+        const scanBrowsing     = ref(false);
+        const scanBrowsePath   = ref('');
+        const scanBrowseWinPath = ref('');
+        const scanBrowseParent = ref(null);
+        const scanBrowseItems  = ref([]);
+        const scanBrowseLoading = ref(false);
+
         // Seasonal
         const animeSeasonalResults  = ref([]);
         const animeSeasonalLoading  = ref(false);
@@ -507,6 +526,26 @@ const app = createApp({
             return groups;
         });
 
+        const updatesById = computed(() => {
+            const m = {};
+            for (const u of mangaUpdates.value) m[u.manga_id] = u;
+            return m;
+        });
+
+        const loadMangaUpdates = async () => {
+            updatesLoading.value = true;
+            try {
+                const r = await fetch('/api/mangadex/updates');
+                if (r.ok) mangaUpdates.value = (await r.json()) || [];
+            } catch (_) {}
+            updatesLoading.value = false;
+        };
+
+        const refreshMangaUpdates = async () => {
+            await fetch('/api/mangadex/updates/refresh', { method: 'POST' });
+            await loadMangaUpdates();
+        };
+
         const filteredLibrary = computed(() => {
             let items = combinedLibrary.value;
             const q = libSearch.value.trim().toLowerCase();
@@ -514,6 +553,7 @@ const app = createApp({
             if (libFilter.value === 'downloaded') items = items.filter(i => i.downloaded);
             else if (libFilter.value === 'upscaled')  items = items.filter(i => i.upscaled > 0);
             else if (libFilter.value === 'saved')     items = items.filter(i => !i.downloaded);
+            else if (libFilter.value === 'updates')   items = items.filter(i => i.mdManga && updatesById.value[i.mdManga.id]);
             return items;
         });
 
@@ -631,13 +671,10 @@ const app = createApp({
                 const res = await fetch('/api/library');
                 const data = await res.json();
                 library.value = data || [];
-                
-                // Load ALL covers in PARALLEL (fast!)
-                if (data.length > 0) {
-                    await Promise.all(data.map(m => loadCoverForManga(m)));
-                }
-            } catch (e) { 
-                library.value = []; 
+                // Fire-and-forget: covers load in background, don't block the grid render
+                if (data.length > 0) Promise.all(data.map(m => loadCoverForManga(m)));
+            } catch (e) {
+                library.value = [];
             }
         };
         const langFlags = {
@@ -1627,9 +1664,9 @@ const app = createApp({
             currentPage.value = closest;
         };
         
-        const showToast = (msg, type = 'info') => {
+        const showToast = (msg, type = 'info', duration = 3000) => {
             toast.value = { show: true, message: msg, type };
-            setTimeout(() => toast.value.show = false, 3000);
+            setTimeout(() => toast.value.show = false, duration);
         };
         
         // SSE — replaces pollTasks + pollExports setIntervals
@@ -3066,12 +3103,15 @@ const app = createApp({
         };
 
         const playEpisode = async (anime, ep) => {
-            if ((!ep.in_qbt || ep.progress < 100) && !(ep.num > 0 && libDetailBatchDone.value)) return;
+            if ((!ep.in_qbt || ep.progress < 100) && !(ep.num > 0 && libDetailBatchDone.value) && !ep.in_local) return;
             try {
+                const body = ep.in_local
+                    ? { anime_id: anime.id, episode: ep.num, local_path: ep.local_path }
+                    : { anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash };
                 const r = await fetch('/api/anime/play', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash }),
+                    body: JSON.stringify(body),
                 });
                 let d;
                 try { d = await r.json(); } catch (_) {
@@ -3088,6 +3128,158 @@ const app = createApp({
                 showToast('Error al reproducir: ' + e.message, 'error');
             }
         };
+
+        // ── Scan paths ────────────────────────────────────────────────────────
+        const openScanPaths = async () => {
+            scanPathsShow.value = true;
+            scanBrowsing.value = false;
+            const r = await fetch('/api/anime/scanpaths');
+            if (r.ok) {
+                scanPaths.value = await r.json();
+                if (scanPaths.value.length > 0) loadScanFolders();
+            }
+        };
+
+        const openBrowse = () => {
+            scanBrowsing.value = true;
+            navigateBrowse('');
+        };
+
+        const navigateBrowse = async (path) => {
+            scanBrowseLoading.value = true;
+            try {
+                const url = path ? `/api/anime/browse?path=${encodeURIComponent(path)}` : '/api/anime/browse';
+                const r = await fetch(url);
+                if (!r.ok) return;
+                const d = await r.json();
+                scanBrowsePath.value   = d.path || '';
+                scanBrowseWinPath.value = d.win_path || '';
+                scanBrowseParent.value = d.parent ?? null;
+                scanBrowseItems.value  = d.items || [];
+            } finally {
+                scanBrowseLoading.value = false;
+            }
+        };
+
+        const selectBrowsePath = async () => {
+            const p = scanBrowseWinPath.value || scanBrowsePath.value;
+            if (!p) return;
+            await fetch('/api/anime/scanpaths', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: p }),
+            });
+            const r = await fetch('/api/anime/scanpaths');
+            if (r.ok) scanPaths.value = await r.json();
+            scanBrowsing.value = false;
+            showToast(`Ruta agregada: ${p}`, 'success');
+            loadScanFolders();
+        };
+
+        const addScanPath = async () => {
+            const p = scanNewPath.value.trim();
+            if (!p) return;
+            await fetch('/api/anime/scanpaths', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path: p }),
+            });
+            scanNewPath.value = '';
+            const r = await fetch('/api/anime/scanpaths');
+            if (r.ok) scanPaths.value = await r.json();
+        };
+
+        const removeScanPath = async (path) => {
+            await fetch('/api/anime/scanpaths', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ path }),
+            });
+            const r = await fetch('/api/anime/scanpaths');
+            if (r.ok) scanPaths.value = await r.json();
+            // Remove from current scan results too
+            scanFolders.value = scanFolders.value.filter(f => !f.folder.startsWith(path));
+        };
+
+        const loadScanFolders = async () => {
+            scanFoldersLoading.value = true;
+            try {
+                const r = await fetch('/api/anime/scan/folders');
+                if (r.ok) {
+                    const data = await r.json();
+                    scanFolders.value = data.map(f => ({
+                        ...f,
+                        _searchQuery: '',
+                        _searchResults: [],
+                        _searching: false,
+                        _suggLoading: false,
+                    }));
+                    // Fetch AniList suggestions lazily — one at a time to avoid rate-limiting
+                    for (const folder of scanFolders.value) {
+                        if (folder.mapped_id || folder.suggestion) continue;
+                        folder._suggLoading = true;
+                        try {
+                            const sr = await fetch(`/api/anime/scan/suggest?name=${encodeURIComponent(folder.name)}`);
+                            if (sr.ok) folder.suggestion = await sr.json();
+                        } catch (_) {}
+                        folder._suggLoading = false;
+                    }
+                }
+            } finally {
+                scanFoldersLoading.value = false;
+            }
+        };
+
+        const matchFolder = async (folder, match) => {
+            await fetch('/api/anime/scan/match', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    folder: folder.folder,
+                    anilist_id: match.id,
+                    title: match.title,
+                    cover: match.cover,
+                }),
+            });
+            folder.mapped_id     = String(match.id);
+            folder.matched_title = match.title;
+            folder.matched_cover = match.cover;
+            folder._searchResults = [];
+            await loadAnimeLibrary();
+        };
+
+        const unmatchFolder = async (folder) => {
+            await fetch('/api/anime/scan/unmatch', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ folder: folder.folder }),
+            });
+            folder.mapped_id     = null;
+            folder.matched_title = '';
+            folder.matched_cover = '';
+            await loadAnimeLibrary();
+        };
+
+        const searchForScanFolder = async (folder) => {
+            const q = folder._searchQuery.trim();
+            if (!q) return;
+            folder._searching = true;
+            folder._searchResults = [];
+            try {
+                const r = await fetch(`/api/anime/search?q=${encodeURIComponent(q)}`);
+                if (r.ok) {
+                    const items = await r.json();
+                    folder._searchResults = items.slice(0, 6).map(a => ({
+                        id: a.al_id || a.id,
+                        title: a.title,
+                        cover: a.cover,
+                    }));
+                }
+            } finally {
+                folder._searching = false;
+            }
+        };
+        // ─────────────────────────────────────────────────────────────────────
 
         const toggleWatched = async (anime, ep) => {
             try {
@@ -3110,7 +3302,8 @@ const app = createApp({
         const subTasks = ref(_loadSubTasks());
         watch(subTasks, (val) => { try { localStorage.setItem('subTasks', JSON.stringify(val)); } catch {} }, { deep: true });
 
-        const subTrackModal = ref(null); // {anime, ep, tracks} when picker is open
+        const subTrackModal  = ref(null); // {anime, ep, tracks, externalTracks} when picker is open
+        const subFetchingKey = ref(null); // key of episode currently fetching subtitle tracks
 
         const _subPoll = (key, taskId) => {
             const iv = setInterval(async () => {
@@ -3130,7 +3323,7 @@ const app = createApp({
             }, 1500);
         };
 
-        const startTranslate = async (anime, ep, subIndex = 0) => {
+        const startTranslate = async (anime, ep, subIndex = 0, externalSub = null) => {
             subTrackModal.value = null;
             const key = subTaskKey(anime.id, ep.num);
             subTasks.value = { ...subTasks.value, [key]: { status: 'starting', progress: 0, message: 'Iniciando…' } };
@@ -3139,10 +3332,12 @@ const app = createApp({
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        info_hash: ep.info_hash,
-                        episode:   ep.num,
-                        anime_id:  anime.id,
-                        sub_index: subIndex,
+                        info_hash:  ep.info_hash || '',
+                        episode:    ep.num,
+                        anime_id:   anime.id,
+                        sub_index:  subIndex,
+                        ...(ep.local_path ? { local_path: ep.local_path } : {}),
+                        ...(externalSub    ? { external_sub: externalSub } : {}),
                     }),
                 });
                 const d = await r.json();
@@ -3161,29 +3356,44 @@ const app = createApp({
         };
 
         const translateSubs = async (anime, ep) => {
-            // First fetch available subtitle tracks
+            const key = subTaskKey(anime.id, ep.num);
+            subFetchingKey.value = key;
             const params = new URLSearchParams({
-                info_hash: ep.info_hash, episode: ep.num, anime_id: anime.id
+                info_hash: ep.info_hash || '', episode: ep.num, anime_id: anime.id,
+                ...(ep.local_path ? { local_path: ep.local_path } : {}),
             });
             try {
                 const r = await fetch(`/api/subtitle/tracks?${params}`);
                 const d = await r.json();
                 if (!r.ok) { showToast(d.error || 'No se encontró el archivo', 'error'); return; }
-                const tracks = d.tracks || [];
-                const engTracks = tracks.filter(t => t.language === 'eng' || t.language === 'und');
-                if (engTracks.length === 1) {
-                    // Single track → start immediately
+                const tracks     = d.tracks          || [];
+                const extTracks  = d.external_tracks || [];
+                const missingKeys = d.sources_missing_key || [];
+                const engTracks  = tracks.filter(t => t.language === 'eng' || t.language === 'und');
+
+                if (tracks.length === 0 && extTracks.length === 0) {
+                    const hint = missingKeys.length
+                        ? ` (sin API key: ${missingKeys.join(', ')} — configura JIMAKU_API_KEY / OPENSUBTITLES_API_KEY)`
+                        : '';
+                    showToast(`No se encontraron subtítulos${hint}`, 'error', 8000);
+                } else if (tracks.length === 0 && extTracks.length === 1) {
+                    // Single external sub → auto-download + translate
+                    await startTranslate(anime, ep, 0, extTracks[0]);
+                } else if (tracks.length === 0 && extTracks.length > 1) {
+                    // Multiple external subs → picker
+                    subTrackModal.value = { anime, ep, tracks: [], externalTracks: extTracks };
+                } else if (engTracks.length === 1) {
                     await startTranslate(anime, ep, engTracks[0].sub_index);
                 } else if (tracks.length === 1) {
                     await startTranslate(anime, ep, tracks[0].sub_index);
-                } else if (tracks.length > 1) {
-                    // Multiple tracks → show picker
-                    subTrackModal.value = { anime, ep, tracks };
                 } else {
-                    showToast('No se encontraron subtítulos en el archivo', 'error');
+                    // Multiple internal tracks → picker (no external needed)
+                    subTrackModal.value = { anime, ep, tracks, externalTracks: [] };
                 }
             } catch (e) {
                 showToast('Error al obtener pistas de subtítulos', 'error');
+            } finally {
+                subFetchingKey.value = null;
             }
         };
 
@@ -3237,6 +3447,38 @@ const app = createApp({
                 }
             } catch (e) {
                 showToast('Error al eliminar: ' + e.message, 'error');
+            }
+        };
+
+        // ── Episode type override (local episodes) ────────────────────────────
+        const epOverrideMenu = ref(null); // {anime, ep, x, y}
+
+        const openEpOverrideMenu = (event, anime, ep) => {
+            event.stopPropagation();
+            event.preventDefault();
+            epOverrideMenu.value = { anime, ep };
+        };
+
+        const setEpOverride = async (type) => {
+            const { anime, ep } = epOverrideMenu.value || {};
+            epOverrideMenu.value = null;
+            if (!anime || !ep) return;
+            try {
+                const r = await fetch(`/api/anime/library/${anime.id}/ep_override`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filename: ep.filename, type }),
+                });
+                const d = await r.json();
+                if (d.ok) {
+                    await loadAnimeLibrary();
+                    const labels = { special: 'especial', hidden: 'oculto', episode: 'episodio normal' };
+                    showToast(`Marcado como ${labels[type] || type}`, 'success');
+                } else {
+                    showToast(d.error || 'Error', 'error');
+                }
+            } catch (e) {
+                showToast('Error: ' + e.message, 'error');
             }
         };
 
@@ -3395,12 +3637,26 @@ const app = createApp({
         };
 
         // Init
+        // Lazy-load flags: only fetch once per session
+        let _mdTagsLoaded = false;
+        let _mdLibraryLoaded = false;
+        let _cbzLoaded = false;
+
         // Auto-fetch AniList scores when search/popular results arrive
         watch(currentView, (val) => {
             if (val === 'anime') {
                 loadAnimeLibrary();
                 if (libPollTimer) clearInterval(libPollTimer);
                 libPollTimer = setInterval(() => loadAnimeLibrary(true), 3500);
+            } else if (val === 'mangadex') {
+                if (!_mdTagsLoaded)    { _mdTagsLoaded = true;    loadMdTags(); }
+                if (!_mdLibraryLoaded) { _mdLibraryLoaded = true; loadMdLibrary(); }
+                if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
+                if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
+            } else if (val === 'cbz') {
+                if (!_cbzLoaded) { _cbzLoaded = true; loadCbzLibrary(); }
+                if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
+                if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
             } else {
                 if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
                 if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
@@ -3422,15 +3678,12 @@ const app = createApp({
         onMounted(() => {
             loadLibrary();
             loadLocalLibrary();
-            loadMdLibrary();
             initSSE();
             syncExportTasks();
             checkSuwayomi();
             checkDrive();
             checkQbt();
             loadLibraryInfo();
-            loadCbzLibrary();
-            loadMdTags();
             document.addEventListener('keydown', handleKeydown);
             // On reload: reconnect polls for subtitle tasks that were in progress and have a task_id
             const _terminal = new Set(['done', 'error', 'cancelled']);
@@ -3451,6 +3704,7 @@ const app = createApp({
             currentManga, currentMdManga, currentTitle, currentCover, currentCoverUrl,
             currentChapter, currentPage, pages, isZoomed, selectedLang, toast,
             stats, groupedChapters, filteredChapters, availableLangs, currentPageUrl, combinedLibrary, filteredLibrary, libSearch, libFilter,
+            mangaUpdates, updatesLoading, updatesById, loadMangaUpdates, refreshMangaUpdates,
             getLangName, getLangFlag, getUniqueLangs, openManga, openMdManga, openLibraryItem, closeModal, addToLibrary, removeLibraryItem,
             isDownloaded, isUpscaled, isPartialUpscaled, getTask, getActiveTask, getProgressPercent,
             downloadChapter, upscaleChapter, cancelUpscale, cancelDownload, repairChapter, readChapter, readChapterOriginal, readChapterUpscaled, closeReader,
@@ -3519,7 +3773,13 @@ const app = createApp({
             loadAnimeLibrary, removeFromAnimeLibrary, openAnimeLibraryDetail, searchEpisodeInNyaa,
             isInAnimeLibrary, addAnimeToLibrary, libDetailHasBatch, libDetailBatchDone, libDetailBatchEp,
             playEpisode, toggleWatched, deleteEpisode,
-            subTasks, subTrackModal, translateSubs, startTranslate, subTaskKey, cancelTranslation,
+            scanPathsShow, scanPaths, scanNewPath, scanFolders, scanFoldersLoading,
+            scanBrowsing, scanBrowsePath, scanBrowseWinPath, scanBrowseParent, scanBrowseItems, scanBrowseLoading,
+            openScanPaths, addScanPath, removeScanPath, loadScanFolders,
+            openBrowse, navigateBrowse, selectBrowsePath,
+            matchFolder, unmatchFolder, searchForScanFolder,
+            subTasks, subTrackModal, subFetchingKey, translateSubs, startTranslate, subTaskKey, cancelTranslation,
+            epOverrideMenu, openEpOverrideMenu, setEpOverride,
             animeSeasonalResults, animeSeasonalLoading, animeSeasonSort, animeSeasonGenreFilter,
             animeSeasonSeason, animeSeasonYear, seasonLabel, seasonYears, filteredSeasonalAnime, seasonalGenres,
             loadSeasonalAnime, seasonNav, onSeasonChange, onYearChange, SEASON_ES,

@@ -9,7 +9,7 @@
   <meta name="theme-color" content="#6184d3">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260520-9">
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260522-8">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <script src="/static/js/vue.js"></script>
@@ -77,6 +77,13 @@
             <button :class="['lib-filter-btn', libFilter==='downloaded' && 'active']" @click="libFilter='downloaded'">Descargados</button>
             <button :class="['lib-filter-btn', libFilter==='upscaled' && 'active']" @click="libFilter='upscaled'">4K</button>
             <button :class="['lib-filter-btn', libFilter==='saved' && 'active']" @click="libFilter='saved'">Guardados</button>
+            <button :class="['lib-filter-btn', 'lib-filter-btn--updates', libFilter==='updates' && 'active']"
+                    @click="libFilter='updates'; if(!mangaUpdates.length && !updatesLoading) loadMangaUpdates()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+              Actualizaciones
+              <span v-if="updatesLoading" class="lib-filter-spinner"></span>
+              <span v-else-if="mangaUpdates.length > 0" class="lib-filter-badge">{{ mangaUpdates.length }}</span>
+            </button>
           </div>
           <span class="lib-count">{{ filteredLibrary.length }}<template v-if="filteredLibrary.length !== combinedLibrary.length"> / {{ combinedLibrary.length }}</template> manga</span>
           <button class="lib-offline-btn" @click="downloadCoversOffline()"
@@ -86,6 +93,40 @@
             <span v-if="offlineCoverStatus.running">{{ offlineCoverStatus.done }}/{{ offlineCoverStatus.total }}</span>
             <span v-else>Offline</span>
           </button>
+        </div>
+      </div>
+
+      <!-- Updates summary panel: visible only when 'updates' filter is active -->
+      <div v-if="libFilter === 'updates'" class="updates-panel">
+        <div class="updates-panel-header">
+          <span class="updates-panel-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:5px"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>
+            {{ updatesLoading ? 'Comprobando actualizaciones…' : (mangaUpdates.length ? `${mangaUpdates.length} manga con capítulos nuevos` : 'Todo al día') }}
+          </span>
+          <button class="updates-refresh-btn" @click="refreshMangaUpdates()" :disabled="updatesLoading" title="Actualizar desde MangaDex">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" :class="updatesLoading && 'spin'"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+            Actualizar
+          </button>
+        </div>
+        <div v-if="!updatesLoading && mangaUpdates.length > 0" class="updates-list">
+          <div v-for="upd in mangaUpdates" :key="upd.manga_id" class="updates-item" @click="openLibraryItem(combinedLibrary.find(i=>i.mdManga&&i.mdManga.id===upd.manga_id) || {mdManga:{id:upd.manga_id,title:upd.title,cover:upd.cover}})">
+            <img v-if="upd.cover" :src="upd.cover" class="updates-cover" loading="lazy">
+            <div v-else class="updates-cover updates-cover--placeholder">{{ upd.title.charAt(0).toUpperCase() }}</div>
+            <div class="updates-info">
+              <div class="updates-title">{{ upd.title }}</div>
+              <div class="updates-chapters">
+                <span class="updates-new-label">{{ upd.new_count }} cap{{ upd.new_count !== 1 ? 's' : '' }} nuevo{{ upd.new_count !== 1 ? 's' : '' }}</span>
+                <span v-for="ch in upd.new_chapters.slice(0, 12)" :key="ch" class="updates-ch-chip">{{ ch }}</span>
+                <span v-if="upd.new_chapters.length > 12" class="updates-ch-more">+{{ upd.new_chapters.length - 12 }} más</span>
+              </div>
+            </div>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" class="updates-arrow"><path d="M10 6L8.59 7.41 13.17 12l-4.58 4.59L10 18l6-6z"/></svg>
+          </div>
+        </div>
+        <div v-if="!updatesLoading && mangaUpdates.length === 0" class="updates-empty">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor" opacity="0.3"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+          <p>Todo al día — no hay capítulos nuevos</p>
+          <button class="md-btn-secondary" style="margin-top:8px" @click="refreshMangaUpdates()">Verificar ahora</button>
         </div>
       </div>
 
@@ -101,6 +142,9 @@
             <div v-if="item.upscaled > 0" class="md-badge">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
               {{ item.upscaled }}
+            </div>
+            <div v-if="item.mdManga && updatesById[item.mdManga.id]" class="md-new-badge">
+              +{{ updatesById[item.mdManga.id].new_count }} nuevo{{ updatesById[item.mdManga.id].new_count !== 1 ? 's' : '' }}
             </div>
             <!-- Active task overlay -->
             <template v-if="activeTasksByTitle[canonicalTitle(item.title)]">
@@ -645,6 +689,9 @@
           Mi Anime
           <span v-if="animeLibrary.length > 0" class="source-online-dot" style="background:#4ade80"></span>
         </button>
+        <button class="anime-subnav-btn anime-subnav-icon" @click="openScanPaths" title="Rutas de anime local">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/><circle cx="15.5" cy="13.5" r="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M19 17l-1.8-1.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
       </div>
 
       <!-- ── SEARCH VIEW ── -->
@@ -1065,6 +1112,20 @@
                          :style="{ width: Math.min(100, animeLibraryDetail.downloaded_count / animeLibraryDetail.total_episodes * 100) + '%' }"></div>
                   </div>
                 </div>
+                <div class="anime-detail-links" style="margin-top:10px">
+                  <a v-if="animeLibraryDetail.al_id"
+                     :href="'https://anilist.co/anime/' + animeLibraryDetail.al_id"
+                     target="_blank" rel="noopener" class="anime-ext-link anime-ext-link--al">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M14 3v2H7v14h14v-7h2v9H5V3h9zm5-3l3 3-9 9-3-1 1-3 9-8z"/></svg>
+                    AniList
+                  </a>
+                  <a v-if="animeLibraryDetail.mal_id"
+                     :href="'https://myanimelist.net/anime/' + animeLibraryDetail.mal_id"
+                     target="_blank" rel="noopener" class="anime-ext-link anime-ext-link--mal">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M14 3v2H7v14h14v-7h2v9H5V3h9zm5-3l3 3-9 9-3-1 1-3 9-8z"/></svg>
+                    MAL
+                  </a>
+                </div>
               </div>
             </div>
             <button class="allib-del-all-btn" @click="removeFromAnimeLibrary(animeLibraryDetail.id)"
@@ -1076,18 +1137,18 @@
 
           <!-- Episode grid -->
           <div class="epgrid">
-            <div v-for="ep in animeLibraryDetail.episodes.filter(e => e.num !== 0)" :key="ep.num"
+            <div v-for="ep in animeLibraryDetail.episodes.filter(e => e.num !== 0 && e.ep_type !== 'special')" :key="ep.num"
                  class="ep-card"
                  :class="{
-                   'ep-card--done':    (ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone),
+                   'ep-card--done':    (ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone) || ep.in_local,
                    'ep-card--dl':      (ep.in_qbt && ep.progress < 100 && !libDetailHasBatch) || (ep.num > 0 && libDetailHasBatch && !libDetailBatchDone),
-                   'ep-card--missing': !ep.in_qbt && !(ep.num > 0 && libDetailHasBatch),
+                   'ep-card--missing': !ep.in_qbt && !ep.in_local && !(ep.num > 0 && libDetailHasBatch),
                    'ep-card--watched': ep.watched,
                  }">
 
               <!-- ── Thumbnail ───────────────────────────────────────────── -->
               <div class="ep-card-thumb"
-                   @click="((ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone)) && playEpisode(animeLibraryDetail, ep)">
+                   @click="((ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone) || ep.in_local) && playEpisode(animeLibraryDetail, ep)">
 
                 <!-- Blurred cover art background (fallback when no frame extracted) -->
                 <div class="ep-card-bg"
@@ -1095,7 +1156,7 @@
                 </div>
 
                 <!-- Extracted video frame thumbnail (fades in over cover bg) -->
-                <img v-if="(ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone)"
+                <img v-if="(ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone) || ep.in_local"
                      class="ep-card-thumb-img"
                      :src="`/api/anime/thumb/${animeLibraryDetail.id}/${ep.num}`"
                      @load="$event.target.classList.add('ep-card-thumb-img--loaded')"
@@ -1155,7 +1216,7 @@
                 </div>
 
                 <!-- Play hover overlay (done episodes) -->
-                <div v-else-if="(ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone)"
+                <div v-else-if="(ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone) || ep.in_local"
                      class="ep-card-play-hover">
                   <svg width="38" height="38" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                 </div>
@@ -1167,9 +1228,15 @@
 
                 <div class="ep-card-actions">
                   <!-- Downloaded state -->
-                  <template v-if="(ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone)">
+                  <template v-if="(ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone) || ep.in_local">
                     <!-- Left: translate pill -->
-                    <button v-if="!subTasks[subTaskKey(animeLibraryDetail.id, ep.num)] ||
+                    <button v-if="subFetchingKey === subTaskKey(animeLibraryDetail.id, ep.num)"
+                            class="ep-card-btn ep-card-btn--sub" disabled
+                            title="Buscando subtítulos…">
+                      <svg class="spin" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+                      <span>Buscando…</span>
+                    </button>
+                    <button v-else-if="!subTasks[subTaskKey(animeLibraryDetail.id, ep.num)] ||
                                    ['done','error','cancelled'].includes(subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].status)"
                             class="ep-card-btn ep-card-btn--sub"
                             :class="subTasks[subTaskKey(animeLibraryDetail.id, ep.num)]?.status === 'done'
@@ -1186,7 +1253,7 @@
                       <span>Traduciendo…</span>
                     </div>
 
-                    <!-- Right: watched + delete -->
+                    <!-- Right: watched (no delete for local) -->
                     <div class="ep-card-actions-right">
                       <button class="ep-card-icon-btn" :class="ep.watched ? 'ep-card-icon-btn--active' : ''"
                               @click="toggleWatched(animeLibraryDetail, ep)"
@@ -1194,7 +1261,12 @@
                         <svg v-if="ep.watched" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46A11.804 11.804 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27z"/></svg>
                         <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
                       </button>
-                      <button class="ep-card-icon-btn ep-card-icon-btn--danger"
+                      <button v-if="ep.in_local" class="ep-card-icon-btn"
+                              @click.stop="openEpOverrideMenu($event, animeLibraryDetail, ep)"
+                              title="Cambiar tipo de episodio">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+                      </button>
+                      <button v-if="!ep.in_local" class="ep-card-icon-btn ep-card-icon-btn--danger"
                               @click="deleteEpisode(animeLibraryDetail, ep)" title="Borrar episodio">
                         <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
                       </button>
@@ -1219,6 +1291,73 @@
             </div>
 
           </div>
+
+          <!-- Specials section -->
+          <template v-if="animeLibraryDetail.episodes.some(e => e.ep_type === 'special')">
+            <div class="epgrid-specials-header">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+              Especiales / Extras
+            </div>
+            <div class="epgrid">
+              <div v-for="ep in animeLibraryDetail.episodes.filter(e => e.ep_type === 'special')" :key="'sp-'+ep.num"
+                   class="ep-card ep-card--done" :class="{ 'ep-card--watched': ep.watched }">
+
+                <div class="ep-card-thumb" @click="playEpisode(animeLibraryDetail, ep)">
+                  <div class="ep-card-bg"
+                       :style="animeLibraryDetail.cover ? `background-image:url('${animeLibraryDetail.cover}')` : ''"></div>
+                  <img class="ep-card-thumb-img" :src="`/api/anime/thumb/${animeLibraryDetail.id}/${ep.num}?special=1`"
+                       @load="$event.target.classList.add('ep-card-thumb-img--loaded')"
+                       @error="$event.target.style.display='none'"
+                       loading="lazy" alt="">
+                  <div class="ep-card-num">
+                    <span class="ep-card-num-label">SP</span>
+                    <span class="ep-card-num-val">{{ String(ep.num).padStart(2,'0') }}</span>
+                  </div>
+                  <div v-if="ep.watched" class="ep-card-chip ep-card-chip--watched">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    Visto
+                  </div>
+                  <div class="ep-card-play-hover">
+                    <svg width="38" height="38" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                  </div>
+                </div>
+
+                <div class="ep-card-foot">
+                  <div class="ep-card-title">{{ ep.title || ('Especial ' + ep.num) }}</div>
+                  <div class="ep-card-actions">
+                    <button v-if="subFetchingKey === subTaskKey(animeLibraryDetail.id, ep.num)"
+                            class="ep-card-btn ep-card-btn--sub" disabled>
+                      <svg class="spin" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+                      <span>Buscando…</span>
+                    </button>
+                    <button v-else-if="!subTasks[subTaskKey(animeLibraryDetail.id, ep.num)] ||
+                                   ['done','error','cancelled'].includes(subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].status)"
+                            class="ep-card-btn ep-card-btn--sub"
+                            :class="subTasks[subTaskKey(animeLibraryDetail.id, ep.num)]?.status === 'done' ? 'ep-card-btn--sub-done' : ''"
+                            @click="translateSubs(animeLibraryDetail, ep)"
+                            :title="subTasks[subTaskKey(animeLibraryDetail.id, ep.num)]?.status === 'done' ? 'Re-traducir' : 'Traducir al español'">
+                      <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>
+                      <span>{{ subTasks[subTaskKey(animeLibraryDetail.id, ep.num)]?.status === 'done' ? 'ESP ✓' : 'Sub ES' }}</span>
+                    </button>
+                    <div class="ep-card-actions-right">
+                      <button class="ep-card-icon-btn" :class="ep.watched ? 'ep-card-icon-btn--active' : ''"
+                              @click="toggleWatched(animeLibraryDetail, ep)"
+                              :title="ep.watched ? 'Marcar como no visto' : 'Marcar como visto'">
+                        <svg v-if="ep.watched" width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46A11.804 11.804 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27z"/></svg>
+                        <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/></svg>
+                      </button>
+                      <button class="ep-card-icon-btn"
+                              @click.stop="openEpOverrideMenu($event, animeLibraryDetail, ep)"
+                              title="Cambiar tipo de episodio">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
         </div>
 
         <!-- Library grid -->
@@ -1243,7 +1382,7 @@
               <div class="allib-card-dots">
                 <span v-for="ep in a.episodes.filter(e => e.num !== 0).slice(0, 16)" :key="ep.num"
                       class="allib-card-dot"
-                      :class="{ 'allib-dot--done': ep.in_qbt && ep.progress >= 100, 'allib-dot--dl': ep.in_qbt && ep.progress < 100 }"></span>
+                      :class="{ 'allib-dot--done': (ep.in_qbt && ep.progress >= 100) || ep.in_local, 'allib-dot--dl': ep.in_qbt && ep.progress < 100 }"></span>
               </div>
             </div>
             <button class="allib-card-del" @click.stop="removeFromAnimeLibrary(a.id)"
@@ -2382,12 +2521,35 @@
     </div>
   </div>
 
+  <!-- EPISODE TYPE OVERRIDE MENU -->
+  <div v-if="epOverrideMenu" class="ep-override-backdrop" @click="epOverrideMenu = null">
+    <div class="ep-override-menu" @click.stop>
+      <div class="ep-override-title">{{ epOverrideMenu.ep.title }}</div>
+      <button class="ep-override-opt" :class="{'ep-override-opt--active': epOverrideMenu.ep.ep_type === 'episode'}"
+              @click="setEpOverride('episode')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h5v2h8v-2h5c1.1 0 1.99-.9 1.99-2L23 5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg>
+        Episodio normal
+      </button>
+      <button class="ep-override-opt" :class="{'ep-override-opt--active': epOverrideMenu.ep.ep_type === 'special'}"
+              @click="setEpOverride('special')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+        Especial / Extra
+      </button>
+      <button class="ep-override-opt ep-override-opt--danger"
+              @click="setEpOverride('hidden')">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46A11.804 11.804 0 0 0 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27z"/></svg>
+        Ocultar
+      </button>
+    </div>
+  </div>
+
   <!-- SUBTITLE TRACK PICKER MODAL -->
   <div v-if="subTrackModal" class="sub-modal-backdrop" @click.self="subTrackModal = null">
     <div class="sub-modal">
       <div class="sub-modal-title">Seleccionar pista de subtítulos</div>
       <div class="sub-modal-file">{{ subTrackModal.ep.num > 0 ? 'Ep ' + subTrackModal.ep.num : 'BATCH' }}</div>
       <div class="sub-modal-tracks">
+        <!-- Internal MKV tracks -->
         <button v-for="t in subTrackModal.tracks" :key="t.sub_index"
                 class="sub-modal-track-btn"
                 @click="startTranslate(subTrackModal.anime, subTrackModal.ep, t.sub_index)">
@@ -2395,8 +2557,155 @@
           <span class="sub-track-codec">{{ t.codec.toUpperCase() }}</span>
           <span v-if="t.title" class="sub-track-title">{{ t.title }}</span>
         </button>
+        <!-- External subtitle sources -->
+        <template v-if="subTrackModal.externalTracks?.length">
+          <div v-if="subTrackModal.tracks?.length" class="sub-track-separator">Fuentes externas</div>
+          <div v-else class="sub-track-separator">Sin pistas internas — fuentes externas</div>
+          <button v-for="(t, i) in subTrackModal.externalTracks" :key="'ext-'+i"
+                  class="sub-modal-track-btn sub-modal-track-btn--ext"
+                  @click="startTranslate(subTrackModal.anime, subTrackModal.ep, 0, t)">
+            <span class="sub-track-lang">{{ (t.language || 'und').toUpperCase() }}</span>
+            <span class="sub-track-source sub-track-source--{{ t.source }}">{{ t.source }}</span>
+            <span v-if="t.title" class="sub-track-title">{{ t.title }}</span>
+          </button>
+        </template>
       </div>
       <button class="sub-modal-cancel" @click="subTrackModal = null">Cancelar</button>
+    </div>
+  </div>
+
+  <!-- ── SCAN PATHS MODAL ── -->
+  <div v-if="scanPathsShow" class="md-modal-overlay" @click.self="scanPathsShow = false">
+    <div class="md-modal scan-paths-modal">
+      <button class="md-modal-close" @click="scanPathsShow = false">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+
+      <!-- ── FILE BROWSER VIEW ── -->
+      <template v-if="scanBrowsing">
+        <div class="scan-modal-header">
+          <button class="scan-back-btn" @click="scanBrowsing = false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+          </button>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="opacity:.6"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+          <div class="scan-breadcrumb">
+            <span v-if="!scanBrowsePath" class="scan-breadcrumb-root">Mis discos</span>
+            <span v-else class="scan-breadcrumb-path">{{ scanBrowseWinPath || scanBrowsePath }}</span>
+          </div>
+        </div>
+
+        <!-- Navigate up -->
+        <button v-if="scanBrowseParent !== null" class="scan-dir-up" @click="navigateBrowse(scanBrowseParent)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
+          Subir un nivel
+        </button>
+
+        <!-- Directory listing -->
+        <div class="scan-dir-list" v-if="!scanBrowseLoading">
+          <div v-if="scanBrowseItems.length === 0" class="scan-empty-hint">Carpeta vacía</div>
+          <button v-for="item in scanBrowseItems" :key="item.path"
+                  class="scan-dir-item" @click="navigateBrowse(item.path)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" style="color:#f59e0b;flex-shrink:0"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+            <span>{{ item.name }}</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" style="margin-left:auto;opacity:.3"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6z"/></svg>
+          </button>
+        </div>
+        <div v-else class="md-loading" style="padding:24px 0"><div class="md-spinner"></div></div>
+
+        <!-- Select current folder -->
+        <div class="scan-select-row" v-if="scanBrowsePath">
+          <button class="scan-select-btn" @click="selectBrowsePath">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            Agregar "{{ (scanBrowseWinPath || scanBrowsePath).split(/[/\\]/).filter(Boolean).pop() }}"
+          </button>
+        </div>
+      </template>
+
+      <!-- ── MAIN VIEW ── -->
+      <template v-else>
+        <div class="scan-modal-header">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+          <h3>Rutas de anime local</h3>
+        </div>
+
+        <!-- Explore button -->
+        <button class="scan-explore-btn" @click="openBrowse">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+          Explorar carpetas
+        </button>
+
+        <!-- Path list -->
+        <div class="scan-paths-list" v-if="scanPaths.length > 0">
+          <div v-for="p in scanPaths" :key="p" class="scan-path-row">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="flex-shrink:0;opacity:.5"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+            <span class="scan-path-text">{{ p }}</span>
+            <button class="scan-path-del" @click="removeScanPath(p)" title="Quitar ruta">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+            </button>
+          </div>
+        </div>
+        <p v-else class="scan-empty-hint">Usa "Explorar carpetas" para agregar rutas</p>
+
+        <!-- Scan button -->
+        <div class="scan-action-row" v-if="scanPaths.length > 0">
+          <button class="scan-scan-btn" @click="loadScanFolders" :disabled="scanFoldersLoading">
+            <svg v-if="!scanFoldersLoading" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><circle cx="11" cy="11" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M21 21l-4.35-4.35" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            <div v-else class="md-spinner" style="width:14px;height:14px;border-width:2px"></div>
+            {{ scanFoldersLoading ? 'Escaneando…' : 'Escanear carpetas' }}
+          </button>
+        </div>
+      </template>
+
+      <!-- Folder results -->
+      <div v-if="scanFolders.length > 0" class="scan-folders-section">
+        <div class="scan-folders-title">{{ scanFolders.length }} carpeta{{ scanFolders.length !== 1 ? 's' : '' }} encontrada{{ scanFolders.length !== 1 ? 's' : '' }}</div>
+        <div v-for="f in scanFolders" :key="f.folder" class="scan-folder-item">
+          <div class="scan-folder-name">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor" style="opacity:.5;flex-shrink:0"><path d="M10 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>
+            <span>{{ f.name }}</span>
+            <span v-if="f.mapped_id" class="scan-linked-badge">Vinculado</span>
+          </div>
+
+          <!-- Matched -->
+          <div v-if="f.mapped_id" class="scan-match-row">
+            <img v-if="f.matched_cover" :src="f.matched_cover" class="scan-match-thumb" :alt="f.matched_title">
+            <span class="scan-match-title">{{ f.matched_title }}</span>
+            <button class="scan-unlink-btn" @click="unmatchFolder(f)">Desvincular</button>
+          </div>
+
+          <!-- Suggestion (not yet matched) -->
+          <div v-else>
+            <div v-if="f._suggLoading" class="scan-suggestion-loading">
+              <div class="md-spinner" style="width:12px;height:12px;border-width:2px"></div>
+              <span>Buscando sugerencia…</span>
+            </div>
+            <div v-if="f.suggestion" class="scan-suggestion-row">
+              <img v-if="f.suggestion.cover" :src="f.suggestion.cover" class="scan-match-thumb" :alt="f.suggestion.title">
+              <div class="scan-suggestion-info">
+                <span class="scan-match-title">{{ f.suggestion.title }}</span>
+                <span class="scan-suggestion-label">Sugerencia</span>
+              </div>
+              <button class="scan-confirm-btn" @click="matchFolder(f, f.suggestion)">Confirmar</button>
+            </div>
+            <!-- Manual search toggle -->
+            <div class="scan-manual-row">
+              <input class="scan-manual-input" v-model="f._searchQuery"
+                     :placeholder="f.suggestion ? 'Buscar otro…' : 'Buscar en AniList…'"
+                     @keyup.enter="searchForScanFolder(f)">
+              <button class="scan-manual-btn" @click="searchForScanFolder(f)" :disabled="f._searching">
+                <div v-if="f._searching" class="md-spinner" style="width:12px;height:12px;border-width:2px"></div>
+                <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5z"/></svg>
+              </button>
+            </div>
+            <div v-if="f._searchResults && f._searchResults.length" class="scan-search-results">
+              <div v-for="r in f._searchResults" :key="r.id" class="scan-search-result" @click="matchFolder(f, r)">
+                <img v-if="r.cover" :src="r.cover" class="scan-result-thumb" :alt="r.title">
+                <span>{{ r.title }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -2404,7 +2713,7 @@
   <div v-if="toast.show" class="md-toast" :class="toast.type">{{ toast.message }}</div>
 
 </div>
-<script src="/static/js/app.js?v=20260520-9"></script>
+<script src="/static/js/app.js?v=20260522-7"></script>
 <script>
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});

@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 import os
 
-from api.runtime import MANGA_DIR
+from api.runtime import MANGA_DIR, normalize_chapter
 
 auth_bp = Blueprint('mangadex', __name__)
 
@@ -193,6 +193,9 @@ _SEARCH_TTL = 300          # 5 minutes
 _tags_cache: list = []
 _tags_cache_ts: float = 0
 _TAGS_TTL = 3600           # 1 hour
+
+_updates_cache: dict = {}  # manga_id → {'chapter_nums': set, 'ts': float}
+_UPDATES_TTL = 600         # 10 minutes
 
 _ALL_RATINGS = ["safe", "suggestive", "erotica", "pornographic"]
 
@@ -660,6 +663,127 @@ def update_manga_data():
             break
     save_local_library(lib)
     return jsonify({"success": True})
+
+
+@auth_bp.route('/updates')
+def manga_updates():
+    """Return library manga that have chapters on MangaDex not yet downloaded locally.
+    Only checks manga with at least one local chapter (downloaded, not just saved).
+    Results cached per-manga for 10 minutes."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    lib = load_local_library()
+    manga_dir_path = Path(MANGA_DIR)
+
+    # Collect entries that have local chapters on disk
+    candidates = []  # [(manga_id, title, cover, local_chs)]
+    for entry in lib:
+        manga_id = entry.get('id')
+        title = (entry.get('title') or entry.get('name') or '').strip()
+        cover = entry.get('cover') or ''
+        if not manga_id or not title:
+            continue
+
+        local_chs: set = set()
+        folder = manga_dir_path / title
+        if folder.exists():
+            for img in folder.iterdir():
+                if img.is_file() and img.suffix.lower() in ('.jpg', '.png', '.webp'):
+                    parts = img.stem.split('_')
+                    if parts and parts[0].lower().startswith('ch'):
+                        local_chs.add(normalize_chapter(parts[0]))
+
+        if local_chs:
+            candidates.append((manga_id, title, cover, local_chs))
+
+    if not candidates:
+        return jsonify([])
+
+    def _fetch_remote(manga_id: str) -> set:
+        now = time.time()
+        cached = _updates_cache.get(manga_id)
+        if cached and now - cached['ts'] < _UPDATES_TTL:
+            return cached['chapter_nums']
+        try:
+            r = _SESSION.get(
+                f"https://api.mangadex.org/manga/{manga_id}/aggregate",
+                timeout=10,
+            )
+            remote_chs: set = set()
+            if r.ok:
+                for vol_data in (r.json().get('volumes') or {}).values():
+                    for ch_num in (vol_data.get('chapters') or {}).keys():
+                        norm = normalize_chapter(ch_num)
+                        if norm and norm != 'one_shot':
+                            remote_chs.add(norm)
+            _updates_cache[manga_id] = {'chapter_nums': remote_chs, 'ts': now}
+            return remote_chs
+        except Exception:
+            return set()
+
+    # Fetch all remote chapter sets in parallel (max 6 concurrent)
+    remote_map: dict = {}
+    ids_to_fetch = [mid for mid, *_ in candidates]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        futures = {pool.submit(_fetch_remote, mid): mid for mid in ids_to_fetch}
+        for future in as_completed(futures):
+            mid = futures[future]
+            try:
+                remote_map[mid] = future.result()
+            except Exception:
+                remote_map[mid] = set()
+
+    def _num_sort(c):
+        try:
+            return float(c)
+        except (ValueError, TypeError):
+            return 0.0
+
+    result = []
+    for manga_id, title, cover, local_chs in candidates:
+        remote_chs = remote_map.get(manga_id, set())
+
+        # Convert local chapter numbers to floats for comparison
+        local_nums = set()
+        for c in local_chs:
+            try:
+                local_nums.add(float(c))
+            except (ValueError, TypeError):
+                pass
+
+        max_local = max(local_nums) if local_nums else 0.0
+
+        # "New" = chapters on MangaDex with a number GREATER than the highest local chapter.
+        # This avoids flagging intentionally-skipped back-catalogue chapters as "new".
+        new_chs = []
+        for c in remote_chs:
+            try:
+                if float(c) > max_local:
+                    new_chs.append(c)
+            except (ValueError, TypeError):
+                pass
+
+        if not new_chs:
+            continue
+        sorted_new = sorted(new_chs, key=_num_sort)
+        result.append({
+            'manga_id': manga_id,
+            'title': title,
+            'cover': cover,
+            'new_count': len(sorted_new),
+            'new_chapters': sorted_new[:50],
+            'latest_local': str(int(max_local)) if max_local == int(max_local) else str(max_local),
+        })
+
+    result.sort(key=lambda x: x['title'].lower())
+    return jsonify(result)
+
+
+@auth_bp.route('/updates/refresh', methods=['POST'])
+def manga_updates_refresh():
+    """Clear the updates cache so next /updates call re-fetches from MangaDex."""
+    _updates_cache.clear()
+    return jsonify({'ok': True})
 
 
 @auth_bp.route('/volumes/<manga_id>')

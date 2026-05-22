@@ -6,6 +6,8 @@ import tempfile
 import subprocess
 import threading
 import uuid
+import urllib.request as _ur
+import urllib.parse as _up
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Blueprint, request, jsonify
 
@@ -65,8 +67,10 @@ def _build_prompt(src_lang: str = 'eng') -> str:
 
 # ── Subtitle detection & extraction ──────────────────────────────────────────
 
+_TEXT_SUB_CODECS = {'ass', 'ssa', 'subrip', 'srt', 'webvtt', 'mov_text', 'text', 'jacosub', 'microdvd', 'realtext', 'subviewer', 'vplayer'}
+
 def _ffprobe_tracks(path: str) -> list:
-    """Return list of subtitle stream dicts from an MKV."""
+    """Return list of text subtitle stream dicts from an MKV (image-based codecs excluded)."""
     cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json',
            '-show_streams', path]
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -79,16 +83,223 @@ def _ffprobe_tracks(path: str) -> list:
     subs = []
     for s in streams:
         if s.get('codec_type') == 'subtitle':
+            codec = s.get('codec_name', 'srt')
+            if codec not in _TEXT_SUB_CODECS:
+                sub_idx += 1  # still count it so sub_index stays correct for ffmpeg
+                continue
             tags = s.get('tags', {})
             subs.append({
-                'index':        s.get('index'),        # global stream index
-                'sub_index':    sub_idx,               # 0-based among subtitle streams
-                'codec':        s.get('codec_name', 'srt'),
-                'language':     tags.get('language', 'und'),
-                'title':        tags.get('title', ''),
+                'index':     s.get('index'),
+                'sub_index': sub_idx,
+                'codec':     codec,
+                'language':  tags.get('language', 'und'),
+                'title':     tags.get('title', ''),
             })
             sub_idx += 1
     return subs
+
+
+# ── External subtitle search (Jimaku / OpenSubtitles / Nyaa) ─────────────────
+# Requires env vars:
+#   JIMAKU_API_KEY       — free account at jimaku.cc (best anime source)
+#   OPENSUBTITLES_API_KEY — free account at opensubtitles.com
+
+def _ext_search_jimaku(al_id: str, titles: list, episode: int) -> list:
+    """Search Jimaku CC by AniList ID (only reliable search method — title search returns full catalog).
+    Requires JIMAKU_API_KEY env var (free account at jimaku.cc)."""
+    key = os.environ.get('JIMAKU_API_KEY', '')
+    if not key:
+        print('[subtitle] Jimaku: sin JIMAKU_API_KEY — saltando')
+        return []
+    if not al_id:
+        print('[subtitle] Jimaku: sin al_id — saltando (búsqueda por título no filtra)')
+        return []
+    headers = {'User-Agent': 'MangaUpscaler/1.0', 'Authorization': key}
+    results = []
+    try:
+        req = _ur.Request(f'https://jimaku.cc/api/entries/search?anilist_id={al_id}', headers=headers)
+        with _ur.urlopen(req, timeout=10) as r:
+            entries = json.loads(r.read())
+        if not isinstance(entries, list) or not entries:
+            print(f'[subtitle] Jimaku: anime al_id={al_id} no encontrado en catálogo')
+            return []
+        for entry in entries[:3]:
+            eid = entry.get('id')
+            if not eid:
+                continue
+            req2 = _ur.Request(
+                f'https://jimaku.cc/api/entries/{eid}/files?episode={episode}',
+                headers=headers,
+            )
+            with _ur.urlopen(req2, timeout=10) as r2:
+                files = json.loads(r2.read())
+            if not isinstance(files, list):
+                continue
+            for f in files:
+                name = f.get('name', '')
+                if not any(name.lower().endswith(x) for x in ('.srt', '.ass', '.ssa', '.vtt')):
+                    continue
+                results.append({'url': f.get('url', ''), 'language': 'eng', 'title': name, 'source': 'jimaku'})
+        print(f'[subtitle] Jimaku: {len(results)} archivos encontrados')
+    except Exception as e:
+        print(f'[subtitle] Jimaku search error: {e}')
+    return results
+
+
+def _ext_search_opensubtitles(titles: list, episode: int) -> list:
+    """Search OpenSubtitles v3. Tries each title variant and filters by title similarity.
+    Requires OPENSUBTITLES_API_KEY env var (free account at opensubtitles.com)."""
+    key = os.environ.get('OPENSUBTITLES_API_KEY', '')
+    if not key:
+        print('[subtitle] OpenSubtitles: sin OPENSUBTITLES_API_KEY — saltando')
+        return []
+    results = []
+    seen_ids: set = set()
+    # Build set of significant words (5+ chars) from all title variants for relevance filtering
+    _STOP = {'nanatsu', 'taizai', 'anime', 'episode', 'season', 'part', 'the', 'and', 'for'}
+    title_words: set = set()
+    for t in titles:
+        if t:
+            title_words.update(
+                w.lower() for w in re.split(r'\W+', t)
+                if len(w) >= 5 and w.lower() not in _STOP
+            )
+
+    def _is_relevant(release_name: str, feature_name: str) -> bool:
+        """Return True if at least 2 significant title words appear in the result metadata."""
+        if not title_words:
+            return True
+        combined = (release_name + ' ' + feature_name).lower()
+        matched = sum(1 for w in title_words if w in combined)
+        return matched >= min(2, len(title_words))
+
+    for title in titles:
+        if not title:
+            continue
+        try:
+            params = _up.urlencode({'query': title, 'type': 'episode', 'episode_number': episode})
+            req = _ur.Request(
+                f'https://api.opensubtitles.com/api/v1/subtitles?{params}',
+                headers={'Api-Key': key, 'User-Agent': 'MangaUpscaler v1.0', 'Content-Type': 'application/json'},
+            )
+            with _ur.urlopen(req, timeout=10) as r:
+                data = json.loads(r.read())
+            for item in data.get('data', [])[:10]:
+                attrs = item.get('attributes', {})
+                files = attrs.get('files', [])
+                if not files:
+                    continue
+                file_id = files[0].get('file_id')
+                if not file_id or file_id in seen_ids:
+                    continue
+                release = attrs.get('release', '')
+                feature = (attrs.get('feature_details') or {}).get('movie_name', '')
+                if not _is_relevant(release, feature):
+                    continue
+                seen_ids.add(file_id)
+                results.append({
+                    'file_id': file_id,
+                    'language': attrs.get('language', 'eng'),
+                    'title': release or feature,
+                    'source': 'opensubtitles',
+                })
+        except Exception as e:
+            print(f'[subtitle] OpenSubtitles search error (title="{title}"): {e}')
+    print(f'[subtitle] OpenSubtitles: {len(results)} encontrados')
+    return results
+
+
+def _ext_search_nyaa(titles: list, episode: int) -> list:
+    """Search Nyaa.si RSS for subtitle-only releases (.srt/.ass standalone files).
+    No API key needed — only finds results when a group uploaded subs separately."""
+    results = []
+    seen: set = set()
+    for title in titles:
+        if not title:
+            continue
+        try:
+            # Category 3_0 = Anime English-translated; search for subtitle-only releases
+            query = f'{title} {episode:02d} subtitle'
+            params = _up.urlencode({'page': 'rss', 'q': query, 'c': '3_0', 'f': '0'})
+            req = _ur.Request(f'https://nyaa.si/?{params}', headers={'User-Agent': 'Mozilla/5.0'})
+            with _ur.urlopen(req, timeout=10) as r:
+                xml = r.read().decode('utf-8', errors='replace')
+            # Parse RSS items
+            for m in re.finditer(r'<item>(.*?)</item>', xml, re.DOTALL):
+                item_xml = m.group(1)
+                item_title = (re.findall(r'<title>([^<]+)</title>', item_xml) or [''])[0]
+                item_link  = (re.findall(r'<link>([^<]+)</link>', item_xml) or [''])[0]
+                item_lower = item_title.lower()
+                # Only include if the release title contains subtitle-related keywords
+                if not any(kw in item_lower for kw in ('sub', 'srt', 'ass', 'subtitle')):
+                    continue
+                if item_link in seen:
+                    continue
+                seen.add(item_link)
+                results.append({
+                    'url': item_link,  # torrent URL — user must download and extract
+                    'language': 'eng',
+                    'title': item_title,
+                    'source': 'nyaa',
+                })
+        except Exception as e:
+            print(f'[subtitle] Nyaa search error (title="{title}"): {e}')
+    print(f'[subtitle] Nyaa: {len(results)} encontrados')
+    return results
+
+
+def _ext_download_sub(sub_info: dict, tmpdir: str) -> str:
+    """Download an external subtitle to tmpdir. Returns local file path."""
+    source = sub_info.get('source', '')
+
+    if source == 'opensubtitles':
+        key = os.environ.get('OPENSUBTITLES_API_KEY', '')
+        payload = json.dumps({'file_id': sub_info['file_id']}).encode()
+        req = _ur.Request(
+            'https://api.opensubtitles.com/api/v1/download',
+            data=payload,
+            headers={'Api-Key': key, 'User-Agent': 'MangaUpscaler v1.0', 'Content-Type': 'application/json'},
+            method='POST',
+        )
+        with _ur.urlopen(req, timeout=15) as r:
+            dl_data = json.loads(r.read())
+        url = dl_data.get('link', '')
+        if not url:
+            raise RuntimeError('OpenSubtitles no devolvió URL de descarga')
+    elif source == 'nyaa':
+        raise RuntimeError('Nyaa devuelve torrents, no archivos directos. Descarga el torrent manualmente y extrae el .srt/.ass.')
+    else:
+        url = sub_info.get('url', '')
+        if not url:
+            raise RuntimeError(f'No hay URL para descargar de {source}')
+
+    ext = os.path.splitext(url.split('?')[0])[1].lower()
+    if ext not in ('.srt', '.ass', '.ssa', '.vtt'):
+        ext = '.srt'
+    out_path = os.path.join(tmpdir, f'external{ext}')
+    req = _ur.Request(url, headers={'User-Agent': 'MangaUpscaler/1.0'})
+    with _ur.urlopen(req, timeout=30) as r:
+        with open(out_path, 'wb') as f:
+            f.write(r.read())
+    return out_path
+
+
+def _ext_find_subs(al_id: str, titles: list, episode: int) -> list:
+    """Try all external subtitle sources. `titles` = [english_title, romaji_title, ...]."""
+    # Deduplicate and filter empty titles
+    seen_t: set = set()
+    clean_titles = []
+    for t in titles:
+        if t and t.lower() not in seen_t:
+            seen_t.add(t.lower())
+            clean_titles.append(t)
+    print(f'[subtitle] Buscando subs externos: al_id={al_id}, titles={clean_titles}, ep={episode}')
+    results = []
+    results.extend(_ext_search_jimaku(al_id, clean_titles, episode))
+    results.extend(_ext_search_opensubtitles(clean_titles, episode))
+    results.extend(_ext_search_nyaa(clean_titles, episode))
+    print(f'[subtitle] Total subs externos encontrados: {len(results)}')
+    return results
 
 
 def _extract_sub(mkv_path: str, sub_index: int, codec: str, tmpdir: str) -> str:
@@ -96,15 +307,36 @@ def _extract_sub(mkv_path: str, sub_index: int, codec: str, tmpdir: str) -> str:
     ext = '.ass' if codec in ('ass', 'ssa') else '.srt'
     out = os.path.join(tmpdir, f'sub{ext}')
     cmd = ['ffmpeg', '-y', '-i', mkv_path, '-map', f'0:s:{sub_index}', out]
-    subprocess.run(cmd, capture_output=True, check=True)
+    result = subprocess.run(cmd, capture_output=True)
+    if result.returncode != 0:
+        stderr = result.stderr.decode('utf-8', errors='replace')
+        if 'image' in stderr.lower() or 'pgs' in stderr.lower() or 'dvdsub' in stderr.lower():
+            raise RuntimeError('El archivo tiene subtítulos de imagen (PGS/VOBSUB) que no se pueden traducir')
+        raise RuntimeError(f'No se pudo extraer el subtítulo. El archivo puede no tener pistas de texto.')
+    return out
+
+
+def _save_sub_external(video_path: str, sub_path: str) -> str:
+    """Save subtitle as a sidecar file next to the video (same basename, .srt/.ass).
+    MPV auto-loads subtitle files that match the video filename.
+    Used for non-MKV formats where mkvmerge cannot embed."""
+    base = os.path.splitext(video_path)[0]
+    ext = os.path.splitext(sub_path)[1].lower() or '.srt'
+    # Use language suffix so MPV picks it up: video.spa.srt
+    out = f'{base}.spa{ext}'
+    import shutil
+    shutil.copy2(sub_path, out)
     return out
 
 
 def _inject_sub(mkv_path: str, sub_path: str, n_existing_subs: int) -> str:
     """Insert translated subtitle into the original MKV in-place using mkvmerge.
+    For non-MKV files, saves a sidecar subtitle file instead (MPV auto-loads it).
     mkvmerge writes proper cue entries (index) so MPV can seek all subtitle packets.
     ffmpeg -c copy omits the cue index, causing MPV to only read the first packet.
     """
+    if not mkv_path.lower().endswith('.mkv'):
+        return _save_sub_external(mkv_path, sub_path)
     tmp_out = mkv_path + '._tmp_spa.mkv'
 
     # Identify tracks via mkvmerge; collect subtitle track IDs to exclude existing spa ones
@@ -316,10 +548,18 @@ def _translate_batch(texts: list, client, model_name: str, src_lang: str = 'eng'
 
 # ── Main worker ───────────────────────────────────────────────────────────────
 
-def _resolve_video_path(info_hash: str, episode: int, anime_id: str) -> str | None:
-    """Resolve MKV path via qBittorrent, reusing anime.py helpers."""
+def _resolve_video_path(info_hash: str, episode: int, anime_id: str, local_path: str = '') -> str | None:
+    """Resolve MKV path via local_path or qBittorrent."""
     try:
         from api.anime import _q, _find_video, _lib_read
+        if local_path:
+            return _find_video(local_path, episode)
+        # Fallback: check library for local_path
+        if anime_id:
+            lib = _lib_read()
+            lp = (lib.get(anime_id) or {}).get('local_path', '')
+            if lp:
+                return _find_video(lp, episode)
         torrents = _q('get', '/torrents/info', params={'hashes': info_hash}).json()
         if not torrents and anime_id:
             lib = _lib_read()
@@ -458,7 +698,8 @@ def _translate_batch_ollama(texts: list, src_lang: str = 'eng') -> list:
     return result
 
 
-def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_subs: int, src_lang: str = 'eng'):
+def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_subs: int,
+                  src_lang: str = 'eng', external_sub_info: dict = None):
     global _OLLAMA_TASK_COUNT
     task = _tasks[task_id]
     _cancel_flags.setdefault(task_id, False)
@@ -476,10 +717,19 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
         return bool(_cancel_flags.get(task_id))
 
     try:
-        upd('extracting', 5, 'Extrayendo subtítulos del MKV…')
+        if external_sub_info:
+            source_label = external_sub_info.get('source', 'fuente externa')
+            upd('extracting', 5, f'Descargando subtítulos de {source_label}…')
+        else:
+            upd('extracting', 5, 'Extrayendo subtítulos del MKV…')
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            sub_file = _extract_sub(mkv_path, sub_index, codec, tmpdir)
+            if external_sub_info:
+                sub_file = _ext_download_sub(external_sub_info, tmpdir)
+                ext = os.path.splitext(sub_file)[1].lower()
+                codec = 'ass' if ext in ('.ass', '.ssa') else 'subrip'
+            else:
+                sub_file = _extract_sub(mkv_path, sub_index, codec, tmpdir)
             with open(sub_file, encoding='utf-8', errors='replace') as f:
                 content = f.read()
 
@@ -668,36 +918,82 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
 
 @subtitle_bp.route('/tracks')
 def subtitle_tracks():
-    """List subtitle tracks in an MKV given its qBittorrent info_hash."""
-    info_hash = request.args.get('info_hash', '')
-    episode   = int(request.args.get('episode', 1))
-    anime_id  = request.args.get('anime_id', '')
+    """List subtitle tracks in an MKV. Falls back to external search when no text tracks found."""
+    info_hash  = request.args.get('info_hash', '')
+    episode    = int(request.args.get('episode', 1))
+    anime_id   = request.args.get('anime_id', '')
+    local_path = request.args.get('local_path', '')
 
-    path = _resolve_video_path(info_hash, episode, anime_id)
+    path = _resolve_video_path(info_hash, episode, anime_id, local_path)
     if not path or not os.path.exists(path):
         return jsonify({'error': 'Archivo no encontrado', 'path': path}), 404
 
     tracks = _ffprobe_tracks(path)
-    return jsonify({'path': path, 'tracks': tracks})
+    external_tracks = []
+    sources_missing_key = []
+    if not tracks:
+        titles = []
+        if anime_id:
+            try:
+                from api.anime import _lib_read
+                lib = _lib_read()
+                anime = lib.get(anime_id) or {}
+                titles.append(anime.get('title', ''))
+                titles.append(anime.get('title_romaji', ''))
+            except Exception:
+                pass
+        # Report which sources will be skipped due to missing keys
+        if not os.environ.get('JIMAKU_API_KEY'):
+            sources_missing_key.append('jimaku')
+        if not os.environ.get('OPENSUBTITLES_API_KEY'):
+            sources_missing_key.append('opensubtitles')
+        print(f'[subtitle] No text tracks in {os.path.basename(path)} — searching external sources')
+        external_tracks = _ext_find_subs(anime_id, titles, episode)
+        print(f'[subtitle] External search found {len(external_tracks)} subs')
+    return jsonify({
+        'path': path,
+        'tracks': tracks,
+        'external_tracks': external_tracks,
+        'sources_missing_key': sources_missing_key,
+    })
 
 
 @subtitle_bp.route('/translate', methods=['POST'])
 def subtitle_translate():
     """Start async subtitle translation. Returns task_id."""
-    data      = request.get_json(silent=True) or {}
-    info_hash = data.get('info_hash', '')
-    episode   = int(data.get('episode', 1))
-    anime_id  = data.get('anime_id', '')
-    sub_index = int(data.get('sub_index', 0))  # 0-based subtitle stream index
-    force     = bool(data.get('force', False))  # replace existing spa track
+    data         = request.get_json(silent=True) or {}
+    info_hash    = data.get('info_hash', '')
+    episode      = int(data.get('episode', 1))
+    anime_id     = data.get('anime_id', '')
+    sub_index    = int(data.get('sub_index', 0))  # 0-based subtitle stream index
+    force        = bool(data.get('force', False))  # replace existing spa track
+    local_path   = data.get('local_path', '')
+    external_sub = data.get('external_sub')        # {url|file_id, language, source, title}
 
-    path = _resolve_video_path(info_hash, episode, anime_id)
+    path = _resolve_video_path(info_hash, episode, anime_id, local_path)
     if not path or not os.path.exists(path):
         return jsonify({'error': 'Archivo de video no encontrado'}), 404
 
     tracks = _ffprobe_tracks(path)
+
+    # ── External subtitle path ─────────────────────────────────────────────────
+    if external_sub:
+        src_lang = external_sub.get('language', 'eng')
+        task_id = uuid.uuid4().hex[:8]
+        _tasks[task_id] = dict(status='starting', progress=0, message='Iniciando…',
+                               error=None, output=None)
+        t = threading.Thread(
+            target=_do_translate,
+            args=(task_id, path, 0, 'subrip', len(tracks), src_lang),
+            kwargs={'external_sub_info': external_sub},
+            daemon=True,
+        )
+        t.start()
+        return jsonify({'task_id': task_id, 'file': os.path.basename(path)})
+
+    # ── Internal subtitle path ─────────────────────────────────────────────────
     if not tracks:
-        return jsonify({'error': 'El archivo no tiene pistas de subtítulos'}), 400
+        return jsonify({'error': 'El archivo no tiene pistas de subtítulos de texto'}), 400
 
     # Block re-translation unless force=true
     if not force and any(t['language'] in ('spa', 'es') for t in tracks):
@@ -714,10 +1010,8 @@ def subtitle_translate():
     src_lang = track.get('language') or 'eng'
 
     task_id = uuid.uuid4().hex[:8]
-    _tasks[task_id] = dict(
-        status='starting', progress=0, message='Iniciando…',
-        error=None, output=None,
-    )
+    _tasks[task_id] = dict(status='starting', progress=0, message='Iniciando…',
+                           error=None, output=None)
 
     t = threading.Thread(
         target=_do_translate,
@@ -731,12 +1025,13 @@ def subtitle_translate():
 @subtitle_bp.route('/reinject', methods=['POST'])
 def subtitle_reinject():
     """Re-extract the existing Spanish track and re-inject it (no Gemini). Fixes format without retranslating."""
-    data      = request.get_json(silent=True) or {}
-    info_hash = data.get('info_hash', '')
-    episode   = int(data.get('episode', 1))
-    anime_id  = data.get('anime_id', '')
+    data       = request.get_json(silent=True) or {}
+    info_hash  = data.get('info_hash', '')
+    episode    = int(data.get('episode', 1))
+    anime_id   = data.get('anime_id', '')
+    local_path = data.get('local_path', '')
 
-    path = _resolve_video_path(info_hash, episode, anime_id)
+    path = _resolve_video_path(info_hash, episode, anime_id, local_path)
     if not path or not os.path.exists(path):
         return jsonify({'error': 'Archivo de video no encontrado'}), 404
 
