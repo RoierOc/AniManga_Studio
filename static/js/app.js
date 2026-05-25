@@ -309,7 +309,7 @@ const app = createApp({
         // Watch status
         const ANIME_STATUS = {
             watching:      { label: 'Viendo',      color: '#56b870' },
-            completed:     { label: 'Completado',  color: '#7c9dc4' },
+            completed:     { label: 'Completado',  color: '#6b8fbd' },
             plan_to_watch: { label: 'Por ver',     color: '#9b7fb8' },
             on_hold:       { label: 'En pausa',    color: '#c9a84c' },
             dropped:       { label: 'Abandonado',  color: '#d45f5f' },

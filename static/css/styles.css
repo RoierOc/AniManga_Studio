@@ -9,8 +9,8 @@ html { zoom: 133%; }
     --bg-input:   #161819;
     --bg-surface: #0f1012;
 
-    --accent:     #e8924a;
-    --accent-h:   #f0a860;
+    --accent:     #6b8fbd;
+    --accent-h:   #82a5d0;
     --accent-grn: #56b870;
     --accent-orn: #e8924a;
     --accent-red: #d45f5f;
@@ -54,8 +54,8 @@ body::before {
     position: fixed;
     inset: 0;
     background:
-        radial-gradient(ellipse 60% 40% at 15% 10%, rgba(232,146,74,.04) 0%, transparent 70%),
-        radial-gradient(ellipse 50% 40% at 85% 90%, rgba(180,100,60,.03) 0%, transparent 70%);
+        radial-gradient(ellipse 60% 40% at 15% 10%, rgba(107,143,189,.05) 0%, transparent 70%),
+        radial-gradient(ellipse 50% 40% at 85% 90%, rgba(80,110,155,.03) 0%, transparent 70%);
     pointer-events: none;
     z-index: -1;
 }
@@ -101,7 +101,7 @@ body::before {
 .md-logo svg { width: 30px; height: 30px; }
 
 .md-logo span:last-child {
-    background: linear-gradient(135deg, #e8924a, #c97835);
+    background: linear-gradient(135deg, #4d7eb8, #82a5d0);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -184,10 +184,10 @@ body::before {
 }
 
 /* Domain accent tokens */
-#app                { --da: #e8924a; --da-rgb: 232,146,74; }
+#app                { --da: #6b8fbd; --da-rgb: 232,146,74; }
 #app.domain-manga   { --da: #7c9dc4; --da-rgb: 124,157,196; }
 #app.domain-anime   { --da: #7ab882; --da-rgb: 122,184,130; }
-#app.domain-local   { --da: #e8924a; --da-rgb: 232,146,74; }
+#app.domain-local   { --da: #6b8fbd; --da-rgb: 232,146,74; }
 
 .sidebar {
     position: fixed;
@@ -225,7 +225,7 @@ body::before {
     font-size: 14px;
     font-weight: 700;
     letter-spacing: -.2px;
-    background: linear-gradient(135deg, #e8924a, #c97835);
+    background: linear-gradient(135deg, #4d7eb8, #82a5d0);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -586,7 +586,7 @@ body::before {
 
 .md-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(195px, 1fr));
     gap: 18px;
 }
 
@@ -3042,7 +3042,7 @@ body::before {
 
 /* ─── AniList tab ─────────────────────────────────────────────────────────── */
 
-.sources-tab--anilist { border-color: rgba(124,157,196,.35) !important; color: #f0a860 !important; }
+.sources-tab--anilist { border-color: rgba(124,157,196,.35) !important; color: #82a5d0 !important; }
 .sources-tab--anilist:hover { border-color: rgba(124,157,196,.7) !important; background: rgba(124,157,196,.1) !important; }
 
 .al-sort-row { display: flex; gap: 6px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -3051,7 +3051,7 @@ body::before {
     border: 1px solid var(--border); background: var(--bg-card);
     color: var(--text-muted); cursor: pointer; transition: all .15s;
 }
-.al-sort-btn.active { background: rgba(124,157,196,.2); border-color: #e8924a; color: #f0a860; font-weight: 600; }
+.al-sort-btn.active { background: rgba(124,157,196,.2); border-color: #6b8fbd; color: #82a5d0; font-weight: 600; }
 .al-sort-btn:hover:not(.active) { border-color: rgba(124,157,196,.5); color: var(--text); }
 
 .al-genre-row {
@@ -3064,7 +3064,7 @@ body::before {
     color: var(--text-muted); cursor: pointer; transition: all .15s; white-space: nowrap;
 }
 .al-genre-chip:hover { border-color: rgba(124,157,196,.5); color: var(--text); }
-.al-genre-chip.active { background: rgba(124,157,196,.25); border-color: #e8924a; color: #f0a860; font-weight: 600; }
+.al-genre-chip.active { background: rgba(124,157,196,.25); border-color: #6b8fbd; color: #82a5d0; font-weight: 600; }
 
 .al-card-genres { font-size: 11px; color: var(--text-muted); }
 
@@ -3074,7 +3074,7 @@ body::before {
     background: var(--bg-card); color: var(--text-muted);
     cursor: pointer; font-size: 13px; transition: all .15s;
 }
-.al-load-more:hover { border-color: #e8924a; color: var(--text); }
+.al-load-more:hover { border-color: #6b8fbd; color: var(--text); }
 
 /* ─── AniList chip search ─────────────────────────────────────────────────── */
 
@@ -3087,11 +3087,11 @@ body::before {
     background: var(--bg-card); border: 1px solid var(--border);
     color: var(--text); font-size: 12px;
 }
-.al-chip-search:focus { outline: none; border-color: #e8924a; }
+.al-chip-search:focus { outline: none; border-color: #6b8fbd; }
 .al-chip-clear {
     padding: 5px 10px; border-radius: 20px; font-size: 11px; font-weight: 600;
-    background: rgba(124,157,196,.2); border: 1px solid #e8924a;
-    color: #f0a860; cursor: pointer; white-space: nowrap;
+    background: rgba(124,157,196,.2); border: 1px solid #6b8fbd;
+    color: #82a5d0; cursor: pointer; white-space: nowrap;
     transition: background .15s;
 }
 .al-chip-clear:hover { background: rgba(124,157,196,.35); }
@@ -3115,7 +3115,7 @@ body::before {
 }
 .anime-subnav-btn:hover { background: var(--bg-card); color: var(--text); }
 .anime-subnav-btn.active {
-    background: rgba(124,157,196,.15); border-color: #e8924a; color: #f0a860;
+    background: rgba(124,157,196,.15); border-color: #6b8fbd; color: #82a5d0;
 }
 
 /* Search bar */
@@ -3127,10 +3127,10 @@ body::before {
     background: var(--bg-card); border: 1px solid var(--border);
     color: var(--text); font-size: 14px;
 }
-.anime-search-input:focus { outline: none; border-color: #e8924a; }
+.anime-search-input:focus { outline: none; border-color: #6b8fbd; }
 .anime-search-btn {
     padding: 10px 16px; border-radius: 10px;
-    background: #e8924a; border: none; color: #fff;
+    background: #6b8fbd; border: none; color: #fff;
     cursor: pointer; display: flex; align-items: center;
     transition: background .15s;
 }
@@ -3150,7 +3150,7 @@ body::before {
 /* Anime grid */
 .anime-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(182px, 1fr));
     gap: 16px;
 }
 .anime-card {
@@ -3188,7 +3188,7 @@ body::before {
 .anime-card-genres { display: flex; flex-wrap: wrap; gap: 3px; }
 .anime-genre-tag {
     font-size: 10px; padding: 1px 6px; border-radius: 8px;
-    background: rgba(124,157,196,.15); color: #f0a860;
+    background: rgba(124,157,196,.15); color: #82a5d0;
 }
 
 /* Anime detail header */
@@ -3229,7 +3229,7 @@ body::before {
     display: flex; align-items: center; gap: 10px;
     padding: 10px 14px; margin-bottom: 10px;
     background: rgba(124,157,196,.08); border: 1px solid rgba(124,157,196,.3);
-    border-radius: 10px; font-size: 13px; color: #f0a860; flex-wrap: wrap;
+    border-radius: 10px; font-size: 13px; color: #82a5d0; flex-wrap: wrap;
 }
 .target-ep-stepper {
     display: flex; align-items: center;
@@ -3238,7 +3238,7 @@ body::before {
 }
 .target-ep-step {
     width: 28px; height: 28px; border: none; background: transparent;
-    color: #f0a860; font-size: 16px; font-weight: 700; cursor: pointer;
+    color: #82a5d0; font-size: 16px; font-weight: 700; cursor: pointer;
     transition: background .12s; line-height: 1;
 }
 .target-ep-step:hover { background: rgba(124,157,196,.25); }
@@ -3270,8 +3270,8 @@ body::before {
     background: transparent; border: 1px solid var(--border);
     color: var(--text-muted); cursor: pointer; transition: all .15s;
 }
-.anime-filter-btn:hover { border-color: #e8924a; color: var(--text); }
-.anime-filter-btn.active { background: rgba(124,157,196,.15); border-color: #e8924a; color: #f0a860; }
+.anime-filter-btn:hover { border-color: #6b8fbd; color: var(--text); }
+.anime-filter-btn.active { background: rgba(124,157,196,.15); border-color: #6b8fbd; color: #82a5d0; }
 
 /* Language filter pills */
 .anime-filter-btn--lang { display: inline-flex; align-items: center; gap: 5px; }
@@ -3299,7 +3299,7 @@ body::before {
 .anime-empty-action {
     padding: 7px 18px; border-radius: 20px; font-size: 12px; font-weight: 600;
     background: rgba(124,157,196,.15); border: 1px solid rgba(124,157,196,.4);
-    color: #f0a860; cursor: pointer; transition: background .15s;
+    color: #82a5d0; cursor: pointer; transition: background .15s;
 }
 .anime-empty-action:hover { background: rgba(124,157,196,.3); }
 
@@ -3323,7 +3323,7 @@ body::before {
 .anime-torrent-title { flex: 1; font-size: 12px; line-height: 1.45; color: var(--text); }
 .anime-ep-badge {
     display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 10px; font-weight: 700;
-    background: rgba(124,157,196,.2); color: #f0a860; margin-right: 4px; white-space: nowrap;
+    background: rgba(124,157,196,.2); color: #82a5d0; margin-right: 4px; white-space: nowrap;
 }
 .anime-ep-badge--batch { background: rgba(245,158,11,.15); color: #f59e0b; }
 .anime-quality-badge {
@@ -3336,8 +3336,8 @@ body::before {
 .anime-add-btn {
     display: flex; align-items: center; gap: 5px; flex-shrink: 0;
     padding: 5px 12px; border-radius: 8px; font-size: 11px; font-weight: 600;
-    background: rgba(124,157,196,.2); border: 1px solid #e8924a;
-    color: #f0a860; cursor: pointer; transition: background .15s;
+    background: rgba(124,157,196,.2); border: 1px solid #6b8fbd;
+    color: #82a5d0; cursor: pointer; transition: background .15s;
     white-space: nowrap;
 }
 .anime-add-btn:hover { background: rgba(124,157,196,.4); }
@@ -3413,7 +3413,7 @@ body::before {
     height: 4px; border-radius: 2px; background: rgba(255,255,255,.08);
     margin-bottom: 8px; overflow: hidden;
 }
-.qbt-bar-fill { height: 100%; background: #e8924a; border-radius: 2px; transition: width .5s; }
+.qbt-bar-fill { height: 100%; background: #6b8fbd; border-radius: 2px; transition: width .5s; }
 .qbt-bar-done { background: #22c55e; }
 .qbt-torrent-meta {
     display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
@@ -3450,7 +3450,7 @@ body::before {
     flex-shrink: 0; width: 62px; min-height: 80px;
     display: flex; flex-direction: column; align-items: center; justify-content: center;
     background: rgba(124,157,196,.12); border-right: 1px solid rgba(124,157,196,.2);
-    font-weight: 800; color: #f0a860; gap: 1px; padding: 10px 0;
+    font-weight: 800; color: #82a5d0; gap: 1px; padding: 10px 0;
 }
 .ep-group--batch .ep-num {
     background: rgba(245,158,11,.12); border-right-color: rgba(245,158,11,.25); color: #f59e0b;
@@ -3477,7 +3477,7 @@ body::before {
 .ep-tag--esp  { background: rgba(250,204,21,.15); color: #fbbf24; border: 1px solid rgba(250,204,21,.35); }
 .ep-tag--eng  { background: rgba(59,130,246,.15);  color: #93c5fd; border: 1px solid rgba(59,130,246,.35); }
 .ep-tag--quality { background: rgba(74,222,128,.12); color: #56b870; border: 1px solid rgba(74,222,128,.3); }
-.ep-tag--trusted { background: rgba(124,157,196,.15); color: #f0a860; border: 1px solid rgba(124,157,196,.3); }
+.ep-tag--trusted { background: rgba(124,157,196,.15); color: #82a5d0; border: 1px solid rgba(124,157,196,.3); }
 .ep-tag--tosho  { background: rgba(251,146,60,.12); color: #fb923c; border: 1px solid rgba(251,146,60,.35); }
 .ep-tag--group { background: rgba(255,255,255,.07); color: var(--text-muted); border: 1px solid var(--border); }
 
@@ -3510,7 +3510,7 @@ body::before {
 .ep-dl-btn {
     display: flex; align-items: center; justify-content: center; gap: 6px;
     padding: 9px 16px; border-radius: 8px; font-size: 12px; font-weight: 700;
-    background: #e8924a; border: none; color: #fff; cursor: pointer;
+    background: #6b8fbd; border: none; color: #fff; cursor: pointer;
     transition: background .15s; white-space: nowrap;
 }
 .ep-dl-btn:hover:not(:disabled) { background: #4f46e5; }
@@ -3552,7 +3552,7 @@ body::before {
     flex-shrink: 0; display: flex; align-items: center; justify-content: center;
     width: 30px; height: 30px; border-radius: 7px;
     background: rgba(124,157,196,.15); border: 1px solid rgba(124,157,196,.35);
-    color: #f0a860; cursor: pointer; transition: background .15s;
+    color: #82a5d0; cursor: pointer; transition: background .15s;
 }
 .ep-alt-dl:hover:not(:disabled) { background: rgba(124,157,196,.35); }
 .ep-alt-dl:disabled { opacity: .3; cursor: not-allowed; }
@@ -3584,7 +3584,7 @@ body::before {
 
 /* ─── Anime detail — track/follow button ────────────────────────────────────── */
 .anime-track-btn {
-    background: rgba(124,157,196,.12); color: #f0a860;
+    background: rgba(124,157,196,.12); color: #82a5d0;
     border: 1px solid rgba(124,157,196,.3) !important; cursor: pointer;
     font-size: 11px; transition: background .15s, color .15s, border-color .15s;
 }
@@ -3645,9 +3645,9 @@ body::before {
   border-color: rgba(255,255,255,.15);
 }
 .allib-tab.active[style] {
-  background: color-mix(in srgb, var(--tab-color, #e8924a) 15%, transparent);
-  border-color: color-mix(in srgb, var(--tab-color, #e8924a) 40%, transparent);
-  color: var(--tab-color, #e8924a);
+  background: color-mix(in srgb, var(--tab-color, #6b8fbd) 15%, transparent);
+  border-color: color-mix(in srgb, var(--tab-color, #6b8fbd) 40%, transparent);
+  color: var(--tab-color, #6b8fbd);
 }
 .allib-tab-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .allib-tab-count {
@@ -3669,7 +3669,7 @@ body::before {
 /* ── Grid ────────────────────────────────────────────────────────────────── */
 .allib-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(182px, 1fr));
   gap: 16px; padding: 4px 0;
 }
 
@@ -3713,7 +3713,7 @@ body::before {
 /* Download progress strip (bottom edge of cover) */
 .allib-card-dl-strip {
   position: absolute; bottom: 0; left: 0; height: 3px; z-index: 2;
-  background: #e8924a; transition: width .4s;
+  background: #6b8fbd; transition: width .4s;
 }
 
 /* Hover overlay */
@@ -3763,7 +3763,7 @@ body::before {
 }
 .allib-card-bottom { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
 .allib-card-eps { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
-.allib-card-count { color: #f0a860; font-weight: 700; }
+.allib-card-count { color: #82a5d0; font-weight: 700; }
 .allib-card-total { opacity: .65; }
 .allib-card-dots { display: flex; flex-wrap: wrap; gap: 3px; }
 .allib-card-dot { width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.1); }
@@ -3792,14 +3792,16 @@ body::before {
 .allib-stat-done { color: #56b870; font-weight: 700; }
 .allib-detail-bar-wrap { width: 100%; max-width: 280px; }
 .allib-detail-bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.1); overflow: hidden; }
-.allib-detail-bar-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #e8924a, #56b870); transition: width .4s; }
+.allib-detail-bar-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, #6b8fbd, #56b870); transition: width .4s; }
 .allib-del-all-btn {
-    display: flex; align-items: center; gap: 6px; flex-shrink: 0;
-    padding: 7px 14px; border-radius: 8px; font-size: 12px; font-weight: 600;
-    background: rgba(239,68,68,.12); border: 1px solid rgba(239,68,68,.3);
-    color: #f87171; cursor: pointer; transition: background .15s;
+    display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+    padding: 5px 9px; border-radius: 6px; font-size: 11.5px; font-weight: 500;
+    font-family: var(--font);
+    background: transparent; border: 1px solid rgba(212,95,95,.25);
+    color: var(--accent-red); cursor: pointer; transition: background .12s, border-color .12s;
 }
-.allib-del-all-btn:hover { background: rgba(239,68,68,.25); }
+.allib-del-all-btn svg { width: 12px; height: 12px; }
+.allib-del-all-btn:hover { background: rgba(212,95,95,.1); border-color: rgba(212,95,95,.45); }
 
 /* Episode legend */
 .allib-ep-legend { display: flex; gap: 16px; margin-bottom: 14px; flex-wrap: wrap; }
@@ -3823,7 +3825,7 @@ body::before {
     transition: border-color .15s, box-shadow .15s;
 }
 .allib-ep--missing { cursor: pointer; border-style: dashed; }
-.allib-ep--missing:hover { border-color: #e8924a; background: rgba(124,157,196,.1); color: #f0a860; }
+.allib-ep--missing:hover { border-color: #6b8fbd; background: rgba(124,157,196,.1); color: #82a5d0; }
 .allib-ep--done    { cursor: pointer; background: rgba(74,222,128,.12); border-color: rgba(74,222,128,.4); color: #56b870; }
 .allib-ep--dl      { background: rgba(250,204,21,.1); border-color: rgba(250,204,21,.35); color: #facc15; }
 .allib-ep--watched { background: rgba(155,127,184,.18) !important; border-color: rgba(155,127,184,.5) !important; color: #9b7fb8 !important; }
@@ -3960,7 +3962,7 @@ body::before {
     flex-shrink: 0; font-size: 10px; font-weight: 700;
     padding: 1px 6px; border-radius: 6px;
 }
-.eplist-engine-badge--gemini { background: rgba(124,157,196,.18); color: #f0a860; }
+.eplist-engine-badge--gemini { background: rgba(124,157,196,.18); color: #82a5d0; }
 .eplist-engine-badge--ollama { background: rgba(245,158,11,.18); color: #fcd34d; }
 
 .eplist-actions {
@@ -3981,7 +3983,7 @@ body::before {
 }
 .eplist-btn--play:hover { background: rgba(74,222,128,.22); }
 .eplist-btn--search {
-    background: rgba(124,157,196,.1); border-color: rgba(124,157,196,.4); color: #f0a860;
+    background: rgba(124,157,196,.1); border-color: rgba(124,157,196,.4); color: #82a5d0;
 }
 .eplist-btn--search:hover { background: rgba(124,157,196,.22); }
 .eplist-btn--translate {
@@ -4058,7 +4060,7 @@ body::before {
     display: flex; align-items: center; justify-content: center; line-height: 1;
     transition: background .15s, border-color .15s;
 }
-.seasonal-nav-btn:hover { background: rgba(124,157,196,.15); border-color: #e8924a; }
+.seasonal-nav-btn:hover { background: rgba(124,157,196,.15); border-color: #6b8fbd; }
 .seasonal-title { font-size: 17px; font-weight: 700; color: var(--text); min-width: 150px; }
 .seasonal-sorts { display: flex; gap: 6px; flex-wrap: wrap; }
 .seasonal-sort-btn {
@@ -4067,7 +4069,7 @@ body::before {
     transition: all .15s;
 }
 .seasonal-sort-btn:hover, .seasonal-sort-btn.active {
-    background: rgba(124,157,196,.15); border-color: #e8924a; color: #f0a860;
+    background: rgba(124,157,196,.15); border-color: #6b8fbd; color: #82a5d0;
 }
 .seasonal-genres { display: flex; gap: 6px; flex-wrap: wrap; }
 .seasonal-genre-btn {
@@ -4076,7 +4078,7 @@ body::before {
     transition: all .15s;
 }
 .seasonal-genre-btn:hover, .seasonal-genre-btn.active {
-    background: rgba(124,157,196,.12); border-color: #e8924a; color: #f0a860;
+    background: rgba(124,157,196,.12); border-color: #6b8fbd; color: #82a5d0;
 }
 .seasonal-grid {
     display: grid;
@@ -4095,7 +4097,7 @@ body::before {
     color: #fff; font-size: 12px; font-weight: 600; padding: 7px 8px; cursor: pointer;
     transition: background .15s;
 }
-.seasonal-add-btn:hover { background: #e8924a; }
+.seasonal-add-btn:hover { background: #6b8fbd; }
 .seasonal-add-btn--tracked { background: rgba(74,222,128,.8) !important; color: #000 !important; }
 .seasonal-ep-count { font-size: 11px; color: var(--text-muted); }
 .seasonal-select {
@@ -4103,7 +4105,7 @@ body::before {
     color: var(--text); font-size: 14px; font-weight: 600; padding: 4px 10px;
     cursor: pointer; outline: none; transition: border-color .15s;
 }
-.seasonal-select:hover, .seasonal-select:focus { border-color: #e8924a; }
+.seasonal-select:hover, .seasonal-select:focus { border-color: #6b8fbd; }
 
 /* ── Episode grid (Crunchyroll-style cards) ───────────────────────────────── */
 .epgrid {
@@ -4290,7 +4292,7 @@ body::before {
     border-radius: 10px; white-space: nowrap;
 }
 .ep-card-tr-engine--ollama { background: rgba(245,158,11,.28); color: #fcd34d; }
-.ep-card-tr-engine--gemini { background: rgba(124,157,196,.28); color: #f0a860; }
+.ep-card-tr-engine--gemini { background: rgba(124,157,196,.28); color: #82a5d0; }
 .ep-card-tr-msg {
     font-size: 10px; color: #34d399; flex: 1; min-width: 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -4974,52 +4976,82 @@ body::before {
   opacity: .7;
 }
 
-/* ── Episode auto-renamer ─────────────────────────────────────────────────── */
+/* ── Series detail action buttons ─────────────────────────────────────────── */
 .allib-header-actions {
-  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: 2px;
 }
-.allib-rename-btn {
-  display: flex; align-items: center; gap: 6px;
-  background: rgba(232,146,74,.12); border: 1px solid rgba(232,146,74,.25);
-  border-radius: 6px; color: var(--accent); font-size: 12px; font-weight: 600;
-  padding: 7px 12px; cursor: pointer; transition: background .15s;
+
+/* Unified minimal ghost button for all actions */
+.allib-action-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,.1);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 11.5px; font-weight: 500;
+  font-family: var(--font);
+  padding: 5px 9px;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+  white-space: nowrap;
+  letter-spacing: .01em;
 }
-.allib-rename-btn:hover { background: rgba(232,146,74,.22); }
+.allib-action-btn svg { width: 12px; height: 12px; flex-shrink: 0; opacity: .7; }
+.allib-action-btn:hover {
+  background: rgba(255,255,255,.07);
+  border-color: rgba(255,255,255,.22);
+  color: var(--text);
+}
+.allib-action-btn:hover svg { opacity: 1; }
+
+/* Destructive variant */
+.allib-action-btn--danger {
+  border-color: rgba(212,95,95,.25);
+  color: var(--accent-red);
+}
+.allib-action-btn--danger svg { opacity: 1; }
+.allib-action-btn--danger:hover {
+  background: rgba(212,95,95,.1);
+  border-color: rgba(212,95,95,.45);
+  color: #e07070;
+}
 
 /* Status selector in detail header */
 .allib-status-wrap { display: flex; align-items: center; }
 .allib-status-select {
-  background: rgba(255,255,255,.05); border: 1px solid var(--border);
-  border-radius: 6px; padding: 6px 10px; font-size: 12px; font-weight: 600;
-  color: #94a3b8; cursor: pointer; outline: none; transition: border-color .15s;
+  background: transparent; border: 1px solid rgba(255,255,255,.1);
+  border-radius: 6px; padding: 5px 8px; font-size: 11.5px; font-weight: 600;
+  color: var(--text-dim); cursor: pointer; outline: none;
+  font-family: var(--font);
+  transition: border-color .12s, color .12s;
 }
-.allib-status-select:hover { border-color: rgba(255,255,255,.2); }
-.allib-status-select option { background: #111214; color: #e2e8f0; }
+.allib-status-select:hover { border-color: rgba(255,255,255,.22); color: var(--text); }
+.allib-status-select option { background: #111214; color: #eceae7; }
 
-/* Link torrent + clear eps buttons */
-.allib-link-btn {
-  display: flex; align-items: center; gap: 5px;
-  background: rgba(250,191,36,.1); border: 1px solid rgba(250,191,36,.25);
-  border-radius: 6px; color: #fbbf24; font-size: 12px; font-weight: 600;
-  padding: 7px 11px; cursor: pointer; transition: background .15s;
-}
-.allib-link-btn:hover { background: rgba(250,191,36,.2); }
+/* Map old class names to unified style */
+.allib-rename-btn,
+.allib-link-btn,
 .allib-clear-eps-btn {
-  display: flex; align-items: center; gap: 5px;
-  background: rgba(251,146,60,.1); border: 1px solid rgba(251,146,60,.25);
-  border-radius: 6px; color: #fb923c; font-size: 12px; font-weight: 600;
-  padding: 7px 11px; cursor: pointer; transition: background .15s;
+  display: inline-flex; align-items: center; gap: 5px;
+  background: transparent; border: 1px solid rgba(255,255,255,.1);
+  border-radius: 6px; color: var(--text-dim); font-size: 11.5px; font-weight: 500;
+  font-family: var(--font); padding: 5px 9px; cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+  white-space: nowrap;
 }
-.allib-clear-eps-btn:hover { background: rgba(251,146,60,.2); }
+.allib-rename-btn svg, .allib-link-btn svg, .allib-clear-eps-btn svg { width: 12px; height: 12px; flex-shrink: 0; opacity: .7; }
+.allib-rename-btn:hover, .allib-link-btn:hover, .allib-clear-eps-btn:hover {
+  background: rgba(255,255,255,.07); border-color: rgba(255,255,255,.22); color: var(--text);
+}
 
 /* Link torrent panel */
 .allib-link-panel {
-  background: rgba(255,255,255,.04); border: 1px solid var(--border);
+  background: rgba(255,255,255,.03); border: 1px solid var(--border);
   border-radius: 8px; margin: 10px 0 0; overflow: hidden;
 }
 .allib-link-panel-header {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 14px; font-size: 13px; font-weight: 600; color: #fbbf24;
+  padding: 10px 14px; font-size: 12.5px; font-weight: 600; color: var(--text-dim);
   border-bottom: 1px solid var(--border);
 }
 .allib-link-close {
@@ -5064,7 +5096,7 @@ body::before {
 }
 .rename-modal-hint code {
   background: rgba(255,255,255,.07); border-radius: 4px; padding: 1px 5px;
-  font-size: 11px; color: #f0a860;
+  font-size: 11px; color: #82a5d0;
 }
 .rename-table-wrap { flex: 1; overflow-y: auto; margin-bottom: 14px; }
 .rename-table {
@@ -5079,7 +5111,7 @@ body::before {
 .rename-row--changed { background: rgba(232,146,74,.06); }
 .rename-row--same   { opacity: .45; }
 .rename-old { color: var(--text-dim); word-break: break-all; }
-.rename-new { color: #f0a860; word-break: break-all; }
+.rename-new { color: #82a5d0; word-break: break-all; }
 .rename-arrow { color: var(--text-dim); text-align: center; padding: 0 4px; }
 .rename-badge--ep { background: rgba(232,146,74,.2); color: var(--accent); font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; }
 .rename-badge--sp { background: rgba(245,158,11,.2); color: #fbbf24; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; }

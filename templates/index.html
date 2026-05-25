@@ -9,7 +9,7 @@
   <meta name="theme-color" content="#6184d3">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260525-01">
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260525-02">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <script src="/static/js/vue.js"></script>
@@ -1286,7 +1286,7 @@
               <!-- Watch status selector -->
               <div class="allib-status-wrap">
                 <select class="allib-status-select"
-                        :style="{ color: ANIME_STATUS[animeLibraryDetail.status]?.color || '#94a3b8' }"
+                        :style="{ color: ANIME_STATUS[animeLibraryDetail.status]?.color || 'var(--text-dim)' }"
                         :value="animeLibraryDetail.status || ''"
                         @change="setAnimeStatus(animeLibraryDetail.id, $event.target.value)">
                   <option value="">Sin estado</option>
@@ -1295,22 +1295,22 @@
               </div>
               <button class="allib-rename-btn" @click="openRenamePreview(animeLibraryDetail)"
                       title="Renombrar episodios al formato limpio">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                 Renombrar
               </button>
               <button class="allib-link-btn" @click="openLinkTorrent()"
                       title="Enlazar torrent existente de qBittorrent">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17 7h-4v2h4c1.65 0 3 1.35 3 3s-1.35 3-3 3h-4v2h4c2.76 0 5-2.24 5-5s-2.24-5-5-5zm-6 8H7c-1.65 0-3-1.35-3-3s1.35-3 3-3h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-2zm1-4H8v2h8v-2z"/></svg>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
                 Enlazar
               </button>
               <button class="allib-clear-eps-btn" @click="clearAnimeEpisodes(animeLibraryDetail, false, false)"
                       title="Borrar episodios (mantiene la serie)">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11H7v-2h10v2z"/></svg>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4h6v2"/></svg>
                 Borrar eps
               </button>
-              <button class="allib-del-all-btn" @click="removeFromAnimeLibrary(animeLibraryDetail.id)"
+              <button class="allib-action-btn allib-action-btn--danger" @click="removeFromAnimeLibrary(animeLibraryDetail.id)"
                       title="Eliminar de la biblioteca">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
                 Eliminar
               </button>
             </div>
@@ -3389,7 +3389,7 @@
   </teleport>
 
 </div>
-<script src="/static/js/app.js?v=20260525-01"></script>
+<script src="/static/js/app.js?v=20260525-02"></script>
 <script>
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
