@@ -13,8 +13,8 @@ else
     PYTHON_BIN="python"
 fi
 
-export MANGA_DIR="$SCRIPT_DIR/../../MangaLibrary"
-export UPSCALED_DIR="$SCRIPT_DIR/../../MangaLibrary_Upscaled"
+export MANGA_DIR="/Manga_Upscaler_project/MangaLibrary"
+export UPSCALED_DIR="/Manga_Upscaler_project/MangaLibrary_Upscaled"
 
 # Load secrets from .env (if it exists) without polluting the shell
 if [[ -f "$SCRIPT_DIR/.env" ]]; then

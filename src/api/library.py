@@ -549,3 +549,51 @@ def download_covers_offline():
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"ok": True, "total": len(targets), "message": f"Descargando {len(targets)} portadas..."})
+
+
+# ── Scanlation comparison variants ───────────────────────────────────────────
+
+@library_bp.route('/<path:title>/compare_variants/<chapter>')
+def list_compare_variants(title, chapter):
+    """List downloaded comparison variants for a given chapter."""
+    from api.runtime import normalize_chapter as _nc
+    from decimal import Decimal, InvalidOperation
+
+    chapter_norm = _nc(chapter)
+    # Build chapter prefix (e.g. ch0001 or ch0024.2)
+    try:
+        val = Decimal(chapter_norm)
+        int_part = int(val.to_integral_value(rounding='ROUND_FLOOR'))
+        ch_prefix = f"ch{int_part:04d}.{chapter_norm.split('.')[-1]}" if '.' in chapter_norm else f"ch{int_part:04d}"
+    except (InvalidOperation, ValueError):
+        ch_prefix = f"ch{chapter_norm}"
+
+    compare_root = Path(MANGA_DIR) / title / '_compare'
+    if not compare_root.exists():
+        return jsonify([])
+
+    variants = []
+    for d in sorted(compare_root.iterdir()):
+        if not d.is_dir() or not d.name.startswith(ch_prefix + '_'):
+            continue
+        meta_file = d / '.meta.json'
+        if meta_file.exists():
+            try:
+                meta = json.loads(meta_file.read_text(encoding='utf-8'))
+            except Exception:
+                meta = {}
+        else:
+            parts = d.name[len(ch_prefix) + 1:].rsplit('_', 1)
+            meta = {'group': parts[0].replace('_', ' ') if parts else '?',
+                    'lang': parts[1] if len(parts) > 1 else '?'}
+
+        page_count = sum(1 for f in d.iterdir()
+                         if f.suffix.lower() in ('.jpg', '.jpeg', '.png', '.webp'))
+        variants.append({
+            'dir': f"_compare/{d.name}",
+            'group': meta.get('group', '?'),
+            'lang': meta.get('lang', '?'),
+            'page_count': page_count,
+        })
+
+    return jsonify(variants)

@@ -8,8 +8,12 @@ import os
 import re
 import time
 import json
+import glob
+import shutil
 import string
+import uuid
 import subprocess
+from html import unescape as _html_unescape
 import threading
 import xml.etree.ElementTree as ET
 from pathlib import Path as _Path
@@ -56,6 +60,50 @@ def _lib_write(data: dict):
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
 
+# ── Watch history ──────────────────────────────────────────────────────────────
+
+def _history_path() -> _Path:
+    return _Path(os.environ.get('MANGA_DIR', str(_Path.home() / 'MangaLibrary'))) / 'watch_history.json'
+
+def _history_read() -> list:
+    try:
+        if _history_path().exists():
+            return json.loads(_history_path().read_text(encoding='utf-8'))
+    except Exception:
+        pass
+    return []
+
+def _history_append(anime_id: str, title: str, episode: int, cover: str = ''):
+    history = _history_read()
+    history.insert(0, {
+        'anime_id': anime_id,
+        'title': title,
+        'episode': episode,
+        'cover': cover,
+        'watched_at': int(time.time()),
+    })
+    try:
+        _history_path().write_text(
+            json.dumps(history[:500], ensure_ascii=False, indent=2), encoding='utf-8'
+        )
+    except Exception:
+        pass
+
+# ── Subtitle helpers ───────────────────────────────────────────────────────────
+
+_SUBTITLE_EXTS = {'.srt', '.ass', '.ssa', '.sub', '.vtt'}
+
+def _find_subtitles(video_path: str) -> list:
+    video = _Path(video_path)
+    if not video.exists():
+        return []
+    subs = []
+    for f in video.parent.iterdir():
+        if f.suffix.lower() in _SUBTITLE_EXTS:
+            subs.append({'name': f.name, 'path': str(f)})
+    subs.sort(key=lambda s: (not s['name'].startswith(video.stem), s['name'].lower()))
+    return subs
+
 
 _backfill_done = False
 
@@ -66,7 +114,7 @@ def _backfill_anime_metadata():
     global _backfill_done
     lib = _lib_read()
     to_fetch = [(k, v) for k, v in lib.items()
-                if v.get('local_path') and not v.get('total_episodes') and k.isdigit()]
+                if not v.get('total_episodes') and k.isdigit()]
     if not to_fetch:
         _backfill_done = True
         return
@@ -134,11 +182,39 @@ _SHORT_VIDEO_SECS = 600  # < 10 min → auto-special
 
 # Duration cache: path → (mtime, duration_secs)
 # Keyed by absolute path; invalidated when file mtime changes.
+# Persisted to disk so server restarts don't re-probe every file.
 _dur_cache: dict = {}
+_DUR_CACHE_PATH = _Path.home() / '.animanga_dur_cache.json'
+_dur_cache_dirty = False
+
+
+def _load_dur_cache():
+    global _dur_cache
+    try:
+        with open(_DUR_CACHE_PATH) as f:
+            _dur_cache = {k: tuple(v) for k, v in json.load(f).items()}
+    except Exception:
+        _dur_cache = {}
+
+
+def _save_dur_cache():
+    global _dur_cache_dirty
+    if not _dur_cache_dirty:
+        return
+    try:
+        with open(_DUR_CACHE_PATH, 'w') as f:
+            json.dump({k: list(v) for k, v in _dur_cache.items()}, f)
+        _dur_cache_dirty = False
+    except Exception:
+        pass
+
+
+_load_dur_cache()
 
 
 def _video_duration(path: str) -> float:
-    """Return video duration in seconds via ffprobe, cached by file mtime."""
+    """Return video duration in seconds via ffprobe, cached by file mtime (persisted to disk)."""
+    global _dur_cache_dirty
     try:
         mtime = _Path(path).stat().st_mtime
     except Exception:
@@ -156,7 +232,30 @@ def _video_duration(path: str) -> float:
     except Exception:
         dur = 0.0
     _dur_cache[path] = (mtime, dur)
+    _dur_cache_dirty = True
+    # Flush cache in background to avoid blocking the request thread
+    threading.Thread(target=_save_dur_cache, daemon=True).start()
     return dur
+
+
+# Folder-level scan cache: wsl_path → (folder_mtime, overrides_key, episodes_list)
+# Keyed by folder path; re-scans only when folder mtime or overrides change.
+_scan_cache: dict = {}
+
+
+def _folder_mtime(p: _Path) -> float:
+    """Get max mtime of a folder and all immediate subdirs — detects new files."""
+    try:
+        mtimes = [p.stat().st_mtime]
+        for sub in p.iterdir():
+            if sub.is_dir():
+                try:
+                    mtimes.append(sub.stat().st_mtime)
+                except Exception:
+                    pass
+        return max(mtimes)
+    except Exception:
+        return 0.0
 
 
 def _scan_local_episodes(folder_path: str, overrides: dict = None) -> list:
@@ -164,6 +263,7 @@ def _scan_local_episodes(folder_path: str, overrides: dict = None) -> list:
     overrides: {filename: 'special'|'hidden'|'episode'} — manual type assignments.
     Files with no override and duration < 10 min are auto-classified as special.
     A manual override='episode' forces normal treatment even if short.
+    Results are cached by folder mtime so repeated calls don't hit the filesystem.
     """
     wsl_path = folder_path
     if _is_wsl() and re.match(r'^[A-Za-z]:[/\\]', folder_path):
@@ -171,8 +271,15 @@ def _scan_local_episodes(folder_path: str, overrides: dict = None) -> list:
     p = _Path(wsl_path)
     if not p.exists():
         return []
-    files = sorted(f for f in p.rglob('*') if f.is_file() and f.suffix.lower() in _VIDEO_EXTS)
+
     overrides = overrides or {}
+    overrides_key = str(sorted(overrides.items()))
+    fmtime = _folder_mtime(p)
+    cached = _scan_cache.get(wsl_path)
+    if cached and cached[0] == fmtime and cached[1] == overrides_key:
+        return cached[2]
+
+    files = sorted(f for f in p.rglob('*') if f.is_file() and f.suffix.lower() in _VIDEO_EXTS)
     seen: set = set()
     episodes = []
     sp_counter = 0
@@ -202,7 +309,10 @@ def _scan_local_episodes(folder_path: str, overrides: dict = None) -> list:
             ep_num += 1
         seen.add(ep_num)
         episodes.append({'num': ep_num, 'path': str(f), 'ep_type': 'episode', 'filename': f.name})
-    return sorted(episodes, key=lambda e: (e['ep_type'] != 'episode', e['num']))
+
+    result = sorted(episodes, key=lambda e: (e['ep_type'] != 'episode', e['num']))
+    _scan_cache[wsl_path] = (fmtime, overrides_key, result)
+    return result
 
 
 # ── MPV / video helpers ────────────────────────────────────────────────────────
@@ -220,7 +330,7 @@ def _win_to_wsl(path: str) -> str:
         return path
 
 
-def _find_video(content_path: str, episode: int) -> str:
+def _find_video(content_path: str, episode: int, subpath: str = '') -> str:
     # Windows path from qBittorrent → convert to WSL path first
     if _is_wsl() and re.match(r'^[A-Za-z]:[/\\\\]', content_path):
         content_path = _win_to_wsl(content_path)
@@ -228,6 +338,11 @@ def _find_video(content_path: str, episode: int) -> str:
     if p.is_file() and p.suffix.lower() in _VIDEO_EXTS:
         return str(p)
     if p.is_dir():
+        # Subpath narrows the search to a specific subfolder (e.g. Season 2 within a batch)
+        if subpath:
+            sub = p / subpath
+            if sub.is_dir():
+                p = sub
         candidates = sorted(f for f in p.rglob('*') if f.is_file() and f.suffix.lower() in _VIDEO_EXTS)
         if not candidates:
             return ''
@@ -276,32 +391,281 @@ def _is_wsl() -> bool:
 
 _CMD_EXE = '/mnt/c/Windows/System32/cmd.exe'
 
-def _launch_mpv(file_path: str) -> bool:
-    """Open the video file with the default Windows app (mpv)."""
+# Known Windows locations for mpv.exe (checked in order when not in PATH)
+_MPV_CANDIDATE_PATHS = [
+    '/mnt/c/Program Files (x86)/mpv/mpv.exe',
+    '/mnt/c/Program Files/mpv/mpv.exe',
+    '/mnt/c/tools/mpv/mpv.exe',
+    '/mnt/c/scoop/apps/mpv/current/mpv.exe',
+]
+
+
+def _find_mpv_exe() -> str:
+    """Return a usable mpv executable path, or empty string if not found."""
+    # Prefer PATH entry first
+    try:
+        subprocess.check_output(['which', 'mpv.exe'], stderr=subprocess.DEVNULL, timeout=2)
+        return 'mpv.exe'
+    except Exception:
+        pass
+    for p in _MPV_CANDIDATE_PATHS:
+        if _Path(p).exists():
+            return p
+    return ''
+
+
+def _make_wl_dir_wsl() -> tuple:
+    """Create a watch-later dir on the Windows side (%TEMP%) so MPV can write to it.
+    Returns (wl_win, wl_linux): Windows path and Linux path for reading."""
+    uid = uuid.uuid4().hex[:8]
+    try:
+        # Use PowerShell to get real Windows %TEMP% path
+        win_temp = subprocess.check_output(
+            ['powershell.exe', '-NoProfile', '-Command',
+             '[System.IO.Path]::GetTempPath().TrimEnd("\\")'],
+            stderr=subprocess.DEVNULL, timeout=5,
+        ).decode().strip()
+        if not win_temp:
+            raise ValueError('empty temp path')
+        wl_win = win_temp + f'\\mpv-wl-{uid}'
+        # Create the directory on Windows side
+        subprocess.run(
+            ['powershell.exe', '-NoProfile', '-Command', f'New-Item -ItemType Directory -Path "{wl_win}" -Force | Out-Null'],
+            stderr=subprocess.DEVNULL, timeout=5,
+        )
+        wl_linux = subprocess.check_output(
+            ['wslpath', '-u', wl_win], stderr=subprocess.DEVNULL, timeout=3
+        ).decode().strip()
+        print(f'[mpv] wl_win={wl_win!r} wl_linux={wl_linux!r}', flush=True)
+        return wl_win, wl_linux
+    except Exception as e:
+        print(f'[mpv] _make_wl_dir_wsl fallback: {e}', flush=True)
+        # Fallback: Linux side (may not be writable by Windows MPV)
+        wl_linux = f'/tmp/mpv-wl-{uid}'
+        os.makedirs(wl_linux, exist_ok=True)
+        try:
+            wl_win = subprocess.check_output(
+                ['wslpath', '-w', wl_linux], stderr=subprocess.DEVNULL, timeout=3
+            ).decode().strip()
+        except Exception:
+            wl_win = wl_linux
+        return wl_win, wl_linux
+
+
+def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> tuple:
+    """Open the video file with mpv.
+    Returns (ok, proc, wl_dir): proc is Popen|None; wl_dir is the Linux watch-later dir for reading.
+    --save-position-on-quit writes position to wl_dir when MPV exits — used for watched detection
+    and resume. This works around the WSL2 interop shim exiting early before Windows MPV closes."""
+
+    def _wl_args(wl_win_path):
+        args = [f'--watch-later-dir={wl_win_path}', '--save-position-on-quit']
+        if start_pos > 30:
+            args.append(f'--start={start_pos:.1f}')
+        return args
+
     if _is_wsl():
+        # Create watch-later dir on Windows side so MPV can write to it
+        wl_win, wl_dir = _make_wl_dir_wsl()
         try:
             win_path = subprocess.check_output(
                 ['wslpath', '-w', file_path], stderr=subprocess.DEVNULL, timeout=3
             ).decode().strip()
         except Exception:
             win_path = file_path
-        for cmd in [_CMD_EXE, 'cmd.exe']:
+        win_sub = ''
+        if sub_file and _Path(sub_file).exists():
+            try:
+                win_sub = subprocess.check_output(
+                    ['wslpath', '-w', sub_file], stderr=subprocess.DEVNULL, timeout=3
+                ).decode().strip()
+            except Exception:
+                win_sub = sub_file
+        mpv_bin = _find_mpv_exe()
+        print(f'[mpv] bin={mpv_bin!r} win_path={win_path!r} start={start_pos:.0f}s wl_win={wl_win!r}', flush=True)
+        if mpv_bin:
+            try:
+                # Use PowerShell Start-Process so MPV opens in the foreground
+                args = [win_path] + _wl_args(wl_win)
+                if win_sub:
+                    args.append(f'--sub-file={win_sub}')
+
+                def _ps_quote(s):
+                    return "'" + s.replace("'", "''") + "'"
+
+                ps_args = ','.join(_ps_quote(a) for a in args)
+                ps_cmd = (
+                    f'$p = Start-Process -FilePath {_ps_quote(mpv_bin)} '
+                    f'-ArgumentList @({ps_args}) -PassThru; '
+                    f'Write-Output $p.Id'
+                )
+                pid_str = subprocess.check_output(
+                    ['powershell.exe', '-NoProfile', '-Command', ps_cmd],
+                    stderr=subprocess.DEVNULL, timeout=15,
+                ).decode().strip()
+                win_pid = int(pid_str)
+                print(f'[mpv] launched via Start-Process win_pid={win_pid}', flush=True)
+                return (True, None, wl_dir)  # proc=None; tracked via tasklist
+            except Exception as e:
+                print(f'[mpv] Start-Process failed: {e}, trying direct Popen', flush=True)
+                try:
+                    cmd = [mpv_bin, win_path] + _wl_args(wl_win)
+                    if win_sub:
+                        cmd += [f'--sub-file={win_sub}']
+                    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    print(f'[mpv] direct launch pid={proc.pid}', flush=True)
+                    return (True, proc, wl_dir)
+                except Exception as e2:
+                    print(f'[mpv] direct launch failed: {e2}', flush=True)
+        for cmd_exe in [_CMD_EXE, 'cmd.exe']:
             try:
                 subprocess.Popen(
-                    [cmd, '/c', 'start', '', win_path],
+                    [cmd_exe, '/c', 'start', '', win_path],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
-                return True
+                print(f'[mpv] fallback via cmd.exe', flush=True)
+                return (True, None, wl_dir)
             except Exception:
                 continue
-        return False
+        return (False, None, wl_dir)
     else:
+        wl_dir = f'/tmp/mpv-wl-{uuid.uuid4().hex[:8]}'
+        os.makedirs(wl_dir, exist_ok=True)
+        for mpv_bin in ['mpv']:
+            try:
+                cmd = [mpv_bin, file_path] + _wl_args(wl_dir)
+                if sub_file and _Path(sub_file).exists():
+                    cmd += [f'--sub-file={sub_file}']
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return (True, proc, wl_dir)
+            except Exception:
+                pass
         try:
             subprocess.Popen(['xdg-open', file_path],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            return True
+            return (True, None, wl_dir)
         except Exception:
-            return False
+            return (False, None, wl_dir)
+
+
+_WATCHED_THRESHOLD = 0.50
+
+
+def _read_wl_position(wl_dir: str) -> float:
+    """Read saved playback position from MPV watch-later dir. Returns 0 if not found."""
+    files = glob.glob(os.path.join(wl_dir, '*'))
+    for f in files:
+        try:
+            with open(f) as fh:
+                for line in fh:
+                    if line.startswith('start='):
+                        return float(line.split('=', 1)[1].strip())
+        except Exception:
+            pass
+    return 0.0
+
+
+def _wait_for_mpv_close(wl_dir: str, timeout: float = 14400) -> float:
+    """Wait for Windows MPV to close (WSL2 interop exits early).
+    Polls for watch-later file (mid-episode quit) or absence of mpv.exe in tasklist (EOS/crash).
+    Returns playback position in seconds (0 = EOS or no position saved)."""
+    deadline = time.time() + timeout
+    # Give MPV 4 seconds to start before first tasklist check
+    startup_grace = time.time() + 4
+    while time.time() < deadline:
+        pos = _read_wl_position(wl_dir)
+        if pos > 0:
+            time.sleep(0.5)  # ensure file write is complete
+            final = _read_wl_position(wl_dir)
+            print(f'[mpv] position file found: {final:.0f}s', flush=True)
+            return final
+        if time.time() > startup_grace:
+            try:
+                out = subprocess.check_output(
+                    ['tasklist.exe', '/FI', 'IMAGENAME eq mpv.exe', '/NH'],
+                    stderr=subprocess.DEVNULL, timeout=5,
+                ).decode()
+                if 'mpv.exe' not in out.lower():
+                    print(f'[mpv] mpv.exe gone from tasklist → EOS', flush=True)
+                    return 0.0  # MPV gone, no position file → EOS or quick close
+            except Exception:
+                pass
+        time.sleep(0.5)
+    return 0.0
+
+
+def _track_mpv_session(proc, wl_dir: str, anime_id: str, ep_str: str, duration: float):
+    """Background thread: track MPV session, detect watched status, save resume position.
+
+    WSL2: the interop shim exits in ~5s even though Windows MPV keeps running.
+    We use --save-position-on-quit + watch-later dir to get the real close signal.
+    - Position file appears  → user quit mid-episode; save for resume if < threshold
+    - No position file + mpv.exe gone → episode finished (EOS) or quick close → mark watched
+    """
+    from api.runtime import push_sse_event
+    print(f'[mpv] tracking anime={anime_id} ep={ep_str} dur={duration:.0f}s wl_dir={wl_dir!r}', flush=True)
+    if proc is not None:
+        try:
+            proc.wait()
+        except Exception as e:
+            print(f'[mpv] proc.wait() error: {e}', flush=True)
+    else:
+        # cmd.exe / no-proc fallback: give MPV a moment to start before polling
+        print(f'[mpv] proc=None, waiting 6s for MPV to start…', flush=True)
+        time.sleep(6)
+
+    if _is_wsl():
+        # proc.wait() returned fast (interop shim) — wait for actual Windows MPV
+        position = _wait_for_mpv_close(wl_dir, timeout=14400)
+    else:
+        time.sleep(0.3)
+        position = _read_wl_position(wl_dir)
+
+    try:
+        shutil.rmtree(wl_dir, ignore_errors=True)
+    except Exception:
+        pass
+
+    # position > 0 → user quit mid-episode; position == 0 → EOS or quick close
+    if position > 0 and duration > 0:
+        watched  = (position / duration) >= _WATCHED_THRESHOLD
+        save_pos = 0 if watched else int(position)
+    else:
+        watched  = True   # EOS = finished
+        save_pos = 0
+
+    print(f'[mpv] session end: pos={position:.0f}s dur={duration:.0f}s watched={watched} save_pos={save_pos}', flush=True)
+
+    try:
+        lib = _lib_read()
+        if anime_id not in lib:
+            return
+        # Always persist duration so frontend can compute progress %
+        if duration > 0:
+            lib[anime_id].setdefault('durations', {})[ep_str] = int(duration)
+
+        if save_pos > 30:
+            lib[anime_id].setdefault('positions', {})[ep_str] = save_pos
+        else:
+            lib[anime_id].get('positions', {}).pop(ep_str, None)
+
+        if watched:
+            lib[anime_id].setdefault('watched', {})[ep_str] = True
+            now = int(time.time())
+            lib[anime_id]['last_watched_at'] = now
+            _lib_write(lib)
+            _history_append(anime_id, lib[anime_id].get('title', anime_id),
+                            int(ep_str), lib[anime_id].get('cover', ''))
+            print(f'[mpv] marked watched: anime={anime_id} ep={ep_str}', flush=True)
+            push_sse_event('watched', anime_id=anime_id, ep_str=ep_str,
+                           last_watched_at=now, watched=True,
+                           duration=int(duration))
+        else:
+            _lib_write(lib)
+            push_sse_event('position', anime_id=anime_id, ep_str=ep_str,
+                           position=save_pos, duration=int(duration))
+    except Exception as e:
+        print(f'[mpv] track error: {e}', flush=True)
 
 
 _SEARCH_TTL = 120
@@ -374,6 +738,12 @@ def _parse_episode(title: str) -> int:
     # Strip codec identifiers so x264/x265/h264/h265 numbers are never extracted as episodes
     clean = re.sub(r'[xXhH]\.?26[45]', ' ', title)
     clean = re.sub(r'\b(HEVC|AVC1?|xvid|divx)\b', ' ', clean, flags=re.I)
+    # SxxExx / SxxOVAxx patterns — extract episode part only
+    m = re.search(r'\bS\d{1,2}[Ee](\d{1,3})\b', clean, re.I)
+    if m:
+        n = int(m.group(1))
+        if 1 <= n <= 999:
+            return n
     # Dash-number: take the LAST match so "Part 2 - 01" returns 1 not 2
     matches = list(re.finditer(r'[-–]\s*(\d{1,3})(?:v\d+)?(?=\s|\[|\(|_|\.mkv|$)', clean))
     for m in reversed(matches):
@@ -599,6 +969,85 @@ def get_torrents():
     return jsonify(merged)
 
 
+# ── Animetosho search (HTML scrape — JSON API discontinued) ───────────────────
+
+_TOSHO = 'https://animetosho.org'
+
+@anime_bp.route('/torrents_tosho')
+def get_torrents_tosho():
+    q = request.args.get('q', '').strip()
+    if not q:
+        return jsonify([])
+    try:
+        resp = _http.get(
+            f'{_TOSHO}/search',
+            params={'q': q},
+            headers={'User-Agent': _MAL_UA},
+            timeout=10,
+        )
+        html = resp.text
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+    # Split into entry blocks
+    raw_blocks = re.split(r'(?=<div class="home_list_entry)', html)
+
+    results = []
+    seen: set = set()
+
+    for block in raw_blocks[1:]:
+        # Title + view URL
+        link_m = re.search(r'<div class="link"><a href="([^"]+)">([^<]+)</a></div>', block)
+        if not link_m:
+            continue
+        view_url = link_m.group(1)
+        title    = _html_unescape(link_m.group(2).strip())
+
+        # Torrent URL — path contains hex info_hash
+        torrent_m = re.search(
+            r'href="(https?://animetosho\.org/storage/torrent/([a-f0-9]{40})/[^"]+\.torrent)"',
+            block,
+        )
+        info_hash   = torrent_m.group(2).lower() if torrent_m else ''
+        torrent_url = torrent_m.group(1)         if torrent_m else ''
+
+        if info_hash and info_hash in seen:
+            continue
+        if info_hash:
+            seen.add(info_hash)
+
+        # Magnet
+        mag_m  = re.search(r'href="(magnet:[^"]+)"', block)
+        magnet = _html_unescape(mag_m.group(1)) if mag_m else (_magnet(info_hash, title) if info_hash else '')
+
+        # Size (display string already formatted)
+        size_m = re.search(r'<div class="size"[^>]*>([^<]+)</div>', block)
+        size   = size_m.group(1).strip() if size_m else ''
+
+        # Date
+        date_m = re.search(r'<div class="date" title="Date/time submitted:\s*([^"]+)"', block)
+        date   = date_m.group(1).strip() if date_m else ''
+
+        results.append({
+            'title':       title,
+            'torrent_url': torrent_url,
+            'view_url':    view_url if view_url.startswith('http') else f'{_TOSHO}{view_url}',
+            'magnet':      magnet,
+            'info_hash':   info_hash,
+            'size':        size,
+            'seeders':     -1,   # not shown in search HTML
+            'leechers':    0,
+            'trusted':     False,
+            'date':        date,
+            'episode':     _parse_episode(title),
+            'quality':     _parse_quality(title),
+            'group':       _parse_group(title),
+            'source':      'tosho',
+        })
+
+    return jsonify(results)
+
+
 # ── qBittorrent ────────────────────────────────────────────────────────────────
 
 @anime_bp.route('/qbt/status')
@@ -743,7 +1192,9 @@ def anime_library_get():
                 if not stem:
                     continue
                 ep_num = _parse_episode(stem)
-                if ep_num > 0:
+                if ep_num > 0 and ep_num not in ep_files:
+                    # First-match wins: for multi-season batches sorted alphabetically,
+                    # S01 files come before S02, so Season 1 title names are preferred.
                     ep_files[ep_num] = stem
             # If only one video file exists, store it under key -1 (single-file torrent)
             if not ep_files and len(raw_files) == 1:
@@ -754,7 +1205,9 @@ def anime_library_get():
 
     result = []
     for anime_id, anime in lib.items():
-        watched_map = anime.get('watched', {})
+        watched_map   = anime.get('watched', {})
+        positions_map = anime.get('positions', {})
+        durations_map = anime.get('durations', {})
         local_path = anime.get('local_path', '')
         if local_path:
             overrides = anime.get('episode_overrides', {})
@@ -773,6 +1226,8 @@ def anime_library_get():
                     'local_path': ep['path'],   # specific file path for direct playback
                     'added_on':   0,
                     'watched':    bool(watched_map.get(str(ep['num']))),
+                    'resume_pos': positions_map.get(str(ep['num']), 0),
+                    'duration':   durations_map.get(str(ep['num']), 0),
                     'ep_type':    ep.get('ep_type', 'episode'),
                     'filename':   ep.get('filename', _Path(ep['path']).name),
                 }
@@ -803,9 +1258,12 @@ def anime_library_get():
                 'cover': anime.get('cover', ''),
                 'total_episodes': series_total or regular_count,
                 'format': anime.get('format', ''),
+                'status': anime.get('status', ''),
                 'episodes': episodes_out,
                 'downloaded_count': regular_count,
                 'is_local': True,
+                'added_at': anime.get('added_at', 0),
+                'last_watched_at': anime.get('last_watched_at', 0),
             })
             continue
 
@@ -845,9 +1303,11 @@ def anime_library_get():
                 'progress': progress,
                 'state': state,
                 'size': qbt.get('size', 0) if qbt else 0,
-                'in_qbt': in_qbt,
-                'added_on': ep_data.get('added_on', 0),
-                'watched': bool(watched_map.get(ep_str)),
+                'in_qbt':     in_qbt,
+                'added_on':   ep_data.get('added_on', 0),
+                'watched':    bool(watched_map.get(ep_str)),
+                'resume_pos': positions_map.get(ep_str, 0),
+                'duration':   durations_map.get(ep_str, 0),
             })
 
         episodes_out.sort(key=lambda e: (e['num'] < 0, e['num']))
@@ -881,6 +1341,9 @@ def anime_library_get():
                         e['title'] = ep_files_b.get(e['num'], '')
 
         done_count = sum(1 for e in episodes_out if e.get('in_qbt') and e.get('num', 0) > 0)
+        # added_at fallback: earliest episode added_on (for entries created before this field existed)
+        ep_times = [ep.get('added_on', 0) for ep in ep_map.values() if ep.get('added_on', 0) > 0]
+        added_at_fallback = min(ep_times) if ep_times else 0
         result.append({
             'id': anime_id,
             'al_id': anime.get('al_id'),
@@ -890,8 +1353,11 @@ def anime_library_get():
             'cover': anime.get('cover', ''),
             'total_episodes': total,
             'format': anime.get('format', ''),
+            'status': anime.get('status', ''),
             'episodes': episodes_out,
             'downloaded_count': done_count,
+            'added_at': anime.get('added_at', added_at_fallback),
+            'last_watched_at': anime.get('last_watched_at', 0),
         })
     return jsonify(result)
 
@@ -906,6 +1372,23 @@ def anime_library_add():
     if not anime_id:
         return jsonify({'error': 'need al_id, mal_id, or title'}), 400
 
+    total_eps = data.get('total_episodes')
+    fmt       = data.get('format', '')
+
+    # If episode count is missing but we have an AniList id, fetch it now
+    if not total_eps and al_id:
+        try:
+            _q = '''query($id:Int){Media(id:$id,type:ANIME){episodes format
+                title{english romaji} coverImage{large}}}'''
+            r = _http.post(_ANILIST, json={'query': _q, 'variables': {'id': int(al_id)}}, timeout=8)
+            m = (r.json().get('data') or {}).get('Media') or {}
+            if m.get('episodes'):
+                total_eps = m['episodes']
+            if m.get('format') and not fmt:
+                fmt = m['format']
+        except Exception:
+            pass
+
     lib = _lib_read()
     if anime_id not in lib:
         lib[anime_id] = {
@@ -913,17 +1396,18 @@ def anime_library_add():
             'title': title,
             'title_romaji': data.get('title_romaji', ''),
             'cover': data.get('cover', ''),
-            'total_episodes': data.get('total_episodes'),
-            'format': data.get('format', ''),
+            'total_episodes': total_eps,
+            'format': fmt,
             'episodes': {},
+            'added_at': int(time.time()),
         }
     else:
         if not lib[anime_id].get('cover') and data.get('cover'):
             lib[anime_id]['cover'] = data['cover']
-        if not lib[anime_id].get('total_episodes') and data.get('total_episodes'):
-            lib[anime_id]['total_episodes'] = data['total_episodes']
-        if not lib[anime_id].get('format') and data.get('format'):
-            lib[anime_id]['format'] = data['format']
+        if not lib[anime_id].get('total_episodes') and total_eps:
+            lib[anime_id]['total_episodes'] = total_eps
+        if not lib[anime_id].get('format') and fmt:
+            lib[anime_id]['format'] = fmt
 
     # track_only = add anime to library without registering any episode
     if not data.get('track_only'):
@@ -1016,6 +1500,103 @@ def anime_ep_override(anime_id):
 
     if not overrides:
         lib[anime_id].pop('episode_overrides', None)
+
+    _lib_write(lib)
+    return jsonify({'ok': True})
+
+
+@anime_bp.route('/library/<anime_id>/status', methods=['POST'])
+def anime_set_status(anime_id):
+    """Set watch status for a library entry.
+    Body: { "status": "watching" | "completed" | "plan_to_watch" | "on_hold" | "dropped" | "" }
+    """
+    ALLOWED = {'watching', 'completed', 'plan_to_watch', 'on_hold', 'dropped', ''}
+    data = request.get_json(silent=True) or {}
+    status = data.get('status', '')
+    if status not in ALLOWED:
+        return jsonify({'error': 'invalid status'}), 400
+
+    lib = _lib_read()
+    if anime_id not in lib:
+        return jsonify({'error': 'not found'}), 404
+
+    lib[anime_id]['status'] = status
+    _lib_write(lib)
+    return jsonify({'ok': True})
+
+
+@anime_bp.route('/library/<anime_id>/clear_episodes', methods=['POST'])
+def anime_clear_episodes(anime_id):
+    """Remove all episode records from a library entry, optionally deleting torrents/files.
+    Body: { "remove_from_qbt": bool, "delete_files": bool }
+    """
+    data = request.get_json(silent=True) or {}
+    remove_from_qbt = bool(data.get('remove_from_qbt', False))
+    delete_files = bool(data.get('delete_files', False))
+
+    lib = _lib_read()
+    if anime_id not in lib:
+        return jsonify({'error': 'not found'}), 404
+
+    if remove_from_qbt:
+        episodes = lib[anime_id].get('episodes', {})
+        seen_hashes = set()
+        for ep in episodes.values():
+            ih = ep.get('info_hash', '')
+            if ih and ih not in seen_hashes:
+                seen_hashes.add(ih)
+                try:
+                    _q('post', '/torrents/delete',
+                       data={'hashes': ih, 'deleteFiles': str(delete_files).lower()})
+                except Exception:
+                    pass
+
+    lib[anime_id]['episodes'] = {}
+    _lib_write(lib)
+    return jsonify({'ok': True})
+
+
+@anime_bp.route('/library/<anime_id>/link_torrent', methods=['POST'])
+def anime_link_torrent(anime_id):
+    """Link an existing torrent to a library entry episode slot.
+    Body: { "info_hash": str, "episode": int (default 0), "torrent_title": str }
+    If episode == 0 and total_episodes > 0, pre-fills episodes 1..total with from_batch=True.
+    """
+    data = request.get_json(silent=True) or {}
+    info_hash = (data.get('info_hash') or '').strip().lower()
+    episode = int(data.get('episode', 0))
+    torrent_title = (data.get('torrent_title') or '').strip()
+
+    if not info_hash:
+        return jsonify({'error': 'info_hash required'}), 400
+
+    lib = _lib_read()
+    if anime_id not in lib:
+        return jsonify({'error': 'not found'}), 404
+
+    entry = lib[anime_id]
+    episodes = entry.setdefault('episodes', {})
+    now = int(time.time())
+
+    subpath = (data.get('subpath') or '').strip()
+    ep_record = {
+        'title': torrent_title,
+        'info_hash': info_hash,
+        'added_on': now,
+    }
+    if subpath:
+        ep_record['subpath'] = subpath
+
+    if episode == 0:
+        episodes['0'] = ep_record  # always write batch slot
+        total = int(entry.get('total_episodes', 0))
+        if total > 0:
+            for n in range(1, total + 1):
+                slot = str(n)
+                if slot not in episodes:
+                    episodes[slot] = dict(ep_record, from_batch=True)
+    else:
+        episodes[str(episode)] = ep_record
 
     _lib_write(lib)
     return jsonify({'ok': True})
@@ -1275,19 +1856,33 @@ def anime_play():
         anime_id   = data.get('anime_id', '')
         episode    = data.get('episode', -1)
         local_path = (data.get('local_path') or '').strip()
+        sub_file   = (data.get('sub_file') or '').strip()
+        ep_str     = str(episode)
+
+        # Read saved resume position from library
+        start_pos = 0.0
+        if anime_id:
+            lib_peek = _lib_read()
+            start_pos = float((lib_peek.get(anime_id) or {}).get('positions', {}).get(ep_str, 0))
+
+        def _launch_and_track(video):
+            ok, proc, wl_dir = _launch_mpv(video, sub_file, start_pos)
+            if not ok:
+                return False
+            if anime_id:
+                dur = _video_duration(video)
+                threading.Thread(target=_track_mpv_session,
+                                 args=(proc, wl_dir, anime_id, ep_str, dur),
+                                 daemon=True).start()
+            return True
 
         if local_path:
             video = _find_video(local_path, int(episode))
             if not video:
                 return jsonify({'error': f'no video found in: {local_path}'}), 404
-            if not _launch_mpv(video):
+            if not _launch_and_track(video):
                 return jsonify({'error': 'failed to launch mpv'}), 500
-            if anime_id:
-                lib = _lib_read()
-                if anime_id in lib:
-                    lib[anime_id].setdefault('watched', {})[str(episode)] = True
-                    _lib_write(lib)
-            return jsonify({'ok': True, 'path': video})
+            return jsonify({'ok': True, 'path': video, 'resume_pos': start_pos})
 
         info_hash = (data.get('info_hash') or '').lower()
         if not info_hash:
@@ -1296,7 +1891,6 @@ def anime_play():
             torrents = _q('get', '/torrents/info', params={'hashes': info_hash}).json()
         except Exception as e:
             return jsonify({'error': f'qBT error: {e}'}), 500
-        # Fallback: if hash not found but anime has a batch (episode 0), use that torrent
         if not torrents and anime_id:
             lib = _lib_read()
             batch_hash = (lib.get(anime_id) or {}).get('episodes', {}).get('0', {}).get('info_hash', '')
@@ -1310,17 +1904,19 @@ def anime_play():
         content_path = torrents[0].get('content_path') or torrents[0].get('save_path', '')
         if not content_path:
             return jsonify({'error': 'no content path from qBittorrent'}), 404
-        video = _find_video(content_path, int(episode))
+        # Read subpath from library episode record (set when linking multi-season batches)
+        ep_subpath = ''
+        if anime_id:
+            lib_ep = (_lib_read().get(anime_id) or {}).get('episodes', {}).get(ep_str, {})
+            if not lib_ep:  # fallback to batch ep record
+                lib_ep = (_lib_read().get(anime_id) or {}).get('episodes', {}).get('0', {})
+            ep_subpath = lib_ep.get('subpath', '')
+        video = _find_video(content_path, int(episode), ep_subpath)
         if not video:
             return jsonify({'error': f'no video file found in: {content_path}'}), 404
-        if not _launch_mpv(video):
+        if not _launch_and_track(video):
             return jsonify({'error': 'failed to launch mpv — is mpv.exe in PATH?'}), 500
-        if anime_id:
-            lib = _lib_read()
-            if anime_id in lib:
-                lib[anime_id].setdefault('watched', {})[str(episode)] = True
-                _lib_write(lib)
-        return jsonify({'ok': True, 'path': video})
+        return jsonify({'ok': True, 'path': video, 'resume_pos': start_pos})
     except Exception as e:
         return jsonify({'error': f'internal error: {e}'}), 500
 
@@ -1460,8 +2056,14 @@ def anime_watched_toggle(anime_id):
         state = False
     else:
         watched[episode] = True
+        lib[anime_id]['last_watched_at'] = int(time.time())
+        _history_append(anime_id, lib[anime_id].get('title', anime_id),
+                        int(episode), lib[anime_id].get('cover', ''))
         state = True
     _lib_write(lib)
+    from api.runtime import push_sse_event
+    push_sse_event('watched', anime_id=anime_id, ep_str=episode,
+                   watched=state, last_watched_at=lib[anime_id].get('last_watched_at', 0))
     return jsonify({'ok': True, 'watched': state})
 
 
@@ -1535,13 +2137,20 @@ def anime_thumb(anime_id, episode):
     # Get duration and seek to 50% (midpoint)
     duration = _ffprobe_duration(video)
     seek_secs = duration * 0.50 if duration > 0 else 30.0
-    seek_ts = _secs_to_hms(seek_secs)
+
+    # Two-pass seek: fast pre-seek (keyframe) + short accurate post-seek.
+    # Using only -ss before -i lands on a B/P-frame without its references → blurry.
+    fine_margin = min(6.0, seek_secs)
+    pre_ts  = _secs_to_hms(max(0.0, seek_secs - fine_margin))
+    fine_ts = _secs_to_hms(fine_margin)
 
     try:
         subprocess.run(
-            ['ffmpeg', '-y', '-ss', seek_ts, '-i', video,
-             '-vframes', '1', '-vf', 'scale=360:-1',
-             '-q:v', '5', str(cache_path)],
+            ['ffmpeg', '-y',
+             '-ss', pre_ts, '-i', video,   # fast seek to near-target keyframe
+             '-ss', fine_ts,               # accurate fine-seek post-input (short, cheap)
+             '-vframes', '1', '-vf', 'scale=480:-2',
+             '-q:v', '2', str(cache_path)],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             timeout=30,
         )
@@ -1552,3 +2161,463 @@ def anime_thumb(anime_id, episode):
         return ('', 500)
 
     return send_file(str(cache_path), mimetype='image/jpeg', max_age=604800)
+
+
+# ── Subtitle list endpoint ─────────────────────────────────────────────────────
+
+@anime_bp.route('/subtitles/<anime_id>/<int:episode>')
+def anime_subtitles(anime_id, episode):
+    """Return subtitle files found alongside the episode video."""
+    lib = _lib_read()
+    anime = lib.get(anime_id)
+    if not anime:
+        return jsonify([])
+
+    local_path = anime.get('local_path', '')
+    if local_path:
+        video = _find_video(local_path, episode)
+    else:
+        ep_map = anime.get('episodes', {})
+        ep_data = ep_map.get(str(episode)) or {}
+        ih = (ep_data.get('info_hash') or '').lower()
+        if not ih:
+            return jsonify([])
+        try:
+            torrents = _q('get', '/torrents/info', params={'hashes': ih}).json()
+        except Exception:
+            return jsonify([])
+        if not torrents:
+            return jsonify([])
+        content_path = torrents[0].get('content_path') or torrents[0].get('save_path', '')
+        video = _find_video(content_path, episode)
+
+    if not video:
+        return jsonify([])
+    return jsonify(_find_subtitles(video))
+
+
+# ── Episode auto-renamer ──────────────────────────────────────────────────────
+
+@anime_bp.route('/rename_preview/<anime_id>')
+def anime_rename_preview(anime_id):
+    lib = _lib_read()
+    if anime_id not in lib:
+        return jsonify({'error': 'not found'}), 404
+    entry = lib[anime_id]
+    local_path = (entry.get('local_path') or '').strip()
+    if not local_path or not _Path(local_path).is_dir():
+        return jsonify({'error': 'no_local'}), 400
+
+    title = (entry.get('title') or anime_id)
+    safe_title = re.sub(r'[\\/:*?"<>|]', '', title).strip()
+    overrides = entry.get('episode_overrides', {})
+    episodes = _scan_local_episodes(local_path, overrides)
+
+    renames = []
+    for ep in episodes:
+        old_path = ep['path']
+        old_name = ep['filename']
+        ext = _Path(old_name).suffix
+        if ep['ep_type'] == 'special':
+            new_name = f"{safe_title} - SP{ep['num']:02d}{ext}"
+        else:
+            new_name = f"{safe_title} - E{ep['num']:02d}{ext}"
+        renames.append({
+            'old_path': old_path,
+            'old_name': old_name,
+            'new_name': new_name,
+            'num': ep['num'],
+            'ep_type': ep['ep_type'],
+            'changed': old_name != new_name,
+        })
+
+    return jsonify({
+        'title': title,
+        'renames': renames,
+        'changes': sum(1 for r in renames if r['changed']),
+    })
+
+
+@anime_bp.route('/rename_apply/<anime_id>', methods=['POST'])
+def anime_rename_apply(anime_id):
+    lib = _lib_read()
+    if anime_id not in lib:
+        return jsonify({'error': 'not found'}), 404
+    data = request.json or {}
+    to_rename = [r for r in data.get('renames', []) if r.get('changed')]
+    renamed = 0
+    errors = []
+    for r in to_rename:
+        old_p = _Path(r['old_path'])
+        new_p = old_p.parent / r['new_name']
+        try:
+            if old_p.exists() and not new_p.exists():
+                old_p.rename(new_p)
+                renamed += 1
+            elif new_p.exists() and new_p != old_p:
+                errors.append({'file': old_p.name, 'error': 'ya existe'})
+        except Exception as e:
+            errors.append({'file': old_p.name, 'error': str(e)})
+    return jsonify({'renamed': renamed, 'errors': errors})
+
+
+# ── Watch history endpoints ────────────────────────────────────────────────────
+
+@anime_bp.route('/history')
+def anime_history_get():
+    return jsonify(_history_read())
+
+
+@anime_bp.route('/history/clear', methods=['POST'])
+def anime_history_clear():
+    try:
+        _history_path().write_text('[]', encoding='utf-8')
+    except Exception:
+        pass
+    return jsonify({'ok': True})
+
+
+# ── AniList recommendations ────────────────────────────────────────────────────
+
+_REC_QUERY = """
+query ($id: Int) {
+  Media(id: $id) {
+    recommendations(sort: RATING_DESC, page: 1, perPage: 15) {
+      nodes {
+        rating
+        mediaRecommendation {
+          id
+          title { romaji english }
+          coverImage { large medium }
+          averageScore
+          genres
+          format
+          episodes
+          status
+        }
+      }
+    }
+  }
+}
+"""
+
+
+@anime_bp.route('/recommendations/<int:al_id>')
+def anime_recommendations(al_id):
+    try:
+        resp = _http.post(
+            _ANILIST,
+            json={'query': _REC_QUERY, 'variables': {'id': al_id}},
+            timeout=10,
+        )
+        nodes = (resp.json()
+                 .get('data', {})
+                 .get('Media', {})
+                 .get('recommendations', {})
+                 .get('nodes', []))
+        recs = []
+        for node in nodes:
+            if not node.get('rating'):
+                continue
+            m = node.get('mediaRecommendation')
+            if not m:
+                continue
+            recs.append({
+                'al_id':        m['id'],
+                'title':        m['title'].get('english') or m['title'].get('romaji', ''),
+                'title_romaji': m['title'].get('romaji', ''),
+                'cover':        (m.get('coverImage') or {}).get('large') or (m.get('coverImage') or {}).get('medium', ''),
+                'score':        m.get('averageScore') or 0,
+                'genres':       (m.get('genres') or [])[:3],
+                'format':       m.get('format', ''),
+                'episodes':     m.get('episodes') or 0,
+                'status':       m.get('status', ''),
+                'rating':       node['rating'],
+            })
+        return jsonify(recs)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── AniList tags ───────────────────────────────────────────────────────────────
+
+_TAGS_QUERY = """
+query ($id: Int) {
+  Media(id: $id) {
+    tags { name rank category isAdult }
+    idMal
+  }
+}
+"""
+
+_TAG_BROWSE_QUERY = """
+query ($tag: String) {
+  Page(page: 1, perPage: 30) {
+    media(type: ANIME, tag: $tag, sort: SCORE_DESC, isAdult: false) {
+      id idMal
+      title { romaji english }
+      coverImage { large medium }
+      averageScore genres format episodes status
+      tags { name rank }
+    }
+  }
+}
+"""
+
+
+@anime_bp.route('/tags/<int:al_id>')
+def anime_tags(al_id):
+    try:
+        resp = _http.post(
+            _ANILIST,
+            json={'query': _TAGS_QUERY, 'variables': {'id': al_id}},
+            timeout=10,
+        )
+        media = (resp.json().get('data', {}).get('Media', {}) or {})
+        tags  = media.get('tags') or []
+        mal_id = media.get('idMal')
+
+        result = [
+            {'name': t['name'], 'rank': t['rank'], 'category': t.get('category', '')}
+            for t in tags
+            if not t.get('isAdult') and t.get('rank', 0) >= 60
+        ]
+        result.sort(key=lambda x: -x['rank'])
+
+        # Fetch mal_url from Jikan so we can link directly to the community page
+        mal_url = ''
+        if mal_id:
+            try:
+                jk = _http.get(f'{_JIKAN}/anime/{mal_id}', timeout=6)
+                mal_url = (jk.json().get('data') or {}).get('url', '') or ''
+            except Exception:
+                pass
+
+        return jsonify({'tags': result, 'mal_url': mal_url, 'mal_id': mal_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@anime_bp.route('/browse_tag')
+def browse_by_tag():
+    tag  = request.args.get('tag', '').strip()
+    al_id = request.args.get('al_id', type=int)
+    if not tag:
+        return jsonify([])
+    try:
+        # Get source anime's full tag set for similarity scoring
+        source_tags: set = set()
+        if al_id:
+            try:
+                r2 = _http.post(
+                    _ANILIST,
+                    json={'query': _TAGS_QUERY, 'variables': {'id': al_id}},
+                    timeout=8,
+                )
+                raw = (r2.json().get('data', {}).get('Media', {}) or {}).get('tags') or []
+                source_tags = {t['name'] for t in raw if not t.get('isAdult')}
+            except Exception:
+                pass
+
+        resp = _http.post(
+            _ANILIST,
+            json={'query': _TAG_BROWSE_QUERY, 'variables': {'tag': tag}},
+            timeout=10,
+        )
+        items = (resp.json().get('data', {}).get('Page', {}).get('media') or [])
+        result = []
+        for m in items:
+            if al_id and m['id'] == al_id:
+                continue  # skip the source anime itself
+            item_tags = {t['name'] for t in (m.get('tags') or [])}
+            shared = len(source_tags & item_tags) if source_tags else 0
+            result.append({
+                'al_id':        m['id'],
+                'mal_id':       m.get('idMal'),
+                'title':        m['title'].get('english') or m['title'].get('romaji', ''),
+                'title_romaji': m['title'].get('romaji', ''),
+                'cover':        (m.get('coverImage') or {}).get('large') or (m.get('coverImage') or {}).get('medium', ''),
+                'score':        m.get('averageScore') or 0,
+                'genres':       (m.get('genres') or [])[:3],
+                'format':       m.get('format', ''),
+                'episodes':     m.get('episodes') or 0,
+                'status':       m.get('status', ''),
+                'shared':       shared,
+            })
+        # Most tag-overlap first, then by score
+        result.sort(key=lambda x: (-x['shared'], -x['score']))
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── MAL Interest Stacks ────────────────────────────────────────────────────────
+
+_stacks_cache: dict = {}  # mal_id → list of stacks
+
+_MAL_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+
+
+def _scrape_stacks(mal_url: str) -> list:
+    url = mal_url.rstrip('/') + '/stacks'
+    resp = _http.get(url, headers={'User-Agent': _MAL_UA}, timeout=10)
+    html = resp.text
+    # Extract stack id + name from anchor pairs
+    raw = re.findall(
+        r'href="https://myanimelist\.net/stacks/(\d+)"[^>]*>\s*(.*?)\s*</a>',
+        html, re.DOTALL
+    )
+    seen: set = set()
+    stacks = []
+    for sid, name in raw:
+        name = re.sub(r'<[^>]+>', '', name).strip()
+        if sid not in seen and name:
+            seen.add(sid)
+            stacks.append({
+                'id':   int(sid),
+                'name': name,
+                'url':  f'https://myanimelist.net/stacks/{sid}',
+            })
+    return stacks
+
+
+@anime_bp.route('/stacks')
+def anime_stacks():
+    mal_id = request.args.get('mal_id', type=int)
+    if not mal_id:
+        return jsonify([])
+    if mal_id in _stacks_cache:
+        return jsonify(_stacks_cache[mal_id])
+    try:
+        jk = _http.get(f'{_JIKAN}/anime/{mal_id}', timeout=6)
+        mal_url = (jk.json().get('data') or {}).get('url', '') or ''
+        if not mal_url:
+            return jsonify([])
+        stacks = _scrape_stacks(mal_url)
+        _stacks_cache[mal_id] = stacks
+        return jsonify(stacks)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ── Stack browse (pure MAL scraping) ──────────────────────────────────────────
+
+_stack_browse_cache: dict = {}  # stack_id → {stack, items}
+
+
+def _slug_to_title(slug: str) -> str:
+    return slug.replace('__', ': ').replace('_', ' ').strip()
+
+
+@anime_bp.route('/stacks/browse/<int:stack_id>')
+def browse_stack(stack_id):
+    if stack_id in _stack_browse_cache:
+        return jsonify(_stack_browse_cache[stack_id])
+    try:
+        # Use list view: exposes author personal score + per-item intro note
+        resp = _http.get(
+            f'https://myanimelist.net/stacks/{stack_id}?view_style=list',
+            headers={'User-Agent': _MAL_UA}, timeout=12,
+        )
+        html = resp.text
+
+        # ── Stack metadata ────────────────────────────────────────────────────
+        og_m = re.search(r'<meta property="og:title"\s+content="([^"]+)"', html)
+        stack_name = ''
+        if og_m:
+            stack_name = re.sub(r'\s*\|\s*MyAnimeList\.net\s*$', '', og_m.group(1)).strip()
+
+        desc_m = re.search(r'<meta name="description"\s+content="([^"]+)"', html)
+        stack_desc = _html_unescape(desc_m.group(1)) if desc_m else ''
+
+        entries_m  = re.search(r'([\d,]+)\s+Entr(?:y|ies)', html, re.IGNORECASE)
+        restacks_m = re.search(r'([\d,]+)\s+Restacks?', html, re.IGNORECASE)
+        entries  = int(entries_m.group(1).replace(',', ''))  if entries_m  else 0
+        restacks = int(restacks_m.group(1).replace(',', '')) if restacks_m else 0
+
+        # ── Item blocks ───────────────────────────────────────────────────────
+        raw_blocks = re.split(
+            r'(?=<div[^>]+class="[^"]*seasonal-anime\s+js-seasonal-anime[^"]*")',
+            html,
+        )
+
+        items: list = []
+        seen: set   = set()
+
+        for block in raw_blocks[1:]:
+            # Title link and MAL id/slug (list view: class="link-title")
+            link_m = re.search(
+                r'href="https://myanimelist\.net/anime/(\d+)/([^"]+)"\s+class="link-title">([^<]+)</a>',
+                block,
+            )
+            if not link_m:
+                continue
+            mal_id = int(link_m.group(1))
+            if mal_id in seen:
+                continue
+            seen.add(mal_id)
+            slug  = link_m.group(2)
+            title = _html_unescape(link_m.group(3).strip())
+
+            # Cover image
+            cover_m = re.search(
+                r'<div class="image">.*?<img[^>]+src="(https://cdn\.myanimelist\.net/images/anime/[^"]+)"',
+                block, re.DOTALL,
+            )
+            cover = cover_m.group(1) if cover_m else ''
+
+            # Info line: "TV, 2021,\n11 eps  <span>Me:...</span> <span>Author:...</span>"
+            info_m = re.search(r'<div class="info">(.*?)</div>', block, re.DOTALL)
+            type_ = year = ''
+            episodes = 0
+            author_score = 0
+            if info_m:
+                info_raw = info_m.group(1)
+                # Text before first <span>: "TV, 2021,\n11 eps"
+                text_part = re.split(r'<span', info_raw, maxsplit=1)[0]
+                text_part = re.sub(r'\s+', ' ', text_part).strip().rstrip(',')
+                tm = re.match(r'(\w+),\s*(\d{4})', text_part)
+                if tm:
+                    type_ = tm.group(1)
+                    year  = tm.group(2)
+                em = re.search(r'(\d+)\s+ep', text_part)
+                if em:
+                    episodes = int(em.group(1))
+                # Author's personal score
+                am = re.search(r'Author:<i[^>]*></i>(\d+)', info_raw)
+                if am:
+                    author_score = int(am.group(1))
+
+            # Per-item note from the creator
+            note_m = re.search(r'<div class="intro">\s*(.*?)\s*</div>', block, re.DOTALL)
+            note = ''
+            if note_m:
+                raw_note = re.sub(r'<[^>]+>', '', note_m.group(1)).strip()
+                note = _html_unescape(raw_note) if raw_note else ''
+
+            items.append({
+                'mal_id':       mal_id,
+                'cover':        cover,
+                'title':        title,
+                'type':         type_,
+                'year':         year,
+                'episodes':     episodes,
+                'author_score': author_score,
+                'note':         note,
+                'url':          f'https://myanimelist.net/anime/{mal_id}/{slug}',
+            })
+
+        result = {
+            'stack': {
+                'name':        stack_name,
+                'description': stack_desc,
+                'entries':     entries,
+                'restacks':    restacks,
+                'url':         f'https://myanimelist.net/stacks/{stack_id}',
+            },
+            'items': items,
+        }
+        _stack_browse_cache[stack_id] = result
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500

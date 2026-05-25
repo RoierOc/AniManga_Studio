@@ -5,12 +5,37 @@ const { createApp, ref, computed, watch, onMounted } = Vue;
 // Initialize
 const app = createApp({
     setup() {
-        // Views
-        const currentView = ref('library');
+        // ── Session persistence ───────────────────────────────────────────────
+        const _SESSION_KEY = 'animanga:session';
+        const _sess = (() => { try { return JSON.parse(localStorage.getItem(_SESSION_KEY) || '{}'); } catch { return {}; } })();
+        const _saveSession = () => {
+            const av = animeView.value;
+            localStorage.setItem(_SESSION_KEY, JSON.stringify({
+                view: currentView.value,
+                // only restore persistent sub-views, not ephemeral ones
+                animeView: ['library','history'].includes(av) ? av : 'library',
+                libFilter: libFilter.value,
+                libSearch: libSearch.value,
+                animeLibFilter: animeLibFilter.value,
+                animeLibSort: animeLibSort.value,
+            }));
+        };
 
-        // Library search & filter
-        const libSearch = ref('');
-        const libFilter = ref('all'); // 'all' | 'downloaded' | 'upscaled' | 'saved' | 'updates'
+        // Views — restored from session
+        const _VALID_VIEWS = new Set(['library','mangadex','followed','sources','anime','local']);
+        const currentView = ref(_VALID_VIEWS.has(_sess.view) ? _sess.view : 'library');
+
+        // Sidebar state
+        const sidebarCollapsed  = ref(localStorage.getItem('manga-sb-collapsed') === '1');
+        const sidebarMobileOpen = ref(false);
+
+        const saveSidebarState = () => {
+            localStorage.setItem('manga-sb-collapsed', sidebarCollapsed.value ? '1' : '0');
+        };
+
+        // Library search & filter — restored from session
+        const libSearch = ref(_sess.libSearch || '');
+        const libFilter = ref(_sess.libFilter || 'all'); // 'all' | 'downloaded' | 'upscaled' | 'saved' | 'updates'
 
         // Manga chapter updates
         const mangaUpdates = ref([]);
@@ -68,6 +93,8 @@ const app = createApp({
         const downloadedLang = ref({});  // tracks which language was downloaded per chapter key
         const taskQueueExpanded = ref(true);
         const toast = ref({ show: false, message: '', type: 'info' });
+        const showShortcuts = ref(false);
+        const mainScrolled = ref(false);
 
         // Modal tab state
         const currentModalTab = ref('chapters');
@@ -244,7 +271,7 @@ const app = createApp({
         const corruptScanBusy = ref(false);
 
         // ── Anime / Nyaa ────────────────────────────────────────────────────────
-        const animeView = ref('library');          // 'library' | 'search' | 'detail' | 'downloads'
+        const animeView = ref(['library','history'].includes(_sess.animeView) ? _sess.animeView : 'library'); // 'library' | 'search' | 'detail' | 'downloads'
         const animeQuery = ref('');
         const animeResults = ref([]);
         const animeLoading = ref(false);
@@ -275,6 +302,49 @@ const app = createApp({
         const animeLibrary = ref([]);
         const animeLibraryLoading = ref(false);
         const animeLibraryDetail  = ref(null);
+        const animeLibSort   = ref(_sess.animeLibSort   || 'last_added');  // 'last_added'|'last_watched'|'last_downloaded'|'title'|'progress'|'episodes'|'status'
+        const animeLibFilter = ref(_sess.animeLibFilter || 'all');     // 'all' | status values
+        const animeLibSearch = ref('');
+
+        // Watch status
+        const ANIME_STATUS = {
+            watching:      { label: 'Viendo',      color: '#4ade80' },
+            completed:     { label: 'Completado',  color: '#60a5fa' },
+            plan_to_watch: { label: 'Por ver',     color: '#a78bfa' },
+            on_hold:       { label: 'En pausa',    color: '#fbbf24' },
+            dropped:       { label: 'Abandonado',  color: '#f87171' },
+        };
+        const linkTorrentShow   = ref(false);
+        const linkTorrentList   = ref([]);
+        const linkTorrentLoading = ref(false);
+        const linkTorrentSubpath = ref('');
+        const clearEpsConfirm   = ref(false);
+
+        // Watch history
+        const watchHistory       = ref([]);
+        const watchHistoryLoaded = ref(false);
+
+        // MangaDex new-chapter notifications
+        const mangaNewChapters   = ref([]);  // [{manga_id, title, cover, new_count, new_chapters}]
+        const mangaNewCount      = computed(() => mangaNewChapters.value.length);
+
+        // Episode auto-renamer
+        const renameAnime   = ref(null);
+        const renameItems   = ref([]);
+        const renameBusy    = ref(false);
+        const renameChanges = computed(() => renameItems.value.filter(r => r.changed).length);
+
+        // Scanlation comparison
+        const scanCompareChapter  = ref(null);   // group object currently expanded
+        const scanCompareVariants = ref([]);      // downloaded comparison copies for that chapter
+        const scanCompareLoading  = ref(false);
+        const scanCompareMode     = ref(false);   // true when reader is in scanlation-compare mode
+        const comparePages2       = ref([]);      // pages of the comparison variant in reader
+        const currentPageCompare2Url = computed(() => {
+            if (!scanCompareMode.value || !comparePages2.value.length) return '';
+            const idx = Math.min(currentPage.value, comparePages2.value.length - 1);
+            return '/uploads/original/' + comparePages2.value[idx];
+        });
 
         // Scan paths (local anime folders)
         const scanPathsShow      = ref(false);
@@ -653,6 +723,12 @@ const app = createApp({
             return '/uploads/original/' + encodeURIComponent(p);
         });
         const currentPageUpUrl = computed(() => {
+            // In scanlation compare mode use the second variant's page
+            if (scanCompareMode.value && comparePages2.value.length) {
+                const idx = Math.min(currentPage.value, comparePages2.value.length - 1);
+                const p2 = comparePages2.value[idx];
+                return p2.startsWith('/') ? p2 : '/uploads/original/' + encodeURIComponent(p2);
+            }
             if (!pages.value.length) return '';
             const p = pages.value[currentPage.value];
             if (p.startsWith('/')) return p;
@@ -660,7 +736,8 @@ const app = createApp({
         });
         const canCompare = computed(() =>
             readerMode.value === 'paged' &&
-            (readerSource.value === 'upscaled' ||
+            (scanCompareMode.value ||
+             readerSource.value === 'upscaled' ||
              isUpscaled(currentChapter.value) ||
              isPartialUpscaled(currentChapter.value))
         );
@@ -1498,6 +1575,7 @@ const app = createApp({
             showReader.value = false; pages.value = [];
             readerZoom.value = 1.0; panY.value = 0; panX.value = 0; readerBarsHidden.value = false;
             dragActive = false; compareDragging = false; compareMode.value = false;
+            scanCompareMode.value = false; comparePages2.value = [];
             clearTimeout(readerBarsTimer);
         };
         const nextPage = () => { if (currentPage.value < pages.value.length - 1) currentPage.value++; };
@@ -1664,20 +1742,55 @@ const app = createApp({
             currentPage.value = closest;
         };
         
-        const showToast = (msg, type = 'info', duration = 3000) => {
+        let _toastTimer = null;
+        const showToast = (msg, type = 'info', duration = 3500) => {
+            if (_toastTimer) { clearTimeout(_toastTimer); _toastTimer = null; }
             toast.value = { show: true, message: msg, type };
-            setTimeout(() => toast.value.show = false, duration);
+            _toastTimer = setTimeout(() => { toast.value.show = false; _toastTimer = null; }, duration);
+        };
+        const dismissToast = () => {
+            if (_toastTimer) { clearTimeout(_toastTimer); _toastTimer = null; }
+            toast.value.show = false;
+        };
+        const scrollToTop = () => {
+            document.querySelector('.main-wrapper')?.scrollTo({ top: 0, behavior: 'smooth' });
         };
         
         // SSE — replaces pollTasks + pollExports setIntervals
         const initSSE = () => {
             const sse = new EventSource('/api/status/stream');
+            const _activeStatuses = new Set(['downloading','upscaling','upscaleing','starting','started','queued']);
+            const _completedSeen = new Set(); // prevent duplicate toasts on reconnect
 
             sse.onmessage = (event) => {
                 let data;
                 try { data = JSON.parse(event.data); } catch (e) { return; }
 
-                // ── Downloads & upscales ──────────────────────────────────────
+                // ── Discover tasks running on backend that this tab doesn't know yet ──
+                // Handles page refresh during active download/upscale.
+                const pools = [
+                    { pool: data.downloads || {}, type: 'download' },
+                    { pool: data.upscale   || {}, type: 'upscale'  },
+                ];
+                for (const { pool, type } of pools) {
+                    for (const [taskId, st] of Object.entries(pool)) {
+                        if (activeTasks.value[taskId]) continue;
+                        if (!_activeStatuses.has(st.status)) continue;
+                        const pct = st.percent ?? (st.total ? Math.round(((st.progress || 0) / st.total) * 100) : 0);
+                        activeTasks.value = {
+                            ...activeTasks.value,
+                            [taskId]: {
+                                type, status: st.status,
+                                progress: st.progress ?? 0, total: st.total || 1, percent: pct,
+                                misses: 0,
+                                displayTitle: st.title || taskId.replace(/_(?:download|upscale)_ch.*$/, '').replace(/_/g, ' '),
+                                displayChapter: st.chapter || taskId.replace(/.*_ch/, ''),
+                            }
+                        };
+                    }
+                }
+
+                // ── Known task updates ────────────────────────────────────────
                 const keys = Object.keys(activeTasks.value);
                 for (const taskId of keys) {
                     const task = activeTasks.value[taskId];
@@ -1697,12 +1810,14 @@ const app = createApp({
                         continue;
                     }
 
-                    if (['downloading','upscaling','upscaleing','starting','started'].includes(st.status)) {
+                    if (_activeStatuses.has(st.status)) {
+                        const pct = st.percent ?? (st.total ? Math.round(((st.progress || 0) / st.total) * 100) : 0);
                         activeTasks.value = {
                             ...activeTasks.value,
-                            [taskId]: { ...task, status: st.status, progress: st.progress ?? st.current ?? 0, total: st.total || 1, percent: st.percent, misses: 0 }
+                            [taskId]: { ...task, status: st.status, progress: st.progress ?? st.current ?? 0, total: st.total || 1, percent: pct, misses: 0 }
                         };
-                    } else if (st.status === 'complete') {
+                    } else if (st.status === 'complete' && !_completedSeen.has(taskId)) {
+                        _completedSeen.add(taskId);
                         activeTasks.value = { ...activeTasks.value, [taskId]: { ...task, status: 'complete', progress: task.total || 1 } };
                         showToast(task.type === 'download' ? '✅ Descarga completa' : '🔥 Upscale completo', 'success');
                         setTimeout(() => {
@@ -1712,7 +1827,7 @@ const app = createApp({
                                 if (task.type === 'upscale') loadChapterHealth(currentTitle.value);
                             }
                             if (task.type === 'download') loadLibrary();
-                        }, 2000);
+                        }, 800);
                     } else if (st.status === 'cancelled') {
                         const t = { ...activeTasks.value }; delete t[taskId]; activeTasks.value = t;
                     } else if (st.status === 'error') {
@@ -1737,6 +1852,44 @@ const app = createApp({
                         }, 6000);
                     }
                 }
+
+                // ── Push events (watched, download_complete, …) ───────────────
+                for (const ev of (data.events || [])) {
+                    if (ev.type === 'watched') {
+                        const aid = ev.anime_id;
+                        const newState = ev.watched !== undefined ? ev.watched : true;
+                        const applyWatched = (animeObj) => {
+                            if (!animeObj) return;
+                            const ep = (animeObj.episodes || []).find(e => String(e.num) === ev.ep_str);
+                            if (ep) {
+                                ep.watched = newState;
+                                ep.resume_pos = 0;
+                                if (ev.duration) ep.duration = ev.duration;
+                            }
+                            if (newState && ev.last_watched_at) animeObj.last_watched_at = ev.last_watched_at;
+                        };
+                        applyWatched(animeLibrary.value.find(a => a.id === aid));
+                        if (animeLibraryDetail.value?.id === aid) applyWatched(animeLibraryDetail.value);
+                    } else if (ev.type === 'position') {
+                        const aid = ev.anime_id;
+                        const applyPos = (animeObj) => {
+                            if (!animeObj) return;
+                            const ep = (animeObj.episodes || []).find(e => String(e.num) === ev.ep_str);
+                            if (ep) {
+                                ep.resume_pos = ev.position || 0;
+                                if (ev.duration) ep.duration = ev.duration;
+                            }
+                        };
+                        applyPos(animeLibrary.value.find(a => a.id === aid));
+                        if (animeLibraryDetail.value?.id === aid) applyPos(animeLibraryDetail.value);
+                    } else if (ev.type === 'download_complete') {
+                        // Immediate chapter list refresh when the open manga just got a chapter
+                        if (currentTitle.value && canonicalTitle(currentTitle.value) === canonicalTitle(ev.title || '')) {
+                            loadChapters(currentTitle.value);
+                        }
+                        loadLibrary();
+                    }
+                }
             };
 
             sse.onerror = () => { /* EventSource auto-reconnects */ };
@@ -1748,6 +1901,17 @@ const app = createApp({
         
         // Keyboard
         const handleKeydown = (e) => {
+            // Global shortcuts — work outside reader too (skip when typing in inputs)
+            const isInput = ['INPUT','TEXTAREA','SELECT'].includes(e.target?.tagName);
+            if (!isInput) {
+                if (e.key === '?' && !showReader.value && !showModal.value) {
+                    showShortcuts.value = !showShortcuts.value;
+                    return;
+                }
+                if (e.key === 'Escape') {
+                    if (showShortcuts.value) { showShortcuts.value = false; return; }
+                }
+            }
             if (!showReader.value) return;
             const isRTL = readingDir.value === 'rtl';
             const zoomed = readerZoom.value > 1.01;
@@ -2877,6 +3041,23 @@ const app = createApp({
             }
         };
 
+        const animeToshoLoading = ref(false);
+
+        const searchAnimetosho = async () => {
+            const q = animeTorrentQuery.value.trim();
+            if (!q) return;
+            animeToshoLoading.value = true;
+            animeTorrents.value = [];
+            try {
+                const res = await fetch(`/api/anime/torrents_tosho?q=${encodeURIComponent(q)}`);
+                animeTorrents.value = await res.json();
+            } catch (e) {
+                showToast('Error buscando en Animetosho', 'error');
+            } finally {
+                animeToshoLoading.value = false;
+            }
+        };
+
         // Fetch multiple title variants in parallel and merge results (dedup by info_hash)
         const _nyaaMultiFetch = async (queries) => {
             const category = animeTorrentCategory.value;
@@ -2908,7 +3089,17 @@ const app = createApp({
         };
 
         const isAdding = (key) => qbtAddingHashes.value.has(key);
-        const isAdded  = (key) => qbtAddedHashes.value.has(key);
+        const isAdded  = (key) => {
+            if (qbtAddedHashes.value.has(key)) return true;
+            // Check persisted library so "already added" survives page reload
+            if (!key || key.startsWith('http') || !animeCurrentAnime.value) return false;
+            const cur = animeCurrentAnime.value;
+            const libEntry = animeLibrary.value.find(a =>
+                (cur.al_id  && a.al_id  === cur.al_id)  ||
+                (cur.mal_id && a.mal_id === cur.mal_id)
+            );
+            return !!(libEntry?.episodes || []).find(e => e.info_hash === key);
+        };
 
         const openAnime = async (anime) => {
             const prevView  = animeView.value;
@@ -2989,7 +3180,11 @@ const app = createApp({
                                 torrent_title: torrent.title,
                                 info_hash: torrent.info_hash || '',
                             }),
-                        }).catch(() => {});
+                        }).then(() => loadAnimeLibrary(true)).catch(() => {});
+                        // Warn about multi-season batches so user can register in other season entries
+                        if (torrent.episode === 0 && /Season\s+\d+\s*[\+\-&\/]\s*\d+|S\d{2}\s*[\+\-]\s*S?\d{2}|\bSeason\s+\d+.*Season\s+\d+/i.test(torrent.title)) {
+                            setTimeout(() => showToast('Batch multi-temporada: ábrelo también en la entrada de la Temporada 2 para registrarlo allí también', 'info', 6000), 800);
+                        }
                     }
                 } else {
                     showToast('qBittorrent: ' + (d.msg || d.error || 'Error'), 'error');
@@ -3074,7 +3269,8 @@ const app = createApp({
                 qbtPollTimer = setInterval(loadQbtTorrents, 5000);
             } else if (view === 'library') {
                 if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
-                await loadAnimeLibrary();
+                // Load silently if we already have data (instant view, refresh in background)
+                await loadAnimeLibrary(animeLibrary.value.length > 0);
                 if (libPollTimer) clearInterval(libPollTimer);
                 libPollTimer = setInterval(() => loadAnimeLibrary(true), 3500);
             } else if (view === 'seasonal') {
@@ -3088,26 +3284,78 @@ const app = createApp({
         };
 
         const loadAnimeLibrary = async (silent = false) => {
-            if (!silent) animeLibraryLoading.value = true;
+            // Show spinner only on the very first load (empty list); never flash on refreshes
+            const firstLoad = animeLibrary.value.length === 0;
+            if (!silent && firstLoad) animeLibraryLoading.value = true;
             try {
                 const res = await fetch('/api/anime/library');
-                animeLibrary.value = await res.json();
+                const newData = await res.json();
+                // Smart merge: keep existing object references for unchanged items so Vue
+                // skips re-rendering cards (and avoids image reload flicker)
+                const byId = new Map(animeLibrary.value.map(a => [a.id, a]));
+                animeLibrary.value = newData.map(n => {
+                    const old = byId.get(n.id);
+                    if (!old) return n;
+                    const epSig = eps => JSON.stringify(
+                        (eps || []).map(e => `${e.num}:${e.watched}:${e.progress}:${e.state}`)
+                    );
+                    if (old.downloaded_count === n.downloaded_count &&
+                        old.status === n.status &&
+                        epSig(old.episodes) === epSig(n.episodes))
+                        return old; // same reference → Vue skips this card entirely
+                    return n;
+                });
                 if (animeLibraryDetail.value) {
-                    animeLibraryDetail.value = animeLibrary.value.find(a => a.id === animeLibraryDetail.value.id) || animeLibraryDetail.value;
+                    const updated = animeLibrary.value.find(a => a.id === animeLibraryDetail.value.id);
+                    if (updated && updated !== animeLibraryDetail.value) animeLibraryDetail.value = updated;
                 }
             } catch (_) {
-                if (!silent) animeLibrary.value = [];
+                if (!silent && firstLoad) animeLibrary.value = [];
             } finally {
                 if (!silent) animeLibraryLoading.value = false;
             }
         };
 
-        const playEpisode = async (anime, ep) => {
+        const loadWatchHistory = async () => {
+            try {
+                const r = await fetch('/api/anime/history');
+                watchHistory.value = await r.json();
+                watchHistoryLoaded.value = true;
+            } catch (_) {}
+        };
+
+        const clearWatchHistory = async () => {
+            await fetch('/api/anime/history/clear', { method: 'POST' });
+            watchHistory.value = [];
+            showToast('Historial borrado', 'info');
+        };
+
+        const checkMangaUpdates = async () => {
+            try {
+                const r = await fetch('/api/mangadex/updates');
+                if (r.ok) mangaNewChapters.value = await r.json();
+            } catch (_) {}
+        };
+
+        // Subtitle state per episode key "animeId_epNum"
+        const epSubtitles = ref({});  // key → [{name, path}]
+
+        const loadEpSubtitles = async (anime, ep) => {
+            const key = `${anime.id}_${ep.num}`;
+            if (epSubtitles.value[key] !== undefined) return;
+            epSubtitles.value[key] = [];  // mark as loading
+            try {
+                const r = await fetch(`/api/anime/subtitles/${anime.id}/${ep.num}`);
+                epSubtitles.value[key] = await r.json();
+            } catch (_) { epSubtitles.value[key] = []; }
+        };
+
+        const playEpisode = async (anime, ep, subFile = '') => {
             if ((!ep.in_qbt || ep.progress < 100) && !(ep.num > 0 && libDetailBatchDone.value) && !ep.in_local) return;
             try {
                 const body = ep.in_local
-                    ? { anime_id: anime.id, episode: ep.num, local_path: ep.local_path }
-                    : { anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash };
+                    ? { anime_id: anime.id, episode: ep.num, local_path: ep.local_path, sub_file: subFile }
+                    : { anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash, sub_file: subFile };
                 const r = await fetch('/api/anime/play', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -3122,10 +3370,101 @@ const app = createApp({
                     showToast('Error al reproducir: ' + d.error, 'error');
                 } else {
                     showToast('Reproduciendo en MPV…', 'success');
-                    await loadAnimeLibrary();
+                    await loadAnimeLibrary(true);
                 }
             } catch (e) {
                 showToast('Error al reproducir: ' + e.message, 'error');
+            }
+        };
+
+        // ── Episode auto-renamer ──────────────────────────────────────────────
+        const openRenamePreview = async (anime) => {
+            renameItems.value = [];
+            renameAnime.value = anime;
+            const r = await fetch(`/api/anime/rename_preview/${anime.id}`);
+            if (r.ok) {
+                const d = await r.json();
+                if (d.error) { showToast('Sin episodios locales para renombrar', 'info'); renameAnime.value = null; return; }
+                renameItems.value = d.renames || [];
+            }
+        };
+
+        const applyRenames = async () => {
+            if (!renameAnime.value || renameBusy.value) return;
+            renameBusy.value = true;
+            const r = await fetch(`/api/anime/rename_apply/${renameAnime.value.id}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ renames: renameItems.value }),
+            });
+            const d = await r.json();
+            renameBusy.value = false;
+            renameAnime.value = null;
+            showToast(`${d.renamed} episodio(s) renombrado(s)`, d.errors?.length ? 'info' : 'success');
+            await loadAnimeLibrary(true);
+        };
+
+        // ── Scanlation comparison ─────────────────────────────────────────────
+        const openComparePanel = async (group, title) => {
+            if (scanCompareChapter.value?.chapter === group.chapter) {
+                scanCompareChapter.value = null;
+                return;
+            }
+            scanCompareChapter.value = group;
+            scanCompareVariants.value = [];
+            scanCompareLoading.value = true;
+            try {
+                const r = await fetch(`/api/library/${encodeURIComponent(title)}/compare_variants/${group.chapter}`);
+                if (r.ok) scanCompareVariants.value = await r.json();
+            } finally { scanCompareLoading.value = false; }
+        };
+
+        const downloadCompareVariant = async (variant, title, chapter) => {
+            const r = await fetch('/api/download/download_compare', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chapterId: variant.id,
+                    title,
+                    chapter,
+                    group: variant.groups?.[0] || 'unknown',
+                    lang: variant.language,
+                }),
+            });
+            if (r.ok) {
+                showToast('Descargando variante para comparar…', 'info');
+                // Reload variants after a delay
+                setTimeout(() => openComparePanel({ chapter }, title), 8000);
+            }
+        };
+
+        const readCompareSources = async (title, chapter, compareDir, group, lang) => {
+            try {
+                const [r1, r2] = await Promise.all([
+                    fetch('/api/reader/read_chapter', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title, chapter, source: 'original' }),
+                    }),
+                    fetch('/api/reader/read_compare', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ title, chapter, compare_dir: compareDir }),
+                    }),
+                ]);
+                const d1 = await r1.json();
+                const d2 = await r2.json();
+                pages.value = d1.pages || [];
+                comparePages2.value = d2.pages || [];
+                currentPage.value = 0;
+                compareMode.value = true;
+                scanCompareMode.value = true;
+                readerSource.value = 'original';
+                currentTitle.value = title;
+                currentChapter.value = chapter;
+                showReader.value = true;
+            } catch (e) {
+                showToast('Error al cargar comparación: ' + e.message, 'error');
             }
         };
 
@@ -3245,7 +3584,7 @@ const app = createApp({
             folder.matched_title = match.title;
             folder.matched_cover = match.cover;
             folder._searchResults = [];
-            await loadAnimeLibrary();
+            await loadAnimeLibrary(true);
         };
 
         const unmatchFolder = async (folder) => {
@@ -3257,7 +3596,7 @@ const app = createApp({
             folder.mapped_id     = null;
             folder.matched_title = '';
             folder.matched_cover = '';
-            await loadAnimeLibrary();
+            await loadAnimeLibrary(true);
         };
 
         const searchForScanFolder = async (folder) => {
@@ -3282,6 +3621,12 @@ const app = createApp({
         // ─────────────────────────────────────────────────────────────────────
 
         const toggleWatched = async (anime, ep) => {
+            const newState = !ep.watched;
+            // Optimistic update — flip immediately in both detail and library list
+            ep.watched = newState;
+            const libAnime = animeLibrary.value.find(a => a.id === anime.id);
+            const libEp = libAnime?.episodes?.find(e => e.num === ep.num);
+            if (libEp) libEp.watched = newState;
             try {
                 const r = await fetch(`/api/anime/library/${anime.id}/watched`, {
                     method: 'POST',
@@ -3289,8 +3634,13 @@ const app = createApp({
                     body: JSON.stringify({ episode: ep.num }),
                 });
                 const d = await r.json();
-                if (d.ok) await loadAnimeLibrary();
+                if (!d.ok) {
+                    ep.watched = !newState;
+                    if (libEp) libEp.watched = !newState;
+                }
             } catch (e) {
+                ep.watched = !newState;
+                if (libEp) libEp.watched = !newState;
                 showToast('Error al actualizar estado visto', 'error');
             }
         };
@@ -3423,7 +3773,7 @@ const app = createApp({
                     body: JSON.stringify({ delete_files: deleteFiles }),
                 });
                 if (animeLibraryDetail.value?.id === animeId) animeLibraryDetail.value = null;
-                await loadAnimeLibrary();
+                await loadAnimeLibrary(true);
                 showToast('Eliminado de la biblioteca', 'success');
             } catch (e) {
                 showToast('Error al eliminar', 'error');
@@ -3440,7 +3790,7 @@ const app = createApp({
                 });
                 const d = await r.json();
                 if (d.ok) {
-                    await loadAnimeLibrary();
+                    await loadAnimeLibrary(true);
                     showToast(`Episodio ${ep.num} eliminado`, 'success');
                 } else {
                     showToast(d.error || 'Error al eliminar', 'error');
@@ -3471,7 +3821,7 @@ const app = createApp({
                 });
                 const d = await r.json();
                 if (d.ok) {
-                    await loadAnimeLibrary();
+                    await loadAnimeLibrary(true);
                     const labels = { special: 'especial', hidden: 'oculto', episode: 'episodio normal' };
                     showToast(`Marcado como ${labels[type] || type}`, 'success');
                 } else {
@@ -3482,11 +3832,131 @@ const app = createApp({
             }
         };
 
+        // ── Recommendations ──────────────────────────────────────────────────
+        const animeRecs      = ref({});   // al_id → array of rec objects
+        const animeRecsState = ref({});   // al_id → 'loading' | 'done' | 'error' | 'none'
+
+        const loadAnimeRecs = async (anime) => {
+            const id = anime?.al_id;
+            if (!id || animeRecsState.value[id]) return;
+            animeRecsState.value[id] = 'loading';
+            try {
+                const r = await fetch(`/api/anime/recommendations/${id}`);
+                const data = await r.json();
+                if (data.error) throw new Error(data.error);
+                animeRecs.value[id] = data;
+                animeRecsState.value[id] = data.length ? 'done' : 'none';
+            } catch (_) {
+                animeRecsState.value[id] = 'error';
+            }
+        };
+
+        // ── Tags ──────────────────────────────────────────────────────────────
+        const animeTags      = ref({});  // al_id → [{name, rank, category}]
+        const animeTagsState = ref({});
+        const animeMalUrls   = ref({});  // al_id → MAL url string (with slug)
+
+        // Extract MAL numeric ID from a MAL URL like https://myanimelist.net/anime/20/Naruto
+        const _malIdFromUrl = (url) => {
+            const m = (url || '').match(/\/anime\/(\d+)\//);
+            return m ? parseInt(m[1]) : null;
+        };
+
+        const loadAnimeTags = async (anime) => {
+            const id = anime?.al_id;
+            if (!id || animeTagsState.value[id]) return;
+            animeTagsState.value[id] = 'loading';
+            try {
+                const r = await fetch(`/api/anime/tags/${id}`);
+                const data = await r.json();
+                if (data.error) throw new Error(data.error);
+                animeTags.value[id]    = data.tags || [];
+                animeMalUrls.value[id] = data.mal_url || '';
+                animeTagsState.value[id] = (data.tags || []).length ? 'done' : 'none';
+                // Now we know the mal_id — trigger stacks if not already loading
+                const mid = anime.mal_id || _malIdFromUrl(data.mal_url);
+                if (mid) loadAnimeStacks({ ...anime, mal_id: mid });
+            } catch (_) {
+                animeTagsState.value[id] = 'error';
+            }
+        };
+
+        const tagBrowse      = ref(null);   // tag name being browsed
+        const tagBrowseAnime = ref([]);
+        const tagBrowseState = ref('idle'); // 'idle'|'loading'|'done'|'error'
+
+        const browseByTag = async (tagName, sourceAlId = null) => {
+            tagBrowse.value = tagName;
+            tagBrowseState.value = 'loading';
+            tagBrowseAnime.value = [];
+            try {
+                let url = `/api/anime/browse_tag?tag=${encodeURIComponent(tagName)}`;
+                if (sourceAlId) url += `&al_id=${sourceAlId}`;
+                const r = await fetch(url);
+                const data = await r.json();
+                if (data.error) throw new Error(data.error);
+                tagBrowseAnime.value = data;
+                tagBrowseState.value = 'done';
+            } catch (_) {
+                tagBrowseState.value = 'error';
+            }
+        };
+
+        // ── MAL Interest Stacks ─────────────────────────────────────────────
+        // Keyed by al_id so the HTML condition stays simple and works even when
+        // mal_id isn't in the library entry but is derived later from animeMalUrls.
+        const animeStacks      = ref({});  // al_id → [{id, name, url}]
+        const animeStacksState = ref({});  // al_id → 'loading'|'done'|'error'|'none'
+
+        const loadAnimeStacks = async (anime) => {
+            const alId = anime?.al_id;
+            if (!alId || animeStacksState.value[alId]) return;
+            // Resolve mal_id: from library data first, then animeMalUrls
+            const mid = anime.mal_id || _malIdFromUrl(animeMalUrls.value[alId] || '');
+            if (!mid) return;   // no mal_id available yet (tags not loaded)
+            animeStacksState.value[alId] = 'loading';
+            try {
+                const r = await fetch(`/api/anime/stacks?mal_id=${mid}`);
+                const data = await r.json();
+                if (data.error) throw new Error(data.error);
+                animeStacks.value[alId]      = data;
+                animeStacksState.value[alId] = data.length ? 'done' : 'none';
+            } catch (_) {
+                animeStacksState.value[alId] = 'error';
+            }
+        };
+
+        // Stack browse panel (in-app)
+        const stackBrowse      = ref(null);   // {id, name, url} of the stack being browsed
+        const stackBrowseMeta  = ref(null);   // {name, description, entries, restacks, url} from API
+        const stackBrowseAnime = ref([]);
+        const stackBrowseState = ref('idle'); // 'idle'|'loading'|'done'|'error'
+
+        const browseStack = async (stack) => {
+            stackBrowse.value      = stack;
+            stackBrowseMeta.value  = null;
+            stackBrowseState.value = 'loading';
+            stackBrowseAnime.value = [];
+            try {
+                const r    = await fetch(`/api/anime/stacks/browse/${stack.id}`);
+                const data = await r.json();
+                if (data.error) throw new Error(data.error);
+                stackBrowseMeta.value  = data.stack  || null;
+                stackBrowseAnime.value = data.items  || [];
+                stackBrowseState.value = 'done';
+            } catch (_) {
+                stackBrowseState.value = 'error';
+            }
+        };
+
         const openAnimeLibraryDetail = (anime) => {
             const prev = animeLibraryDetail.value;
             _navStack.push(() => { animeLibraryDetail.value = prev; });
             history.pushState({ depth: _navStack.length }, '');
             animeLibraryDetail.value = anime;
+            loadAnimeRecs(anime);
+            loadAnimeTags(anime);
+            loadAnimeStacks(anime);
         };
 
         const isInAnimeLibrary = (anime) => {
@@ -3515,11 +3985,77 @@ const app = createApp({
                 const d = await res.json();
                 if (d.ok) {
                     showToast(`"${anime.title}" añadido a Mi Anime`, 'success');
-                    await loadAnimeLibrary();
+                    await loadAnimeLibrary(true);
                 }
             } catch (e) {
                 showToast('Error al añadir a biblioteca', 'error');
             }
+        };
+
+        const setAnimeStatus = async (animeId, status) => {
+            // Optimistic update — mutate in-place so the card re-renders immediately
+            const entry = animeLibrary.value.find(a => a.id === animeId);
+            const prev = entry?.status;
+            if (entry) entry.status = status;
+            if (animeLibraryDetail.value?.id === animeId) animeLibraryDetail.value.status = status;
+            try {
+                const res = await fetch(`/api/anime/library/${animeId}/status`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status }),
+                });
+                if (!(await res.json()).ok) throw new Error();
+                // Silent background refresh to sync any other fields
+                loadAnimeLibrary(true);
+            } catch (e) {
+                // Roll back on error
+                if (entry) entry.status = prev;
+                if (animeLibraryDetail.value?.id === animeId) animeLibraryDetail.value.status = prev;
+                showToast('Error al cambiar estado', 'error');
+            }
+        };
+
+        const clearAnimeEpisodes = async (anime, removeFromQbt = false, deleteFiles = false) => {
+            if (!confirm(`¿Borrar todos los episodios de "${anime.title}"? La serie permanecerá en la biblioteca.`)) return;
+            try {
+                await fetch(`/api/anime/library/${anime.id}/clear_episodes`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ remove_from_qbt: removeFromQbt, delete_files: deleteFiles }),
+                });
+                showToast('Episodios eliminados', 'success');
+                await loadAnimeLibrary(true);
+            } catch (e) { showToast('Error al borrar episodios', 'error'); }
+        };
+
+        const openLinkTorrent = async () => {
+            linkTorrentShow.value = true;
+            linkTorrentLoading.value = true;
+            linkTorrentList.value = [];
+            linkTorrentSubpath.value = '';
+            try {
+                const res = await fetch('/api/anime/qbt/list');
+                linkTorrentList.value = (await res.json()) || [];
+            } catch (e) { linkTorrentList.value = []; }
+            linkTorrentLoading.value = false;
+        };
+
+        const linkExistingTorrent = async (anime, torrent) => {
+            if (!torrent?.hash) return;
+            try {
+                const res = await fetch(`/api/anime/library/${anime.id}/link_torrent`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        info_hash: torrent.hash, episode: 0, torrent_title: torrent.name,
+                        subpath: linkTorrentSubpath.value.trim(),
+                    }),
+                });
+                const d = await res.json();
+                if (d.ok) {
+                    showToast(`Torrent enlazado como batch en "${anime.title}"`, 'success');
+                    linkTorrentShow.value = false;
+                    linkTorrentSubpath.value = '';
+                    await loadAnimeLibrary(true);
+                }
+            } catch (e) { showToast('Error al enlazar', 'error'); }
         };
 
         const libDetailBatchEp = computed(() =>
@@ -3527,6 +4063,90 @@ const app = createApp({
         );
         const libDetailHasBatch = computed(() => !!libDetailBatchEp.value);
         const libDetailBatchDone = computed(() => (libDetailBatchEp.value?.progress ?? 0) >= 100);
+
+        const fmtPos = (secs) => {
+            if (!secs) return '';
+            const h = Math.floor(secs / 3600);
+            const m = Math.floor((secs % 3600) / 60);
+            const s = Math.floor(secs % 60);
+            if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+            return `${m}:${String(s).padStart(2,'0')}`;
+        };
+
+        const nextUnwatchedEp = (anime) => {
+            if (!anime?.episodes) return null;
+            return anime.episodes.find(e =>
+                e.ep_type !== 'special' && e.num > 0 && !e.watched &&
+                (e.in_local || (e.in_qbt && e.progress >= 100))
+            ) || null;
+        };
+
+        const _watchedFraction = (anime) => {
+            const eps = (anime.episodes || []).filter(e => e.ep_type !== 'special' && e.num > 0 &&
+                (e.in_local || (e.in_qbt && e.progress >= 100)));
+            if (!eps.length) return 0;
+            return eps.filter(e => e.watched).length / eps.length;
+        };
+        const _lastDownloaded = (anime) => {
+            const eps = (anime.episodes || []).filter(e => e.num > 0 && e.added_on > 0 &&
+                (e.in_local || (e.in_qbt && e.progress >= 100)));
+            return eps.length ? Math.max(...eps.map(e => e.added_on)) : 0;
+        };
+
+        const sortedAnimeLibrary = computed(() => {
+            let list = [...animeLibrary.value];
+            const q = animeLibSearch.value.trim().toLowerCase();
+            if (q) list = list.filter(a =>
+                (a.title || '').toLowerCase().includes(q) ||
+                (a.title_romaji || '').toLowerCase().includes(q)
+            );
+            // Filter by explicit status field
+            const f = animeLibFilter.value;
+            if (f !== 'all') list = list.filter(a => (a.status || '') === f);
+
+            if (animeLibSort.value === 'last_added') {
+                list.sort((a, b) => (b.added_at || 0) - (a.added_at || 0));
+            } else if (animeLibSort.value === 'last_watched') {
+                list.sort((a, b) => (b.last_watched_at || 0) - (a.last_watched_at || 0));
+            } else if (animeLibSort.value === 'last_downloaded') {
+                list.sort((a, b) => _lastDownloaded(b) - _lastDownloaded(a));
+            } else if (animeLibSort.value === 'progress') {
+                list.sort((a, b) => _watchedFraction(b) - _watchedFraction(a));
+            } else if (animeLibSort.value === 'episodes') {
+                list.sort((a, b) => (b.downloaded_count || 0) - (a.downloaded_count || 0));
+            } else {
+                list.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
+            }
+            return list;
+        });
+
+        // Groups for the "Por estado" layout (only non-empty groups shown)
+        const STATUS_ORDER = ['watching', 'plan_to_watch', 'on_hold', 'dropped', 'completed', ''];
+        const animeLibGroups = computed(() => {
+            const base = sortedAnimeLibrary.value;
+            if (animeLibSort.value !== 'status') return null;
+            const groups = {};
+            for (const a of base) {
+                const s = a.status || '';
+                if (!groups[s]) groups[s] = [];
+                groups[s].push(a);
+            }
+            return STATUS_ORDER.filter(s => groups[s]?.length).map(s => ({
+                key: s,
+                label: s ? ANIME_STATUS[s]?.label : 'Sin estado',
+                color: s ? ANIME_STATUS[s]?.color : '#94a3b8',
+                items: groups[s],
+            }));
+        });
+
+        const animeLibCounts = computed(() => {
+            const counts = { all: animeLibrary.value.length };
+            for (const a of animeLibrary.value) {
+                const s = a.status || '';
+                counts[s] = (counts[s] || 0) + 1;
+            }
+            return counts;
+        });
 
         const seasonLabel = computed(() => {
             const s = animeSeasonSeason.value;
@@ -3648,8 +4268,8 @@ const app = createApp({
                 loadAnimeLibrary();
                 if (libPollTimer) clearInterval(libPollTimer);
                 libPollTimer = setInterval(() => loadAnimeLibrary(true), 3500);
-            } else if (val === 'mangadex') {
-                if (!_mdTagsLoaded)    { _mdTagsLoaded = true;    loadMdTags(); }
+            } else if (val === 'mangadex' || val === 'followed') {
+                if (val === 'mangadex' && !_mdTagsLoaded) { _mdTagsLoaded = true; loadMdTags(); }
                 if (!_mdLibraryLoaded) { _mdLibraryLoaded = true; loadMdLibrary(); }
                 if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
                 if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
@@ -3675,6 +4295,9 @@ const app = createApp({
             if (ids.length) fetchAnilistScores(ids);
         });
 
+        // Persist session on every view/filter change
+        watch([currentView, animeView, libFilter, libSearch, animeLibFilter, animeLibSort], _saveSession, { flush: 'post' });
+
         onMounted(() => {
             loadLibrary();
             loadLocalLibrary();
@@ -3684,6 +4307,26 @@ const app = createApp({
             checkDrive();
             checkQbt();
             loadLibraryInfo();
+
+            // Restore view-specific data based on persisted session
+            // (the currentView watch doesn't fire on initial value, so we do it manually)
+            const _initView = currentView.value;
+            if (_initView === 'anime') {
+                loadAnimeLibrary(false);
+                libPollTimer = setInterval(() => loadAnimeLibrary(true), 3500);
+                if (animeView.value === 'history') loadWatchHistory();
+            } else if (_initView === 'mangadex' || _initView === 'followed') {
+                if (!_mdTagsLoaded) { _mdTagsLoaded = true; loadMdTags(); }
+                if (!_mdLibraryLoaded) { _mdLibraryLoaded = true; loadMdLibrary(); }
+            } else if (_initView === 'local') {
+                if (!_cbzLoaded) { _cbzLoaded = true; loadCbzLibrary(); }
+            }
+            // 'library' and 'sources' handled by loadLibrary() + checkSuwayomi() above
+
+            // Check for new manga chapters (silently, shows badge if any)
+            setTimeout(checkMangaUpdates, 3000);
+            // Re-check every 15 minutes
+            setInterval(checkMangaUpdates, 15 * 60 * 1000);
             document.addEventListener('keydown', handleKeydown);
             // On reload: reconnect polls for subtitle tasks that were in progress and have a task_id
             const _terminal = new Set(['done', 'error', 'cancelled']);
@@ -3757,6 +4400,13 @@ const app = createApp({
             toggleCompare, onCompareDragStart, onCompareDrag, onCompareDragEnd,
             libraryUrlLocal, libraryUrlPhone, libraryWslIp, libraryFileCount, libraryFwCmd, libraryProxyCmd,
             loadLibraryInfo, saveToLibrary, dismissExportTask, downloadExportFile,
+            animeLibSearch,
+            watchHistory, watchHistoryLoaded, loadWatchHistory, clearWatchHistory,
+            mangaNewChapters, mangaNewCount, checkMangaUpdates,
+            epSubtitles, loadEpSubtitles,
+            renameAnime, renameItems, renameBusy, renameChanges, openRenamePreview, applyRenames,
+            scanCompareChapter, scanCompareVariants, scanCompareLoading, scanCompareMode,
+            comparePages2, currentPageCompare2Url, openComparePanel, downloadCompareVariant, readCompareSources,
             animeView, animeQuery, animeResults, animeLoading, animeAnilistDown, animeCurrentAnime,
             searchNyaaDirect,
             animeTorrents, animeTorrentsLoading, animeTorrentQuery, animeTorrentCategory,
@@ -3765,13 +4415,23 @@ const app = createApp({
             filteredAnimeTorrents, animeGroups, animeQualities,
             qbtConnected, qbtVersion, qbtUrl, qbtUsername, qbtPassword, qbtConfigShow, qbtTorrents, qbtLoading,
             qbtAddingHashes, qbtAddedHashes, isAdding, isAdded,
-            searchAnime, searchAnimeTorrents, openAnime, addToQbt, checkQbt, configureQbt,
+            searchAnime, searchAnimeTorrents, searchAnimetosho, animeToshoLoading, openAnime, addToQbt, checkQbt, configureQbt,
             loadQbtTorrents, qbtAction, switchToAnimeView,
             formatBytes, formatSpeed, formatEta, qbtStateLabel, animeFormatLabel, animeEpLabel,
             groupedAnimeEpisodes, animeExpandedEps, toggleEpGroup, isEpExpanded, isSpanishOrMulti, isEnglishSub,
             animeLibrary, animeLibraryLoading, animeLibraryDetail,
+            animeLibSort, animeLibFilter, sortedAnimeLibrary, animeLibGroups, animeLibCounts,
+            nextUnwatchedEp, fmtPos,
+            ANIME_STATUS, STATUS_ORDER,
             loadAnimeLibrary, removeFromAnimeLibrary, openAnimeLibraryDetail, searchEpisodeInNyaa,
             isInAnimeLibrary, addAnimeToLibrary, libDetailHasBatch, libDetailBatchDone, libDetailBatchEp,
+            setAnimeStatus, clearAnimeEpisodes,
+            linkTorrentShow, linkTorrentList, linkTorrentLoading, linkTorrentSubpath, openLinkTorrent, linkExistingTorrent,
+            animeRecs, animeRecsState,
+            animeTags, animeTagsState, animeMalUrls, browseByTag,
+            animeStacks, animeStacksState,
+            stackBrowse, stackBrowseMeta, stackBrowseAnime, stackBrowseState, browseStack,
+            tagBrowse, tagBrowseAnime, tagBrowseState,
             playEpisode, toggleWatched, deleteEpisode,
             scanPathsShow, scanPaths, scanNewPath, scanFolders, scanFoldersLoading,
             scanBrowsing, scanBrowsePath, scanBrowseWinPath, scanBrowseParent, scanBrowseItems, scanBrowseLoading,
@@ -3784,6 +4444,8 @@ const app = createApp({
             animeSeasonSeason, animeSeasonYear, seasonLabel, seasonYears, filteredSeasonalAnime, seasonalGenres,
             loadSeasonalAnime, seasonNav, onSeasonChange, onYearChange, SEASON_ES,
             gotoView,
+            sidebarCollapsed, sidebarMobileOpen, saveSidebarState,
+            showShortcuts, mainScrolled, scrollToTop, dismissToast,
         };
     }
 });

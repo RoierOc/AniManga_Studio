@@ -16,7 +16,9 @@ subtitle_bp = Blueprint('subtitle', __name__)
 _tasks: dict = {}
 _cancel_flags: dict = {}
 BATCH_SIZE = 60
-OLLAMA_BATCH_SIZE = 60          # ~60 lines fits comfortably in 2048-token context
+OLLAMA_BATCH_SIZE = 80          # 80 lines/batch → 25% fewer round trips; fits in 3200-token ctx
+# Inter-batch pause — 0 by default (max speed). Set OLLAMA_BATCH_PAUSE_SECS=3 if MPV lags.
+_OLLAMA_BATCH_PAUSE = float(os.environ.get('OLLAMA_BATCH_PAUSE_SECS', '0'))
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
 _OLLAMA_URL    = os.environ.get('OLLAMA_URL',   'http://localhost:11434')
 _OLLAMA_MODEL  = os.environ.get('OLLAMA_MODEL', 'qwen2.5:14b')
@@ -29,6 +31,10 @@ _ENGINE = os.environ.get('TRANSLATION_ENGINE', 'ollama')
 # Reference counter — model is only unloaded when the LAST concurrent task finishes
 _OLLAMA_TASK_COUNT = 0
 _OLLAMA_TASK_LOCK  = threading.Lock()
+
+# OpenSubtitles JWT token cache (login required for download endpoint)
+_OST_TOKEN: dict = {'token': '', 'expires': 0.0}
+_OST_TOKEN_LOCK   = threading.Lock()
 
 _LANG_NAMES: dict[str, str] = {
     'eng': 'inglés',   'en':  'inglés',
@@ -248,24 +254,92 @@ def _ext_search_nyaa(titles: list, episode: int) -> list:
     return results
 
 
+def _opensubtitles_login() -> str:
+    """Login to OpenSubtitles and return JWT token. Caches for 23h.
+    Requires OPENSUBTITLES_USERNAME + OPENSUBTITLES_PASSWORD + OPENSUBTITLES_API_KEY."""
+    import time
+    username = os.environ.get('OPENSUBTITLES_USERNAME', '')
+    password = os.environ.get('OPENSUBTITLES_PASSWORD', '')
+    key      = os.environ.get('OPENSUBTITLES_API_KEY', '')
+    if not (username and password and key):
+        return ''
+    with _OST_TOKEN_LOCK:
+        if _OST_TOKEN['token'] and time.time() < _OST_TOKEN['expires']:
+            return _OST_TOKEN['token']
+    payload = json.dumps({'username': username, 'password': password}).encode()
+    req = _ur.Request(
+        'https://api.opensubtitles.com/api/v1/login',
+        data=payload,
+        headers={'Api-Key': key, 'User-Agent': 'MangaUpscaler v1.0',
+                 'Content-Type': 'application/json'},
+        method='POST',
+    )
+    try:
+        with _ur.urlopen(req, timeout=15) as r:
+            data = json.loads(r.read())
+        token = data.get('token', '')
+        if token:
+            with _OST_TOKEN_LOCK:
+                _OST_TOKEN['token']   = token
+                _OST_TOKEN['expires'] = time.time() + 23 * 3600
+            print('[subtitle] OpenSubtitles: login OK')
+        return token
+    except Exception as e:
+        print(f'[subtitle] OpenSubtitles login error: {e}')
+        return ''
+
+
 def _ext_download_sub(sub_info: dict, tmpdir: str) -> str:
     """Download an external subtitle to tmpdir. Returns local file path."""
     source = sub_info.get('source', '')
 
     if source == 'opensubtitles':
-        key = os.environ.get('OPENSUBTITLES_API_KEY', '')
-        payload = json.dumps({'file_id': sub_info['file_id']}).encode()
-        req = _ur.Request(
-            'https://api.opensubtitles.com/api/v1/download',
-            data=payload,
-            headers={'Api-Key': key, 'User-Agent': 'MangaUpscaler v1.0', 'Content-Type': 'application/json'},
-            method='POST',
-        )
-        with _ur.urlopen(req, timeout=15) as r:
-            dl_data = json.loads(r.read())
+        key   = os.environ.get('OPENSUBTITLES_API_KEY', '')
+        token = _opensubtitles_login()
+        headers = {
+            'Api-Key':      key,
+            'Authorization': f'Bearer {token}' if token else '',
+            'User-Agent':   'MangaUpscaler v1.0',
+            'Content-Type': 'application/json',
+            'Accept':       'application/json',   # prevents CDN returning HTML error pages
+        }
+        if not token:
+            del headers['Authorization']
+        payload = json.dumps({'file_id': int(sub_info['file_id'])}).encode()
+
+        def _ost_download_request():
+            req = _ur.Request(
+                'https://api.opensubtitles.com/api/v1/download',
+                data=payload, headers=headers, method='POST',
+            )
+            try:
+                with _ur.urlopen(req, timeout=15) as r:
+                    return json.loads(r.read())
+            except _ur.HTTPError as e:
+                body = ''
+                try: body = e.read().decode('utf-8', errors='replace')[:200]
+                except Exception: pass
+                if e.code == 406:
+                    raise RuntimeError('Cuota diaria agotada (20/día cuenta gratuita)') from e
+                if e.code == 401:
+                    raise RuntimeError('Token expirado o credenciales inválidas') from e
+                # 503 suele ser transitorio — el caller reintentará
+                raise _ur.HTTPError(e.url, e.code, e.reason, e.headers, None) from e
+
+        try:
+            dl_data = _ost_download_request()
+        except _ur.HTTPError as e:
+            if e.code == 503:
+                print('[subtitle] OpenSubtitles 503 — reintentando en 3s…')
+                time.sleep(3)
+                dl_data = _ost_download_request()
+            else:
+                raise RuntimeError(f'OpenSubtitles error {e.code}') from e
+
         url = dl_data.get('link', '')
         if not url:
-            raise RuntimeError('OpenSubtitles no devolvió URL de descarga')
+            remaining = dl_data.get('remaining', '?')
+            raise RuntimeError(f'OpenSubtitles no devolvió URL (descargas restantes: {remaining})')
     elif source == 'nyaa':
         raise RuntimeError('Nyaa devuelve torrents, no archivos directos. Descarga el torrent manualmente y extrae el .srt/.ass.')
     else:
@@ -347,27 +421,15 @@ def _inject_sub(mkv_path: str, sub_path: str, n_existing_subs: int) -> str:
     id_data = json.loads(id_result.stdout or '{}')
     tracks = id_data.get('tracks', [])
 
-    # Build --subtitle-tracks arg: keep non-spa subtitle tracks from source
-    keep_sub_ids = [
-        str(t['id']) for t in tracks
-        if t.get('type') == 'subtitles'
-        and t.get('properties', {}).get('language', '') not in ('spa', 'es')
-    ]
-    keep_audio_ids  = [str(t['id']) for t in tracks if t.get('type') == 'audio']
-    keep_video_ids  = [str(t['id']) for t in tracks if t.get('type') == 'video']
+    keep_audio_ids = [str(t['id']) for t in tracks if t.get('type') == 'audio']
+    keep_video_ids = [str(t['id']) for t in tracks if t.get('type') == 'video']
 
-    cmd = [
-        'mkvmerge', '-o', tmp_out,
-    ]
+    cmd = ['mkvmerge', '-o', tmp_out]
     if keep_video_ids:
         cmd += ['--video-tracks', ','.join(keep_video_ids)]
     if keep_audio_ids:
         cmd += ['--audio-tracks', ','.join(keep_audio_ids)]
-    if keep_sub_ids:
-        cmd += ['--subtitle-tracks', ','.join(keep_sub_ids)]
-    else:
-        cmd += ['--no-subtitles']
-    cmd += [mkv_path]
+    cmd += ['--no-subtitles', mkv_path]
     # New Spanish subtitle
     cmd += [
         '--language', '0:spa',
@@ -385,14 +447,11 @@ def _inject_sub(mkv_path: str, sub_path: str, n_existing_subs: int) -> str:
 
     os.replace(tmp_out, mkv_path)
 
-    # Clear default on other subtitle tracks
-    n_kept_subs = len(keep_sub_ids)
-    mkvprop_args = ['mkvpropedit', mkv_path]
-    for i in range(1, n_kept_subs + 1):
-        mkvprop_args += ['--edit', f'track:s{i}', '--set', 'flag-default=0']
-    mkvprop_args += ['--edit', f'track:s{n_kept_subs + 1}', '--set', 'flag-default=1']
-    subprocess.run(mkvprop_args, capture_output=True,
-                   env={**os.environ, 'LC_ALL': 'C'})
+    # Spanish is now the only subtitle track — mark it default
+    subprocess.run(
+        ['mkvpropedit', mkv_path, '--edit', 'track:s1', '--set', 'flag-default=1'],
+        capture_output=True, env={**os.environ, 'LC_ALL': 'C'},
+    )
 
     return mkv_path
 
@@ -624,6 +683,8 @@ def _ollama_available() -> bool:
 def _ollama_preload():
     """Load model into VRAM once; keep alive 30 min. May take 30-60 s on first call."""
     import urllib.request as _ur
+    if not os.environ.get('OLLAMA_FLASH_ATTENTION'):
+        print('[subtitle] TIP: inicia Ollama con OLLAMA_FLASH_ATTENTION=1 para ~20-30% más velocidad')
     payload = json.dumps({
         'model': _OLLAMA_MODEL,
         'messages': [{'role': 'user', 'content': '1|ok'}],
@@ -640,37 +701,59 @@ def _ollama_preload():
 
 
 def _ollama_unload():
-    """Release model from VRAM immediately."""
+    """Release model from VRAM immediately.
+    Must use /api/chat (same endpoint as preload) — /api/generate uses a separate
+    context slot in Ollama and won't evict a model loaded via chat."""
     import urllib.request as _ur
     try:
-        payload = json.dumps({'model': _OLLAMA_MODEL, 'keep_alive': 0}).encode()
-        req = _ur.Request(f'{_OLLAMA_URL}/api/generate', data=payload,
+        payload = json.dumps({
+            'model': _OLLAMA_MODEL,
+            'messages': [],
+            'keep_alive': 0,
+        }).encode()
+        req = _ur.Request(f'{_OLLAMA_URL}/api/chat', data=payload,
                           headers={'Content-Type': 'application/json'}, method='POST')
         _ur.urlopen(req, timeout=15)
-    except Exception:
-        pass
+        print(f'[subtitle] {_OLLAMA_MODEL} descargado de VRAM')
+    except Exception as e:
+        print(f'[subtitle] _ollama_unload error: {e}')
 
 
 def _translate_batch_ollama(texts: list, src_lang: str = 'eng') -> list:
-    """Translate a batch via local Ollama. Retries once if model returns < 85% of lines."""
+    """Translate a batch via local Ollama. Retries once if model returns < 85% of lines.
+
+    Uses system/user message split so Ollama reuses the KV cache for the instruction
+    prompt across all batches of the same job (only the user portion changes).
+    """
     if not texts:
         return []
     import urllib.request as _ur
 
     n = len(texts)
-    # num_ctx: prompt ~200t + 60 lines ~600t input + ~720t output ≈ 1520 → 2048 fits
-    # num_predict: generous ceiling so the model never truncates mid-batch
-    n_predict = min(n * 40, 3000)
+    # system ~300t + user header ~20t + n lines ~12t input + ~12t output each
+    # 3200 minimum: for n=80 real usage is ~2500t, smaller ctx = faster attention
+    num_ctx = max(3200, 300 + (n * 26))
+    n_predict = min(n * 20, 2200)
+
+    system_prompt = _build_prompt(src_lang)
 
     def _call() -> tuple[list, int]:
         numbered = '\n'.join(f'{i+1}|{t}' for i, t in enumerate(texts))
-        prompt = f'{_build_prompt(src_lang)}\n\nTraduce estas {n} líneas:\n\n{numbered}'
         payload = json.dumps({
             'model': _OLLAMA_MODEL,
-            'messages': [{'role': 'user', 'content': prompt}],
+            'messages': [
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user',   'content': f'Traduce estas {n} líneas:\n\n{numbered}'},
+            ],
             'stream': False,
             'keep_alive': '30m',
-            'options': {'temperature': 0.05, 'num_predict': n_predict, 'num_ctx': 2048},
+            'options': {
+                'temperature': 0.05,
+                'num_predict': n_predict,
+                'num_ctx':     num_ctx,
+                'num_gpu':     -1,      # all layers on GPU
+                'f16_kv':      True,    # FP16 KV cache: ~2x less VRAM, faster attention
+            },
         }).encode()
         req = _ur.Request(f'{_OLLAMA_URL}/api/chat', data=payload,
                           headers={'Content-Type': 'application/json'}, method='POST')
@@ -856,10 +939,19 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                 o_batches.append(buf)
 
                 done_o = [0]
-                for o_batch_positions in o_batches:
+                for o_batch_idx, o_batch_positions in enumerate(o_batches):
                     if _cancelled_now():
                         _cancelled = True
                         break
+                    # GPU breathing room between batches so MPV can play without lag
+                    if o_batch_idx > 0 and _OLLAMA_BATCH_PAUSE > 0:
+                        pct = 10 + int(78 * len(translated_map) / total)
+                        upd('translating', min(pct, 88),
+                            f'GPU en pausa ({_OLLAMA_BATCH_PAUSE:.0f}s)…', engine='ollama')
+                        time.sleep(_OLLAMA_BATCH_PAUSE)
+                        if _cancelled_now():
+                            _cancelled = True
+                            break
                     o_texts = [texts[i] for i in o_batch_positions]
                     o_translated = _translate_batch_ollama(o_texts, src_lang)
                     for pos, t in zip(o_batch_positions, o_translated):

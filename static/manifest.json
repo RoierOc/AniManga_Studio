@@ -1,7 +1,7 @@
 {
-  "name": "MangaUpscaler",
-  "short_name": "MangaUpscaler",
-  "description": "Gestiona y escala manga con IA",
+  "name": "AniManga Studio",
+  "short_name": "AniManga",
+  "description": "Gestiona manga y anime con IA",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f1117",

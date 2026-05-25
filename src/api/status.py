@@ -28,11 +28,18 @@ def _all_status():
 
 @status_bp.route('/stream')
 def stream_status():
-    """Server-Sent Events stream — pushes aggregated status every 500 ms."""
+    """Server-Sent Events stream — pushes aggregated status + event bus every 500 ms."""
+    from api.runtime import get_sse_events_since
+
     def generate():
+        last_seq = 0
         while True:
             try:
                 payload = _all_status()
+                new_events = get_sse_events_since(last_seq)
+                if new_events:
+                    last_seq = new_events[-1]['seq']
+                    payload['events'] = new_events
                 yield f"data: {json.dumps(payload)}\n\n"
             except Exception:
                 yield "data: {}\n\n"

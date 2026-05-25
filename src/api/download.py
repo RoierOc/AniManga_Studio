@@ -327,6 +327,8 @@ def _run_download_chapter(download_id, title, chapter_norm, chapter_id, manga_id
                     'status': 'complete', 'title': title, 'chapter': chapter_norm,
                     'pages': downloaded_count, 'progress': len(pages), 'total': len(pages),
                 })
+                from api.runtime import push_sse_event
+                push_sse_event('download_complete', title=title, chapter=chapter_norm)
             else:
                 set_download_status(download_id, {'status': 'error', 'message': 'No se pudo descargar ninguna página'})
 
@@ -661,3 +663,85 @@ def run_download(download_id, manga_id, title, max_chapters):
 
     except Exception as e:
         set_download_status(download_id, {'status': 'error', 'message': str(e)})
+
+# ── Scanlation comparison download ───────────────────────────────────────────
+
+def _run_download_compare(download_id, title, chapter_norm, chapter_id, compare_subdir, group, lang):
+    """Download a chapter variant to a _compare subfolder for side-by-side comparison."""
+    with _dl_semaphore:
+        folder = Path(MANGA_DIR) / title / compare_subdir
+        folder.mkdir(parents=True, exist_ok=True)
+        try:
+            r = http_requests.get(
+                f'https://api.mangadex.org/at-home/server/{chapter_id}',
+                timeout=30,
+            )
+            resp_data = r.json()
+            if resp_data.get('result') != 'ok':
+                set_download_status(download_id, {'status': 'error', 'message': 'Capítulo no disponible'})
+                return
+
+            pages = resp_data.get('chapter', {}).get('data', [])
+            base = resp_data['baseUrl']
+            hash_val = resp_data['chapter']['hash']
+
+            set_download_status(download_id, {
+                'status': 'downloading', 'title': title, 'chapter': chapter_norm,
+                'group': group, 'lang': lang, 'progress': 0, 'total': len(pages),
+            })
+
+            for i, page in enumerate(pages, 1):
+                set_download_status(download_id, {
+                    'status': 'downloading', 'title': title, 'chapter': chapter_norm,
+                    'group': group, 'lang': lang, 'progress': i, 'total': len(pages),
+                })
+                img_url = f"{base}/data/{hash_val}/{page}"
+                time.sleep(0.25)
+                resp = _fetch_with_retry(img_url)
+                if resp and resp.status_code == 200:
+                    ext = page.split('.')[-1]
+                    fname = f"{_chapter_file_prefix(chapter_norm)}_{i:03d}.{ext}"
+                    with open(folder / fname, 'wb') as fh:
+                        fh.write(resp.content)
+
+            (folder / '.meta.json').write_text(
+                json.dumps({'group': group, 'lang': lang, 'chapter': chapter_norm,
+                            'chapter_id': chapter_id, 'pages': len(pages)},
+                           ensure_ascii=False),
+                encoding='utf-8',
+            )
+            set_download_status(download_id, {
+                'status': 'complete', 'title': title, 'chapter': chapter_norm,
+                'group': group, 'lang': lang, 'pages': len(pages),
+                'progress': len(pages), 'total': len(pages),
+            })
+        except Exception as e:
+            set_download_status(download_id, {'status': 'error', 'message': str(e)})
+
+
+@download_bp.route('/download_compare', methods=['POST'])
+def download_compare():
+    """Download a MangaDex chapter variant to _compare subfolder."""
+    data = request.get_json(silent=True) or {}
+    chapter_id = (data.get('chapterId') or '').strip()
+    title      = (data.get('title')     or '').strip()
+    chapter    = data.get('chapter')
+    group      = (data.get('group')     or 'unknown').strip()
+    lang       = (data.get('lang')      or 'en').strip()
+
+    if not all([chapter_id, title, chapter is not None]):
+        return jsonify({'error': 'chapterId, title, chapter required'}), 400
+
+    chapter_norm = normalize_chapter(str(chapter))
+    group_slug   = re.sub(r'[^\w]', '_', group)[:28]
+    prefix       = _chapter_file_prefix(chapter_norm).rstrip('_')
+    compare_subdir = f"_compare/{prefix}_{group_slug}_{lang}"
+    download_id  = f"cmp_{sanitize_title_for_id(title)}_ch{chapter_norm}_{group_slug}"
+
+    threading.Thread(
+        target=_run_download_compare,
+        args=(download_id, title, chapter_norm, chapter_id, compare_subdir, group, lang),
+        daemon=True,
+    ).start()
+
+    return jsonify({'download_id': download_id, 'compare_subdir': compare_subdir})

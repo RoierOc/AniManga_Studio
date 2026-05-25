@@ -5,16 +5,41 @@ Shared runtime configuration and helpers.
 
 from __future__ import annotations
 
+from collections import deque
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 import os
 import re
 import sys
+import threading
+
+
+# ── SSE event bus ─────────────────────────────────────────────────────────────
+# Push-based notification queue. Components call push_sse_event(); the SSE
+# stream generator calls get_sse_events_since(seq) to drain only new events.
+# deque(maxlen=500) acts as a ring buffer so memory never grows unbounded.
+
+_sse_deque: deque = deque(maxlen=500)
+_sse_seq: int = 0
+_sse_lock = threading.Lock()
+
+
+def push_sse_event(event_type: str, **payload) -> None:
+    global _sse_seq
+    with _sse_lock:
+        _sse_seq += 1
+        _sse_deque.append({"seq": _sse_seq, "type": event_type, **payload})
+
+
+def get_sse_events_since(seq: int) -> list:
+    with _sse_lock:
+        return [e for e in _sse_deque if e["seq"] > seq]
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MANGA_DIR = Path.home() / "MangaLibrary"
-DEFAULT_UPSCALED_DIR = Path.home() / "MangaLibrary_Upscaled"
+_PROJECT_BASE = Path("/Manga_Upscaler_project")
+DEFAULT_MANGA_DIR = _PROJECT_BASE / "MangaLibrary"
+DEFAULT_UPSCALED_DIR = _PROJECT_BASE / "MangaLibrary_Upscaled"
 
 MANGA_DIR = Path(os.environ.get("MANGA_DIR", str(DEFAULT_MANGA_DIR))).expanduser()
 UPSCALED_DIR = Path(os.environ.get("UPSCALED_DIR", str(DEFAULT_UPSCALED_DIR))).expanduser()

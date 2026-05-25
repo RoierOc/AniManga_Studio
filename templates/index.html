@@ -3,63 +3,149 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MangaUpscaler</title>
+  <title>AniManga Studio</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
   <link rel="manifest" href="/static/manifest.json">
   <meta name="theme-color" content="#6184d3">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260522-8">
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260524-22">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <script src="/static/js/vue.js"></script>
 </head>
 <body>
-<div id="app">
+<div id="app" :class="{ 'domain-manga': ['library','mangadex','followed','sources'].includes(currentView), 'domain-anime': currentView === 'anime', 'domain-local': currentView === 'local' }">
 
-  <!-- HEADER -->
-  <header class="md-header">
-    <div class="md-header-inner">
-      <a href="/" class="md-logo">
-        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <!-- SIDEBAR -->
+  <aside class="sidebar" :class="{ 'is-collapsed': sidebarCollapsed, 'mobile-open': sidebarMobileOpen }">
+
+    <!-- Logo -->
+    <div class="sidebar-logo">
+      <div class="sidebar-logo-icon">
+        <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
           <rect width="32" height="32" rx="7" fill="#6184d3"/>
-          <text x="16" y="24" font-size="21" text-anchor="middle" fill="white" font-family="'Hiragino Mincho ProN','Yu Mincho','MS Mincho',serif" font-weight="700">愛</text>
+          <text x="16" y="24" font-size="21" text-anchor="middle" fill="white" font-family="serif" font-weight="700">愛</text>
         </svg>
-        <span>MangaUpscaler</span>
-        <span v-if="taskQueueList.length > 0" class="task-badge">{{ taskQueueList.length }}</span>
-      </a>
-
-      <nav class="md-nav">
-        <button class="md-nav-link" :class="{ active: currentView === 'library' }" @click="gotoView('library')">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z"/></svg>
-          Biblioteca
-        </button>
-        <button class="md-nav-link" :class="{ active: currentView === 'mangadex' }" @click="gotoView('mangadex')">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
-          MangaDex
-        </button>
-        <button class="md-nav-link" :class="{ active: currentView === 'followed' }" @click="gotoView('followed')">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
-          Seguidos
-        </button>
-        <button class="md-nav-link" :class="{ active: currentView === 'sources' }" @click="gotoView('sources', checkSuwayomi)">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
-          Mihon
-          <span v-if="suwayomiOnline" class="source-online-dot"></span>
-        </button>
-        <button class="md-nav-link" :class="{ active: currentView === 'local' }" @click="gotoView('local')">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-2 3l-6 3.75L6 7h12zm0 10H6V9.25l6 3.75 6-3.75V17z"/></svg>
-          Local
-          <span v-if="cbzManga.length > 0" class="source-online-dot"></span>
-        </button>
-        <button class="md-nav-link" :class="{ active: currentView === 'anime' }" @click="gotoView('anime')">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-          Anime
-        </button>
-      </nav>
+      </div>
+      <span class="sidebar-logo-text">AniManga Studio</span>
+      <button class="sidebar-collapse-btn" @click="sidebarCollapsed = !sidebarCollapsed; saveSidebarState()"
+              :title="sidebarCollapsed ? 'Expandir menú' : 'Colapsar menú'">
+        <svg v-if="sidebarCollapsed" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
+        <svg v-else width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"/></svg>
+      </button>
     </div>
-  </header>
 
+    <div class="sidebar-body">
+
+      <!-- MANGA section -->
+      <div class="sidebar-section sidebar-section--manga">
+        <div class="sidebar-section-label">Manga</div>
+        <button class="sb-item" :class="{ active: currentView === 'library' }"
+                @click="gotoView('library'); sidebarMobileOpen = false"
+                title="Biblioteca">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z"/></svg>
+          <span class="sb-label">Biblioteca</span>
+          <span v-if="mangaUpdates.length > 0" class="sb-dot" style="background:#818cf8" :title="mangaUpdates.length + ' novedades'"></span>
+        </button>
+        <button class="sb-item" :class="{ active: currentView === 'mangadex' }"
+                @click="gotoView('mangadex'); sidebarMobileOpen = false"
+                title="MangaDex">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          <span class="sb-label">MangaDex</span>
+        </button>
+        <button class="sb-item" :class="{ active: currentView === 'followed' }"
+                @click="gotoView('followed'); sidebarMobileOpen = false"
+                title="Seguidos">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/></svg>
+          <span class="sb-label">Seguidos</span>
+          <span v-if="mangaNewCount > 0" class="sb-badge" :title="mangaNewCount + ' mangas con nuevos capítulos'">{{ mangaNewCount }}</span>
+        </button>
+        <button class="sb-item" :class="{ active: currentView === 'sources' }"
+                @click="gotoView('sources', checkSuwayomi); sidebarMobileOpen = false"
+                title="Fuentes (Mihon)">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>
+          <span class="sb-label">Fuentes</span>
+          <span v-if="suwayomiOnline" class="sb-dot"></span>
+        </button>
+      </div>
+
+      <div class="sidebar-divider"></div>
+
+      <!-- ANIME section -->
+      <div class="sidebar-section sidebar-section--anime">
+        <div class="sidebar-section-label">Anime</div>
+        <button class="sb-item" :class="{ active: currentView === 'anime' && animeView === 'library' }"
+                @click="gotoView('anime'); switchToAnimeView('library'); sidebarMobileOpen = false"
+                title="Mi Anime">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20 2H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2zM4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6z"/></svg>
+          <span class="sb-label">Mi Anime</span>
+          <span v-if="animeLibrary.length > 0" class="sb-dot"></span>
+        </button>
+        <button class="sb-item" :class="{ active: currentView === 'anime' && animeView === 'search' }"
+                @click="gotoView('anime'); switchToAnimeView('search'); sidebarMobileOpen = false"
+                title="Buscar Anime">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+          <span class="sb-label">Buscar Anime</span>
+        </button>
+        <button class="sb-item" :class="{ active: currentView === 'anime' && animeView === 'seasonal' }"
+                @click="gotoView('anime'); switchToAnimeView('seasonal'); sidebarMobileOpen = false"
+                title="Temporada">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M17 12h-5v5h5v-5zM16 1v2H8V1H6v2H5c-1.11 0-1.99.9-1.99 2L3 19c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2h-1V1h-2zm3 18H5V8h14v11z"/></svg>
+          <span class="sb-label">Temporada</span>
+        </button>
+        <button class="sb-item" :class="{ active: currentView === 'anime' && animeView === 'downloads' }"
+                @click="gotoView('anime'); switchToAnimeView('downloads'); sidebarMobileOpen = false"
+                title="Descargas">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+          <span class="sb-label">Descargas</span>
+          <span v-if="qbtConnected" class="sb-dot"></span>
+        </button>
+      </div>
+
+      <div class="sidebar-divider"></div>
+
+      <!-- TOOLS section -->
+      <div class="sidebar-section">
+        <button class="sb-item" :class="{ active: currentView === 'local' }"
+                @click="gotoView('local'); sidebarMobileOpen = false"
+                title="Local / CBZ">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-2 3l-6 3.75L6 7h12zm0 10H6V9.25l6 3.75 6-3.75V17z"/></svg>
+          <span class="sb-label">Local / CBZ</span>
+          <span v-if="cbzManga.length > 0" class="sb-dot"></span>
+        </button>
+      </div>
+
+    </div><!-- end sidebar-body -->
+
+    <!-- Footer: task badge + service status -->
+    <div class="sidebar-footer">
+      <div v-if="taskQueueList.length > 0" class="sb-task-badge" @click="gotoView('library')" :title="taskQueueList.length + ' tareas activas'">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+        <span class="sb-task-label">{{ taskQueueList.length }} tarea{{ taskQueueList.length !== 1 ? 's' : '' }}</span>
+      </div>
+      <div class="sb-service-row">
+        <span class="sb-svc" :class="qbtConnected ? 'sb-svc--ok' : 'sb-svc--off'" title="qBittorrent">qBt</span>
+        <span class="sb-svc" :class="suwayomiOnline ? 'sb-svc--ok' : 'sb-svc--off'" title="Suwayomi">Mhon</span>
+        <button class="sb-shortcut-hint" @click="showShortcuts = !showShortcuts" title="Atajos de teclado (?)">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M11.5 2C6.81 2 3 5.81 3 10.5S6.81 19 11.5 19h.5v3c4.86-2.34 8-7 8-11.5C20 5.81 16.19 2 11.5 2zm1 14.5h-2v-2h2v2zm0-4h-2c0-3.25 3-3 3-5 0-1.1-.9-2-2-2s-2 .9-2 2h-2c0-2.21 1.79-4 4-4s4 1.79 4 4c0 2.5-3 2.75-3 5z"/></svg>
+        </button>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- Mobile hamburger -->
+  <button class="sidebar-hamburger" @click="sidebarMobileOpen = !sidebarMobileOpen" title="Menú">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z"/></svg>
+  </button>
+  <div class="sidebar-overlay" :class="{ visible: sidebarMobileOpen }" @click="sidebarMobileOpen = false"></div>
+
+  <div class="main-wrapper" @scroll.passive="mainScrolled = $event.target.scrollTop > 280">
+  <!-- Scroll to top -->
+  <button v-if="mainScrolled" class="scroll-top-btn" @click="scrollToTop" title="Volver arriba">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></svg>
+  </button>
   <!-- MAIN -->
   <main class="md-main">
 
@@ -689,6 +775,12 @@
           Mi Anime
           <span v-if="animeLibrary.length > 0" class="source-online-dot" style="background:#4ade80"></span>
         </button>
+        <button class="anime-subnav-btn" :class="{ active: animeView === 'history' }"
+                @click="switchToAnimeView('history'); loadWatchHistory()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+          Historial
+          <span v-if="watchHistory.length > 0" class="source-online-dot" style="background:#fb923c"></span>
+        </button>
         <button class="anime-subnav-btn anime-subnav-icon" @click="openScanPaths" title="Rutas de anime local">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2zm0 12H4V8h16v10z"/><circle cx="15.5" cy="13.5" r="2.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M19 17l-1.8-1.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         </button>
@@ -785,9 +877,9 @@
               <button class="anime-ext-link anime-track-btn"
                       :class="{ 'anime-track-btn--tracked': isInAnimeLibrary(animeCurrentAnime) }"
                       @click="addAnimeToLibrary(animeCurrentAnime)">
-                <svg v-if="isInAnimeLibrary(animeCurrentAnime)" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2z"/></svg>
-                <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17 3H7c-1.1 0-1.99.9-1.99 2L5 21l7-3 7 3V5c0-1.1-.9-2-2-2zm0 15l-5-2.18L7 18V5h10v13z"/></svg>
-                {{ isInAnimeLibrary(animeCurrentAnime) ? 'En Mi Anime ✓' : 'Añadir a Mi Anime' }}
+                <svg v-if="isInAnimeLibrary(animeCurrentAnime)" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+                {{ isInAnimeLibrary(animeCurrentAnime) ? 'Agregado a Mi Anime' : 'Añadir a Mi Anime' }}
               </button>
             </div>
           </div>
@@ -795,9 +887,13 @@
         <div class="anime-nyaa-bar">
           <input class="anime-search-input" type="text" v-model="animeTorrentQuery"
                  placeholder="Búsqueda en Nyaa…" @keyup.enter="searchAnimeTorrents">
-          <button class="anime-search-btn" @click="searchAnimeTorrents" :disabled="animeTorrentsLoading">
+          <button class="anime-search-btn" @click="searchAnimeTorrents" :disabled="animeTorrentsLoading" title="Buscar en Nyaa">
             <svg v-if="!animeTorrentsLoading" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5z"/></svg>
             <div v-else class="md-spinner" style="width:16px;height:16px;border-width:2px"></div>
+          </button>
+          <button class="anime-tosho-btn" @click="searchAnimetosho" :disabled="animeToshoLoading" title="Buscar en Animetosho">
+            <div v-if="animeToshoLoading" class="md-spinner" style="width:14px;height:14px;border-width:2px"></div>
+            <span v-else>Tosho</span>
           </button>
         </div>
         <!-- Target episode badge (when coming from Mi Anime) -->
@@ -922,6 +1018,7 @@
                   <span v-else-if="group.torrents[0].isEnglish" class="ep-tag ep-tag--eng">🇬🇧 ENG</span>
                   <span v-if="group.torrents[0].quality" class="ep-tag ep-tag--quality">{{ group.torrents[0].quality }}</span>
                   <span v-if="group.torrents[0].trusted" class="ep-tag ep-tag--trusted">✓ Confiable</span>
+                  <span v-if="group.torrents[0].source === 'tosho'" class="ep-tag ep-tag--tosho">Tosho</span>
                   <span v-if="group.torrents[0].group" class="ep-tag ep-tag--group">{{ group.torrents[0].group }}</span>
                 </div>
                 <!-- Title -->
@@ -929,11 +1026,12 @@
                 <!-- Stats row -->
                 <div class="ep-stats">
                   <span class="ep-seed-pill"
-                        :class="group.torrents[0].seeders > 20 ? 'seed-hot' : group.torrents[0].seeders > 5 ? 'seed-ok' : group.torrents[0].seeders > 0 ? 'seed-low' : 'seed-dead'">
-                    ▲ {{ group.torrents[0].seeders }} seeds
+                        :class="group.torrents[0].seeders < 0 ? 'seed-unknown' : group.torrents[0].seeders > 20 ? 'seed-hot' : group.torrents[0].seeders > 5 ? 'seed-ok' : group.torrents[0].seeders > 0 ? 'seed-low' : 'seed-dead'">
+                    <template v-if="group.torrents[0].seeders < 0">▲ ?</template>
+                    <template v-else>▲ {{ group.torrents[0].seeders }} seeds</template>
                   </span>
-                  <span class="ep-stat-sep">·</span>
-                  <span class="ep-leech-text">▼ {{ group.torrents[0].leechers }}</span>
+                  <span v-if="group.torrents[0].seeders >= 0" class="ep-stat-sep">·</span>
+                  <span v-if="group.torrents[0].seeders >= 0" class="ep-leech-text">▼ {{ group.torrents[0].leechers }}</span>
                   <span v-if="group.torrents[0].size" class="ep-stat-sep">·</span>
                   <span v-if="group.torrents[0].size" class="ep-filesize">{{ group.torrents[0].size }}</span>
                 </div>
@@ -944,7 +1042,7 @@
                 <button class="ep-dl-btn"
                         :class="{ 'ep-dl-btn--adding': isAdding(group.torrents[0].info_hash || group.torrents[0].torrent_url), 'ep-dl-btn--added': isAdded(group.torrents[0].info_hash || group.torrents[0].torrent_url) }"
                         @click.stop="addToQbt(group.torrents[0])"
-                        :disabled="group.torrents[0].seeders === 0 || isAdding(group.torrents[0].info_hash || group.torrents[0].torrent_url)">
+                        :disabled="(group.torrents[0].seeders === 0) || isAdding(group.torrents[0].info_hash || group.torrents[0].torrent_url)">
                   <svg v-if="isAdding(group.torrents[0].info_hash || group.torrents[0].torrent_url)" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" class="ep-dl-spin"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"/></svg>
                   <svg v-else-if="isAdded(group.torrents[0].info_hash || group.torrents[0].torrent_url)" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                   <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
@@ -1078,6 +1176,54 @@
         </div>
       </div>
 
+      <!-- ── HISTORY VIEW ── -->
+      <div v-else-if="animeView === 'history'" class="history-section">
+        <div class="history-header">
+          <h2 class="history-title">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+            Historial de Reproducción
+          </h2>
+          <div class="history-header-actions">
+            <button v-if="watchHistory.length > 0" class="history-clear-btn" @click="clearWatchHistory()">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+              Borrar historial
+            </button>
+          </div>
+        </div>
+
+        <div v-if="!watchHistoryLoaded" class="md-loading"><div class="md-spinner"></div></div>
+
+        <div v-else-if="watchHistory.length === 0" class="anime-empty">
+          <svg width="56" height="56" viewBox="0 0 24 24" fill="currentColor" opacity="0.2"><path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/></svg>
+          <p>No has visto ningún episodio todavía</p>
+          <button class="md-btn" @click="switchToAnimeView('library')">Ir a Mi Anime</button>
+        </div>
+
+        <div v-else class="history-timeline">
+          <div v-for="(entry, idx) in watchHistory" :key="idx" class="history-entry">
+            <div class="history-entry-thumb">
+              <img v-if="entry.cover" :src="entry.cover" :alt="entry.title" loading="lazy"
+                   @error="$event.target.style.display='none'">
+              <div v-else class="history-thumb-placeholder">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" opacity="0.4"><path d="M8 5v14l11-7z"/></svg>
+              </div>
+            </div>
+            <div class="history-entry-info">
+              <div class="history-entry-title">{{ entry.title }}</div>
+              <div class="history-entry-ep">
+                Episodio {{ entry.episode }}
+              </div>
+              <div class="history-entry-time">
+                {{ new Date(entry.watched_at * 1000).toLocaleString('es', { dateStyle: 'medium', timeStyle: 'short' }) }}
+              </div>
+            </div>
+            <div class="history-entry-badge">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- ── LIBRARY VIEW ── -->
       <div v-else-if="animeView === 'library'" class="allib-section">
 
@@ -1125,14 +1271,80 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M14 3v2H7v14h14v-7h2v9H5V3h9zm5-3l3 3-9 9-3-1 1-3 9-8z"/></svg>
                     MAL
                   </a>
+                  <!-- MAL community: userrec page (slug required — use Jikan URL) -->
+                  <a v-if="animeLibraryDetail.al_id && animeMalUrls[animeLibraryDetail.al_id]"
+                     :href="animeMalUrls[animeLibraryDetail.al_id] + '/userrec'"
+                     target="_blank" rel="noopener" class="anime-ext-link anime-ext-link--mal"
+                     title="Recomendaciones escritas por la comunidad en MAL">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
+                    Comunidad MAL
+                  </a>
                 </div>
               </div>
             </div>
-            <button class="allib-del-all-btn" @click="removeFromAnimeLibrary(animeLibraryDetail.id)"
-                    title="Eliminar de la biblioteca">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
-              Eliminar anime
-            </button>
+            <div class="allib-header-actions">
+              <!-- Watch status selector -->
+              <div class="allib-status-wrap">
+                <select class="allib-status-select"
+                        :style="{ color: ANIME_STATUS[animeLibraryDetail.status]?.color || '#94a3b8' }"
+                        :value="animeLibraryDetail.status || ''"
+                        @change="setAnimeStatus(animeLibraryDetail.id, $event.target.value)">
+                  <option value="">Sin estado</option>
+                  <option v-for="(v, k) in ANIME_STATUS" :key="k" :value="k">{{ v.label }}</option>
+                </select>
+              </div>
+              <button class="allib-rename-btn" @click="openRenamePreview(animeLibraryDetail)"
+                      title="Renombrar episodios al formato limpio">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+                Renombrar
+              </button>
+              <button class="allib-link-btn" @click="openLinkTorrent()"
+                      title="Enlazar torrent existente de qBittorrent">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M17 7h-4v2h4c1.65 0 3 1.35 3 3s-1.35 3-3 3h-4v2h4c2.76 0 5-2.24 5-5s-2.24-5-5-5zm-6 8H7c-1.65 0-3-1.35-3-3s1.35-3 3-3h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-2zm1-4H8v2h8v-2z"/></svg>
+                Enlazar
+              </button>
+              <button class="allib-clear-eps-btn" @click="clearAnimeEpisodes(animeLibraryDetail, false, false)"
+                      title="Borrar episodios (mantiene la serie)">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm5 11H7v-2h10v2z"/></svg>
+                Borrar eps
+              </button>
+              <button class="allib-del-all-btn" @click="removeFromAnimeLibrary(animeLibraryDetail.id)"
+                      title="Eliminar de la biblioteca">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+                Eliminar
+              </button>
+            </div>
+
+            <!-- Link torrent panel -->
+            <div v-if="linkTorrentShow" class="allib-link-panel">
+              <div class="allib-link-panel-header">
+                <span>Enlazar torrent batch a "{{ animeLibraryDetail.title }}"</span>
+                <button class="allib-link-close" @click="linkTorrentShow = false">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+              </div>
+              <div v-if="linkTorrentLoading" class="allib-link-loading">
+                <div class="md-spinner" style="width:18px;height:18px;border-width:2px"></div>
+              </div>
+              <div v-else-if="!linkTorrentList.length" class="allib-link-empty">
+                No hay torrents activos en qBittorrent
+              </div>
+              <div v-else class="allib-link-list">
+                <div class="allib-link-subpath-row">
+                  <label class="allib-link-subpath-label">Subcarpeta (batch multi-temporada):</label>
+                  <input class="allib-link-subpath-input" v-model="linkTorrentSubpath"
+                         placeholder="ej: Carpeta Season 2…" />
+                </div>
+                <div v-for="t in linkTorrentList" :key="t.hash" class="allib-link-item"
+                     @click="linkExistingTorrent(animeLibraryDetail, t)">
+                  <div class="allib-link-name">{{ t.name }}</div>
+                  <div class="allib-link-meta">
+                    <span class="allib-link-state">{{ t.state }}</span>
+                    <span class="allib-link-pct">{{ t.progress }}%</span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
 
           <!-- Episode grid -->
@@ -1183,6 +1395,27 @@
                 <!-- ESP badge (top-right, translation done) -->
                 <div v-else-if="subTasks[subTaskKey(animeLibraryDetail.id, ep.num)]?.status === 'done'"
                      class="ep-card-chip ep-card-chip--esp">ESP ✓</div>
+                <!-- Subtitle file badge (bottom-left, local .srt/.ass found) -->
+                <div v-if="epSubtitles[`${animeLibraryDetail.id}_${ep.num}`]?.length > 0"
+                     class="ep-card-chip ep-card-chip--sub-file"
+                     :title="epSubtitles[`${animeLibraryDetail.id}_${ep.num}`].length + ' subtítulo(s) encontrado(s)'">
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V6h16v12zM6 10h2v2H6zm0 4h8v2H6zm10 0h2v2h-2zm-6-4h8v2h-8z"/></svg>
+                  SUB
+                </div>
+
+                <!-- Watched dim overlay (only when ≥50% watched) -->
+                <div v-if="ep.watched" class="ep-card-watched-overlay">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                  Visto
+                </div>
+
+                <!-- Watch progress bar (bottom of thumb — Crunchyroll style) -->
+                <div v-if="(ep.resume_pos > 0 || ep.watched) && ep.duration > 0"
+                     class="ep-watch-progress">
+                  <div class="ep-watch-progress-fill"
+                       :style="{ width: (ep.watched ? 100 : Math.min(100, ep.resume_pos / ep.duration * 100)) + '%' }">
+                  </div>
+                </div>
 
                 <!-- Download progress bar (bottom of thumb) -->
                 <div v-if="(ep.in_qbt && ep.progress < 100 && !libDetailHasBatch) || (ep.num > 0 && libDetailHasBatch && !libDetailBatchDone)"
@@ -1193,7 +1426,7 @@
                 </div>
 
                 <!-- Translation overlay (bottom of thumb, while translating) -->
-                <div v-else-if="((ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone)) &&
+                <div v-else-if="((ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone) || ep.in_local) &&
                                   subTasks[subTaskKey(animeLibraryDetail.id, ep.num)] &&
                                   !['done','error','cancelled'].includes(subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].status)"
                      class="ep-card-tr-overlay">
@@ -1226,6 +1459,19 @@
               <div class="ep-card-foot">
                 <div class="ep-card-title">{{ animeEpLabel(animeLibraryDetail, ep) }}</div>
 
+                <!-- Subtitle file selector (when local .srt/.ass found) -->
+                <div v-if="epSubtitles[`${animeLibraryDetail.id}_${ep.num}`]?.length > 0"
+                     class="ep-sub-selector">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M20 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V6h16v12zM6 10h2v2H6zm0 4h8v2H6zm10 0h2v2h-2zm-6-4h8v2h-8z"/></svg>
+                  <select class="ep-sub-select"
+                          @change="playEpisode(animeLibraryDetail, ep, $event.target.value); $event.target.value = ''"
+                          title="Reproducir con subtítulo">
+                    <option value="">Sin sub</option>
+                    <option v-for="s in epSubtitles[`${animeLibraryDetail.id}_${ep.num}`]"
+                            :key="s.path" :value="s.path">{{ s.name }}</option>
+                  </select>
+                </div>
+
                 <div class="ep-card-actions">
                   <!-- Downloaded state -->
                   <template v-if="(ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone) || ep.in_local">
@@ -1248,9 +1494,21 @@
                       </svg>
                       <span>{{ subTasks[subTaskKey(animeLibraryDetail.id, ep.num)]?.status === 'done' ? 'ESP ✓' : 'Sub ES' }}</span>
                     </button>
-                    <div v-else class="ep-card-sub-translating">
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor" style="opacity:.6"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>
-                      <span>Traduciendo…</span>
+                    <div v-else class="ep-card-sub-progress">
+                      <div class="ep-sub-prog-header">
+                        <span class="ep-sub-prog-engine"
+                              :class="subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].engine === 'ollama' ? 'ep-sub-prog-engine--qwen' : 'ep-sub-prog-engine--gemini'">
+                          {{ subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].engine === 'ollama' ? '🦙' : '✨' }}
+                          {{ subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].progress || 0 }}%
+                        </span>
+                        <span class="ep-sub-prog-msg">{{ subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].message || 'Traduciendo…' }}</span>
+                        <button class="ep-sub-prog-cancel" @click.stop="cancelTranslation(animeLibraryDetail.id, ep.num)" title="Cancelar">×</button>
+                      </div>
+                      <div class="ep-sub-prog-bar-bg">
+                        <div class="ep-sub-prog-bar-fill"
+                             :class="subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].engine === 'ollama' ? 'ep-sub-prog-bar-fill--qwen' : 'ep-sub-prog-bar-fill--gemini'"
+                             :style="{ width: (subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].progress || 0) + '%' }"></div>
+                      </div>
                     </div>
 
                     <!-- Right: watched (no delete for local) -->
@@ -1358,39 +1616,209 @@
             </div>
           </template>
 
+          <!-- ── MAL Interest Stacks ──────────────────────────────────────── -->
+          <div v-if="animeLibraryDetail.al_id && animeStacksState[animeLibraryDetail.al_id] === 'done' && animeStacks[animeLibraryDetail.al_id]?.length"
+               class="allib-stacks-section">
+            <div class="allib-stacks-header">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M11.5 2C6.81 2 3 5.81 3 10.5S6.81 19 11.5 19h.5v3c4.86-2.34 8-7 8-11.5C20 5.81 16.19 2 11.5 2zm1 14.5h-2v-2h2v2zm0-4h-2c0-3.25 3-3 3-5 0-1.1-.9-2-2-2s-2 .9-2 2h-2c0-2.21 1.79-4 4-4s4 1.79 4 4c0 2.5-3 2.75-3 5z"/></svg>
+              MAL Interest Stacks
+              <span class="allib-stacks-count">{{ animeStacks[animeLibraryDetail.al_id].length }}</span>
+            </div>
+            <div class="allib-stacks-list">
+              <button v-for="st in animeStacks[animeLibraryDetail.al_id]" :key="st.id"
+                      class="allib-stack-chip"
+                      @click="browseStack(st)"
+                      :title="'Ver anime de este stack'">
+                {{ st.name }}
+              </button>
+            </div>
+          </div>
+
+          <!-- ── Recomendados (dentro de v-else-if="animeLibraryDetail") ─── -->
+          <div v-if="animeLibraryDetail.al_id" class="allib-recs-section">
+            <div class="allib-recs-header">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 14.5v-9l6 4.5-6 4.5z"/></svg>
+              Similares en AniList
+            </div>
+            <div v-if="animeRecsState[animeLibraryDetail.al_id] === 'loading'" class="allib-recs-loading">
+              <svg class="spin" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+              Cargando recomendaciones…
+            </div>
+            <div v-else-if="animeRecsState[animeLibraryDetail.al_id] === 'none'" class="allib-recs-loading">
+              Sin recomendaciones disponibles en AniList para esta serie.
+            </div>
+            <div v-else-if="animeRecsState[animeLibraryDetail.al_id] === 'done'" class="allib-recs-grid">
+              <div v-for="rec in animeRecs[animeLibraryDetail.al_id]" :key="rec.al_id"
+                   class="allib-rec-card"
+                   @click="openAnime({ al_id: rec.al_id, title: rec.title, title_romaji: rec.title_romaji, cover: rec.cover, format: rec.format })">
+                <div class="allib-rec-cover">
+                  <img v-if="rec.cover" :src="rec.cover" :alt="rec.title" loading="lazy"
+                       @error="$event.target.style.display='none'">
+                  <div v-if="rec.score" class="allib-rec-score">{{ rec.score }}</div>
+                  <div v-if="isInAnimeLibrary(rec)" class="allib-rec-inlib">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                  </div>
+                </div>
+                <div class="allib-rec-info">
+                  <div class="allib-rec-title">{{ rec.title || rec.title_romaji }}</div>
+                  <div class="allib-rec-meta">
+                    <span v-if="rec.format" class="allib-rec-format">{{ rec.format }}</span>
+                    <span v-if="rec.episodes" class="allib-rec-eps">{{ rec.episodes }} ep.</span>
+                  </div>
+                  <div v-if="rec.genres.length" class="allib-rec-genres">
+                    <span v-for="g in rec.genres" :key="g" class="allib-rec-genre">{{ g }}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </div>
 
         <!-- Library grid -->
-        <div v-else class="allib-grid">
-          <div v-for="a in animeLibrary" :key="a.id" class="allib-card" @click="openAnimeLibraryDetail(a)">
-            <div class="allib-card-img">
-              <img v-if="a.cover" :src="a.cover" :alt="a.title">
-              <div v-else class="allib-card-placeholder">{{ (a.title || '?')[0].toUpperCase() }}</div>
-            </div>
-            <div class="allib-card-info">
-              <div class="allib-card-title">{{ a.title }}</div>
-              <div class="allib-card-eps">
-                <span class="allib-card-count">{{ a.downloaded_count }}</span>
-                <span v-if="a.total_episodes" class="allib-card-total"> / {{ a.total_episodes }} eps</span>
-                <span v-else class="allib-card-total"> eps</span>
-              </div>
-              <div v-if="a.total_episodes && a.total_episodes > 0" class="allib-card-bar">
-                <div class="allib-card-bar-fill"
-                     :style="{ width: Math.min(100, a.downloaded_count / a.total_episodes * 100) + '%' }"></div>
-              </div>
-              <!-- Mini episode dots (first 12) -->
-              <div class="allib-card-dots">
-                <span v-for="ep in a.episodes.filter(e => e.num !== 0).slice(0, 16)" :key="ep.num"
-                      class="allib-card-dot"
-                      :class="{ 'allib-dot--done': (ep.in_qbt && ep.progress >= 100) || ep.in_local, 'allib-dot--dl': ep.in_qbt && ep.progress < 100 }"></span>
-              </div>
-            </div>
-            <button class="allib-card-del" @click.stop="removeFromAnimeLibrary(a.id)"
-                    title="Eliminar de biblioteca">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+        <div v-else>
+          <!-- Sort / filter controls -->
+          <!-- Search bar -->
+          <div class="allib-search-wrap">
+            <svg class="allib-search-icon" width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
+            <input class="allib-search-input" type="text" v-model="animeLibSearch"
+                   placeholder="Filtrar por título…">
+            <button v-if="animeLibSearch" class="allib-search-clear" @click="animeLibSearch = ''" title="Limpiar">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
             </button>
           </div>
-        </div>
+
+          <!-- ─── Status tab bar ─────────────────────────────────────── -->
+          <div class="allib-tabs">
+            <button class="allib-tab" :class="{ active: animeLibFilter === 'all' }"
+                    @click="animeLibFilter = 'all'">
+              <span>Todos</span>
+              <span class="allib-tab-count">{{ animeLibCounts.all || 0 }}</span>
+            </button>
+            <button v-for="(v, k) in ANIME_STATUS" :key="k"
+                    class="allib-tab"
+                    :class="{ active: animeLibFilter === k }"
+                    :style="animeLibFilter === k ? { '--tab-color': v.color } : {}"
+                    @click="animeLibFilter = k">
+              <span class="allib-tab-dot" :style="{ background: v.color }"></span>
+              <span>{{ v.label }}</span>
+              <span v-if="animeLibCounts[k]" class="allib-tab-count">{{ animeLibCounts[k] }}</span>
+            </button>
+            <div class="allib-tab-spacer"></div>
+            <!-- Sort dropdown -->
+            <select class="allib-sort-select" v-model="animeLibSort">
+              <option value="last_added">Recién agregado</option>
+              <option value="last_watched">Últimamente visto</option>
+              <option value="last_downloaded">Últ. descargado</option>
+              <option value="title">A–Z</option>
+              <option value="progress">Progreso</option>
+              <option value="status">Por estado</option>
+            </select>
+            <span class="allib-ctrl-count">{{ sortedAnimeLibrary.length }} series</span>
+          </div>
+
+          <!-- ─── Grouped view (sort=status) ──────────────────────────── -->
+          <template v-if="animeLibSort === 'status' && animeLibGroups">
+            <div v-for="group in animeLibGroups" :key="group.key" class="allib-status-group">
+              <div class="allib-status-group-header">
+                <span class="allib-status-group-dot" :style="{ background: group.color }"></span>
+                <span class="allib-status-group-label">{{ group.label }}</span>
+                <span class="allib-status-group-count">{{ group.items.length }}</span>
+              </div>
+              <div class="allib-grid">
+                <div v-for="a in group.items" :key="a.id" class="allib-card" @click="openAnimeLibraryDetail(a)">
+                  <div class="allib-card-cover">
+                    <div class="allib-card-status-strip" :style="{ background: ANIME_STATUS[a.status]?.color || 'transparent' }"></div>
+                    <img v-if="a.cover" :src="a.cover" :alt="a.title"
+                         @load="$event.target.classList.add('img-loaded')">
+                    <div v-else class="allib-card-placeholder">{{ (a.title||'?')[0].toUpperCase() }}</div>
+                    <div v-if="a.total_episodes && a.total_episodes > 0" class="allib-card-dl-strip"
+                         :style="{ width: Math.min(100, (a.downloaded_count||0) / a.total_episodes * 100) + '%' }"></div>
+                    <div class="allib-card-hover-actions">
+                      <select class="allib-card-status-sel"
+                              :value="a.status || ''"
+                              @change.stop="setAnimeStatus(a.id, $event.target.value)"
+                              @click.stop
+                              :style="{ color: ANIME_STATUS[a.status]?.color || '#94a3b8' }">
+                        <option value="">Sin estado</option>
+                        <option v-for="(v,k) in ANIME_STATUS" :key="k" :value="k">{{ v.label }}</option>
+                      </select>
+                      <button v-if="nextUnwatchedEp(a)" class="allib-card-play-btn"
+                              @click.stop="playEpisode(a, nextUnwatchedEp(a))">
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                        Ep {{ nextUnwatchedEp(a).num }}
+                      </button>
+                    </div>
+                    <button class="allib-card-del" @click.stop="removeFromAnimeLibrary(a.id)" title="Eliminar">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                    </button>
+                  </div>
+                  <div class="allib-card-info">
+                    <div class="allib-card-title">{{ a.title }}</div>
+                    <div class="allib-card-bottom">
+                      <span class="allib-card-eps">
+                        <span class="allib-card-count">{{ a.downloaded_count }}</span>
+                        <span v-if="a.total_episodes" class="allib-card-total"> / {{ a.total_episodes }}</span>
+                      </span>
+                      <div class="allib-card-dots">
+                        <span v-for="ep in a.episodes.filter(e=>e.num>0).slice(0,12)" :key="ep.num"
+                              class="allib-card-dot"
+                              :class="{'allib-dot--done':(ep.in_qbt&&ep.progress>=100)||ep.in_local,'allib-dot--dl':ep.in_qbt&&ep.progress<100}"></span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- ─── Normal grid ─────────────────────────────────────────── -->
+          <div v-else class="allib-grid">
+            <div v-for="a in sortedAnimeLibrary" :key="a.id" class="allib-card" @click="openAnimeLibraryDetail(a)">
+              <div class="allib-card-cover">
+                <div class="allib-card-status-strip" :style="{ background: ANIME_STATUS[a.status]?.color || 'transparent' }"></div>
+                <img v-if="a.cover" :src="a.cover" :alt="a.title"
+                     @load="$event.target.classList.add('img-loaded')">
+                <div v-else class="allib-card-placeholder">{{ (a.title||'?')[0].toUpperCase() }}</div>
+                <div v-if="a.total_episodes && a.total_episodes > 0" class="allib-card-dl-strip"
+                     :style="{ width: Math.min(100, (a.downloaded_count||0) / a.total_episodes * 100) + '%' }"></div>
+                <div class="allib-card-hover-actions">
+                  <select class="allib-card-status-sel"
+                          :value="a.status || ''"
+                          @change.stop="setAnimeStatus(a.id, $event.target.value)"
+                          @click.stop
+                          :style="{ color: ANIME_STATUS[a.status]?.color || '#94a3b8' }">
+                    <option value="">Sin estado</option>
+                    <option v-for="(v,k) in ANIME_STATUS" :key="k" :value="k">{{ v.label }}</option>
+                  </select>
+                  <button v-if="nextUnwatchedEp(a)" class="allib-card-play-btn"
+                          @click.stop="playEpisode(a, nextUnwatchedEp(a))">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                    Ep {{ nextUnwatchedEp(a).num }}
+                  </button>
+                </div>
+                <button class="allib-card-del" @click.stop="removeFromAnimeLibrary(a.id)" title="Eliminar">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
+              </div>
+              <div class="allib-card-info">
+                <div class="allib-card-title">{{ a.title }}</div>
+                <div class="allib-card-bottom">
+                  <span class="allib-card-eps">
+                    <span class="allib-card-count">{{ a.downloaded_count }}</span>
+                    <span v-if="a.total_episodes" class="allib-card-total"> / {{ a.total_episodes }}</span>
+                  </span>
+                  <div class="allib-card-dots">
+                    <span v-for="ep in a.episodes.filter(e=>e.num>0).slice(0,12)" :key="ep.num"
+                          class="allib-card-dot"
+                          :class="{'allib-dot--done':(ep.in_qbt&&ep.progress>=100)||ep.in_local,'allib-dot--dl':ep.in_qbt&&ep.progress<100}"></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div><!-- /allib-grid -->
+
+        </div><!-- /v-else wrapper -->
 
       </div>
 
@@ -1676,7 +2104,8 @@
             </template>
           </div>
 
-          <div v-for="group in filteredChapters" :key="group.chapter" class="ch-row"
+          <template v-for="group in filteredChapters" :key="group.chapter">
+          <div class="ch-row"
                :class="{ 'ch-row--upscaled': isUpscaled(group.chapter), 'ch-row--partial': isPartialUpscaled(group.chapter), 'ch-row--downloaded': isDownloaded(group.chapter) && !isUpscaled(group.chapter) && !isPartialUpscaled(group.chapter) }">
 
             <div class="ch-dot" :class="{
@@ -1767,9 +2196,65 @@
                 </div>
                 <button v-else class="md-btn-sm" @click.stop="downloadChapter(group)">Descargar</button>
               </template>
+
+              <!-- Scanlation compare button (only on downloaded chapters with multiple variants) -->
+              <button v-if="(isDownloaded(group.chapter) || isUpscaled(group.chapter)) && group.variants.length > 1"
+                      class="ch-btn-compare"
+                      :class="{ active: scanCompareChapter?.chapter === group.chapter }"
+                      @click.stop="openComparePanel(group, currentTitle)"
+                      title="Comparar fuentes / grupos de scanlation">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M10 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h5v2h2V1h-2v2zm0 15H5l5-6v6zm9-15h-5v2h5v13l-5-6v6h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
+              </button>
             </div>
 
           </div>
+
+          <!-- Scanlation comparison panel -->
+          <div v-if="scanCompareChapter?.chapter === group.chapter" class="ch-compare-panel">
+            <div class="ch-compare-panel-title">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M10 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h5v2h2V1h-2v2zm0 15H5l5-6v6zm9-15h-5v2h5v13l-5-6v6h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
+              Fuentes disponibles — Cap. {{ group.chapter }}
+            </div>
+
+            <!-- Available MangaDex variants to download -->
+            <div class="ch-compare-section-label">MangaDex — descargar para comparar</div>
+            <div class="ch-compare-variants">
+              <div v-for="v in group.variants" :key="v.id" class="ch-compare-variant">
+                <span class="ch-compare-lang">{{ getLangFlag(v.language) }} {{ v.language }}</span>
+                <span class="ch-compare-group">{{ v.groups?.join(', ') || '—' }}</span>
+                <span class="ch-compare-pages">{{ v.pages || '?' }} págs</span>
+                <button class="ch-compare-dl-btn"
+                        @click="downloadCompareVariant(v, currentTitle, group.chapter)"
+                        title="Descargar esta variante para comparar">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg>
+                  Descargar
+                </button>
+              </div>
+            </div>
+
+            <!-- Downloaded comparison copies -->
+            <template v-if="scanCompareLoading">
+              <div class="ch-compare-loading"><div class="md-spinner" style="width:14px;height:14px;border-width:2px"></div> Buscando copias…</div>
+            </template>
+            <template v-else-if="scanCompareVariants.length > 0">
+              <div class="ch-compare-section-label">Copias descargadas — comparar</div>
+              <div class="ch-compare-variants">
+                <div v-for="cv in scanCompareVariants" :key="cv.dir" class="ch-compare-variant ch-compare-variant--local">
+                  <span class="ch-compare-lang">{{ getLangFlag(cv.lang) }} {{ cv.lang }}</span>
+                  <span class="ch-compare-group">{{ cv.group }}</span>
+                  <span class="ch-compare-pages">{{ cv.page_count }} págs</span>
+                  <button class="ch-compare-read-btn"
+                          @click="readCompareSources(currentTitle, group.chapter, cv.dir, cv.group, cv.lang)"
+                          title="Abrir comparación lado a lado">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M10 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h5v2h2V1h-2v2zm0 15H5l5-6v6zm9-15h-5v2h5v13l-5-6v6h5c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2z"/></svg>
+                    Comparar
+                  </button>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          </template>
         </div>
 
         <!-- Corrupt page scan -->
@@ -2410,8 +2895,12 @@
             </div>
           </div>
           <!-- Labels -->
-          <span class="reader-compare-label reader-compare-label--l">ORIGINAL</span>
-          <span class="reader-compare-label reader-compare-label--r">4K</span>
+          <span class="reader-compare-label reader-compare-label--l">
+            {{ scanCompareMode ? 'Principal' : 'ORIGINAL' }}
+          </span>
+          <span class="reader-compare-label reader-compare-label--r">
+            {{ scanCompareMode ? (scanCompareChapter ? scanCompareVariants.find(v => v.dir === scanCompareChapter.activeDir)?.group || 'Variante' : 'Variante') : '4K' }}
+          </span>
         </div>
 
         <!-- Normal page image -->
@@ -2575,6 +3064,49 @@
   </div>
 
   <!-- ── SCAN PATHS MODAL ── -->
+  <!-- ── RENAME EPISODES MODAL ─────────────────────────────────────────── -->
+  <div v-if="renameAnime" class="md-modal-overlay" @click.self="renameAnime = null">
+    <div class="md-modal rename-modal">
+      <button class="md-modal-close" @click="renameAnime = null">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+      <h3 class="rename-modal-title">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+        Renombrar episodios — {{ renameAnime.title }}
+      </h3>
+      <p class="rename-modal-hint">
+        Se renombrarán <strong>{{ renameChanges }}</strong> de {{ renameItems.length }} archivo(s) al formato
+        <code>{{ renameAnime.title }} - E01.ext</code>
+      </p>
+      <div class="rename-table-wrap">
+        <table class="rename-table">
+          <thead>
+            <tr><th>Nombre actual</th><th></th><th>Nombre nuevo</th><th>Tipo</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in renameItems" :key="r.old_path" :class="r.changed ? 'rename-row--changed' : 'rename-row--same'">
+              <td class="rename-old">{{ r.old_name }}</td>
+              <td class="rename-arrow">{{ r.changed ? '→' : '=' }}</td>
+              <td class="rename-new">{{ r.new_name }}</td>
+              <td class="rename-type">
+                <span :class="r.ep_type === 'special' ? 'rename-badge--sp' : 'rename-badge--ep'">
+                  {{ r.ep_type === 'special' ? 'SP' : 'EP' }}
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="rename-modal-footer">
+        <button class="md-btn" @click="renameAnime = null">Cancelar</button>
+        <button class="md-btn md-btn-primary" @click="applyRenames()" :disabled="renameBusy || renameChanges === 0">
+          <div v-if="renameBusy" class="md-spinner" style="width:14px;height:14px;border-width:2px"></div>
+          <span v-else>Renombrar {{ renameChanges }} archivo(s)</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
   <div v-if="scanPathsShow" class="md-modal-overlay" @click.self="scanPathsShow = false">
     <div class="md-modal scan-paths-modal">
       <button class="md-modal-close" @click="scanPathsShow = false">
@@ -2710,10 +3242,154 @@
   </div>
 
   <!-- TOAST -->
-  <div v-if="toast.show" class="md-toast" :class="toast.type">{{ toast.message }}</div>
+  <div v-if="toast.show" class="md-toast" :class="toast.type">
+    <span class="toast-msg">{{ toast.message }}</span>
+    <button class="toast-dismiss" @click="dismissToast" title="Cerrar">×</button>
+  </div>
+
+  </div><!-- /main-wrapper -->
+
+  <!-- TAG BROWSE OVERLAY -->
+  <teleport to="body">
+    <div v-if="tagBrowse" class="tag-browse-overlay" @click.self="tagBrowse = null; tagBrowseState = 'idle'">
+      <div class="tag-browse-panel">
+        <div class="tag-browse-header">
+          <div class="tag-browse-title">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M21.41 11.58l-9-9C12.05 2.22 11.55 2 11 2H4c-1.1 0-2 .9-2 2v7c0 .55.22 1.05.59 1.42l9 9c.36.36.86.58 1.41.58.55 0 1.05-.22 1.41-.59l7-7c.37-.36.59-.86.59-1.41 0-.55-.23-1.06-.59-1.42zM5.5 7C4.67 7 4 6.33 4 5.5S4.67 4 5.5 4 7 4.67 7 5.5 6.33 7 5.5 7z"/></svg>
+            {{ tagBrowse }}
+            <span class="tag-browse-subtitle">en AniList</span>
+          </div>
+          <button class="tag-browse-close" @click="tagBrowse = null; tagBrowseState = 'idle'">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
+        </div>
+        <div v-if="tagBrowseState === 'loading'" class="tag-browse-loading">
+          <svg class="spin" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+          Buscando anime con esta categoría…
+        </div>
+        <div v-else-if="tagBrowseState === 'done'" class="tag-browse-grid">
+          <div v-for="a in tagBrowseAnime" :key="a.al_id"
+               class="allib-rec-card"
+               @click="openAnime({ al_id: a.al_id, mal_id: a.mal_id, title: a.title, title_romaji: a.title_romaji, cover: a.cover, format: a.format }); tagBrowse = null; tagBrowseState = 'idle'">
+            <div class="allib-rec-cover">
+              <img :src="a.cover" :alt="a.title" loading="lazy"
+                   @error="$event.target.style.display='none'">
+              <div v-if="a.score" class="allib-rec-score">{{ a.score }}</div>
+              <div v-if="isInAnimeLibrary(a)" class="allib-rec-inlib">
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+              </div>
+            </div>
+            <div class="allib-rec-info">
+              <div class="allib-rec-title">{{ a.title || a.title_romaji }}</div>
+              <div v-if="a.title_romaji && a.title_romaji !== a.title" class="allib-rec-romaji">{{ a.title_romaji }}</div>
+              <div class="allib-rec-meta">
+                <span v-if="a.format" class="allib-rec-format">{{ a.format }}</span>
+                <span v-if="a.episodes" class="allib-rec-eps">{{ a.episodes }} ep.</span>
+              </div>
+              <div v-if="a.genres.length" class="allib-rec-genres">
+                <span v-for="g in a.genres" :key="g" class="allib-rec-genre">{{ g }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-else-if="tagBrowseState === 'error'" class="tag-browse-loading">
+          Error al cargar. Intenta de nuevo.
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- STACK BROWSE OVERLAY -->
+  <teleport to="body">
+    <div v-if="stackBrowse" class="tag-browse-overlay" @click.self="stackBrowse = null; stackBrowseState = 'idle'; stackBrowseMeta = null">
+      <div class="tag-browse-panel tag-browse-panel--stack">
+        <div class="tag-browse-header">
+          <div class="tag-browse-title">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M11.5 2C6.81 2 3 5.81 3 10.5S6.81 19 11.5 19h.5v3c4.86-2.34 8-7 8-11.5C20 5.81 16.19 2 11.5 2zm1 14.5h-2v-2h2v2zm0-4h-2c0-3.25 3-3 3-5 0-1.1-.9-2-2-2s-2 .9-2 2h-2c0-2.21 1.79-4 4-4s4 1.79 4 4c0 2.5-3 2.75-3 5z"/></svg>
+            {{ stackBrowseMeta?.name || stackBrowse?.name }}
+            <span v-if="stackBrowseMeta?.entries" class="allib-stacks-count">{{ stackBrowseMeta.entries }}</span>
+            <a :href="stackBrowse?.url" target="_blank" rel="noopener" class="stack-browse-mal-link" title="Ver stack en MAL">
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M14 3v2H7v14h14v-7h2v9H5V3h9zm5-3l3 3-9 9-3-1 1-3 9-8z"/></svg>
+              MAL
+            </a>
+          </div>
+          <button class="tag-browse-close" @click="stackBrowse = null; stackBrowseState = 'idle'; stackBrowseMeta = null">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+          </button>
+        </div>
+        <div v-if="stackBrowseMeta?.description" class="stack-browse-desc">{{ stackBrowseMeta.description }}</div>
+        <div v-if="stackBrowseState === 'loading'" class="tag-browse-loading">
+          <svg class="spin" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+          Cargando anime del stack…
+        </div>
+        <div v-else-if="stackBrowseState === 'done'" class="stack-browse-list">
+          <div v-for="a in stackBrowseAnime" :key="a.mal_id" class="stack-browse-item">
+            <img :src="a.cover" :alt="a.title" loading="lazy" class="stack-browse-cover"
+                 @error="$event.target.style.opacity='0.3'">
+            <div class="stack-browse-info">
+              <button class="stack-browse-title"
+                      @click="animeQuery = a.title; currentView = 'anime'; animeView = 'search'; searchAnime(); stackBrowse = null; stackBrowseState = 'idle'; stackBrowseMeta = null">
+                {{ a.title }}
+              </button>
+              <div class="stack-browse-meta">
+                <span v-if="a.type" class="stack-browse-type">{{ a.type }}</span>
+                <span v-if="a.year" class="stack-browse-year">{{ a.year }}</span>
+                <span v-if="a.episodes" class="stack-browse-eps">{{ a.episodes }} ep.</span>
+              </div>
+              <div v-if="a.author_score" class="stack-browse-score">
+                <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/></svg>
+                {{ a.author_score }}<span class="stack-browse-score-label">/10</span>
+              </div>
+              <div v-if="a.note" class="stack-browse-note">{{ a.note }}</div>
+            </div>
+          </div>
+        </div>
+        <div v-else-if="stackBrowseState === 'error'" class="tag-browse-loading">
+          Error al cargar. Intenta de nuevo.
+        </div>
+      </div>
+    </div>
+  </teleport>
+
+  <!-- SHORTCUTS OVERLAY -->
+  <teleport to="body">
+    <div v-if="showShortcuts" class="shortcuts-overlay" @click.self="showShortcuts = false">
+      <div class="shortcuts-modal">
+        <div class="shortcuts-header">
+          <h3>Atajos de teclado</h3>
+          <button class="shortcuts-close" @click="showShortcuts = false">×</button>
+        </div>
+        <div class="shortcuts-body">
+          <div class="shortcuts-col">
+            <div class="shortcuts-section-title">Lector de manga</div>
+            <div class="shortcut-row"><kbd>←</kbd><kbd>→</kbd><span>Página anterior / siguiente</span></div>
+            <div class="shortcut-row"><kbd>Espacio</kbd><span>Siguiente página</span></div>
+            <div class="shortcut-row"><kbd>[</kbd><kbd>]</kbd><span>Capítulo anterior / siguiente</span></div>
+            <div class="shortcut-row"><kbd>f</kbd><span>Cambiar ajuste de imagen</span></div>
+            <div class="shortcut-row"><kbd>w</kbd><span>Modo paginado / webtoon</span></div>
+            <div class="shortcut-row"><kbd>d</kbd><span>Dirección LTR / RTL</span></div>
+            <div class="shortcut-row"><kbd>c</kbd><span>Comparar original / 4K</span></div>
+            <div class="shortcut-row"><kbd>Esc</kbd><span>Cerrar lector</span></div>
+          </div>
+          <div class="shortcuts-col">
+            <div class="shortcuts-section-title">MPV (shaders Anime4K)</div>
+            <div class="shortcut-row"><kbd>Ctrl+1</kbd><span>Sin shaders</span></div>
+            <div class="shortcut-row"><kbd>Ctrl+2</kbd><span>Modo A (suavizado)</span></div>
+            <div class="shortcut-row"><kbd>Ctrl+3</kbd><span>Modo B (líneas)</span></div>
+            <div class="shortcut-row"><kbd>Ctrl+4</kbd><span>Modo A+A (calidad alta)</span></div>
+            <div class="shortcut-row"><kbd>Ctrl+8</kbd><span>Modo A+A UL (máx. calidad)</span></div>
+            <div class="shortcut-row"><kbd>Ctrl+9</kbd><span>Modo A+A UL + Thin (máx. + bordes)</span></div>
+            <div class="shortcuts-section-title" style="margin-top:12px">Global</div>
+            <div class="shortcut-row"><kbd>?</kbd><span>Mostrar / ocultar este panel</span></div>
+            <div class="shortcut-row"><kbd>Esc</kbd><span>Cerrar panel activo</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </teleport>
 
 </div>
-<script src="/static/js/app.js?v=20260522-7"></script>
+<script src="/static/js/app.js?v=20260524-22"></script>
 <script>
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});
