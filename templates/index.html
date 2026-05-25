@@ -9,7 +9,7 @@
   <meta name="theme-color" content="#6184d3">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260525-02">
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260525-03">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <script src="/static/js/vue.js"></script>
@@ -1156,6 +1156,7 @@
             <div class="qbt-torrent-header">
               <div class="qbt-torrent-name" :title="t.name">{{ t.name }}</div>
               <div class="qbt-torrent-actions">
+                <button v-if="t.state === 'missingFiles'" class="qbt-action-btn qbt-recheck-btn" @click="qbtAction('recheck', t.hash)" title="Forzar recálculo de hashes">↺ Recalcular</button>
                 <button v-if="t.state.includes('paused') || t.state.includes('Paused')" class="qbt-action-btn qbt-resume-btn" @click="qbtAction('resume', t.hash)">▶</button>
                 <button v-else class="qbt-action-btn qbt-pause-btn" @click="qbtAction('pause', t.hash)">⏸</button>
                 <button class="qbt-action-btn qbt-delete-btn" @click="qbtAction('delete', t.hash, false)">✕</button>
@@ -3389,7 +3390,7 @@
   </teleport>
 
 </div>
-<script src="/static/js/app.js?v=20260525-02"></script>
+<script src="/static/js/app.js?v=20260525-03"></script>
 <script>
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});

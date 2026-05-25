@@ -1151,6 +1151,8 @@ def qbt_action():
                data={'hashes': hash_, 'deleteFiles': str(data.get('delete_files', False)).lower()})
         elif action in ('pause', 'resume'):
             _q('post', f'/torrents/{action}', data={'hashes': hash_})
+        elif action == 'recheck':
+            _q('post', '/torrents/recheck', data={'hashes': hash_})
         return jsonify({'ok': True})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
