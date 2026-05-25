@@ -1595,8 +1595,17 @@ def anime_link_torrent(anime_id):
         if total > 0:
             for n in range(1, total + 1):
                 slot = str(n)
-                if slot not in episodes:
+                existing = episodes.get(slot)
+                if existing is None:
                     episodes[slot] = dict(ep_record, from_batch=True)
+                elif existing.get('info_hash', '') == info_hash or existing.get('from_batch'):
+                    # Update subpath on existing batch-linked slots so re-linking with a
+                    # subpath always propagates to all pre-filled episode records.
+                    if subpath:
+                        existing['subpath'] = subpath
+                    elif 'subpath' in existing:
+                        del existing['subpath']
+                    existing['from_batch'] = True
     else:
         episodes[str(episode)] = ep_record
 

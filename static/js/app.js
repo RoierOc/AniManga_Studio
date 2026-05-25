@@ -3243,11 +3243,17 @@ const app = createApp({
 
         const qbtAction = async (action, hash, deleteFiles = false) => {
             try {
-                await fetch('/api/anime/qbt/action', {
+                const res = await fetch('/api/anime/qbt/action', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ action, hash, delete_files: deleteFiles }),
                 });
+                const json = await res.json().catch(() => ({}));
+                if (!res.ok || json.error) throw new Error(json.error || res.statusText);
+                if (action === 'recheck') {
+                    showToast('Recalculando archivos… espera unos segundos', 'info');
+                    await new Promise(r => setTimeout(r, 3000));
+                }
                 await loadQbtTorrents();
             } catch (e) {
                 showToast('Error: ' + e.message, 'error');
