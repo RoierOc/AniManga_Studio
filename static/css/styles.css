@@ -5544,93 +5544,7 @@ kbd {
     --glow-violet:    0 0 20px rgba(155,127,184,.35), 0 0 40px rgba(155,127,184,.15);
 }
 
-/* ── Custom Cursor (desktop only) ────────────────────────────────────────── */
-
-@media (hover: hover) and (pointer: fine) {
-    html, body, *, *::before, *::after { cursor: none !important; }
-}
-
-#cursor-dot {
-    position: fixed;
-    width: 10px;
-    height: 10px;
-    background: var(--accent);
-    border-radius: 50%;
-    pointer-events: none;
-    z-index: 999999;
-    transform: translate(-50%, -50%);
-    will-change: transform, width, height;
-    transition: width .18s var(--ease-smooth),
-                height .18s var(--ease-smooth),
-                background .18s,
-                opacity .18s;
-    mix-blend-mode: normal;
-}
-
-#cursor-ring {
-    position: fixed;
-    width: 32px;
-    height: 32px;
-    border: 1.5px solid rgba(107,143,189,.6);
-    border-radius: 50%;
-    pointer-events: none;
-    z-index: 999998;
-    transform: translate(-50%, -50%);
-    will-change: transform;
-    transition: width .28s var(--ease-smooth),
-                height .28s var(--ease-smooth),
-                opacity .28s,
-                border-color .28s;
-}
-
-#cursor-ring::after {
-    content: '';
-    position: absolute;
-    top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    font-size: 8px;
-    font-weight: 800;
-    letter-spacing: .1em;
-    color: var(--accent);
-    white-space: nowrap;
-    opacity: 0;
-    transition: opacity .2s;
-}
-
-/* Hover over interactive */
-body.cursor-hover-link #cursor-dot {
-    width: 6px;
-    height: 6px;
-    background: var(--accent-h);
-    box-shadow: var(--glow-blue);
-}
-body.cursor-hover-link #cursor-ring {
-    width: 52px;
-    height: 52px;
-    opacity: .25;
-    border-color: var(--accent-h);
-}
-
-/* Hover over cover image */
-body.cursor-hover-cover #cursor-dot {
-    width: 6px;
-    height: 6px;
-    opacity: .5;
-}
-body.cursor-hover-cover #cursor-ring {
-    width: 64px;
-    height: 64px;
-    border-color: var(--accent);
-}
-body.cursor-hover-cover #cursor-ring::after {
-    content: 'VER →';
-    opacity: 1;
-}
-
-/* Hide on touch */
-@media (hover: none) {
-    #cursor-dot, #cursor-ring { display: none !important; }
-}
+/* Custom cursor removed by user preference */
 
 /* ── Page Curtain (cinematic entrance) ───────────────────────────────────── */
 
@@ -6162,3 +6076,415 @@ body.cursor-hover-cover #cursor-ring::after {
     .lib-stat-value { font-size: 20px; }
 }
 
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   COLOR REFINEMENT — Replace orange/amber with purple+teal palette
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Modal action buttons ────────────────────────────────────────────────── */
+
+/* "Crear Tomo" export → purple */
+.md-btn-export {
+    background: rgba(155,127,184,.1) !important;
+    border-color: rgba(155,127,184,.4) !important;
+    color: #c4a8e8 !important;
+}
+.md-btn-export:hover, .md-btn-export.active {
+    background: rgba(155,127,184,.2) !important;
+}
+.md-btn-export-badge {
+    background: #9b7fb8 !important;
+}
+
+/* "MangaDex" link button → neutral slate, no orange */
+.md-btn-mdlink {
+    background: rgba(107,143,189,.08) !important;
+    border-color: rgba(107,143,189,.3) !important;
+    color: var(--accent-h) !important;
+}
+.md-btn-mdlink:hover {
+    background: rgba(107,143,189,.18) !important;
+}
+
+/* "Leer 4K" read button → teal */
+.md-btn-4k {
+    background: rgba(78,184,199,.1) !important;
+    border-color: rgba(78,184,199,.45) !important;
+    color: #7dd3e0 !important;
+}
+.md-btn-4k:hover {
+    background: rgba(78,184,199,.2) !important;
+}
+
+/* "Added to library" state → purple tint */
+.md-btn-primary.md-btn-added {
+    background: rgba(155,127,184,.15) !important;
+    border: 1px solid rgba(155,127,184,.35) !important;
+    color: #c4a8e8 !important;
+}
+
+/* "Continuar leyendo" button → purple */
+.modal-continue-btn {
+    border-color: rgba(155,127,184,.35) !important;
+    color: #c4a8e8 !important;
+}
+.modal-continue-btn:hover {
+    background: rgba(155,127,184,.15) !important;
+}
+
+/* Modal tab notification badge → accent blue */
+.md-tab-badge {
+    background: var(--accent) !important;
+}
+
+/* ── Progress bar fills: upscale → purple ────────────────────────────────── */
+
+.md-task-overlay-fill--upscale {
+    background: linear-gradient(90deg, #9b7fb8, #a78bfa) !important;
+}
+
+.ch-bar-fill--up {
+    background: #9b7fb8 !important;
+}
+
+.tomo-prog-fill--up {
+    background: #9b7fb8 !important;
+}
+
+.tq-agg-fill--up {
+    background: #9b7fb8 !important;
+}
+
+.tq-icon--up {
+    background: rgba(155,127,184,.18) !important;
+    color: #c4a8e8 !important;
+}
+
+.tq-type-badge--up {
+    background: rgba(155,127,184,.18) !important;
+    color: #c4a8e8 !important;
+}
+
+.tq-bar-fill--up {
+    background: linear-gradient(90deg, #9b7fb8, #a78bfa) !important;
+}
+
+/* ── Anime: watch progress bar → teal/green ─────────────────────────────── */
+
+.ep-watch-progress-fill {
+    background: var(--accent-teal) !important;
+}
+
+/* ── AI subtitle engine badges ───────────────────────────────────────────── */
+
+/* Qwen: warm indigo (distinct from blue, not orange) */
+.ep-sub-prog-engine--qwen {
+    background: rgba(139,107,172,.18) !important;
+    color: #b89ed6 !important;
+    border-color: rgba(139,107,172,.35) !important;
+}
+
+.ep-sub-prog-bar-fill,
+.ep-sub-prog-bar-fill--qwen {
+    background: linear-gradient(90deg, #9b7fb8, #7b9dd4) !important;
+}
+
+/* ── Torrent seed-low pill → warm slate (still signals caution) ──────────── */
+
+.seed-low {
+    background: rgba(107,143,189,.12) !important;
+    color: #82a5d0 !important;
+    border-color: rgba(107,143,189,.3) !important;
+}
+
+/* ── Tosho source badge → teal ───────────────────────────────────────────── */
+
+.ep-tag--tosho {
+    background: rgba(78,184,199,.1) !important;
+    color: var(--accent-teal) !important;
+    border-color: rgba(78,184,199,.3) !important;
+}
+
+/* ── Reader toolbar ──────────────────────────────────────────────────────── */
+
+.reader-tool.active {
+    background: rgba(107,143,189,.2) !important;
+    color: var(--accent-h) !important;
+    border-color: rgba(107,143,189,.35) !important;
+}
+
+.reader-thumb--active {
+    border-color: var(--accent-teal) !important;
+}
+
+/* ── Chapter row: upscaled border → purple ───────────────────────────────── */
+
+.ch-row--upscaled {
+    border-left-color: rgba(155,127,184,.55) !important;
+}
+
+/* ── Sidebar upscale task marquee → already blue from earlier section ───── */
+
+/* ── Task overlay card (active upscale) → purple glow ───────────────────── */
+
+.md-card--active-task .md-cover-wrapper {
+    outline-color: rgba(155,127,184,.7) !important;
+    box-shadow: 0 0 14px rgba(155,127,184,.35) !important;
+}
+
+/* ── eula / AI model badge in chapter controls → slate-blue ─────────────── */
+
+.ch-model-eula, [class*="model-badge"], .ch-model-tag {
+    background: rgba(107,143,189,.15) !important;
+    color: var(--accent-h) !important;
+    border-color: rgba(107,143,189,.3) !important;
+}
+
+
+/* ── v=20260526-13  Visual polish pass ───────────────────────────────────── */
+
+/* 1. Episode card — glass-morphism hover + bottom gradient readability */
+.ep-card-thumb:hover .ep-card-play-hover {
+    background: linear-gradient(160deg, rgba(0,0,0,.15) 0%, rgba(0,0,0,.55) 100%) !important;
+    backdrop-filter: blur(3px) !important;
+    -webkit-backdrop-filter: blur(3px) !important;
+}
+.ep-card-play-hover svg,
+.ep-card-thumb:hover .ep-card-play-hover svg {
+    width: 38px; height: 38px;
+    filter: drop-shadow(0 2px 8px rgba(0,0,0,.6));
+    transform: scale(1);
+    transition: transform .2s cubic-bezier(.34,1.56,.64,1);
+}
+.ep-card-thumb:hover .ep-card-play-hover svg { transform: scale(1.12); }
+
+/* Bottom gradient so Sub/ESP chips remain legible */
+.ep-card-thumb::after {
+    content: '';
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 52px;
+    background: linear-gradient(to top, rgba(0,0,0,.72) 0%, transparent 100%);
+    pointer-events: none;
+    z-index: 2;
+}
+
+/* Watch progress bar — thicker, glowing */
+.ep-watch-progress {
+    height: 4px !important;
+    border-radius: 4px !important;
+    overflow: hidden !important;
+}
+.ep-watch-progress-fill {
+    background: linear-gradient(90deg, var(--accent-teal), #7dd3e0) !important;
+    box-shadow: 0 0 6px rgba(78,184,199,.5) !important;
+}
+
+/* 2. Anime detail info bar — thicker + glow */
+.allib-detail-bar {
+    height: 8px !important;
+    border-radius: 6px !important;
+    background: rgba(255,255,255,.08) !important;
+}
+.allib-detail-bar-fill {
+    border-radius: 6px !important;
+    background: linear-gradient(90deg, var(--accent), var(--accent-teal)) !important;
+    box-shadow: 0 0 8px rgba(107,143,189,.4) !important;
+}
+.allib-detail-info {
+    position: relative;
+    background: linear-gradient(135deg, rgba(107,143,189,.06) 0%, rgba(15,17,23,.0) 60%) !important;
+    border-radius: 12px;
+    padding: 14px !important;
+}
+
+/* 3. CONTINUAR VIENDO — pulse border on hover, gradient ep badge */
+@keyframes cw-pulse {
+    0%,100% { box-shadow: 0 0 0 0 rgba(107,143,189,.0); border-color: rgba(255,255,255,.08); }
+    50%      { box-shadow: 0 0 0 3px rgba(107,143,189,.25); border-color: rgba(107,143,189,.5); }
+}
+.cw-card:hover .cw-card-cover {
+    animation: cw-pulse .9s ease-in-out !important;
+    border-color: rgba(107,143,189,.45) !important;
+}
+.cw-card-ep-badge {
+    background: linear-gradient(135deg, rgba(107,143,189,.85), rgba(78,184,199,.8)) !important;
+    color: #fff !important;
+    font-weight: 700 !important;
+    border: none !important;
+    text-shadow: 0 1px 3px rgba(0,0,0,.4) !important;
+}
+
+/* 4. Library card meta footer — glass background */
+.md-card-meta {
+    background: rgba(15,17,23,.55) !important;
+    backdrop-filter: blur(6px) !important;
+    -webkit-backdrop-filter: blur(6px) !important;
+    border-top: 1px solid rgba(255,255,255,.06) !important;
+    border-radius: 0 0 10px 10px !important;
+    padding: 6px 10px !important;
+}
+
+/* allib grid card footer same treatment */
+.allib-card-info {
+    background: rgba(15,17,23,.55) !important;
+    backdrop-filter: blur(6px) !important;
+    border-top: 1px solid rgba(255,255,255,.05) !important;
+}
+
+/* 5. Subtle noise texture on main content */
+.main-content::before, .md-section::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    pointer-events: none;
+    z-index: 0;
+    opacity: .018;
+}
+
+/* Sidebar active item — stronger visual indicator */
+.sb-item.active {
+    background: linear-gradient(90deg, rgba(107,143,189,.18) 0%, rgba(107,143,189,.04) 100%) !important;
+    border-left: 3px solid var(--accent) !important;
+    color: #c8d8ef !important;
+    padding-left: calc(var(--sb-item-pl, 14px) - 3px) !important;
+}
+
+/* ── v=20260526-14  Modal & chapter row polish ───────────────────────────── */
+
+/* Modal header — more dramatic ambient gradient */
+.md-modal-header {
+    background: linear-gradient(135deg,
+        rgba(107,143,189,.12) 0%,
+        rgba(28,28,36,.95) 45%,
+        rgba(20,20,24,1) 100%) !important;
+    border-bottom: 1px solid rgba(107,143,189,.18) !important;
+    position: relative;
+    overflow: hidden;
+}
+/* Soft radial glow from cover corner */
+.md-modal-header::before {
+    content: '';
+    position: absolute;
+    top: -40px; left: -40px;
+    width: 280px; height: 280px;
+    background: radial-gradient(ellipse at center,
+        rgba(107,143,189,.14) 0%, transparent 70%);
+    pointer-events: none;
+}
+
+/* Modal cover image — subtle glow ring */
+.md-modal-cover img {
+    box-shadow: 0 8px 24px rgba(0,0,0,.5),
+                0 0 0 1px rgba(107,143,189,.2) !important;
+}
+
+/* Modal title — gradient treatment */
+.md-modal-info h2 {
+    background: linear-gradient(135deg, #e2eaf6 0%, #b8cce0 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}
+
+/* Chapter row hover — gradient slide-in from left */
+.ch-row {
+    transition: background .18s, border-left-color .18s !important;
+}
+.ch-row:hover {
+    background: linear-gradient(90deg,
+        rgba(107,143,189,.1) 0%,
+        rgba(107,143,189,.04) 60%,
+        transparent 100%) !important;
+    border-left-color: rgba(107,143,189,.5) !important;
+}
+.ch-row--downloaded:hover { border-left-color: rgba(16,185,129,.7) !important; }
+.ch-row--upscaled:hover   { border-left-color: rgba(155,127,184,.8) !important; }
+
+/* Chapter number — slightly accent colored */
+.ch-num { color: var(--text) !important; }
+.ch-row:hover .ch-num { color: #c8d8ef !important; }
+
+/* Library stats bar — thin gradient separator above */
+.lib-stats-bar {
+    border-top: 1px solid transparent !important;
+    background-image: linear-gradient(#0f1117, #0f1117),
+                      linear-gradient(90deg, transparent, rgba(107,143,189,.3), rgba(155,127,184,.3), transparent) !important;
+    background-origin: border-box !important;
+    background-clip: padding-box, border-box !important;
+    margin-bottom: 18px !important;
+}
+
+/* Library stats values — keep gradient text but bolder */
+.lib-stat-value {
+    font-weight: 700 !important;
+    letter-spacing: -0.02em !important;
+}
+
+/* Anime library grid card — title bolder */
+.allib-card-title {
+    font-weight: 600 !important;
+    font-size: 12px !important;
+    color: var(--text) !important;
+    line-height: 1.3 !important;
+}
+
+/* Continuar Viendo header */
+.cw-section-title, [class*="cw-heading"], .cw-label {
+    background: linear-gradient(90deg, var(--accent), var(--accent-teal));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-weight: 700 !important;
+}
+
+/* ── v=20260526-15  Heading & tab polish ─────────────────────────────────── */
+
+/* "Continuar viendo" heading — gradient text */
+.cw-title {
+    background: linear-gradient(90deg, var(--accent) 0%, var(--accent-teal) 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    font-weight: 700 !important;
+    letter-spacing: 0.04em !important;
+}
+
+/* allib tabs (Todos / Viendo / Completado…) — active tab gets color dot pulse */
+.allib-tab.active {
+    border-bottom-width: 2px !important;
+}
+.allib-tab-dot {
+    transition: transform .2s, box-shadow .2s;
+}
+.allib-tab.active .allib-tab-dot {
+    box-shadow: 0 0 6px currentColor;
+    transform: scale(1.2);
+}
+
+/* Library filter pills — active gets a gradient background */
+.lib-filter-btn.active {
+    background: linear-gradient(135deg, var(--accent), rgba(107,143,189,.7)) !important;
+    border-color: transparent !important;
+}
+
+/* Manga card meta footer — slightly stronger contrast text */
+.md-card-meta span {
+    font-size: 11.5px !important;
+    color: rgba(255,255,255,.65) !important;
+}
+
+/* Modal stats line — teal for downloaded count */
+.md-modal-stats span:first-child {
+    color: var(--accent-teal) !important;
+}
+
+/* Section heading gradient (library sections) */
+.section-title, .lib-section-header h3, .lib-section-label {
+    background: linear-gradient(90deg, #c8d8ef 0%, #9db8d8 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+}

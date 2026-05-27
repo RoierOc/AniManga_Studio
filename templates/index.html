@@ -9,16 +9,12 @@
   <meta name="theme-color" content="#6184d3">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260526-10">
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260526-15">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <script src="/static/js/vue.js"></script>
 </head>
 <body>
-
-<!-- Custom cursor (desktop only) -->
-<div id="cursor-dot"></div>
-<div id="cursor-ring"></div>
 
 <!-- Cinematic page curtain -->
 <div id="page-curtain">
@@ -218,17 +214,7 @@
         </div>
       </div>
 
-      <!-- Hero featured row (top 3 covers with ambient animation) -->
-      <div v-if="combinedLibrary.length >= 3 && libFilter === 'all' && !libSearch" class="lib-hero-row">
-        <div v-for="(item, i) in combinedLibrary.filter(x=>x.cover).slice(0,3)" :key="'hero'+i"
-             class="lib-hero-card" @click="openLibraryItem(item)">
-          <div class="lib-hero-aurora"></div>
-          <img :src="item.cover" :alt="item.title" loading="eager">
-          <div class="lib-hero-card-title">{{ item.title }}</div>
-        </div>
-      </div>
-
-      <!-- Updates summary panel: visible only when 'updates' filter is active -->
+<!-- Updates summary panel: visible only when 'updates' filter is active -->
       <div v-if="libFilter === 'updates'" class="updates-panel">
         <div class="updates-panel-header">
           <span class="updates-panel-title">
