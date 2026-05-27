@@ -4570,3 +4570,187 @@ const app = createApp({
 });
 
 app.mount('#app');
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ANIMANGA STUDIO — ANIMATION CONTROLLER
+   ══════════════════════════════════════════════════════════════════════════ */
+
+(function initAnimations() {
+
+    // ── Page curtain entrance ────────────────────────────────────────────────
+
+    const curtain = document.getElementById('page-curtain');
+    if (curtain) {
+        requestAnimationFrame(() => {
+            setTimeout(() => {
+                curtain.classList.add('curtain-exit');
+                curtain.addEventListener('animationend', () => {
+                    curtain.classList.add('curtain-done');
+                }, { once: true });
+            }, 600); // brief pause so logo is visible
+        });
+    }
+
+    // ── Custom cursor ────────────────────────────────────────────────────────
+
+    const dot  = document.getElementById('cursor-dot');
+    const ring = document.getElementById('cursor-ring');
+
+    if (dot && ring && window.matchMedia('(hover: hover) and (pointer: fine)').matches) {
+        let mouseX = -100, mouseY = -100;
+        let ringX  = -100, ringY  = -100;
+        let animId;
+
+        document.addEventListener('mousemove', (e) => {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+            dot.style.left = mouseX + 'px';
+            dot.style.top  = mouseY + 'px';
+        }, { passive: true });
+
+        const lerp = (a, b, t) => a + (b - a) * t;
+
+        function animateCursor() {
+            ringX = lerp(ringX, mouseX, 0.1);
+            ringY = lerp(ringY, mouseY, 0.1);
+            ring.style.left = ringX + 'px';
+            ring.style.top  = ringY + 'px';
+            animId = requestAnimationFrame(animateCursor);
+        }
+        animateCursor();
+
+        // Cursor state on hover
+        document.addEventListener('mouseover', (e) => {
+            const el = e.target;
+            const isCover = el.closest('.md-cover-wrapper') && el.tagName === 'IMG';
+            const isLink  = el.closest('button, a, [role="button"], input, select, textarea, .md-card, .anime-card, .lib-hero-card');
+            if (isCover) {
+                document.body.classList.add('cursor-hover-cover');
+                document.body.classList.remove('cursor-hover-link');
+            } else if (isLink) {
+                document.body.classList.add('cursor-hover-link');
+                document.body.classList.remove('cursor-hover-cover');
+            } else {
+                document.body.classList.remove('cursor-hover-link', 'cursor-hover-cover');
+            }
+        }, { passive: true });
+
+        document.addEventListener('mouseleave', () => {
+            document.body.classList.remove('cursor-hover-link', 'cursor-hover-cover');
+        });
+    }
+
+    // ── IntersectionObserver: scroll reveals ─────────────────────────────────
+
+    const revealObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('is-visible');
+                revealObserver.unobserve(entry.target);
+            }
+        });
+    }, { threshold: 0.08 });
+
+    // Observe existing cards + watch for new ones
+    function observeRevealCards() {
+        document.querySelectorAll('.reveal-up:not(.is-visible)').forEach(el => {
+            revealObserver.observe(el);
+        });
+    }
+
+    // Run after Vue has rendered
+    setTimeout(observeRevealCards, 200);
+
+    // Re-run whenever view changes (Vue re-renders cards)
+    const appEl = document.getElementById('app');
+    if (appEl) {
+        const domObserver = new MutationObserver(() => {
+            observeRevealCards();
+        });
+        domObserver.observe(appEl, { childList: true, subtree: true });
+    }
+
+    // ── Progress bar entrance animation ──────────────────────────────────────
+
+    const progObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                entry.target.classList.add('prog-animated');
+                progObserver.unobserve(entry.target);
+            }
+        });
+    }, { threshold: 0.5 });
+
+    function observeProgBars() {
+        document.querySelectorAll('.series-prog-bar:not(.prog-animated)').forEach(el => {
+            progObserver.observe(el);
+        });
+    }
+    setTimeout(observeProgBars, 300);
+
+    // ── Animated number counters ──────────────────────────────────────────────
+
+    function animateCounter(el, target) {
+        const duration = 800;
+        const start    = performance.now();
+        const from     = 0;
+        function step(now) {
+            const progress = Math.min((now - start) / duration, 1);
+            // ease-out cubic
+            const eased = 1 - Math.pow(1 - progress, 3);
+            el.textContent = Math.round(from + (target - from) * eased);
+            if (progress < 1) requestAnimationFrame(step);
+        }
+        requestAnimationFrame(step);
+    }
+
+    const counterObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                const target = parseInt(entry.target.textContent, 10);
+                if (!isNaN(target) && target > 0) {
+                    animateCounter(entry.target, target);
+                }
+                counterObserver.unobserve(entry.target);
+            }
+        });
+    }, { threshold: 1.0 });
+
+    function observeCounters() {
+        document.querySelectorAll('.lib-stat-value').forEach(el => {
+            counterObserver.observe(el);
+        });
+    }
+    setTimeout(observeCounters, 250);
+
+    // ── Section title image fill ──────────────────────────────────────────────
+    // Finds cover images in the hero row and applies them to nearby gradient texts
+
+    function applyCoverTextFill() {
+        const heroCards = document.querySelectorAll('.lib-hero-card');
+        heroCards.forEach(card => {
+            const img   = card.querySelector('img');
+            const title = card.querySelector('.lib-hero-card-title');
+            if (img && img.src && title) {
+                title.style.backgroundImage = `url('${img.src}')`;
+                title.style.backgroundSize  = 'cover';
+                title.style.backgroundPosition = 'center';
+                title.style.webkitBackgroundClip = 'text';
+                title.style.webkitTextFillColor  = 'transparent';
+                title.style.backgroundClip = 'text';
+                title.style.textShadow = 'none';
+                img.addEventListener('load', () => {
+                    title.style.backgroundImage = `url('${img.src}')`;
+                }, { once: true });
+            }
+        });
+    }
+    setTimeout(applyCoverTextFill, 400);
+
+    // Re-apply on DOM changes (when library loads)
+    if (appEl) {
+        new MutationObserver(applyCoverTextFill)
+            .observe(appEl, { childList: true, subtree: true });
+    }
+
+})();
