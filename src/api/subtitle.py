@@ -6,6 +6,7 @@ import tempfile
 import subprocess
 import threading
 import uuid
+import zipfile
 import urllib.request as _ur
 import urllib.parse as _up
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -105,10 +106,11 @@ def _ffprobe_tracks(path: str) -> list:
     return subs
 
 
-# ── External subtitle search (Jimaku / OpenSubtitles / Nyaa) ─────────────────
+# ── External subtitle search (Jimaku / OpenSubtitles / Nyaa / Subdl / Subdivx) ──
 # Requires env vars:
-#   JIMAKU_API_KEY       — free account at jimaku.cc (best anime source)
+#   JIMAKU_API_KEY        — free account at jimaku.cc (best anime source)
 #   OPENSUBTITLES_API_KEY — free account at opensubtitles.com
+#   SUBDL_API_KEY         — free account at subdl.com (Spanish/LatAm anime subs)
 
 def _ext_search_jimaku(al_id: str, titles: list, episode: int) -> list:
     """Search Jimaku CC by AniList ID (only reliable search method — title search returns full catalog).
@@ -259,6 +261,122 @@ def _ext_search_nyaa(titles: list, episode: int) -> list:
     return results
 
 
+def _ext_search_subdl(titles: list, episode: int, season: int = 1) -> list:
+    """Search Subdl.com for Spanish/LatAm subtitles. Requires SUBDL_API_KEY env var.
+    Free account at subdl.com — returns ZIP archives containing .srt/.ass files."""
+    key = os.environ.get('SUBDL_API_KEY', '')
+    if not key:
+        print('[subtitle] Subdl: sin SUBDL_API_KEY — saltando')
+        return []
+    results = []
+    seen_ids: set = set()
+    for title in titles[:2]:
+        if not title:
+            continue
+        try:
+            # Try Spanish (Latin America) first, then general Spanish
+            for lang in ('SL', 'ES'):
+                params = _up.urlencode({
+                    'api_key':       key,
+                    'film_name':     title,
+                    'type':          'tv',
+                    'season_number': season,
+                    'episode_number': episode,
+                    'languages':     lang,
+                })
+                req = _ur.Request(
+                    f'https://api.subdl.com/api/v1/subtitles?{params}',
+                    headers={'User-Agent': 'MangaUpscaler/1.0'},
+                )
+                with _ur.urlopen(req, timeout=10) as r:
+                    data = json.loads(r.read())
+                if not data.get('status'):
+                    continue
+                for s in (data.get('subtitles') or [])[:6]:
+                    dl_url = s.get('url') or s.get('download_link', '')
+                    if not dl_url:
+                        continue
+                    uid = dl_url  # use URL as dedup key
+                    if uid in seen_ids:
+                        continue
+                    seen_ids.add(uid)
+                    results.append({
+                        'url':      dl_url,
+                        'language': 'es',
+                        'title':    s.get('release_name') or s.get('name', title),
+                        'source':   'subdl',
+                        'direct':   True,
+                    })
+        except Exception as e:
+            print(f'[subtitle] Subdl search error (title="{title}"): {e}')
+    print(f'[subtitle] Subdl: {len(results)} encontrados')
+    return results
+
+
+def _ext_search_subdivx(titles: list, episode: int) -> list:
+    """Search Subdivx.com for Spanish LatAm subtitles. No API key required.
+    Best source for Latin American fansub groups."""
+    results = []
+    seen_ids: set = set()
+    ep_variants = {str(episode), f'{episode:02d}', f'{episode:03d}'}
+    for title in titles[:2]:
+        if not title:
+            continue
+        try:
+            params = _up.urlencode({'q': title, 't': '1', 'pg': '1'})
+            req = _ur.Request(
+                f'https://www.subdivx.com/api/search?{params}',
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Accept': 'application/json',
+                },
+            )
+            with _ur.urlopen(req, timeout=12) as r:
+                data = json.loads(r.read())
+            for item in (data.get('datos') or [])[:8]:
+                item_id = item.get('id')
+                if not item_id or item_id in seen_ids:
+                    continue
+                # Filter to entries that mention the episode number
+                text = f"{item.get('titulo','')} {item.get('descripcion','')}".lower()
+                if not any(ev in text for ev in ep_variants):
+                    # Broad match: still keep if title matches well enough
+                    title_words = [w for w in re.split(r'\W+', title.lower()) if len(w) >= 4]
+                    if not title_words or sum(1 for w in title_words if w in text) < max(1, len(title_words) // 2):
+                        continue
+                seen_ids.add(item_id)
+                results.append({
+                    'subdivx_id': item_id,
+                    'language':   'es',
+                    'title':      item.get('titulo', title),
+                    'source':     'subdivx',
+                    'direct':     True,
+                })
+        except Exception as e:
+            print(f'[subtitle] Subdivx search error (title="{title}"): {e}')
+    print(f'[subtitle] Subdivx: {len(results)} encontrados')
+    return results
+
+
+def _extract_sub_from_zip(zip_path: str, tmpdir: str) -> str:
+    """Extract first .srt/.ass/.ssa/.vtt from a zip archive. Returns path to extracted file."""
+    try:
+        with zipfile.ZipFile(zip_path, 'r') as zf:
+            # Prefer .ass over .srt for better styling
+            names = zf.namelist()
+            for ext_pref in ('.ass', '.ssa', '.srt', '.vtt'):
+                for name in names:
+                    if name.lower().endswith(ext_pref) and not name.startswith('__MACOSX'):
+                        out = os.path.join(tmpdir, f'extracted{ext_pref}')
+                        with zf.open(name) as src, open(out, 'wb') as dst:
+                            dst.write(src.read())
+                        return out
+    except zipfile.BadZipFile:
+        pass
+    raise RuntimeError('No se encontró archivo de subtítulo (.srt/.ass) en el paquete descargado')
+
+
 def _opensubtitles_login() -> str:
     """Login to OpenSubtitles and return JWT token. Caches for 23h.
     Requires OPENSUBTITLES_USERNAME + OPENSUBTITLES_PASSWORD + OPENSUBTITLES_API_KEY."""
@@ -345,6 +463,54 @@ def _ext_download_sub(sub_info: dict, tmpdir: str) -> str:
         if not url:
             remaining = dl_data.get('remaining', '?')
             raise RuntimeError(f'OpenSubtitles no devolvió URL (descargas restantes: {remaining})')
+    elif source == 'subdl':
+        # Subdl distributes subtitles as ZIP archives
+        dl_url = sub_info.get('url', '')
+        if not dl_url:
+            raise RuntimeError('Subdl: sin URL de descarga')
+        if not dl_url.startswith('http'):
+            dl_url = f'https://dl.subdl.com{dl_url}'
+        req = _ur.Request(dl_url, headers={'User-Agent': 'MangaUpscaler/1.0'})
+        zip_path = os.path.join(tmpdir, 'subdl.zip')
+        with _ur.urlopen(req, timeout=30) as r:
+            with open(zip_path, 'wb') as f:
+                f.write(r.read())
+        return _extract_sub_from_zip(zip_path, tmpdir)
+
+    elif source == 'subdivx':
+        # Subdivx: first fetch the file list for this entry, then download the archive
+        subdivx_id = sub_info.get('subdivx_id')
+        if not subdivx_id:
+            raise RuntimeError('Subdivx: sin ID de entrada')
+        # Get downloadable files for this entry
+        files_req = _ur.Request(
+            f'https://www.subdivx.com/api/files/{subdivx_id}',
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Accept': 'application/json',
+            },
+        )
+        with _ur.urlopen(files_req, timeout=12) as r:
+            files_data = json.loads(r.read())
+        file_url = None
+        for f in (files_data if isinstance(files_data, list) else []):
+            u = f.get('url', '')
+            if u:
+                file_url = u
+                break
+        if not file_url:
+            raise RuntimeError('Subdivx: no se encontraron archivos descargables para esta entrada')
+        dl_req = _ur.Request(
+            file_url,
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Referer': 'https://www.subdivx.com/'},
+        )
+        archive_path = os.path.join(tmpdir, 'subdivx_dl.zip')
+        with _ur.urlopen(dl_req, timeout=30) as r:
+            with open(archive_path, 'wb') as f:
+                f.write(r.read())
+        return _extract_sub_from_zip(archive_path, tmpdir)
+
     elif source == 'nyaa':
         raise RuntimeError('Nyaa devuelve torrents, no archivos directos. Descarga el torrent manualmente y extrae el .srt/.ass.')
     else:
@@ -381,17 +547,26 @@ def _ext_find_subs(al_id: str, titles: list, episode: int) -> list:
 
 
 def _ext_find_spanish_subs(titles: list, episode: int) -> list:
-    """Search OpenSubtitles specifically for pre-made Spanish subtitles (direct inject, no LLM)."""
+    """Search all sources for pre-made Spanish subtitles (direct inject, no LLM).
+    Order: OpenSubtitles ES → Subdl LatAm → Subdivx (best LatAm fansub coverage)."""
     seen_t: set = set()
     clean_titles = []
     for t in titles:
         if t and t.lower() not in seen_t:
             seen_t.add(t.lower())
             clean_titles.append(t)
-    results = _ext_search_opensubtitles(clean_titles, episode, languages='es')
-    # Tag results so frontend can distinguish them from English subs for translation
+    print(f'[subtitle] Buscando subs en español: titles={clean_titles}, ep={episode}')
+    results = []
+    results.extend(_ext_search_opensubtitles(clean_titles, episode, languages='es'))
+    results.extend(_ext_search_subdl(clean_titles, episode))
+    results.extend(_ext_search_subdivx(clean_titles, episode))
+    # Mark all as direct Spanish (no translation needed)
     for r in results:
         r['direct'] = True
+    print(f'[subtitle] Subs en español encontrados: {len(results)} '
+          f'(OST={sum(1 for r in results if r["source"]=="opensubtitles")}, '
+          f'Subdl={sum(1 for r in results if r["source"]=="subdl")}, '
+          f'Subdivx={sum(1 for r in results if r["source"]=="subdivx")})')
     return results
 
 
