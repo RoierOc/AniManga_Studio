@@ -6612,3 +6612,96 @@ input:focus, select:focus, textarea:focus {
     background: rgba(107,143,189,.18) !important;
     color: #9db8d8 !important;
 }
+
+/* ── v=20260526-18  Genre tags + cover placeholders + --da-rgb ───────────── */
+
+/* Genre tags in manga modal — orange → blue */
+.md-meta-tag {
+    background: rgba(107,143,189,.12) !important;
+    border-color: rgba(107,143,189,.25) !important;
+    color: #9db8d8 !important;
+}
+
+/* Cover placeholders — warm brown → cool dark blue */
+.md-cover-placeholder,
+.md-cover-placeholder-lg {
+    background: linear-gradient(145deg, #111827, #1a2133) !important;
+    color: rgba(107,143,189,.5) !important;
+}
+
+/* Anime cover placeholder too */
+.anime-cover-placeholder, .allib-card-placeholder {
+    background: linear-gradient(145deg, #111827, #1a2133) !important;
+    color: rgba(107,143,189,.4) !important;
+}
+
+/* --da-rgb cascade fix: play button on allib cards */
+.allib-card-play-btn {
+    background: rgba(107,143,189,.85) !important;
+}
+.allib-card-play-btn:hover {
+    background: rgba(107,143,189,1) !important;
+}
+
+/* Sidebar active text/bg — reinforce blue over da-rgb orange */
+.sb-item.active {
+    background: linear-gradient(90deg, rgba(107,143,189,.18), rgba(107,143,189,.04)) !important;
+    color: #c8d8ef !important;
+}
+
+/* md-meta-tags container border — warm to cool */
+.md-meta-tags {
+    border-color: rgba(107,143,189,.15) !important;
+}
+
+/* Any element using rgba(232,146,74,...) directly that we haven't caught yet */
+.md-modal-header { border-bottom-color: rgba(107,143,189,.18) !important; }
+
+/* ── v=20260526-19  Final orange sweep ───────────────────────────────────── */
+
+/* Sidebar active task badge */
+.sb-task-badge {
+    background: rgba(107,143,189,.12) !important;
+    border-color: rgba(107,143,189,.25) !important;
+    color: #9db8d8 !important;
+}
+
+/* Search input focus ring */
+.md-search-hero-input:focus {
+    box-shadow: 0 0 0 3px rgba(107,143,189,.2) !important;
+}
+
+/* Card hover drop-shadow — blue ambient instead of orange */
+.md-card:hover {
+    filter: drop-shadow(0 8px 20px rgba(0,0,0,.6))
+            drop-shadow(0 0 2px rgba(107,143,189,.25)) !important;
+}
+
+/* Series progress bar — upscale fill (reinforce previous override) */
+.series-prog-up {
+    background: linear-gradient(90deg, #9b7fb8, #a78bfa) !important;
+}
+
+/* "N nuevo" badge on manga covers → blue */
+.md-new-badge {
+    background: #4a7fb0 !important;
+}
+
+/* Library filter update badge → blue */
+.lib-filter-badge {
+    background: var(--accent) !important;
+}
+.lib-filter-btn--updates.active .lib-filter-badge {
+    background: rgba(255,255,255,.9) !important;
+    color: #1e3a5f !important;
+}
+
+/* Updates panel — new label and chapter chips → blue */
+.updates-new-label {
+    color: #7bb3d8 !important;
+}
+.updates-ch-chip {
+    background: rgba(107,143,189,.15) !important;
+    color: #9db8d8 !important;
+    border-color: rgba(107,143,189,.3) !important;
+}
