@@ -4674,4 +4674,38 @@ app.mount('#app');
     }
     setTimeout(observeCounters, 250);
 
+    // ── Photography Forward: per-card ambient neon glow from cover color ─────
+    function extractDominantRGB(img) {
+        try {
+            const c = document.createElement('canvas');
+            c.width = 10; c.height = 10;
+            const ctx = c.getContext('2d', { willReadFrequently: true });
+            ctx.drawImage(img,
+                img.naturalWidth * .1, img.naturalHeight * .15,
+                img.naturalWidth * .8, img.naturalHeight * .7,
+                0, 0, 10, 10
+            );
+            const d = ctx.getImageData(0, 0, 10, 10).data;
+            let r = 0, g = 0, b = 0;
+            const n = d.length / 4;
+            for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i+1]; b += d[i+2]; }
+            r = Math.min(255, (r / n * 1.15) | 0);
+            g = Math.min(255, (g / n * 1.15) | 0);
+            b = Math.min(255, (b / n * 1.15) | 0);
+            return `${r},${g},${b}`;
+        } catch(e) { return '107,143,189'; }
+    }
+
+    document.body.addEventListener('load', function(e) {
+        const img = e.target;
+        if (img.tagName !== 'IMG') return;
+        const rgb = extractDominantRGB(img);
+        const mdCard = img.closest('.md-card');
+        if (mdCard) { mdCard.style.setProperty('--card-glow-rgb', rgb); return; }
+        const alibCard = img.closest('.allib-card');
+        if (alibCard) { alibCard.style.setProperty('--card-glow-rgb', rgb); return; }
+        const modal = img.closest('.md-modal');
+        if (modal) { modal.style.setProperty('--modal-glow-rgb', rgb); }
+    }, true);
+
 })();

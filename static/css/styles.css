@@ -6705,3 +6705,214 @@ input:focus, select:focus, textarea:focus {
     color: #9db8d8 !important;
     border-color: rgba(107,143,189,.3) !important;
 }
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   v=20260526-20  Photography Forward + Neon Portrait UI
+   Full-bleed portrait cards · Per-card ambient neon glow · Cinematic dark
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 0. Cinematic dark base ────────────────────────────────────────────── */
+body { background: #06080d !important; }
+#app { background: #06080d !important; }
+.sidebar {
+    background: linear-gradient(180deg, #030406 0%, #05070a 100%) !important;
+    border-right: 1px solid rgba(107,143,189,.07) !important;
+}
+
+/* ── 1. Manga library cards — full-bleed portrait ──────────────────────── */
+.md-card {
+    position: relative !important;
+    overflow: hidden !important;
+    aspect-ratio: 2/3 !important;
+    border-radius: 10px !important;
+    border: 1px solid rgba(255,255,255,.05) !important;
+    background: #0a0c14 !important;
+    transition: transform .28s cubic-bezier(.34,1.56,.64,1),
+                box-shadow .3s ease,
+                border-color .3s ease !important;
+}
+
+/* Cover fills the entire card */
+.md-card .md-cover-wrapper {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    aspect-ratio: unset !important;
+    border-radius: 0 !important;
+    z-index: 1 !important;
+}
+
+/* Cinematic bottom-up vignette */
+.md-card::before {
+    content: '' !important;
+    position: absolute !important;
+    inset: 0 !important;
+    background: linear-gradient(
+        to top,
+        rgba(4,5,10,.97) 0%,
+        rgba(4,5,10,.72) 24%,
+        rgba(4,5,10,.18) 50%,
+        transparent 68%
+    ) !important;
+    z-index: 2 !important;
+    pointer-events: none !important;
+    border-radius: 10px !important;
+}
+
+/* Title overlaid bottom */
+.md-card .md-card-title {
+    position: absolute !important;
+    bottom: 24px !important;
+    left: 0 !important;
+    right: 0 !important;
+    z-index: 3 !important;
+    padding: 0 10px !important;
+    margin: 0 !important;
+    min-height: auto !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    line-height: 1.4 !important;
+    color: rgba(255,255,255,.95) !important;
+    text-shadow: 0 1px 8px rgba(0,0,0,.9) !important;
+    display: -webkit-box !important;
+    -webkit-line-clamp: 2 !important;
+    -webkit-box-orient: vertical !important;
+    overflow: hidden !important;
+}
+
+/* Stats row overlaid at very bottom */
+.md-card .md-card-sub {
+    position: absolute !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    z-index: 3 !important;
+    padding: 0 10px 5px !important;
+    margin: 0 !important;
+    background: none !important;
+    border: none !important;
+}
+
+.md-card .series-prog-stats { color: rgba(255,255,255,.55) !important; }
+.md-card .sps--up           { color: #b8a8e8 !important; text-shadow: 0 0 8px rgba(167,139,250,.4) !important; }
+
+/* Hover: lift + per-card neon ambient glow */
+.md-card:hover {
+    transform: translateY(-7px) scale(1.025) !important;
+    border-color: rgba(var(--card-glow-rgb, 107,143,189), .6) !important;
+    box-shadow:
+        0 28px 60px rgba(0,0,0,.92),
+        0 0 0 1px rgba(var(--card-glow-rgb, 107,143,189), .2),
+        0 0 45px -5px rgba(var(--card-glow-rgb, 107,143,189), .55) !important;
+    filter: none !important;
+}
+
+/* Subtle image zoom on hover */
+.md-card .md-cover-wrapper img { transition: transform .55s ease !important; }
+.md-card:hover .md-cover-wrapper img { transform: scale(1.06) !important; }
+
+/* Badges stay on top */
+.md-card .md-badge,
+.md-card .md-new-badge,
+.md-card .md-task-overlay,
+.md-card .cover-source-badge { z-index: 4 !important; }
+
+/* Series progress bar inside overlay — slim */
+.md-card .series-prog-bar { background: rgba(255,255,255,.1) !important; }
+
+/* ── 2. Anime library cards — same treatment ───────────────────────────── */
+.allib-card {
+    position: relative !important;
+    overflow: hidden !important;
+    aspect-ratio: 2/3 !important;
+    border-radius: 10px !important;
+    border: 1px solid rgba(255,255,255,.05) !important;
+    background: #0a0c14 !important;
+    transition: transform .28s cubic-bezier(.34,1.56,.64,1),
+                box-shadow .3s ease,
+                border-color .3s ease !important;
+}
+
+.allib-card-cover {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    aspect-ratio: unset !important;
+    border-radius: 0 !important;
+    z-index: 1 !important;
+    background: linear-gradient(145deg, #0c1020, #131826) !important;
+    animation: none !important;
+}
+
+.allib-card::before {
+    content: '' !important;
+    position: absolute !important;
+    inset: 0 !important;
+    background: linear-gradient(
+        to top,
+        rgba(4,5,10,.97) 0%,
+        rgba(4,5,10,.68) 24%,
+        rgba(4,5,10,.15) 50%,
+        transparent 68%
+    ) !important;
+    z-index: 2 !important;
+    pointer-events: none !important;
+    border-radius: 10px !important;
+}
+
+.allib-card-info {
+    position: absolute !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    z-index: 3 !important;
+    padding: 4px 9px 5px !important;
+    background: none !important;
+}
+
+.allib-card-title {
+    font-size: 10.5px !important;
+    font-weight: 700 !important;
+    line-height: 1.4 !important;
+    color: rgba(255,255,255,.95) !important;
+    text-shadow: 0 1px 6px rgba(0,0,0,.9) !important;
+    display: -webkit-box !important;
+    -webkit-line-clamp: 2 !important;
+    -webkit-box-orient: vertical !important;
+    overflow: hidden !important;
+}
+
+.allib-card-bottom { color: rgba(255,255,255,.5) !important; }
+
+.allib-card:hover {
+    transform: translateY(-7px) scale(1.025) !important;
+    filter: none !important;
+    border-color: rgba(var(--card-glow-rgb, 107,143,189), .6) !important;
+    box-shadow:
+        0 28px 60px rgba(0,0,0,.92),
+        0 0 0 1px rgba(var(--card-glow-rgb, 107,143,189), .2),
+        0 0 45px -5px rgba(var(--card-glow-rgb, 107,143,189), .55) !important;
+}
+
+.allib-card-cover img { transition: transform .55s ease !important; }
+.allib-card:hover .allib-card-cover img { transform: scale(1.06) !important; }
+
+.allib-card-del,
+.allib-card-hover-actions { z-index: 4 !important; }
+
+.allib-card-status-strip {
+    border-radius: 0 !important;
+    z-index: 5 !important;
+}
+
+/* ── 3. Modal — ambient glow from cover color ──────────────────────────── */
+.md-modal {
+    border: 1px solid rgba(var(--modal-glow-rgb, 107,143,189), .15) !important;
+    box-shadow:
+        0 32px 80px rgba(0,0,0,.92),
+        0 0 60px -10px rgba(var(--modal-glow-rgb, 107,143,189), .22),
+        inset 0 1px 0 rgba(255,255,255,.04) !important;
+}
