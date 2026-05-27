@@ -459,7 +459,8 @@ def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> t
     and resume. This works around the WSL2 interop shim exiting early before Windows MPV closes."""
 
     def _wl_args(wl_win_path):
-        args = [f'--watch-later-dir={wl_win_path}', '--save-position-on-quit']
+        args = [f'--watch-later-dir={wl_win_path}', '--save-position-on-quit',
+                '--ontop']  # always-on-top so MPV appears above browser/other windows
         if start_pos > 30:
             args.append(f'--start={start_pos:.1f}')
         return args
@@ -548,7 +549,7 @@ def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> t
             return (False, None, wl_dir)
 
 
-_WATCHED_THRESHOLD = 0.50
+_WATCHED_THRESHOLD = 0.85  # must watch ≥85% before episode is auto-marked watched
 
 
 def _read_wl_position(wl_dir: str) -> float:
@@ -586,8 +587,15 @@ def _wait_for_mpv_close(wl_dir: str, timeout: float = 14400) -> float:
                     stderr=subprocess.DEVNULL, timeout=5,
                 ).decode()
                 if 'mpv.exe' not in out.lower():
+                    # MPV process gone — do one final check with delay in case the
+                    # watch-later file is being flushed to disk at this exact moment
+                    time.sleep(1.0)
+                    final_pos = _read_wl_position(wl_dir)
+                    if final_pos > 0:
+                        print(f'[mpv] mpv.exe gone but position file appeared: {final_pos:.0f}s', flush=True)
+                        return final_pos
                     print(f'[mpv] mpv.exe gone from tasklist → EOS', flush=True)
-                    return 0.0  # MPV gone, no position file → EOS or quick close
+                    return 0.0  # MPV gone, no position file → EOS or clean finish
             except Exception:
                 pass
         time.sleep(0.5)
@@ -630,6 +638,10 @@ def _track_mpv_session(proc, wl_dir: str, anime_id: str, ep_str: str, duration: 
     if position > 0 and duration > 0:
         watched  = (position / duration) >= _WATCHED_THRESHOLD
         save_pos = 0 if watched else int(position)
+    elif position > 0:
+        # duration unknown (ffprobe failed) — save position unconditionally for resume
+        watched  = False
+        save_pos = int(position)
     else:
         watched  = True   # EOS = finished
         save_pos = 0
