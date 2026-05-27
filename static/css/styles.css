@@ -6488,3 +6488,21 @@ kbd {
     -webkit-text-fill-color: transparent;
     background-clip: text;
 }
+
+/* ── v=20260526-16  Final orange replacements ────────────────────────────── */
+
+/* Library card "4K XXXX" stat — was orange, now purple */
+.sps--up { color: #c4a8e8 !important; }
+
+/* series progress bar — upscaled fill to purple */
+.series-prog-up { background: linear-gradient(90deg, var(--accent-vio), #a78bfa) !important; }
+
+/* Any remaining --accent-orn usages */
+[style*="accent-orn"], .accent-orn { color: var(--accent-vio) !important; }
+
+/* Manga card sub-info border line — was brownish, now subtle blue */
+.md-card-sub {
+    border-top: 1px solid rgba(107,143,189,.12) !important;
+    padding-top: 6px !important;
+    margin-top: 4px !important;
+}
