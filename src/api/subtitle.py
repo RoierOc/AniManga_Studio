@@ -182,17 +182,27 @@ def _ext_search_opensubtitles(titles: list, episode: int, languages: str = '') -
         matched = sum(1 for w in title_words if w in combined)
         return matched >= min(2, len(title_words))
 
+    # Bearer token required for search results — login once and reuse cached token
+    token = _opensubtitles_login()
+    search_headers = {
+        'Api-Key': key,
+        'User-Agent': 'MangaUpscaler v1.0',
+        'Content-Type': 'application/json',
+    }
+    if token:
+        search_headers['Authorization'] = f'Bearer {token}'
+
     for title in titles:
         if not title:
             continue
         try:
-            q: dict = {'query': title, 'type': 'episode', 'episode_number': episode}
+            q: dict = {'query': title, 'type': 'episode', 'season_number': 1, 'episode_number': episode}
             if languages:
                 q['languages'] = languages
             params = _up.urlencode(q)
             req = _ur.Request(
                 f'https://api.opensubtitles.com/api/v1/subtitles?{params}',
-                headers={'Api-Key': key, 'User-Agent': 'MangaUpscaler v1.0', 'Content-Type': 'application/json'},
+                headers=search_headers,
             )
             with _ur.urlopen(req, timeout=10) as r:
                 data = json.loads(r.read())
