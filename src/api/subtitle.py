@@ -152,9 +152,10 @@ def _ext_search_jimaku(al_id: str, titles: list, episode: int) -> list:
     return results
 
 
-def _ext_search_opensubtitles(titles: list, episode: int) -> list:
+def _ext_search_opensubtitles(titles: list, episode: int, languages: str = '') -> list:
     """Search OpenSubtitles v3. Tries each title variant and filters by title similarity.
-    Requires OPENSUBTITLES_API_KEY env var (free account at opensubtitles.com)."""
+    Requires OPENSUBTITLES_API_KEY env var (free account at opensubtitles.com).
+    Pass languages='es' to search for Spanish subtitles specifically."""
     key = os.environ.get('OPENSUBTITLES_API_KEY', '')
     if not key:
         print('[subtitle] OpenSubtitles: sin OPENSUBTITLES_API_KEY — saltando')
@@ -183,7 +184,10 @@ def _ext_search_opensubtitles(titles: list, episode: int) -> list:
         if not title:
             continue
         try:
-            params = _up.urlencode({'query': title, 'type': 'episode', 'episode_number': episode})
+            q: dict = {'query': title, 'type': 'episode', 'episode_number': episode}
+            if languages:
+                q['languages'] = languages
+            params = _up.urlencode(q)
             req = _ur.Request(
                 f'https://api.opensubtitles.com/api/v1/subtitles?{params}',
                 headers={'Api-Key': key, 'User-Agent': 'MangaUpscaler v1.0', 'Content-Type': 'application/json'},
@@ -211,7 +215,8 @@ def _ext_search_opensubtitles(titles: list, episode: int) -> list:
                 })
         except Exception as e:
             print(f'[subtitle] OpenSubtitles search error (title="{title}"): {e}')
-    print(f'[subtitle] OpenSubtitles: {len(results)} encontrados')
+    lang_label = f' [{languages}]' if languages else ''
+    print(f'[subtitle] OpenSubtitles{lang_label}: {len(results)} encontrados')
     return results
 
 
@@ -360,7 +365,6 @@ def _ext_download_sub(sub_info: dict, tmpdir: str) -> str:
 
 def _ext_find_subs(al_id: str, titles: list, episode: int) -> list:
     """Try all external subtitle sources. `titles` = [english_title, romaji_title, ...]."""
-    # Deduplicate and filter empty titles
     seen_t: set = set()
     clean_titles = []
     for t in titles:
@@ -373,6 +377,21 @@ def _ext_find_subs(al_id: str, titles: list, episode: int) -> list:
     results.extend(_ext_search_opensubtitles(clean_titles, episode))
     results.extend(_ext_search_nyaa(clean_titles, episode))
     print(f'[subtitle] Total subs externos encontrados: {len(results)}')
+    return results
+
+
+def _ext_find_spanish_subs(titles: list, episode: int) -> list:
+    """Search OpenSubtitles specifically for pre-made Spanish subtitles (direct inject, no LLM)."""
+    seen_t: set = set()
+    clean_titles = []
+    for t in titles:
+        if t and t.lower() not in seen_t:
+            seen_t.add(t.lower())
+            clean_titles.append(t)
+    results = _ext_search_opensubtitles(clean_titles, episode, languages='es')
+    # Tag results so frontend can distinguish them from English subs for translation
+    for r in results:
+        r['direct'] = True
     return results
 
 
@@ -423,14 +442,22 @@ def _inject_sub(mkv_path: str, sub_path: str, n_existing_subs: int) -> str:
 
     keep_audio_ids = [str(t['id']) for t in tracks if t.get('type') == 'audio']
     keep_video_ids = [str(t['id']) for t in tracks if t.get('type') == 'video']
+    # Keep existing subtitle tracks except any prior Spanish track (we replace it)
+    keep_sub_ids   = [str(t['id']) for t in tracks
+                      if t.get('type') == 'subtitles'
+                      and t.get('properties', {}).get('language', '') not in ('spa', 'es')]
 
     cmd = ['mkvmerge', '-o', tmp_out]
     if keep_video_ids:
         cmd += ['--video-tracks', ','.join(keep_video_ids)]
     if keep_audio_ids:
         cmd += ['--audio-tracks', ','.join(keep_audio_ids)]
-    cmd += ['--no-subtitles', mkv_path]
-    # New Spanish subtitle
+    if keep_sub_ids:
+        cmd += ['--subtitle-tracks', ','.join(keep_sub_ids)]
+    else:
+        cmd += ['--no-subtitles']
+    cmd += [mkv_path]
+    # New Spanish subtitle (appended after existing tracks)
     cmd += [
         '--language', '0:spa',
         '--track-name', '0:Español',
@@ -446,13 +473,6 @@ def _inject_sub(mkv_path: str, sub_path: str, n_existing_subs: int) -> str:
         raise RuntimeError(f'mkvmerge inject failed: {result.stderr[-500:]}')
 
     os.replace(tmp_out, mkv_path)
-
-    # Spanish is now the only subtitle track — mark it default
-    subprocess.run(
-        ['mkvpropedit', mkv_path, '--edit', 'track:s1', '--set', 'flag-default=1'],
-        capture_output=True, env={**os.environ, 'LC_ALL': 'C'},
-    )
-
     return mkv_path
 
 
@@ -825,12 +845,46 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                 blocks = _parse_srt(content)
                 texts = [b['text'] for b in blocks]
 
-            total = len(texts)
-            if total == 0:
+            texts_orig = texts
+            total_orig = len(texts_orig)
+            if total_orig == 0:
                 raise RuntimeError('El archivo de subtítulos no tiene líneas de diálogo')
 
-            # position → translated string  (filled incrementally by either engine)
-            translated_map: dict[int, str] = {}
+            # ── Dedup + passthrough pre-filter ────────────────────────────────
+            # Fansub ASS files (e.g. EMBER) embed karaoke animations: the same lyric line
+            # repeats hundreds of times with different \clip() / \c&H...& tags per frame.
+            # Dedup key = VISIBLE TEXT (all {…} tags stripped) so those frames collapse to
+            # one translation. Duplicates are rebuilt with their original leading tags +
+            # the translated visible text, preserving each frame's animation tags.
+            _TAG_RE_D = re.compile(r'\{[^}]*\}')
+            _SKIP_RE_D = re.compile(r'^[\s♪♫…\-_.,!?¡¿:;\'\"()【】「」『』\[\]°·•—–]+$')
+            _LEAD_TAG_RE = re.compile(r'^(\{[^}]*\})+')  # leading tag block(s)
+            _seen_vis: dict[str, int] = {}   # visible_text_key → dedup index
+            _dedup_texts: list[str] = []     # representative full text (first occurrence)
+            _dedup_to_orig: list[list[int]] = []
+
+            for _p, _t in enumerate(texts_orig):
+                _vis = _TAG_RE_D.sub('', _t).strip()
+                _vis_key = _vis.replace('\\N', ' ').strip()
+                if not _vis_key or _SKIP_RE_D.match(_vis_key):
+                    continue  # passthrough — rebuild fallback handles it
+                if _vis_key in _seen_vis:
+                    _dedup_to_orig[_seen_vis[_vis_key]].append(_p)
+                else:
+                    _idx = len(_dedup_texts)
+                    _seen_vis[_vis_key] = _idx
+                    _dedup_texts.append(_t)   # full text of first occurrence
+                    _dedup_to_orig.append([_p])
+
+            texts = _dedup_texts
+            total = len(texts)
+            _n_saved = total_orig - total
+            if _n_saved > 0:
+                print(f'[subtitle] Dedup: {total_orig} → {total} líneas únicas ({_n_saved} omitidas/duplicadas)')
+
+            # dedup_tm: keyed by dedup index (0..total-1)
+            # Expanded to original positions at the end before rebuild.
+            dedup_tm: dict[int, str] = {}
 
             # ── Phase 1: Gemini (parallel) — only when engine != 'ollama' ────────
             key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
@@ -849,8 +903,9 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
 
                 if client:
                     completed_g = [0]
+                    _prog_label = f'{total} únicas' if _n_saved > 0 else str(total)
                     upd('translating', 10,
-                        f'Traduciendo {total} líneas con Gemini…', engine='gemini')
+                        f'Traduciendo {_prog_label} líneas con Gemini…', engine='gemini')
                     pool = ThreadPoolExecutor(max_workers=min(_PARALLEL_WORKERS, n_g))
                     try:
                         futures = {
@@ -867,12 +922,12 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                             idx, i_start = futures[fut]
                             try:
                                 for j, t in enumerate(fut.result()):
-                                    translated_map[i_start + j] = t
+                                    dedup_tm[i_start + j] = t
                             except Exception as e:
                                 if _is_quota_error(e):
                                     quota_hit = True
                                     pool.shutdown(wait=False, cancel_futures=True)
-                                    pct = 10 + int(78 * len(translated_map) / total)
+                                    pct = 10 + int(78 * len(dedup_tm) / total)
                                     upd('translating', pct,
                                         '⚠ Gemini agotado — cambiando a Qwen local…',
                                         engine='gemini')
@@ -880,9 +935,9 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                                 raise
                             with done_count:
                                 completed_g[0] += 1
-                            pct = 10 + int(78 * len(translated_map) / total)
+                            pct = 10 + int(78 * len(dedup_tm) / total)
                             upd('translating', pct,
-                                f'Gemini: {len(translated_map)}/{total} líneas…',
+                                f'Gemini: {len(dedup_tm)}/{total} líneas…',
                                 engine='gemini')
                         if not quota_hit and not _cancelled:
                             pool.shutdown(wait=True)
@@ -896,7 +951,7 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                 return
 
             # ── Phase 2: Ollama for any position not yet translated ────────────
-            missing_positions = [i for i in range(total) if i not in translated_map]
+            missing_positions = [i for i in range(total) if i not in dedup_tm]
 
             if missing_positions:
                 ollama_used[0] = True
@@ -918,12 +973,12 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                 with _OLLAMA_TASK_LOCK:
                     _OLLAMA_TASK_COUNT += 1
 
-                upd('translating', 10 + int(78 * len(translated_map) / total),
+                upd('translating', 10 + int(78 * len(dedup_tm) / total),
                     f'Cargando {_OLLAMA_MODEL} en VRAM ({reason})…', engine='ollama')
                 _ollama_preload()
 
                 lang_label = _LANG_NAMES.get((src_lang or 'eng').lower(), src_lang or 'inglés')
-                upd('translating', 10 + int(78 * len(translated_map) / total),
+                upd('translating', 10 + int(78 * len(dedup_tm) / total),
                     f'Traduciendo {len(missing_positions)} líneas ({lang_label} → español)…',
                     engine='ollama')
 
@@ -945,7 +1000,7 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                         break
                     # GPU breathing room between batches so MPV can play without lag
                     if o_batch_idx > 0 and _OLLAMA_BATCH_PAUSE > 0:
-                        pct = 10 + int(78 * len(translated_map) / total)
+                        pct = 10 + int(78 * len(dedup_tm) / total)
                         upd('translating', min(pct, 88),
                             f'GPU en pausa ({_OLLAMA_BATCH_PAUSE:.0f}s)…', engine='ollama')
                         time.sleep(_OLLAMA_BATCH_PAUSE)
@@ -955,20 +1010,37 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                     o_texts = [texts[i] for i in o_batch_positions]
                     o_translated = _translate_batch_ollama(o_texts, src_lang)
                     for pos, t in zip(o_batch_positions, o_translated):
-                        translated_map[pos] = t
+                        dedup_tm[pos] = t
                     with done_count:
                         done_o[0] += 1
-                    pct = 10 + int(78 * len(translated_map) / total)
+                    pct = 10 + int(78 * len(dedup_tm) / total)
                     upd('translating', min(pct, 88),
-                        f'Qwen: {len(translated_map)}/{total} líneas…', engine='ollama')
+                        f'Qwen: {len(dedup_tm)}/{total} líneas…', engine='ollama')
 
             if _cancelled or _cancel_flags.pop(task_id, False):
                 _cancel_flags.pop(task_id, None)
                 task.update(status='cancelled', progress=0, message='Traducción cancelada')
                 return
 
+            # ── Expand dedup results back to original positions ───────────────
+            # Representative (first occurrence): use translation as-is.
+            # Duplicates (same visible text, different animation tags): keep this
+            # position's leading {…} tags and append the translated visible text.
+            translated_map: dict[int, str] = {}
+            for _d_idx, _trans in dedup_tm.items():
+                _trans_vis = _TAG_RE_D.sub('', _trans).strip()
+                for _i, _orig_pos in enumerate(_dedup_to_orig[_d_idx]):
+                    if _i == 0:
+                        translated_map[_orig_pos] = _trans
+                    else:
+                        _orig_t   = texts_orig[_orig_pos]
+                        _lead_m   = _LEAD_TAG_RE.match(_orig_t)
+                        _leading  = _lead_m.group(0) if _lead_m else ''
+                        translated_map[_orig_pos] = _leading + _trans_vis
+
             # ── Rebuild subtitle with translations ─────────────────────────────
-            translated = [translated_map.get(i, texts[i]) for i in range(total)]
+            # Passthrough positions (empty/symbol-only) fall back to original text
+            translated = [translated_map.get(i, texts_orig[i]) for i in range(total_orig)]
 
             upd('injecting', 90, 'Añadiendo track español al MKV…')
 
@@ -1008,9 +1080,23 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
 
 # ── Flask endpoints ───────────────────────────────────────────────────────────
 
+def _get_anime_titles(anime_id: str) -> list:
+    """Return [title, title_romaji] for a library entry, filtering empties."""
+    if not anime_id:
+        return []
+    try:
+        from api.anime import _lib_read
+        lib = _lib_read()
+        anime = lib.get(anime_id) or {}
+        return [t for t in [anime.get('title', ''), anime.get('title_romaji', '')] if t]
+    except Exception:
+        return []
+
+
 @subtitle_bp.route('/tracks')
 def subtitle_tracks():
-    """List subtitle tracks in an MKV. Falls back to external search when no text tracks found."""
+    """List subtitle tracks in an MKV. Always searches for Spanish subs (direct inject).
+    Falls back to English external sources when no text tracks found."""
     info_hash  = request.args.get('info_hash', '')
     episode    = int(request.args.get('episode', 1))
     anime_id   = request.args.get('anime_id', '')
@@ -1021,33 +1107,83 @@ def subtitle_tracks():
         return jsonify({'error': 'Archivo no encontrado', 'path': path}), 404
 
     tracks = _ffprobe_tracks(path)
+    titles = _get_anime_titles(anime_id)
     external_tracks = []
+    spanish_tracks  = []
     sources_missing_key = []
+
+    if not os.environ.get('OPENSUBTITLES_API_KEY'):
+        sources_missing_key.append('opensubtitles')
+    else:
+        # Always search for pre-made Spanish subs (no GPU needed)
+        spanish_tracks = _ext_find_spanish_subs(titles, episode)
+
     if not tracks:
-        titles = []
-        if anime_id:
-            try:
-                from api.anime import _lib_read
-                lib = _lib_read()
-                anime = lib.get(anime_id) or {}
-                titles.append(anime.get('title', ''))
-                titles.append(anime.get('title_romaji', ''))
-            except Exception:
-                pass
-        # Report which sources will be skipped due to missing keys
+        # No internal text tracks — also search English external sources for translation
         if not os.environ.get('JIMAKU_API_KEY'):
             sources_missing_key.append('jimaku')
-        if not os.environ.get('OPENSUBTITLES_API_KEY'):
-            sources_missing_key.append('opensubtitles')
         print(f'[subtitle] No text tracks in {os.path.basename(path)} — searching external sources')
         external_tracks = _ext_find_subs(anime_id, titles, episode)
         print(f'[subtitle] External search found {len(external_tracks)} subs')
+
     return jsonify({
         'path': path,
         'tracks': tracks,
         'external_tracks': external_tracks,
+        'spanish_tracks': spanish_tracks,
         'sources_missing_key': sources_missing_key,
     })
+
+
+def _sync_sub_to_reference(sub_path: str, mkv_path: str, tmpdir: str) -> str:
+    """Sync a subtitle file's timestamps against the video's audio using ffsubsync.
+    Returns path to the synced subtitle (may be the same file if sync fails/skipped)."""
+    try:
+        from ffsubsync.ffsubsync import make_parser, run as ffs_run
+        ext  = os.path.splitext(sub_path)[1].lower() or '.srt'
+        out  = os.path.join(tmpdir, f'synced{ext}')
+        args = make_parser().parse_args([mkv_path, '-i', sub_path, '-o', out])
+        result = ffs_run(args)
+        if result.get('exc') is None and os.path.exists(out):
+            offset = result.get('offset_seconds', 0)
+            print(f'[subtitle] ffsubsync: sincronizado (offset={offset:.2f}s) → {os.path.basename(out)}')
+            return out
+        print(f'[subtitle] ffsubsync: sin cambios necesarios')
+        return sub_path
+    except Exception as e:
+        print(f'[subtitle] ffsubsync error (usando sub original): {e}')
+        return sub_path
+
+
+@subtitle_bp.route('/inject_direct', methods=['POST'])
+def subtitle_inject_direct():
+    """Download a pre-made Spanish subtitle, sync its timing to the video, and inject it — no LLM."""
+    data         = request.get_json(silent=True) or {}
+    info_hash    = data.get('info_hash', '')
+    episode      = int(data.get('episode', 1))
+    anime_id     = data.get('anime_id', '')
+    local_path   = data.get('local_path', '')
+    external_sub = data.get('external_sub')
+    sync         = bool(data.get('sync', True))   # sync timing by default
+
+    if not external_sub:
+        return jsonify({'error': 'Se requiere external_sub'}), 400
+
+    path = _resolve_video_path(info_hash, episode, anime_id, local_path)
+    if not path or not os.path.exists(path):
+        return jsonify({'error': 'Archivo de video no encontrado'}), 404
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sub_file = _ext_download_sub(external_sub, tmpdir)
+            if sync:
+                sub_file = _sync_sub_to_reference(sub_file, path, tmpdir)
+            tracks = _ffprobe_tracks(path)
+            _inject_sub(path, sub_file, len(tracks))
+        return jsonify({'status': 'ok', 'file': os.path.basename(path)})
+    except Exception as e:
+        print(f'[subtitle] inject_direct error: {e}')
+        return jsonify({'error': str(e)}), 500
 
 
 @subtitle_bp.route('/translate', methods=['POST'])

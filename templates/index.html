@@ -9,7 +9,7 @@
   <meta name="theme-color" content="#6184d3">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260525-04">
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260526-05">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <script src="/static/js/vue.js"></script>
@@ -250,7 +250,7 @@
               </div>
             </div>
             </template>
-            <span v-if="item.source === 'mihon'" class="cover-source-badge cover-source-badge--mihon">MIHON</span>
+            <span v-if="item.source === 'mihon'" class="cover-source-badge cover-source-badge--mihon">{{ item.source_meta?.sourceName || 'MIHON' }}</span>
             <span v-else-if="item.source === 'mangadex'" class="cover-source-badge cover-source-badge--md">MD</span>
           </div>
           <div class="md-card-title">{{ item.title }}</div>
@@ -585,6 +585,10 @@
 
           <!-- Global search bar -->
           <div v-if="searchMode === 'global'" class="sources-search-bar">
+            <select v-model="globalLang" class="sources-lang-filter" title="Filtrar por idioma">
+              <option value="">Todos</option>
+              <option v-for="lang in sourceLangs" :key="lang" :value="lang">{{ lang.toUpperCase() }}</option>
+            </select>
             <input
               v-model="globalQuery"
               type="text"
@@ -639,7 +643,7 @@
           <template v-if="searchMode === 'global'">
             <div v-if="globalSearchLoading" class="md-loading">
               <div class="md-spinner"></div>
-              <p>Buscando en {{ sources.length }} fuentes...</p>
+              <p>{{ globalSearchDone }}/{{ globalSearchTotal || sources.length }} fuentes buscadas<span v-if="globalResults.length > 0"> · {{ globalResults.length }} con resultados</span></p>
             </div>
             <template v-else-if="globalResults.length > 0">
               <div v-for="group in globalResults" :key="group.source.id" class="sources-group">
@@ -1678,6 +1682,34 @@
 
         <!-- Library grid -->
         <div v-else>
+
+          <!-- ─── Continuar viendo ─────────────────────────────────── -->
+          <div v-if="continueWatching.length" class="cw-section">
+            <div class="cw-header">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+              <span class="cw-title">Continuar viendo</span>
+            </div>
+            <div class="cw-row">
+              <div v-for="item in continueWatching" :key="item.anime.id" class="cw-card"
+                   @click="playEpisode(item.anime, item.ep)">
+                <div class="cw-card-cover">
+                  <img v-if="item.anime.cover" :src="item.anime.cover" :alt="item.anime.title"
+                       @load="$event.target.classList.add('img-loaded')">
+                  <div v-else class="cw-card-placeholder">{{ (item.anime.title||'?')[0].toUpperCase() }}</div>
+                  <div class="cw-card-overlay">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                  </div>
+                  <div class="cw-card-ep-badge">Ep {{ item.ep.num }}</div>
+                  <div v-if="item.ep.resume_pos > 0 && item.ep.duration > 0" class="cw-card-progress-bar">
+                    <div class="cw-card-progress-fill"
+                         :style="{ width: Math.min(100, item.ep.resume_pos / item.ep.duration * 100) + '%' }"></div>
+                  </div>
+                </div>
+                <div class="cw-card-title" :title="item.anime.title">{{ item.anime.title }}</div>
+              </div>
+            </div>
+          </div>
+
           <!-- Sort / filter controls -->
           <!-- Search bar -->
           <div class="allib-search-wrap">
@@ -1972,6 +2004,29 @@
               <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
             </button>
           </h2>
+          <!-- Source badge — shown when opened from source search -->
+          <div v-if="currentSourceContext?.sourceName" class="modal-source-badge-row">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" opacity=".6"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/></svg>
+            <span class="modal-source-badge">{{ currentSourceContext.sourceName }}</span>
+            <span v-if="currentSourceContext.sourceLang" class="source-lang-badge">{{ currentSourceContext.sourceLang.toUpperCase() }}</span>
+          </div>
+          <!-- Editable folder name — only shown when freshly opened from source search (not from library) -->
+          <div v-if="sourceFolderName" class="source-folder-row">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor" opacity=".5"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+            <input
+              v-model="sourceFolderName"
+              class="source-folder-input"
+              @keyup.enter="applySourceFolder"
+              @blur="applySourceFolder"
+              title="Nombre de la carpeta donde se guardarán los capítulos"
+            />
+            <button
+              v-if="currentSourceContext?.sourceName && !sourceFolderName.includes('[' + currentSourceContext.sourceName + ']')"
+              class="source-folder-tag"
+              @click="sourceFolderName = sourceFolderName.trim() + ' [' + currentSourceContext.sourceName + ']'; applySourceFolder()"
+              :title="'Guardar como: ' + sourceFolderName.trim() + ' [' + currentSourceContext.sourceName + ']'"
+            >+{{ currentSourceContext.sourceName }}</button>
+          </div>
           <div class="md-modal-stats">
             <span v-if="stats.total > 0">{{ stats.total }} capítulos</span>
             <span v-if="stats.downloaded > 0">• {{ stats.downloaded }} descargados</span>
@@ -3036,21 +3091,50 @@
   <!-- SUBTITLE TRACK PICKER MODAL -->
   <div v-if="subTrackModal" class="sub-modal-backdrop" @click.self="subTrackModal = null">
     <div class="sub-modal">
-      <div class="sub-modal-title">Seleccionar pista de subtítulos</div>
+      <div class="sub-modal-title">Seleccionar subtítulo</div>
       <div class="sub-modal-file">{{ subTrackModal.ep.num > 0 ? 'Ep ' + subTrackModal.ep.num : 'BATCH' }}</div>
       <div class="sub-modal-tracks">
-        <!-- Internal MKV tracks -->
-        <button v-for="t in subTrackModal.tracks" :key="t.sub_index"
-                class="sub-modal-track-btn"
-                @click="startTranslate(subTrackModal.anime, subTrackModal.ep, t.sub_index)">
-          <span class="sub-track-lang">{{ t.language.toUpperCase() }}</span>
-          <span class="sub-track-codec">{{ t.codec.toUpperCase() }}</span>
-          <span v-if="t.title" class="sub-track-title">{{ t.title }}</span>
-        </button>
-        <!-- External subtitle sources -->
+
+        <!-- Spanish subs — direct inject, no GPU -->
+        <template v-if="subTrackModal.spanishTracks?.length">
+          <div class="sub-track-separator sub-track-separator--es">
+            <span>Español</span>
+            <span class="sub-track-sep-badge">Sin GPU · Directo</span>
+          </div>
+          <button v-for="(t, i) in subTrackModal.spanishTracks" :key="'es-'+i"
+                  class="sub-modal-track-btn sub-modal-track-btn--es"
+                  @click="directInjectSub(subTrackModal.anime, subTrackModal.ep, t)">
+            <span class="sub-track-lang sub-track-lang--es">ES</span>
+            <span class="sub-track-source">{{ t.source }}</span>
+            <span v-if="t.title" class="sub-track-title">{{ t.title }}</span>
+          </button>
+        </template>
+        <div v-else-if="subTrackModal.missingKeys?.includes('opensubtitles')"
+             class="sub-track-no-es">
+          Sin OPENSUBTITLES_API_KEY — no se buscaron subs en español
+        </div>
+
+        <!-- Internal MKV tracks — need LLM translation -->
+        <template v-if="subTrackModal.tracks?.length">
+          <div class="sub-track-separator" :class="subTrackModal.spanishTracks?.length ? 'sub-track-separator--llm' : ''">
+            <span>{{ subTrackModal.spanishTracks?.length ? 'Traducir pista interna' : 'Pistas del archivo' }}</span>
+            <span v-if="subTrackModal.spanishTracks?.length" class="sub-track-sep-badge sub-track-sep-badge--llm">LLM · GPU</span>
+          </div>
+          <button v-for="t in subTrackModal.tracks" :key="t.sub_index"
+                  class="sub-modal-track-btn"
+                  @click="startTranslate(subTrackModal.anime, subTrackModal.ep, t.sub_index)">
+            <span class="sub-track-lang">{{ t.language.toUpperCase() }}</span>
+            <span class="sub-track-codec">{{ t.codec.toUpperCase() }}</span>
+            <span v-if="t.title" class="sub-track-title">{{ t.title }}</span>
+          </button>
+        </template>
+
+        <!-- External English sources — need LLM translation -->
         <template v-if="subTrackModal.externalTracks?.length">
-          <div v-if="subTrackModal.tracks?.length" class="sub-track-separator">Fuentes externas</div>
-          <div v-else class="sub-track-separator">Sin pistas internas — fuentes externas</div>
+          <div class="sub-track-separator" :class="subTrackModal.spanishTracks?.length ? 'sub-track-separator--llm' : ''">
+            <span>{{ subTrackModal.tracks?.length ? 'Fuentes externas' : 'Sin pistas internas — fuentes externas' }}</span>
+            <span v-if="subTrackModal.spanishTracks?.length" class="sub-track-sep-badge sub-track-sep-badge--llm">LLM · GPU</span>
+          </div>
           <button v-for="(t, i) in subTrackModal.externalTracks" :key="'ext-'+i"
                   class="sub-modal-track-btn sub-modal-track-btn--ext"
                   @click="startTranslate(subTrackModal.anime, subTrackModal.ep, 0, t)">
@@ -3390,7 +3474,7 @@
   </teleport>
 
 </div>
-<script src="/static/js/app.js?v=20260525-04"></script>
+<script src="/static/js/app.js?v=20260526-05"></script>
 <script>
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});

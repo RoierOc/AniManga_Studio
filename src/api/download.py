@@ -307,7 +307,7 @@ def _run_download_chapter(download_id, title, chapter_norm, chapter_id, manga_id
 
                 set_download_status(download_id, {
                     'status': 'downloading', 'title': title,
-                    'chapter': chapter_norm, 'progress': i, 'total': len(pages),
+                    'chapter': chapter_norm, 'progress': i - 1, 'total': len(pages),
                 })
 
                 img_url = f"{base}/data/{hash_val}/{page}"
@@ -478,6 +478,8 @@ def download_source_chapter():
 
     source_id = data.get('sourceId')
     manga_id = data.get('mangaId')
+    source_name = (data.get('sourceName') or '').strip() or None
+    source_lang = (data.get('sourceLang') or '').strip() or None
 
     chapter_norm = normalize_chapter(chapter)
     download_id = build_task_id(title, chapter_norm, 'download')
@@ -493,7 +495,7 @@ def download_source_chapter():
 
     threading.Thread(
         target=_run_source_download,
-        args=(download_id, title, chapter_norm, page_urls, source_id, manga_id),
+        args=(download_id, title, chapter_norm, page_urls, source_id, manga_id, source_name, source_lang),
         daemon=True,
     ).start()
 
@@ -505,7 +507,7 @@ def download_source_chapter():
     })
 
 
-def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=None, manga_id=None):
+def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=None, manga_id=None, source_name=None, source_lang=None):
     import json as _json
     with _dl_semaphore:
         folder = Path(MANGA_DIR) / title
@@ -513,11 +515,27 @@ def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=
         # Persist source context so the library can reload chapters from Suwayomi
         if source_id and manga_id:
             meta_path = folder / '.source_meta.json'
-            if not meta_path.exists():
+            existing = {}
+            if meta_path.exists():
                 try:
-                    meta_path.write_text(_json.dumps({'sourceId': str(source_id), 'mangaId': int(manga_id)}))
+                    existing = _json.loads(meta_path.read_text())
                 except Exception:
                     pass
+            meta = {'sourceId': str(source_id), 'mangaId': int(manga_id)}
+            if existing.get('thumbnailUrl'):
+                meta['thumbnailUrl'] = existing['thumbnailUrl']
+            if existing.get('title'):
+                meta['title'] = existing['title']
+            name = source_name or existing.get('sourceName')
+            lang = source_lang or existing.get('sourceLang')
+            if name:
+                meta['sourceName'] = name
+            if lang:
+                meta['sourceLang'] = lang
+            try:
+                meta_path.write_text(_json.dumps(meta))
+            except Exception:
+                pass
         prefix = _chapter_file_prefix(chapter_norm)
         downloaded = 0
         total = len(page_urls)
@@ -540,7 +558,7 @@ def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=
                     'status': 'downloading',
                     'title': title,
                     'chapter': chapter_norm,
-                    'progress': i,
+                    'progress': i - 1,
                     'total': total,
                     'source': 'external',
                 })

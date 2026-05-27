@@ -4,7 +4,7 @@ Sources API — proxy Flask → Suwayomi GraphQL.
 Suwayomi exposes Tachiyomi/Mihon extensions via GraphQL at localhost:4567.
 """
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, Response, stream_with_context
 from pathlib import Path
 import json as _json
 import requests as http_requests
@@ -137,6 +137,90 @@ def search_all():
 
     groups.sort(key=lambda g: -len(g["results"]))
     return jsonify(groups)
+
+
+_GQL_STREAM_TIMEOUT = 5  # per-source timeout for streaming search
+
+
+@sources_bp.route("/search_all_stream", methods=["GET"])
+def search_all_stream():
+    """Stream global search results as SSE — results arrive as each source responds."""
+    query = (request.args.get("q") or "").strip()
+    lang  = (request.args.get("lang") or "").strip().lower()
+    if not query:
+        return jsonify({"error": "q is required"}), 400
+
+    try:
+        src_data = _gql("{ sources { nodes { id name lang } } }")
+        source_nodes = [n for n in src_data["sources"]["nodes"] if n["id"] != "0"]
+    except Exception as e:
+        return jsonify({"error": str(e), "offline": not _suwayomi_online()}), 503
+
+    if lang:
+        source_nodes = [s for s in source_nodes if s["lang"].lower() == lang]
+
+    def _search_one(source):
+        try:
+            resp = http_requests.post(
+                SUWAYOMI_URL,
+                json={
+                    "query": """mutation SearchManga($source: LongString!, $query: String, $page: Int!) {
+                      fetchSourceManga(input: { source: $source, type: SEARCH, query: $query, page: $page }) {
+                        mangas { id title thumbnailUrl inLibrary }
+                      }
+                    }""",
+                    "variables": {"source": source["id"], "query": query, "page": 1},
+                },
+                timeout=_GQL_STREAM_TIMEOUT,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if "errors" in data:
+                return {"source": source, "results": []}
+            mangas = [
+                {
+                    "id": m["id"],
+                    "title": m["title"],
+                    "thumbnailUrl": SUWAYOMI_BASE + m["thumbnailUrl"] if m.get("thumbnailUrl") else None,
+                    "inLibrary": m.get("inLibrary", False),
+                    "sourceId": source["id"],
+                    "sourceName": source["name"],
+                    "sourceLang": source["lang"],
+                }
+                for m in data["data"]["fetchSourceManga"]["mangas"]
+            ]
+            return {"source": source, "results": mangas}
+        except Exception:
+            return {"source": source, "results": []}
+
+    def generate():
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        total = len(source_nodes)
+        yield f"data: {_json.dumps({'type': 'start', 'total': total})}\n\n"
+        done = 0
+        with ThreadPoolExecutor(max_workers=20) as pool:
+            futs = {pool.submit(_search_one, s): s for s in source_nodes}
+            for fut in as_completed(futs):
+                result = fut.result()
+                done += 1
+                if result["results"]:
+                    payload = {
+                        "type": "result",
+                        "done": done,
+                        "total": total,
+                        "source": result["source"],
+                        "results": result["results"],
+                    }
+                else:
+                    payload = {"type": "progress", "done": done, "total": total}
+                yield f"data: {_json.dumps(payload)}\n\n"
+        yield f"data: {_json.dumps({'type': 'done', 'total': total})}\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        content_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @sources_bp.route("/search", methods=["GET"])
@@ -379,6 +463,33 @@ def install_extension():
         return jsonify({"error": str(e)}), 500
 
 
+@sources_bp.route("/enrich_library", methods=["POST"])
+def enrich_library():
+    """Scan all manga folders, resolve sourceId → sourceName/sourceLang from Suwayomi, update source_meta.json."""
+    try:
+        src_data = _gql("{ sources { nodes { id name lang } } }")
+        sources_map = {n["id"]: n for n in src_data["sources"]["nodes"]}
+    except Exception as e:
+        return jsonify({"error": str(e), "offline": not _suwayomi_online()}), 503
+
+    enriched = []
+    for meta_path in Path(MANGA_DIR).glob("*/.source_meta.json"):
+        try:
+            meta = _json.loads(meta_path.read_text())
+            sid = str(meta.get("sourceId", ""))
+            if sid and sid in sources_map:
+                src = sources_map[sid]
+                if meta.get("sourceName") != src["name"] or meta.get("sourceLang") != src["lang"]:
+                    meta["sourceName"] = src["name"]
+                    meta["sourceLang"] = src["lang"]
+                    meta_path.write_text(_json.dumps(meta))
+                    enriched.append(meta_path.parent.name)
+        except Exception:
+            pass
+
+    return jsonify({"enriched": enriched, "count": len(enriched)})
+
+
 @sources_bp.route("/save_to_library", methods=["POST"])
 def save_to_library():
     """Create a manga folder + write .source_meta.json so it shows as a Mihon entry in the library.
@@ -392,6 +503,8 @@ def save_to_library():
     source_id = data.get("sourceId")
     manga_id = data.get("mangaId")
     thumbnail_url = (data.get("thumbnailUrl") or "").strip() or None
+    source_name = (data.get("sourceName") or "").strip() or None
+    source_lang = (data.get("sourceLang") or "").strip() or None
     only_if_exists = data.get("onlyIfExists", False)
 
     if not title or not source_id or not manga_id:
@@ -404,17 +517,28 @@ def save_to_library():
     folder.mkdir(parents=True, exist_ok=True)
 
     meta_path = folder / ".source_meta.json"
+    # Read existing meta to preserve fields we're not overwriting
+    existing = {}
+    if meta_path.exists():
+        try:
+            existing = _json.loads(meta_path.read_text())
+        except Exception:
+            pass
+
     meta = {"sourceId": str(source_id), "mangaId": int(manga_id), "title": title}
     if thumbnail_url:
         meta["thumbnailUrl"] = thumbnail_url
-    # Preserve existing thumbnailUrl if we're not providing a new one
-    elif meta_path.exists():
-        try:
-            existing = _json.loads(meta_path.read_text())
-            if existing.get("thumbnailUrl"):
-                meta["thumbnailUrl"] = existing["thumbnailUrl"]
-        except Exception:
-            pass
+    elif existing.get("thumbnailUrl"):
+        meta["thumbnailUrl"] = existing["thumbnailUrl"]
+    if source_name:
+        meta["sourceName"] = source_name
+    elif existing.get("sourceName"):
+        meta["sourceName"] = existing["sourceName"]
+    if source_lang:
+        meta["sourceLang"] = source_lang
+    elif existing.get("sourceLang"):
+        meta["sourceLang"] = existing["sourceLang"]
+
     meta_path.write_text(_json.dumps(meta))
 
     return jsonify({"status": "ok", "title": title})

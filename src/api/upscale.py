@@ -820,8 +820,8 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
             try:
                 set_upscale_status(upscale_id, {
                     'status': 'upscaling',
-                    'current': processed + 1,
-                    'progress': processed + 1,
+                    'current': processed,
+                    'progress': processed,
                     'total': total,
                     'model': MODEL_REGISTRY[_active_model_key[0]]['label'],
                     'scale': effective_scale,
@@ -911,8 +911,8 @@ def run_upscale_all(input_folder, output_folder, images, upscale_id):
             try:
                 set_upscale_status(upscale_id, {
                     'status': 'upscaling',
-                    'current': processed + 1,
-                    'progress': processed + 1,
+                    'current': processed,
+                    'progress': processed,
                     'total': len(images),
                     'model': MODEL_REGISTRY[_active_model_key[0]]['label'],
                     'scale': UPSCALE_SCALE,

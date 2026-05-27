@@ -216,10 +216,20 @@ const app = createApp({
         const suwayomiOnline = ref(false);
         const sourceHasNextPage = ref(false);
         const currentSourceContext = ref(null);
+        const sourceFolderName = ref('');   // editable folder name when opening from source search
         const globalQuery = ref('');
         const globalResults = ref([]);   // [{source:{id,name,lang}, results:[...]}]
         const globalSearchLoading = ref(false);
+        const globalLang = ref('');
+        const globalSearchDone = ref(0);
+        const globalSearchTotal = ref(0);
         const searchMode = ref('global'); // 'global' | 'source' | 'popular'
+
+        const sourceLangs = computed(() => {
+            const seen = new Set();
+            (sources.value || []).forEach(s => s.lang && seen.add(s.lang.toLowerCase()));
+            return [...seen].sort();
+        });
 
         // MangaDex popular/trending tabs
         const mdViewTab = ref('search');   // 'search' | 'popular' | 'latest' | 'rating' | 'anilist'
@@ -1179,6 +1189,7 @@ const app = createApp({
             currentManga.value = null;
             currentMdManga.value = null;
             currentSourceContext.value = null;
+            sourceFolderName.value = '';
             editMetaShow.value = false;
             corruptScanResult.value = null;
         };
@@ -1818,16 +1829,13 @@ const app = createApp({
                         };
                     } else if (st.status === 'complete' && !_completedSeen.has(taskId)) {
                         _completedSeen.add(taskId);
-                        activeTasks.value = { ...activeTasks.value, [taskId]: { ...task, status: 'complete', progress: task.total || 1 } };
                         showToast(task.type === 'download' ? '✅ Descarga completa' : '🔥 Upscale completo', 'success');
-                        setTimeout(() => {
-                            const t = { ...activeTasks.value }; delete t[taskId]; activeTasks.value = t;
-                            if (currentTitle.value) {
-                                loadChapters(currentTitle.value);
-                                if (task.type === 'upscale') loadChapterHealth(currentTitle.value);
-                            }
-                            if (task.type === 'download') loadLibrary();
-                        }, 800);
+                        const t = { ...activeTasks.value }; delete t[taskId]; activeTasks.value = t;
+                        if (currentTitle.value) {
+                            loadChapters(currentTitle.value);
+                            if (task.type === 'upscale') loadChapterHealth(currentTitle.value);
+                        }
+                        if (task.type === 'download') loadLibrary();
                     } else if (st.status === 'cancelled') {
                         const t = { ...activeTasks.value }; delete t[taskId]; activeTasks.value = t;
                     } else if (st.status === 'error') {
@@ -1958,11 +1966,13 @@ const app = createApp({
         });
         
         const taskQueueList = computed(() => {
-            return Object.entries(activeTasks.value).map(([id, task]) => ({
-                id,
-                ...task,
-                percent: task.total > 0 ? Math.min(100, Math.round(((task.progress || 0) * 100) / task.total)) : 0
-            }));
+            return Object.entries(activeTasks.value)
+                .filter(([, task]) => task.status !== 'complete')
+                .map(([id, task]) => ({
+                    id,
+                    ...task,
+                    percent: task.total > 0 ? Math.min(100, Math.round(((task.progress || 0) * 100) / task.total)) : 0
+                }));
         });
 
         const taskQueueSummary = computed(() => {
@@ -2619,7 +2629,14 @@ const app = createApp({
                 const res = await fetch('/api/sources/health');
                 const data = await res.json();
                 suwayomiOnline.value = data.online;
-                if (data.online && sources.value.length === 0) await loadSources();
+                if (data.online) {
+                    if (sources.value.length === 0) await loadSources();
+                    // Enrich existing library items with source name/lang if missing
+                    fetch('/api/sources/enrich_library', { method: 'POST' })
+                        .then(r => r.json())
+                        .then(d => { if (d.count > 0) loadLibrary(); })
+                        .catch(() => {});
+                }
             } catch (e) {
                 suwayomiOnline.value = false;
             }
@@ -2655,34 +2672,64 @@ const app = createApp({
             }
         };
 
-        const searchAllSources = async () => {
+        let _globalSearchES = null;
+        const searchAllSources = () => {
             if (!globalQuery.value.trim()) return;
+            if (_globalSearchES) { _globalSearchES.close(); _globalSearchES = null; }
             globalSearchLoading.value = true;
             globalResults.value = [];
-            try {
-                const params = new URLSearchParams({ q: globalQuery.value.trim() });
-                const res = await fetch(`/api/sources/search_all?${params}`);
-                if (!res.ok) throw new Error(res.statusText);
-                const data = await res.json();
-                if (data.error) throw new Error(data.error);
-                globalResults.value = (data || []).filter(g => g.results.length > 0);
-            } catch (e) {
-                showToast('Error buscando: ' + e.message, 'error');
-            } finally {
+            globalSearchDone.value = 0;
+            globalSearchTotal.value = 0;
+            const params = new URLSearchParams({ q: globalQuery.value.trim() });
+            if (globalLang.value) params.set('lang', globalLang.value);
+            const es = new EventSource(`/api/sources/search_all_stream?${params}`);
+            _globalSearchES = es;
+            es.onmessage = (e) => {
+                const msg = JSON.parse(e.data);
+                if (msg.type === 'start') {
+                    globalSearchTotal.value = msg.total;
+                } else if (msg.type === 'result') {
+                    globalSearchDone.value = msg.done;
+                    globalSearchTotal.value = msg.total;
+                    globalResults.value = [...globalResults.value, { source: msg.source, results: msg.results }];
+                } else if (msg.type === 'progress') {
+                    globalSearchDone.value = msg.done;
+                    globalSearchTotal.value = msg.total;
+                } else if (msg.type === 'done') {
+                    globalSearchLoading.value = false;
+                    es.close();
+                    _globalSearchES = null;
+                }
+            };
+            es.onerror = () => {
                 globalSearchLoading.value = false;
-            }
+                es.close();
+                _globalSearchES = null;
+                if (globalSearchDone.value === 0) showToast('Error en búsqueda global', 'error');
+            };
         };
 
         const openSourceManga = async (manga, sourceOverride) => {
             const source = sourceOverride || activeSource.value;
             const sourceId = source?.id ?? manga.sourceId;
             const mangaId = manga.id;
+            const srcName = source?.name ?? manga.sourceName ?? '';
+            const srcLang = source?.lang ?? manga.sourceLang ?? '';
 
-            currentTitle.value = manga.title;
+            // If a local folder exists with the same title but from a different source, auto-suggest a name with suffix
+            const conflict = library.value.some(m => {
+                const sameName = canonicalTitle(m.name || m.title || '') === canonicalTitle(manga.title);
+                const sameSource = m.source_meta?.sourceId && String(m.source_meta.sourceId) === String(sourceId);
+                return sameName && !sameSource;
+            });
+            const folderName = (conflict && srcName) ? manga.title.trimEnd() + ' [' + srcName + ']' : manga.title;
+
+            currentTitle.value = folderName;
+            sourceFolderName.value = folderName;
             currentCover.value = manga.thumbnailUrl || null;
-            currentMdManga.value = null; // this is a Suwayomi manga, not MangaDex
+            currentMdManga.value = null;
             currentManga.value = null;
-            currentSourceContext.value = { sourceId, mangaId };
+            currentSourceContext.value = { sourceId, mangaId, sourceName: srcName, sourceLang: srcLang };
             mdChapters.value = [];
             chapters.value = [];
             chapterStatus.value = { downloaded: {}, upscaled: {} }; chapterHealth.value = [];
@@ -2696,10 +2743,12 @@ const app = createApp({
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        title: manga.title,
+                        title: folderName,
                         sourceId,
                         mangaId,
                         thumbnailUrl: manga.thumbnailUrl || null,
+                        sourceName: srcName || null,
+                        sourceLang: srcLang || null,
                         onlyIfExists: true,
                     }),
                 }).catch(() => {});
@@ -2715,12 +2764,12 @@ const app = createApp({
                     suwayomiId: ch.id,
                     chapter: String(ch.chapterNumber ?? '0').replace(/\.0$/, ''),
                     title: ch.name || '',
-                    language: activeSource.value?.lang || 'und',
+                    language: srcLang || activeSource.value?.lang || 'und',
                     scanlator: ch.scanlator || '',
                     pageCount: ch.pageCount || 0,
                 }));
-                // Sync local download/upscale status
-                const statusRes = await fetch('/api/library/' + encodeURIComponent(manga.title)).catch(() => null);
+                // Sync local download/upscale status with the resolved folder name
+                const statusRes = await fetch('/api/library/' + encodeURIComponent(currentTitle.value)).catch(() => null);
                 if (statusRes?.ok) {
                     const d = await statusRes.json().catch(() => ({}));
                     if (d.chapters?.length) {
@@ -2734,6 +2783,13 @@ const app = createApp({
             } catch (e) {
                 showToast('Error cargando capítulos: ' + e.message, 'error');
             }
+        };
+
+        const applySourceFolder = () => {
+            const newName = sourceFolderName.value.trim();
+            if (!newName || newName === currentTitle.value) return;
+            currentTitle.value = newName;
+            loadChapters(newName);
         };
 
         const _downloadFromSource = async (group) => {
@@ -2764,6 +2820,8 @@ const app = createApp({
                         pageUrls: pagesData.pages,
                         sourceId: currentSourceContext.value?.sourceId,
                         mangaId: currentSourceContext.value?.mangaId,
+                        sourceName: currentSourceContext.value?.sourceName || null,
+                        sourceLang: currentSourceContext.value?.sourceLang || null,
                     }),
                 });
                 const dlData = await dlRes.json();
@@ -2782,6 +2840,8 @@ const app = createApp({
                             mangaId: currentSourceContext.value.mangaId,
                             title,
                             thumbnailUrl: thumbUrl,
+                            sourceName: currentSourceContext.value.sourceName || null,
+                            sourceLang: currentSourceContext.value.sourceLang || null,
                         } : null,
                         cachedCover: thumbUrl,
                     }];
@@ -3665,6 +3725,12 @@ const app = createApp({
             const iv = setInterval(async () => {
                 try {
                     const r = await fetch(`/api/subtitle/status/${taskId}`);
+                    if (!r.ok) {
+                        // Task not found — server restarted or task expired; stop polling
+                        clearInterval(iv);
+                        subTasks.value = { ...subTasks.value, [key]: { status: 'cancelled', progress: 0, message: 'Tarea perdida (servidor reiniciado)', task_id: taskId } };
+                        return;
+                    }
                     const d = await r.json();
                     // Preserve task_id so cancel button always has it
                     subTasks.value = { ...subTasks.value, [key]: { ...d, task_id: taskId } };
@@ -3677,6 +3743,36 @@ const app = createApp({
                     }
                 } catch { clearInterval(iv); }
             }, 1500);
+        };
+
+        const directInjectSub = async (anime, ep, subInfo) => {
+            subTrackModal.value = null;
+            const key = subTaskKey(anime.id, ep.num);
+            subTasks.value = { ...subTasks.value, [key]: { status: 'injecting', progress: 50, message: 'Descargando subtítulo…' } };
+            try {
+                const r = await fetch('/api/subtitle/inject_direct', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        info_hash:   ep.info_hash || '',
+                        episode:     ep.num,
+                        anime_id:    anime.id,
+                        ...(ep.local_path ? { local_path: ep.local_path } : {}),
+                        external_sub: subInfo,
+                    }),
+                });
+                const d = await r.json();
+                if (!r.ok || d.error) {
+                    subTasks.value = { ...subTasks.value, [key]: { status: 'error', progress: 0, message: d.error || 'Error' } };
+                    showToast(d.error || 'Error al inyectar subtítulo', 'error');
+                    return;
+                }
+                subTasks.value = { ...subTasks.value, [key]: { status: 'done', progress: 100, message: '¡Completado!' } };
+                showToast(`✓ Subtítulos ESP añadidos: ${d.file || ''}`, 'success');
+            } catch (e) {
+                subTasks.value = { ...subTasks.value, [key]: { status: 'error', progress: 0, message: String(e) } };
+                showToast('Error de conexión', 'error');
+            }
         };
 
         const startTranslate = async (anime, ep, subIndex = 0, externalSub = null) => {
@@ -3722,30 +3818,28 @@ const app = createApp({
                 const r = await fetch(`/api/subtitle/tracks?${params}`);
                 const d = await r.json();
                 if (!r.ok) { showToast(d.error || 'No se encontró el archivo', 'error'); return; }
-                const tracks     = d.tracks          || [];
-                const extTracks  = d.external_tracks || [];
-                const missingKeys = d.sources_missing_key || [];
-                const engTracks  = tracks.filter(t => t.language === 'eng' || t.language === 'und');
+                const tracks        = d.tracks          || [];
+                const extTracks     = d.external_tracks || [];
+                const spanishTracks = d.spanish_tracks  || [];
+                const missingKeys   = d.sources_missing_key || [];
+                const engTracks     = tracks.filter(t => t.language === 'eng' || t.language === 'und');
 
-                if (tracks.length === 0 && extTracks.length === 0) {
-                    const hint = missingKeys.length
-                        ? ` (sin API key: ${missingKeys.join(', ')} — configura JIMAKU_API_KEY / OPENSUBTITLES_API_KEY)`
-                        : '';
-                    showToast(`No se encontraron subtítulos${hint}`, 'error', 8000);
-                } else if (tracks.length === 0 && extTracks.length === 1) {
-                    // Single external sub → auto-download + translate
-                    await startTranslate(anime, ep, 0, extTracks[0]);
-                } else if (tracks.length === 0 && extTracks.length > 1) {
-                    // Multiple external subs → picker
-                    subTrackModal.value = { anime, ep, tracks: [], externalTracks: extTracks };
-                } else if (engTracks.length === 1) {
-                    await startTranslate(anime, ep, engTracks[0].sub_index);
-                } else if (tracks.length === 1) {
-                    await startTranslate(anime, ep, tracks[0].sub_index);
-                } else {
-                    // Multiple internal tracks → picker (no external needed)
-                    subTrackModal.value = { anime, ep, tracks, externalTracks: [] };
+                // If Spanish subs found, always show modal (Spanish section first)
+                if (spanishTracks.length > 0 || tracks.length > 0 || extTracks.length > 0) {
+                    // Auto-select only when exactly one Spanish sub and nothing else to choose from
+                    if (spanishTracks.length === 1 && tracks.length === 0 && extTracks.length === 0) {
+                        await directInjectSub(anime, ep, spanishTracks[0]);
+                        return;
+                    }
+                    subTrackModal.value = { anime, ep, tracks, externalTracks: extTracks, spanishTracks, missingKeys };
+                    return;
                 }
+
+                // No subtitles found at all
+                const hint = missingKeys.length
+                    ? ` (sin API key: ${missingKeys.join(', ')} — configura JIMAKU_API_KEY / OPENSUBTITLES_API_KEY)`
+                    : '';
+                showToast(`No se encontraron subtítulos${hint}`, 'error', 8000);
             } catch (e) {
                 showToast('Error al obtener pistas de subtítulos', 'error');
             } finally {
@@ -4087,6 +4181,24 @@ const app = createApp({
             ) || null;
         };
 
+        const continueWatching = computed(() => {
+            return animeLibrary.value
+                .filter(a => a.last_watched_at > 0)
+                .map(a => {
+                    const inProgress = (a.episodes || []).find(e =>
+                        e.ep_type !== 'special' && e.num > 0 && !e.watched &&
+                        e.resume_pos > 0 &&
+                        (e.in_local || (e.in_qbt && e.progress >= 100))
+                    );
+                    const ep = inProgress || nextUnwatchedEp(a);
+                    if (!ep) return null;
+                    return { anime: a, ep };
+                })
+                .filter(Boolean)
+                .sort((a, b) => (b.anime.last_watched_at || 0) - (a.anime.last_watched_at || 0))
+                .slice(0, 12);
+        });
+
         const _watchedFraction = (anime) => {
             const eps = (anime.episodes || []).filter(e => e.ep_type !== 'special' && e.num > 0 &&
                 (e.in_local || (e.in_qbt && e.progress >= 100)));
@@ -4383,7 +4495,8 @@ const app = createApp({
             searchMdexForTomo, selectMdexEntry,
             handleCoverError: (e) => { e.target.style.display = 'none'; if (e.target.nextElementSibling) e.target.nextElementSibling.style.display = 'flex'; },
             sources, activeSource, sourceQuery, sourceResults, sourcesLoading, suwayomiOnline, sourceHasNextPage, currentSourceContext,
-            globalQuery, globalResults, globalSearchLoading, searchMode,
+            sourceFolderName, applySourceFolder,
+            globalQuery, globalResults, globalSearchLoading, globalLang, globalSearchDone, globalSearchTotal, sourceLangs, searchMode,
             checkSuwayomi, loadSources, searchSources, searchAllSources, openSourceManga,
             sourcePopular, sourcePopularLoading, loadSourcesPopular,
             offlineCoverStatus, downloadCoversOffline,
@@ -4427,7 +4540,7 @@ const app = createApp({
             groupedAnimeEpisodes, animeExpandedEps, toggleEpGroup, isEpExpanded, isSpanishOrMulti, isEnglishSub,
             animeLibrary, animeLibraryLoading, animeLibraryDetail,
             animeLibSort, animeLibFilter, sortedAnimeLibrary, animeLibGroups, animeLibCounts,
-            nextUnwatchedEp, fmtPos,
+            nextUnwatchedEp, continueWatching, fmtPos,
             ANIME_STATUS, STATUS_ORDER,
             loadAnimeLibrary, removeFromAnimeLibrary, openAnimeLibraryDetail, searchEpisodeInNyaa,
             isInAnimeLibrary, addAnimeToLibrary, libDetailHasBatch, libDetailBatchDone, libDetailBatchEp,
@@ -4444,7 +4557,7 @@ const app = createApp({
             openScanPaths, addScanPath, removeScanPath, loadScanFolders,
             openBrowse, navigateBrowse, selectBrowsePath,
             matchFolder, unmatchFolder, searchForScanFolder,
-            subTasks, subTrackModal, subFetchingKey, translateSubs, startTranslate, subTaskKey, cancelTranslation,
+            subTasks, subTrackModal, subFetchingKey, translateSubs, startTranslate, directInjectSub, subTaskKey, cancelTranslation,
             epOverrideMenu, openEpOverrideMenu, setEpOverride,
             animeSeasonalResults, animeSeasonalLoading, animeSeasonSort, animeSeasonGenreFilter,
             animeSeasonSeason, animeSeasonYear, seasonLabel, seasonYears, filteredSeasonalAnime, seasonalGenres,
