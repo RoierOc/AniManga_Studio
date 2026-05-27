@@ -6506,3 +6506,109 @@ kbd {
     padding-top: 6px !important;
     margin-top: 4px !important;
 }
+
+/* ── v=20260526-17  Comprehensive orange elimination ─────────────────────── */
+
+/* Re-declare accent-orn variable as purple so var() usages cascade */
+:root, #app, #app.domain-local {
+    --accent-orn: #9b7fb8 !important;
+    --da-rgb: 107,143,189 !important;  /* blue instead of orange for domain accent */
+}
+
+/* Modal buttons — repair, upscale-fast, added state */
+.md-btn-repair {
+    background: rgba(107,143,189,.1) !important;
+    border-color: rgba(107,143,189,.4) !important;
+    color: #9db8d8 !important;
+}
+.md-btn-repair:hover { background: rgba(107,143,189,.2) !important; }
+
+.md-btn-upscale-fast {
+    background: rgba(155,127,184,.1) !important;
+    border-color: rgba(155,127,184,.4) !important;
+    color: #c4a8e8 !important;
+}
+.md-btn-upscale-fast:hover { background: rgba(155,127,184,.2) !important; }
+
+.md-btn-primary.md-btn-added {
+    background: rgba(107,143,189,.12) !important;
+    border-color: rgba(107,143,189,.4) !important;
+    color: #9db8d8 !important;
+}
+
+/* md-btn-4k override (teal) — ensure it wins */
+.md-btn-4k {
+    background: rgba(78,184,199,.1) !important;
+    border-color: rgba(78,184,199,.45) !important;
+    color: #7dd3e0 !important;
+}
+.md-btn-4k:hover { background: rgba(78,184,199,.22) !important; }
+
+/* md-btn-export override (purple) — ensure it wins */
+.md-btn-export {
+    background: rgba(155,127,184,.1) !important;
+    border-color: rgba(155,127,184,.4) !important;
+    color: #c4a8e8 !important;
+}
+.md-btn-export:hover, .md-btn-export.active {
+    background: rgba(155,127,184,.22) !important;
+}
+.md-btn-export-badge { background: #9b7fb8 !important; }
+
+/* md-btn-mdlink (external MangaDex link) → slate blue */
+.md-btn-mdlink {
+    background: rgba(107,143,189,.08) !important;
+    border-color: rgba(107,143,189,.35) !important;
+    color: var(--accent-h, #82a5d0) !important;
+}
+.md-btn-mdlink:hover { background: rgba(107,143,189,.18) !important; }
+
+/* Search/input focus rings — blue */
+.md-search-hero-input:focus,
+.lib-search-input:focus,
+input:focus, select:focus, textarea:focus {
+    box-shadow: 0 0 0 3px rgba(107,143,189,.2) !important;
+}
+
+/* Cover image in library — no orange glow */
+.md-cover-wrapper, .md-card img {
+    filter: none !important;
+}
+
+/* Chapter tag partial → amber-to-teal */
+.ch-tag--partial {
+    background: rgba(107,143,189,.12) !important;
+    color: #94b8d8 !important;
+    border: 1px solid rgba(107,143,189,.25) !important;
+}
+.ch-tag--loading {
+    background: rgba(107,143,189,.1) !important;
+    color: #9db8d8 !important;
+}
+
+/* Chapter bar fill (upscale progress in chapter row) */
+.ch-bar-fill--up { background: #9b7fb8 !important; }
+
+/* Chapter row partial border → amber-blue */
+.ch-row--partial { border-left-color: rgba(107,143,189,.5) !important; }
+
+/* Tomo builder — selection highlight + volume pill */
+.tomo-row--sel  { background: rgba(107,143,189,.08) !important; }
+.tomo-row--part { border-left-color: rgba(107,143,189,.45) !important; }
+.tomo-vol-pill:hover {
+    background: rgba(155,127,184,.15) !important;
+    border-color: rgba(155,127,184,.5) !important;
+}
+.tomo-q-btn--range:hover { background: rgba(107,143,189,.1) !important; }
+.tomo-name-input:focus { box-shadow: 0 0 0 2px rgba(107,143,189,.15) !important; }
+
+/* Series progress bar upscale fill — already covered, reinforce */
+.series-prog-up {
+    background: linear-gradient(90deg, var(--accent-vio), #a78bfa) !important;
+}
+
+/* Any remaining amber/yellow f59e0b usage → blue */
+.ch-tag--active-task, .task-indicator {
+    background: rgba(107,143,189,.18) !important;
+    color: #9db8d8 !important;
+}
