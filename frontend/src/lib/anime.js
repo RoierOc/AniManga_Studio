@@ -54,6 +54,15 @@ export function nextUnwatchedEp(anime) {
   return eps.find(e => !e.watched && isEpisodePlayable(e, batch)) || null
 }
 
+/* Torrent title language detection — identical to the original regexes. */
+export const isSpanishOrMulti = (title) =>
+  /\b(esp|espa[nñ]ol|castellano|multi|lat|latino|multi.?sub|sub.?esp|dual)\b/i.test(title || '')
+
+export const isEnglishSub = (title) => {
+  if (isSpanishOrMulti(title)) return false
+  return /\b(eng(?:lish)?[\s._-]?(?:sub(?:bed)?|dub(?:bed)?)?|english[\s._-]?(?:sub(?:bed)?|dubbed)?|\[en\]|\[eng\])\b/i.test(title || '')
+}
+
 export function fmtCountdown(airingAt, nowSec) {
   const diff = airingAt - nowSec
   if (diff <= 0) return null

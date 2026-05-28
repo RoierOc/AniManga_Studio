@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { onSSE } from '@/lib/sse'
 import { useUiStore } from './ui'
-import { nextUnwatchedEp } from '@/lib/anime'
+import { nextUnwatchedEp, isSpanishOrMulti, isEnglishSub } from '@/lib/anime'
 
 let autoplayTimer = null
 let nowTimer = null
@@ -43,10 +43,68 @@ export const useAnimeStore = defineStore('anime', {
     year: 0,
     seasonSort: 'score',         // score | popularity | trending
     seasonGenre: '',
+
+    // search + torrents
+    searchQuery: '',
+    searchResults: [],
+    searchLoading: false,
+    torrentAnime: null,          // anime whose torrents are open (null = show results)
+    torrents: [],
+    torrentsLoading: false,
+    torrentQuery: '',
+    torrentCategory: '1_2',
+    flt: { lang: 'all', hideDead: true, quality: '', group: '', ep: 'all' },
+    addingHashes: [],            // keys currently being added to qbt
+    addedHashes: [],             // keys just added (transient ✓)
   }),
 
   getters: {
     detail: (s) => s.library.find(a => a.id === s.detailId) || null,
+
+    filteredTorrents: (s) => {
+      let list = s.torrents
+      if (s.flt.hideDead) list = list.filter(t => t.seeders > 0)
+      if (s.flt.lang === 'esp') list = list.filter(t => isSpanishOrMulti(t.title))
+      else if (s.flt.lang === 'eng') list = list.filter(t => isEnglishSub(t.title))
+      else if (s.flt.lang === 'other') list = list.filter(t => !isSpanishOrMulti(t.title) && !isEnglishSub(t.title))
+      if (s.flt.quality) list = list.filter(t => t.quality === s.flt.quality)
+      if (s.flt.group) list = list.filter(t => t.group === s.flt.group)
+      if (s.flt.ep === 'batch') list = list.filter(t => t.episode === 0)
+      else if (s.flt.ep === 'episodes') list = list.filter(t => t.episode > 0)
+      return list
+    },
+    langCounts: (s) => {
+      const all = s.torrents.filter(t => s.flt.hideDead ? t.seeders > 0 : true)
+      return {
+        all: all.length,
+        esp: all.filter(t => isSpanishOrMulti(t.title)).length,
+        eng: all.filter(t => isEnglishSub(t.title)).length,
+        other: all.filter(t => !isSpanishOrMulti(t.title) && !isEnglishSub(t.title)).length,
+      }
+    },
+    torrentGroups: (s) => [...new Set(s.torrents.map(t => t.group).filter(Boolean))].sort(),
+    torrentQualities: (s) => [...new Set(s.torrents.map(t => t.quality).filter(Boolean))].sort(),
+    groupedEpisodes() {
+      const list = this.filteredTorrents.map(t => ({ ...t, isSpanish: isSpanishOrMulti(t.title), isEnglish: isEnglishSub(t.title) }))
+      const map = {}
+      for (const t of list) { (map[t.episode] ??= []).push(t) }
+      for (const k in map) {
+        map[k].sort((a, b) => {
+          if (a.isSpanish !== b.isSpanish) return a.isSpanish ? -1 : 1
+          if (a.isEnglish !== b.isEnglish) return a.isEnglish ? -1 : 1
+          return b.seeders - a.seeders
+        })
+      }
+      return Object.entries(map)
+        .map(([k, torrents]) => ({ episode: Number(k), torrents }))
+        .sort((a, b) => {
+          if (a.episode === 0) return -1
+          if (b.episode === 0) return 1
+          if (a.episode === -1) return 1
+          if (b.episode === -1) return -1
+          return a.episode - b.episode
+        })
+    },
   },
 
   actions: {
@@ -266,6 +324,96 @@ export const useAnimeStore = defineStore('anime', {
         })
         if (d.ok) { useUiStore().toast(`"${anime.title}" añadido a Mi Anime`, 'ok'); await this.loadLibrary(true) }
       } catch (_) { useUiStore().toast('Error al añadir a biblioteca', 'error') }
+    },
+
+    /* ── Search + torrents ──────────────────────────────────────────────── */
+    async searchAnime() {
+      const q = this.searchQuery.trim()
+      if (q.length < 2) return
+      this.searchLoading = true
+      this.searchResults = []
+      try {
+        const d = await api.get(`/api/anime/search?q=${encodeURIComponent(q)}`)
+        if (Array.isArray(d)) this.searchResults = d
+      } catch (_) { useUiStore().toast('Error buscando anime', 'error') }
+      finally { this.searchLoading = false }
+    },
+    closeTorrents() { this.torrentAnime = null },
+
+    async _nyaaMultiFetch(queries) {
+      const cat = this.torrentCategory
+      const lists = await Promise.all(queries.map(q =>
+        api.get(`/api/anime/torrents?${new URLSearchParams({ q, category: cat })}`).catch(() => [])))
+      const seen = new Set(); const merged = []
+      for (const list of lists) for (const t of (list || [])) {
+        const key = t.info_hash || t.title
+        if (!seen.has(key)) { seen.add(key); merged.push(t) }
+      }
+      return merged
+    },
+    async openTorrents(anime) {
+      this.torrentAnime = anime
+      this.torrents = []
+      this.flt = { lang: 'all', hideDead: true, quality: '', group: '', ep: 'all' }
+      const variants = [...new Set([anime.title_romaji, anime.title_english, anime.title].map(t => (t || '').trim()).filter(Boolean))]
+      this.torrentQuery = variants[0] || ''
+      this.torrentsLoading = true
+      try { this.torrents = await this._nyaaMultiFetch(variants) }
+      catch (_) { useUiStore().toast('Error buscando en Nyaa', 'error') }
+      finally { this.torrentsLoading = false }
+    },
+    async searchTorrents() {
+      const q = this.torrentQuery.trim()
+      if (!q) return
+      this.torrentsLoading = true; this.torrents = []
+      try { this.torrents = await api.get(`/api/anime/torrents?${new URLSearchParams({ q, category: this.torrentCategory })}`) || [] }
+      catch (_) { useUiStore().toast('Error buscando en Nyaa', 'error') }
+      finally { this.torrentsLoading = false }
+    },
+    async searchTosho() {
+      const q = this.torrentQuery.trim()
+      if (!q) return
+      this.torrentsLoading = true; this.torrents = []
+      try { this.torrents = await api.get(`/api/anime/torrents_tosho?q=${encodeURIComponent(q)}`) || [] }
+      catch (_) { useUiStore().toast('Error buscando en Animetosho', 'error') }
+      finally { this.torrentsLoading = false }
+    },
+
+    isAdding(key) { return this.addingHashes.includes(key) },
+    isAdded(key) {
+      if (this.addedHashes.includes(key)) return true
+      if (!key || key.startsWith('http') || !this.torrentAnime) return false
+      const cur = this.torrentAnime
+      const lib = this.library.find(a => (cur.al_id && a.al_id === cur.al_id) || (cur.mal_id && a.mal_id === cur.mal_id))
+      return !!(lib?.episodes || []).find(e => e.info_hash === key)
+    },
+    async addToQbt(torrent) {
+      const ui = useUiStore()
+      if (!this.qbt.connected) { ui.toast('qBittorrent no conectado — ve a Descargas para configurarlo', 'error'); return }
+      const key = torrent.info_hash || torrent.torrent_url
+      if (this.addingHashes.includes(key)) return
+      this.addingHashes.push(key)
+      try {
+        const d = await api.post('/api/anime/qbt/add', {
+          magnet: torrent.magnet || '', torrent_url: torrent.torrent_url,
+          anime_title: this.torrentAnime?.title || '',
+        })
+        if (d.ok) {
+          ui.toast('Torrent agregado ✓', 'ok')
+          this.addedHashes.push(key)
+          setTimeout(() => { this.addedHashes = this.addedHashes.filter(k => k !== key) }, 2500)
+          const a = this.torrentAnime
+          if (a) {
+            api.post('/api/anime/library/add', {
+              al_id: a.al_id, mal_id: a.mal_id, title: a.title, title_romaji: a.title_romaji || '',
+              cover: a.cover || '', total_episodes: a.episodes || null, format: a.format || '',
+              episode: torrent.episode === 0 ? 0 : torrent.episode,
+              torrent_title: torrent.title, info_hash: torrent.info_hash || '',
+            }).then(() => this.loadLibrary(true)).catch(() => {})
+          }
+        } else ui.toast('qBittorrent: ' + (d.msg || d.error || 'Error'), 'error')
+      } catch (_) { ui.toast('Error conectando qBittorrent', 'error') }
+      finally { this.addingHashes = this.addingHashes.filter(k => k !== key) }
     },
 
     /* ── History ────────────────────────────────────────────────────────── */
