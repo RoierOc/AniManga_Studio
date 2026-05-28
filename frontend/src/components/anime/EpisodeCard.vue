@@ -37,7 +37,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
       <img v-if="playable" class="ep__img" :src="`/api/anime/thumb/${anime.id}/${ep.num}`"
            loading="lazy" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
 
-      <div class="ep__num"><span class="ep__num-k">EP</span><span class="ep__num-v">{{ String(ep.num).padStart(2, '0') }}</span></div>
+      <div class="ep__num"><span class="ep__num-k">{{ ep.ep_type === 'special' ? 'SP' : 'EP' }}</span><span class="ep__num-v">{{ String(ep.num).padStart(2, '0') }}</span></div>
 
       <div v-if="ep.watched" class="ep__chip ep__chip--seen"><Icon name="check" :size="11" /> Visto</div>
 
@@ -101,26 +101,28 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 .ep:hover { transform: translateY(-3px); border-color: var(--line-strong); box-shadow: var(--shadow-md); }
 
 .ep__thumb { position: relative; aspect-ratio: 16 / 9; cursor: pointer; overflow: hidden; }
+.ep__thumb::after { content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: linear-gradient(0deg, rgba(5,7,13,.7) 0%, transparent 38%); }
 .ep--missing .ep__thumb, .ep--dl .ep__thumb { cursor: default; }
 .ep__bg { position: absolute; inset: 0; background-size: cover; background-position: center; filter: blur(18px) brightness(.4); transform: scale(1.2); }
 .ep__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-slow), transform var(--t-cine) var(--ease-silk); }
 .ep__img.is-loaded { opacity: 1; }
 .ep:hover .ep__img { transform: scale(1.06); }
 
-.ep__num { position: absolute; top: var(--s-2); left: var(--s-2); display: flex; align-items: baseline; gap: 3px; text-shadow: 0 1px 4px rgba(0,0,0,.7); }
-.ep__num-k { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ice); letter-spacing: .08em; }
-.ep__num-v { font-family: var(--font-display); font-weight: 600; font-size: 1.1rem; }
+/* Big episode number, bottom-left — like the original */
+.ep__num { position: absolute; bottom: var(--s-2); left: var(--s-3); display: flex; flex-direction: column; align-items: flex-start; color: #fff; z-index: 3; pointer-events: none; }
+.ep__num-k { font-family: var(--font-mono); font-size: 9px; font-weight: 600; color: var(--ice); letter-spacing: .14em; line-height: 1; }
+.ep__num-v { font-family: var(--font-display); font-weight: 700; font-size: 2.3rem; line-height: 1; text-shadow: 0 2px 16px rgba(0,0,0,.95), 0 0 40px rgba(0,0,0,.6); }
 
-.ep__chip { position: absolute; top: var(--s-2); right: var(--s-2); display: inline-flex; align-items: center; gap: 4px;
+.ep__chip { position: absolute; top: var(--s-2); right: var(--s-2); z-index: 3; display: inline-flex; align-items: center; gap: 4px;
   font-size: var(--fs-2xs); font-weight: 600; padding: 2px 7px; border-radius: var(--r-pill); backdrop-filter: blur(6px); }
 .ep__chip--seen { color: var(--ice); background: rgba(7,10,18,.6); }
-.ep__seen-veil { position: absolute; inset: 0; background: rgba(7,10,18,.5); backdrop-filter: saturate(.6) brightness(.8); }
+.ep__seen-veil { position: absolute; inset: 0; z-index: 2; background: rgba(7,10,18,.5); backdrop-filter: saturate(.6) brightness(.8); }
 
-.ep__dlbar { position: absolute; left: 0; right: 0; bottom: 0; height: 22px; background: rgba(7,10,18,.7); display: flex; align-items: center; }
+.ep__dlbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 22px; background: rgba(7,10,18,.7); display: flex; align-items: center; }
 .ep__dlbar span { position: absolute; left: 0; bottom: 0; top: 0; background: linear-gradient(90deg, var(--cyan), var(--azure)); opacity: .35; }
 .ep__dlbar em { position: relative; margin-left: auto; margin-right: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-style: normal; color: var(--cyan); }
 
-.ep__play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; opacity: 0; transition: opacity var(--t-base); }
+.ep__play { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; color: #fff; opacity: 0; transition: opacity var(--t-base); }
 .ep__play :deep(svg) { filter: drop-shadow(0 2px 8px rgba(0,0,0,.6)); transform: scale(.85); transition: transform var(--t-base) var(--ease-snap); }
 .ep__thumb:hover .ep__play { opacity: 1; }
 .ep__thumb:hover .ep__play :deep(svg) { transform: scale(1); }

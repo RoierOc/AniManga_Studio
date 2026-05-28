@@ -111,7 +111,7 @@ const dots = computed(() =>
 .acard__total { color: var(--ink-soft); opacity: .7; }
 .acard__dots { display: flex; flex-wrap: wrap; gap: 3px; justify-content: flex-end; }
 .ad { width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.16); }
-.ad--done    { background: var(--jade); }
-.ad--dl      { background: var(--gold); }
+.ad--done    { background: var(--azure-bright); }
+.ad--dl      { background: var(--cyan); animation: pulse-live 1.6s var(--ease-drift) infinite; }
 .ad--missing { background: rgba(255,255,255,.14); }
 </style>
