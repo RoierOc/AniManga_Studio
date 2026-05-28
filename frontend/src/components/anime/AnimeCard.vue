@@ -35,19 +35,17 @@ const dots = computed(() => {
 
       <div class="acard__hover"><span class="acard__btn"><Icon name="play" :size="18" /></span></div>
 
-      <div class="acard__foot">
+      <!-- Title + progress overlaid on the poster bottom -->
+      <div class="acard__overlay">
+        <h3 class="acard__title">{{ anime.title }}</h3>
+        <div class="acard__count">
+          <span>{{ done }}<span class="muted"> / {{ total || '?' }}</span> ep.</span>
+          <span v-if="pct >= 100" class="acard__complete"><Icon name="check" :size="11" /></span>
+        </div>
+        <div class="acard__bar"><span :style="{ width: pct + '%' }" /></div>
         <div class="acard__dots">
           <span v-for="(d, i) in dots" :key="i" class="ad" :class="`ad--${d}`" />
         </div>
-      </div>
-    </div>
-
-    <div class="acard__meta">
-      <h3 class="acard__title">{{ anime.title }}</h3>
-      <div class="acard__bar"><span :style="{ width: pct + '%' }" /></div>
-      <div class="acard__count">
-        <span>{{ done }}<span class="muted"> / {{ total || '?' }}</span> ep.</span>
-        <span v-if="pct >= 100" class="acard__complete"><Icon name="check" :size="11" /></span>
       </div>
     </div>
   </article>
@@ -67,7 +65,7 @@ const dots = computed(() => {
 .acard__img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-slow), transform var(--t-cine) var(--ease-silk); }
 .acard__img.is-loaded { opacity: 1; }
 .acard:hover .acard__img { transform: scale(1.07); }
-.acard__scrim { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7,10,18,.35) 0%, transparent 30%, transparent 55%, rgba(7,10,18,.9) 100%); }
+.acard__scrim { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7,10,18,.4) 0%, transparent 26%, transparent 48%, rgba(5,7,13,.95) 100%); }
 .acard__shine {
   position: absolute; inset: 0; pointer-events: none;
   background: linear-gradient(112deg, transparent 35%, rgba(168,200,255,.14) 48%, transparent 60%);
@@ -98,22 +96,21 @@ const dots = computed(() => {
 }
 .acard:hover .acard__btn { transform: scale(1); }
 
-.acard__foot { position: absolute; left: 0; right: 0; bottom: 0; padding: var(--s-2); }
+.acard__overlay { position: absolute; left: 0; right: 0; bottom: 0; padding: var(--s-3); }
+.acard__title {
+  font-family: var(--font-body); font-weight: 600; font-size: var(--fs-sm); line-height: var(--lh-snug); color: #fff;
+  text-shadow: 0 1px 6px rgba(0,0,0,.65);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.acard__count { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-xs); color: var(--ink-soft); margin-top: 5px; text-shadow: 0 1px 4px rgba(0,0,0,.6); }
+.acard__count .muted { color: var(--ink-faint); }
+.acard__complete { color: var(--jade); display: grid; place-items: center; }
+.acard__bar { height: 3px; margin: 6px 0; border-radius: var(--r-pill); background: rgba(255,255,255,.14); overflow: hidden; }
+.acard__bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--azure-deep), var(--azure)); transition: width var(--t-slow) var(--ease-silk); }
 .acard__dots { display: flex; gap: 2px; }
-.ad { flex: 1; height: 3px; border-radius: var(--r-pill); background: var(--ink-ghost); }
+.ad { flex: 1; height: 3px; border-radius: var(--r-pill); background: rgba(255,255,255,.16); }
 .ad--done    { background: var(--azure); }
 .ad--watched { background: var(--ink-faint); }
 .ad--dl      { background: var(--cyan); animation: pulse-live 1.6s var(--ease-drift) infinite; }
 .ad--missing { background: rgba(255,255,255,.08); }
-
-.acard__meta { padding: var(--s-3) var(--s-1) 0; }
-.acard__title {
-  font-family: var(--font-body); font-weight: 600; font-size: var(--fs-sm); line-height: var(--lh-snug);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.acard__bar { height: 3px; margin: var(--s-2) 0 6px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
-.acard__bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--azure-deep), var(--azure)); transition: width var(--t-slow) var(--ease-silk); }
-.acard__count { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-xs); color: var(--ink-soft); }
-.acard__count .muted { color: var(--ink-faint); }
-.acard__complete { color: var(--jade); display: grid; place-items: center; }
 </style>

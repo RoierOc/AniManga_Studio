@@ -77,10 +77,9 @@ const counts = computed(() => {
       <Icon name="film" :size="34" />
       <p>{{ store.library.length ? 'Sin resultados.' : 'Aún no has añadido anime.' }}</p>
     </div>
-    <TransitionGroup v-else tag="div" name="card" class="grid stagger">
-      <AnimeCard v-for="(a, i) in filtered" :key="a.id" :anime="a" :style="{ '--i': Math.min(i, 16) }"
-                 @open="store.openDetail($event)" />
-    </TransitionGroup>
+    <div v-else class="grid">
+      <AnimeCard v-for="a in filtered" :key="a.id" :anime="a" @open="store.openDetail($event)" />
+    </div>
   </div>
 </template>
 
@@ -108,16 +107,12 @@ const counts = computed(() => {
 .sort:hover { color: var(--ink); }
 .sort.is-active { background: var(--surface-3); color: var(--ink); }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: var(--s-6) var(--s-5); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: var(--s-5) var(--s-5); }
 .skeleton { aspect-ratio: 2/3; border-radius: var(--r-md); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-9) 0; color: var(--ink-faint); }
 
-.card-enter-active { transition: all var(--t-slow) var(--ease-silk); }
-.card-enter-from { opacity: 0; transform: translateY(12px); }
-.card-move { transition: transform var(--t-slow) var(--ease-silk); }
-
 @media (max-width: 540px) {
   .alib { padding: 0 var(--s-4); }
-  .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--s-5) var(--s-3); }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s-5) var(--s-3); }
 }
 </style>

@@ -30,14 +30,15 @@ const initials = computed(() =>
       <div class="card__hover">
         <button class="card__open"><Icon name="play" :size="18" /></button>
       </div>
-    </div>
 
-    <div class="card__meta">
-      <h3 class="card__title">{{ manga.name }}</h3>
-      <div class="card__stats">
-        <span>{{ manga.chapter_count || 0 }} cap.</span>
-        <span class="dot" />
-        <span>{{ manga.image_count || 0 }} pág.</span>
+      <!-- Title + stats overlaid on the poster bottom -->
+      <div class="card__overlay">
+        <h3 class="card__title">{{ manga.name }}</h3>
+        <div class="card__stats">
+          <span>{{ manga.chapter_count || 0 }} cap.</span>
+          <span class="dot" />
+          <span>{{ manga.image_count || 0 }} pág.</span>
+        </div>
       </div>
     </div>
   </article>
@@ -80,7 +81,7 @@ const initials = computed(() =>
 
 .card__scrim {
   position: absolute; inset: 0;
-  background: linear-gradient(180deg, transparent 45%, rgba(7, 10, 18, 0.85) 100%);
+  background: linear-gradient(180deg, transparent 38%, rgba(7, 10, 18, 0.55) 62%, rgba(5, 7, 13, 0.94) 100%);
 }
 
 /* diagonal holo shine on hover */
@@ -116,15 +117,21 @@ const initials = computed(() =>
 }
 .card:hover .card__open { transform: scale(1); }
 
-.card__meta { padding: var(--s-3) var(--s-1) 0; }
+.card__overlay {
+  position: absolute; left: 0; right: 0; bottom: 0;
+  padding: var(--s-3) var(--s-3) var(--s-3);
+  transition: transform var(--t-base) var(--ease-silk);
+}
 .card__title {
   font-family: var(--font-body); font-weight: 600; font-size: var(--fs-sm);
-  line-height: var(--lh-snug); color: var(--ink);
+  line-height: var(--lh-snug); color: #fff;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .card__stats {
   display: flex; align-items: center; gap: var(--s-2);
-  margin-top: var(--s-1); font-size: var(--fs-xs); color: var(--ink-faint);
+  margin-top: 5px; font-size: var(--fs-xs); color: var(--ink-soft);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
 }
-.dot { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-ghost); }
+.dot { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-faint); }
 </style>

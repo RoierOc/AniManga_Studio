@@ -101,9 +101,9 @@ onMounted(load)
       <p>{{ items.length ? 'Sin resultados para ese filtro.' : 'Tu biblioteca está vacía.' }}</p>
     </div>
 
-    <TransitionGroup v-else tag="div" name="card" class="grid stagger">
-      <MangaCard v-for="(m, i) in filtered" :key="m.id" :manga="m" :style="{ '--i': Math.min(i, 16) }" />
-    </TransitionGroup>
+    <div v-else class="grid">
+      <MangaCard v-for="m in filtered" :key="m.id" :manga="m" />
+    </div>
   </div>
 </template>
 
@@ -161,8 +161,8 @@ onMounted(load)
 /* ── Grid ─────────────────────────────────────────────────────────────── */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
-  gap: var(--s-6) var(--s-5);
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: var(--s-5) var(--s-5);
 }
 .skeleton {
   aspect-ratio: 2 / 3; border-radius: var(--r-md);
@@ -185,14 +185,9 @@ onMounted(load)
 }
 .btn:hover { background: var(--azure); color: #fff; }
 
-/* card list transitions */
-.card-enter-active { transition: all var(--t-slow) var(--ease-silk); }
-.card-enter-from { opacity: 0; transform: translateY(12px); }
-.card-move { transition: transform var(--t-slow) var(--ease-silk); }
-
 @media (max-width: 540px) {
   .view { padding: var(--s-3) var(--s-4) var(--s-8); }
-  .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--s-5) var(--s-3); }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s-5) var(--s-3); }
   .hero__stats { gap: var(--s-5); }
 }
 </style>
