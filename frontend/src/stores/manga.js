@@ -19,7 +19,7 @@ export const useMangaStore = defineStore('manga', {
     upscale: {},
 
     // reader
-    reader: null,             // { title, chapter, source } | null
+    reader: null,             // { title, chapter, source, kind } | null  (kind: manga | cbz)
     pages: [],
     page: 0,
     readerLoading: false,
@@ -102,7 +102,7 @@ export const useMangaStore = defineStore('manga', {
     /* ── Reader ─────────────────────────────────────────────────────────── */
     async read(chapter, source = 'auto') {
       this.readerLoading = true
-      this.reader = { title: this.current.id, chapter, source }
+      this.reader = { title: this.current.id, chapter, source, kind: 'manga' }
       this.pages = []
       this.page = 0
       try {
@@ -111,6 +111,12 @@ export const useMangaStore = defineStore('manga', {
         if (this.reader) this.reader.source = d.source
       } catch (_) { useUiStore().toast('No se pudo abrir el capítulo', 'error'); this.reader = null }
       finally { this.readerLoading = false }
+    },
+    // Open the reader with pre-resolved page URLs (CBZ / external).
+    openReaderRaw(title, pages, label = '') {
+      this.reader = { title, chapter: label, source: '', kind: 'cbz' }
+      this.pages = pages
+      this.page = 0
     },
     closeReader() { this.reader = null; this.pages = [] },
     nextPage() { if (this.page < this.pages.length - 1) this.page++ },

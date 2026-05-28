@@ -15,7 +15,8 @@ export function chapterSortKey(ch) {
   return isNaN(n) ? Infinity : n
 }
 
-// Page URL served by Flask (/uploads prefers upscaled, falls back to original)
-export const pageUrl = (p) => `/uploads/${p}`
+// Page URL served by Flask (/uploads prefers upscaled, falls back to original).
+// Absolute paths (CBZ pages, remote URLs) pass through unchanged.
+export const pageUrl = (p) => (/^(https?:)?\/\//.test(p) || p.startsWith('/')) ? p : `/uploads/${p}`
 export const pageUrlOriginal = (p) => `/uploads/original/${p}`
 export const pageUrlUpscaled = (p) => `/uploads/upscaled/${p}`

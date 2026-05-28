@@ -10,6 +10,7 @@ const scroller = ref(null)
 
 const open = computed(() => !!store.reader)
 const isUpscaled = computed(() => store.reader?.source === 'upscaled')
+const isManga = computed(() => store.reader?.kind !== 'cbz')
 
 function onKey(e) {
   if (!open.value) return
@@ -43,9 +44,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
         <header class="rd__bar">
           <button class="rd__btn" @click="store.closeReader()"><Icon name="chevron" :size="18" :style="{ transform: 'rotate(180deg)' }" /></button>
           <div class="rd__meta">
-            <span class="rd__title">{{ store.current?.name }}</span>
-            <span class="rd__ch">Cap. {{ store.reader.chapter }}</span>
-            <span class="rd__src" :class="{ 'is-4k': isUpscaled }">{{ isUpscaled ? '4K' : 'ORIG' }}</span>
+            <span class="rd__title">{{ isManga ? store.current?.name : store.reader.title }}</span>
+            <span v-if="store.reader.chapter" class="rd__ch">{{ isManga ? 'Cap. ' : '' }}{{ store.reader.chapter }}</span>
+            <span v-if="isManga" class="rd__src" :class="{ 'is-4k': isUpscaled }">{{ isUpscaled ? '4K' : 'ORIG' }}</span>
           </div>
 
           <div class="rd__tools">
@@ -58,7 +59,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
             <button class="rd__btn" v-if="store.mode === 'paged'" :title="store.dir === 'rtl' ? 'Derecha→Izquierda' : 'Izquierda→Derecha'" @click="store.toggleDir()">
               <span class="rd__txt">{{ store.dir === 'rtl' ? 'RTL' : 'LTR' }}</span>
             </button>
-            <button class="rd__btn" :class="{ 'is-on': isUpscaled }" title="Original / 4K" @click="store.read(store.reader.chapter, isUpscaled ? 'original' : 'upscaled')">
+            <button v-if="isManga" class="rd__btn" :class="{ 'is-on': isUpscaled }" title="Original / 4K" @click="store.read(store.reader.chapter, isUpscaled ? 'original' : 'upscaled')">
               <Icon name="spark" :size="15" />
             </button>
           </div>
