@@ -5,6 +5,7 @@ import { useMangaStore } from '@/stores/manga'
 import Sidebar from '@/components/layout/Sidebar.vue'
 import TopBar from '@/components/layout/TopBar.vue'
 import Toaster from '@/components/ui/Toaster.vue'
+import TaskQueue from '@/components/ui/TaskQueue.vue'
 import MangaModal from '@/components/manga/MangaModal.vue'
 import Reader from '@/components/manga/Reader.vue'
 import LibraryView from '@/views/LibraryView.vue'
@@ -48,6 +49,7 @@ const activeComponent = computed(() => VIEW_COMPONENTS[ui.currentView] || null)
 
     <MangaModal />
     <Reader />
+    <TaskQueue />
     <Toaster />
   </div>
 </template>

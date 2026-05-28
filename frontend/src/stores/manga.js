@@ -17,6 +17,8 @@ export const useMangaStore = defineStore('manga', {
     // live task status (from SSE aggregated payload)
     downloads: {},
     upscale: {},
+    exports: {},
+    queueOpen: true,
 
     // reader
     reader: null,             // { title, chapter, source, kind } | null  (kind: manga | cbz)
@@ -36,6 +38,26 @@ export const useMangaStore = defineStore('manga', {
       return t && ['starting', 'started', 'upscaling'].includes(t.status) ? t : null
     },
     sortedChapters: (s) => [...s.chapters].sort((a, b) => parseFloat(b.chapter) - parseFloat(a.chapter)),
+
+    // Unified active task list for the global queue widget.
+    activeTasks: (s) => {
+      const out = []
+      const pct = (p, t) => t ? Math.min(100, Math.round((p || 0) / t * 100)) : (p || 0)
+      for (const [id, v] of Object.entries(s.downloads)) {
+        if (['done', 'complete', 'error', 'cancelled', 'interrupted'].includes(v.status)) continue
+        out.push({ id, kind: 'download', label: `${v.title || ''} · cap. ${v.chapter ?? ''}`, status: v.status, pct: pct(v.progress, v.total), msg: v.message })
+      }
+      for (const [id, v] of Object.entries(s.upscale)) {
+        if (!['starting', 'started', 'upscaling'].includes(v.status)) continue
+        out.push({ id, kind: 'upscale', label: `4K · ${v.title || ''} cap. ${v.chapter ?? ''}`, status: v.status, pct: pct(v.progress ?? v.current, v.total) })
+      }
+      for (const [id, v] of Object.entries(s.exports)) {
+        const done = v.status === 'complete'
+        if (['error', 'cancelled'].includes(v.status)) continue
+        out.push({ id, kind: 'export', label: v.volume_name || 'Tomo', status: v.status, pct: pct(v.progress, v.total), done, file: done })
+      }
+      return out
+    },
   },
 
   actions: {
@@ -45,6 +67,7 @@ export const useMangaStore = defineStore('manga', {
       onStatus((data) => {
         this.downloads = data.downloads || {}
         this.upscale = data.upscale || {}
+        this.exports = data.exports || {}
         // when an upscale for the open manga finishes, refresh its chapter map
         if (this.current) {
           const finished = Object.entries(this.upscale).some(([k, v]) =>
@@ -97,6 +120,27 @@ export const useMangaStore = defineStore('manga', {
         this.chapters = this.chapters.filter(c => c.chapter !== chapter)
         delete this.upscaled[chapter]
       } catch (_) { useUiStore().toast('No se pudo borrar el capítulo', 'error') }
+    },
+
+    /* ── Task queue actions ─────────────────────────────────────────────── */
+    async cancelTask(task) {
+      try {
+        if (task.kind === 'download') await api.post(`/api/download/cancel/${task.id}`, {})
+        else if (task.kind === 'upscale') await api.post(`/api/upscale/cancel/${task.id}`, {})
+      } catch (_) {}
+    },
+    exportFileUrl(id) { return `/api/export/file/${id}` },
+
+    /* ── Tomo export ────────────────────────────────────────────────────── */
+    async exportTomo({ chapters, volumeName, format = 'cbz', quality = 92, downscaleHalf = false }) {
+      try {
+        const d = await api.post('/api/export/start', {
+          title: this.current.id, chapters, volume_name: volumeName || this.current.name,
+          format, quality, downscale_half: downscaleHalf,
+        })
+        useUiStore().toast(`Exportando "${volumeName || this.current.name}"…`, 'info')
+        return d.task_id
+      } catch (_) { useUiStore().toast('No se pudo iniciar la exportación', 'error'); return null }
     },
 
     /* ── Reader ─────────────────────────────────────────────────────────── */
