@@ -61,6 +61,23 @@ const counts = computed(() => {
       </label>
     </header>
 
+    <!-- Continue watching -->
+    <section v-if="store.continueWatching.length" class="cw">
+      <h3 class="cw__title">Seguir viendo</h3>
+      <div class="cw__row">
+        <article v-for="cw in store.continueWatching" :key="cw.anime.id" class="cwc" @click="store.play(cw.anime, cw.ep)">
+          <div class="cwc__thumb">
+            <img v-if="cw.anime.cover" :src="cw.anime.cover" :alt="cw.anime.title" loading="lazy" />
+            <div class="cwc__scrim" />
+            <div class="cwc__play"><Icon name="play" :size="22" /></div>
+            <span class="cwc__ep">EP {{ cw.ep.num }}</span>
+            <div v-if="cw.ep.resume_pos > 0 && cw.ep.duration" class="cwc__bar"><span :style="{ width: Math.min(100, cw.ep.resume_pos / cw.ep.duration * 100) + '%' }" /></div>
+          </div>
+          <div class="cwc__title">{{ cw.anime.title }}</div>
+        </article>
+      </div>
+    </section>
+
     <div class="toolbar stagger">
       <div class="filters" style="--i:2">
         <button class="pill" :class="{ 'is-active': store.libFilter === 'all' }" @click="store.libFilter = 'all'">
@@ -101,6 +118,23 @@ const counts = computed(() => {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); color: var(--ink-faint); transition: border-color var(--t-fast), box-shadow var(--t-fast); }
 .searchbox:focus-within { border-color: var(--azure); box-shadow: 0 0 0 3px var(--azure-haze); }
 .searchbox input { flex: 1; border: none; outline: none; background: none; color: var(--ink); font-size: var(--fs-sm); }
+
+/* continue watching */
+.cw { margin-bottom: var(--s-6); }
+.cw__title { font-family: var(--font-display); font-size: var(--fs-lg); margin-bottom: var(--s-3); }
+.cw__row { display: flex; gap: var(--s-4); overflow-x: auto; padding-bottom: var(--s-2); }
+.cwc { flex-shrink: 0; width: 220px; cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }
+.cwc:hover { transform: translateY(-4px); }
+.cwc__thumb { position: relative; aspect-ratio: 16/9; border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
+.cwc:hover .cwc__thumb { border-color: var(--azure-glow); box-shadow: var(--shadow-md); }
+.cwc__thumb img { width: 100%; height: 100%; object-fit: cover; }
+.cwc__scrim { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7,10,18,.1), rgba(5,7,13,.6)); }
+.cwc__play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; opacity: 0; transition: opacity var(--t-base); }
+.cwc:hover .cwc__play { opacity: 1; }
+.cwc__ep { position: absolute; top: var(--s-2); left: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 7px; border-radius: var(--r-xs); background: rgba(7,10,18,.7); color: var(--ice); }
+.cwc__bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(255,255,255,.15); }
+.cwc__bar span { display: block; height: 100%; background: var(--azure); }
+.cwc__title { margin-top: var(--s-2); font-size: var(--fs-sm); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--s-3); margin-bottom: var(--s-6); }
 .filters { display: flex; gap: var(--s-2); flex-wrap: wrap; }

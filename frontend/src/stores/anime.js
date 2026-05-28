@@ -80,6 +80,21 @@ export const useAnimeStore = defineStore('anime', {
   getters: {
     detail: (s) => s.library.find(a => a.id === s.detailId) || null,
 
+    // "Continue watching": in-progress or next-unwatched episode per recently-watched anime
+    continueWatching: (s) => {
+      return s.library
+        .filter(a => a.last_watched_at > 0)
+        .map(a => {
+          const eps = (a.episodes || [])
+          const inProg = eps.find(e => e.num > 0 && e.ep_type !== 'special' && (e.resume_pos > 0) && !e.watched && (e.in_local || (e.in_qbt && e.progress >= 100)))
+          const ep = inProg || nextUnwatchedEp(a)
+          return ep ? { anime: a, ep } : null
+        })
+        .filter(Boolean)
+        .sort((x, y) => (y.anime.last_watched_at || 0) - (x.anime.last_watched_at || 0))
+        .slice(0, 12)
+    },
+
     filteredTorrents: (s) => {
       let list = s.torrents
       if (s.flt.hideDead) list = list.filter(t => t.seeders > 0)
