@@ -8,18 +8,20 @@ defineEmits(['open'])
 
 const total = computed(() => props.anime.total_episodes || 0)
 const done = computed(() => props.anime.downloaded_count || 0)
-const pct = computed(() => total.value ? Math.min(100, (done.value / total.value) * 100) : 0)
 const status = computed(() => ANIME_STATUS[props.anime.status] || null)
 
-// last 12 episode availability dots
-const dots = computed(() => {
-  const eps = (props.anime.episodes || []).filter(e => e.num > 0).sort((a, b) => a.num - b.num)
-  return eps.slice(-12).map(e => {
-    if (e.in_local || (e.in_qbt && e.progress >= 100)) return e.watched ? 'watched' : 'done'
-    if (e.in_qbt) return 'dl'
-    return 'missing'
-  })
-})
+// First 12 episode availability dots — exactly like the original card:
+// green = downloaded, yellow = downloading, faint = missing.
+const dots = computed(() =>
+  (props.anime.episodes || [])
+    .filter(e => e.num > 0)
+    .slice(0, 12)
+    .map(e => {
+      if (e.in_local || (e.in_qbt && e.progress >= 100)) return 'done'
+      if (e.in_qbt && e.progress < 100) return 'dl'
+      return 'missing'
+    })
+)
 </script>
 
 <template>
@@ -35,16 +37,16 @@ const dots = computed(() => {
 
       <div class="acard__hover"><span class="acard__btn"><Icon name="play" :size="18" /></span></div>
 
-      <!-- Title + progress overlaid on the poster bottom -->
+      <!-- Title + (count left · dots right) overlaid on the poster bottom -->
       <div class="acard__overlay">
         <h3 class="acard__title">{{ anime.title }}</h3>
-        <div class="acard__count">
-          <span>{{ done }}<span class="muted"> / {{ total || '?' }}</span> ep.</span>
-          <span v-if="pct >= 100" class="acard__complete"><Icon name="check" :size="11" /></span>
-        </div>
-        <div class="acard__bar"><span :style="{ width: pct + '%' }" /></div>
-        <div class="acard__dots">
-          <span v-for="(d, i) in dots" :key="i" class="ad" :class="`ad--${d}`" />
+        <div class="acard__bottom">
+          <span class="acard__eps">
+            <span class="acard__count">{{ done }}</span><span v-if="total" class="acard__total"> / {{ total }}</span>
+          </span>
+          <div class="acard__dots">
+            <span v-for="(d, i) in dots" :key="i" class="ad" :class="`ad--${d}`" />
+          </div>
         </div>
       </div>
     </div>
@@ -102,15 +104,14 @@ const dots = computed(() => {
   text-shadow: 0 1px 6px rgba(0,0,0,.65);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.acard__count { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-xs); color: var(--ink-soft); margin-top: 5px; text-shadow: 0 1px 4px rgba(0,0,0,.6); }
-.acard__count .muted { color: var(--ink-faint); }
-.acard__complete { color: var(--jade); display: grid; place-items: center; }
-.acard__bar { height: 3px; margin: 6px 0; border-radius: var(--r-pill); background: rgba(255,255,255,.14); overflow: hidden; }
-.acard__bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--azure-deep), var(--azure)); transition: width var(--t-slow) var(--ease-silk); }
-.acard__dots { display: flex; gap: 2px; }
-.ad { flex: 1; height: 3px; border-radius: var(--r-pill); background: rgba(255,255,255,.16); }
-.ad--done    { background: var(--azure); }
-.ad--watched { background: var(--ink-faint); }
-.ad--dl      { background: var(--cyan); animation: pulse-live 1.6s var(--ease-drift) infinite; }
-.ad--missing { background: rgba(255,255,255,.08); }
+/* count on the left · dots on the right — exactly like the original */
+.acard__bottom { display: flex; align-items: center; justify-content: space-between; gap: 4px; margin-top: 6px; }
+.acard__eps { font-size: var(--fs-xs); white-space: nowrap; text-shadow: 0 1px 4px rgba(0,0,0,.6); }
+.acard__count { color: var(--azure-bright); font-weight: 700; }
+.acard__total { color: var(--ink-soft); opacity: .7; }
+.acard__dots { display: flex; flex-wrap: wrap; gap: 3px; justify-content: flex-end; }
+.ad { width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.16); }
+.ad--done    { background: var(--jade); }
+.ad--dl      { background: var(--gold); }
+.ad--missing { background: rgba(255,255,255,.14); }
 </style>
