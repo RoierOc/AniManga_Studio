@@ -2,11 +2,13 @@
 import { ref, computed, onMounted } from 'vue'
 import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
+import { useMangaStore } from '@/stores/manga'
 import MangaCard from '@/components/manga/MangaCard.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Icon from '@/components/ui/Icon.vue'
 
 const ui = useUiStore()
+const manga = useMangaStore()
 const items = ref([])
 const loading = ref(true)
 const error = ref(false)
@@ -102,7 +104,7 @@ onMounted(load)
     </div>
 
     <div v-else class="grid">
-      <MangaCard v-for="m in filtered" :key="m.id" :manga="m" />
+      <MangaCard v-for="m in filtered" :key="m.id" :manga="m" @click="manga.open(m)" />
     </div>
   </div>
 </template>

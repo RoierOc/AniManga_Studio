@@ -1,14 +1,19 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useUiStore, VIEWS } from '@/stores/ui'
+import { useMangaStore } from '@/stores/manga'
 import Sidebar from '@/components/layout/Sidebar.vue'
 import TopBar from '@/components/layout/TopBar.vue'
 import Toaster from '@/components/ui/Toaster.vue'
+import MangaModal from '@/components/manga/MangaModal.vue'
+import Reader from '@/components/manga/Reader.vue'
 import LibraryView from '@/views/LibraryView.vue'
 import AnimeStudio from '@/views/anime/AnimeStudio.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 
 const ui = useUiStore()
+const manga = useMangaStore()
+onMounted(() => manga.init())
 
 // Map each view id to its component. Migrated so far: Library, Anime Studio.
 // The rest render the placeholder until their phase lands.
@@ -37,6 +42,8 @@ const activeComponent = computed(() => VIEW_COMPONENTS[ui.currentView] || null)
       </main>
     </div>
 
+    <MangaModal />
+    <Reader />
     <Toaster />
   </div>
 </template>

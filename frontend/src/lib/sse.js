@@ -1,8 +1,14 @@
 /* Single shared EventSource to /api/status/stream.
-   Components subscribe by event type; the connection auto-reconnects. */
+
+   The backend pushes ONE aggregated message every 500ms:
+     { downloads: {...}, upscale: {...}, exports: {...}, events?: [{seq,type,...}] }
+
+   - Aggregated status (downloads/upscale/exports) → onStatus() subscribers.
+   - Each entry in `events[]` (watched/position/download_complete/…) → onSSE(type) subscribers. */
 
 let source = null
-const listeners = new Map() // type -> Set<fn>
+const evListeners = new Map()   // event type -> Set<fn>
+const statusListeners = new Set()
 
 function ensure() {
   if (source) return
@@ -11,12 +17,20 @@ function ensure() {
     source.onmessage = (e) => {
       let data
       try { data = JSON.parse(e.data) } catch { return }
-      const type = data.type
-      const set = listeners.get(type)
-      if (set) set.forEach(fn => { try { fn(data) } catch (_) {} })
+
+      // Aggregated status snapshot
+      if (data.downloads || data.upscale || data.exports) {
+        statusListeners.forEach(fn => { try { fn(data) } catch (_) {} })
+      }
+      // Event bus
+      if (Array.isArray(data.events)) {
+        for (const ev of data.events) {
+          const set = evListeners.get(ev.type)
+          if (set) set.forEach(fn => { try { fn(ev) } catch (_) {} })
+        }
+      }
     }
     source.onerror = () => {
-      // EventSource reconnects on its own; drop the handle if fully closed.
       if (source && source.readyState === EventSource.CLOSED) {
         source = null
         setTimeout(ensure, 3000)
@@ -27,7 +41,13 @@ function ensure() {
 
 export function onSSE(type, fn) {
   ensure()
-  if (!listeners.has(type)) listeners.set(type, new Set())
-  listeners.get(type).add(fn)
-  return () => listeners.get(type)?.delete(fn)
+  if (!evListeners.has(type)) evListeners.set(type, new Set())
+  evListeners.get(type).add(fn)
+  return () => evListeners.get(type)?.delete(fn)
+}
+
+export function onStatus(fn) {
+  ensure()
+  statusListeners.add(fn)
+  return () => statusListeners.delete(fn)
 }
