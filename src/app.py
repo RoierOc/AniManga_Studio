@@ -85,13 +85,43 @@ def mobile_library():
         content = f.read()
     return Response(content, mimetype='text/html', headers={'Cache-Control': 'no-cache'})
 
-@app.route('/')
-def index():
+# ── Frontend v2 (Vite SPA) ────────────────────────────────────────────────────
+# Built assets live in frontend/dist. Flask serves them at / in production.
+# The legacy single-file app stays available at /legacy as a fallback.
+FRONTEND_DIST = BASE_DIR.parent / 'frontend' / 'dist'
+
+def _serve_spa():
+    from flask import Response
+    index_file = FRONTEND_DIST / 'index.html'
+    if not index_file.exists():
+        # dist not built yet — fall back to the legacy UI
+        return _serve_legacy()
+    return Response(index_file.read_text(encoding='utf-8'),
+                    mimetype='text/html', headers={'Cache-Control': 'no-cache'})
+
+def _serve_legacy():
     from flask import Response
     html_path = BASE_DIR.parent / 'templates' / 'index.html'
     with open(html_path, 'r', encoding='utf-8') as f:
         content = f.read()
     return Response(content, mimetype='text/html', headers={'Cache-Control': 'no-cache'})
+
+@app.route('/')
+def index():
+    return _serve_spa()
+
+@app.route('/legacy')
+def legacy_index():
+    return _serve_legacy()
+
+@app.route('/assets/<path:filename>')
+def serve_spa_assets(filename):
+    return send_from_directory(str(FRONTEND_DIST / 'assets'), filename)
+
+@app.route('/favicon.svg')
+def serve_favicon():
+    return send_from_directory(str(FRONTEND_DIST), 'favicon.svg',
+                               mimetype='image/svg+xml')
 
 @app.route('/sw.js')
 def serve_sw():
