@@ -102,8 +102,12 @@ onMounted(() => { load(); if (!manga.updatesLoaded) manga.loadUpdates() })
         </button>
       </div>
       <div class="tb-right" style="--i:2">
-        <button class="covbtn" :disabled="findingCovers" @click="findCovers" title="Buscar portadas faltantes">
+        <button class="covbtn" :disabled="findingCovers" @click="findCovers" title="Buscar portadas faltantes en MangaDex">
           <span v-if="findingCovers" class="covspin" /><Icon v-else name="spark" :size="14" /> Portadas
+        </button>
+        <button class="covbtn" :disabled="manga.offlineCovers?.running" @click="manga.downloadCoversOffline()" title="Descargar todas las portadas para uso offline">
+          <span v-if="manga.offlineCovers?.running" class="covspin" /><Icon v-else name="download" :size="14" />
+          <span v-if="manga.offlineCovers?.running">{{ manga.offlineCovers.done }}/{{ manga.offlineCovers.total }}</span><span v-else>Offline</span>
         </button>
         <label class="searchbox">
           <Icon name="search" :size="15" />

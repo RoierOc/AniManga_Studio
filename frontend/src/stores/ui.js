@@ -38,6 +38,7 @@ export const useUiStore = defineStore('ui', {
       currentView: VALID.has(s.view) ? s.view : 'library',
       sidebarCollapsed: s.sidebarCollapsed ?? false,
       sidebarMobileOpen: false,
+      showShortcuts: false,
       toasts: [],
       _toastSeq: 0,
     }

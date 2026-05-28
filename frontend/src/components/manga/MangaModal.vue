@@ -1,12 +1,20 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useMangaStore } from '@/stores/manga'
+import { formatChapter } from '@/lib/manga'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useMangaStore()
 const m = computed(() => store.current)
 const upState = (ch) => store.upscaled[ch]          // true | 'partial' | undefined
+
+// bulk upscale range
+const rangeFrom = ref('')
+const rangeTo = ref('')
+function doRange() { if (rangeFrom.value && rangeTo.value) store.upscaleRange(rangeFrom.value, rangeTo.value) }
+// color pages
+function detectColors() { store.loadColorPages([...sel.value]) }
 
 // modal tabs + tomo export form
 const tab = ref('chapters')
@@ -25,8 +33,8 @@ const tomoCover = ref('')      // b64 cover for the exported tomo
 watch(m, (v) => {
   tab.value = 'chapters'; sel.value = new Set(); volName.value = v?.name || ''
   showManage.value = false; renameVal.value = v?.name || ''; coverUrlVal.value = ''
-  tomoCover.value = ''
-  if (v) store.resetMdex()
+  tomoCover.value = ''; rangeFrom.value = ''; rangeTo.value = ''
+  if (v) { store.resetMdex(); store.loadHealth(); store.colorPages = []; store.excludedPages = [] }
   if (v && !Object.keys(store.models).length) store.loadModels()
   if (v) store.loadDestinations()
 }, { immediate: true })
@@ -86,6 +94,11 @@ async function doExport(toDrive = false) {
               </div>
               <div class="modal__hacts">
                 <button class="hbtn hbtn--accent" @click="store.upscaleAll()"><Icon name="spark" :size="13" /> Escalar todo 4K</button>
+                <span class="rangebox">
+                  <input v-model="rangeFrom" placeholder="de" inputmode="decimal" />
+                  <input v-model="rangeTo" placeholder="a" inputmode="decimal" />
+                  <button @click="doRange" title="Escalar rango">4K rango</button>
+                </span>
                 <button class="hbtn" @click="showManage = !showManage" :class="{ 'is-on': showManage }">Gestionar</button>
                 <button class="hbtn" @click="store.scanCorrupt()">Verificar</button>
               </div>
@@ -145,8 +158,23 @@ async function doExport(toDrive = false) {
                 </button>
                 <div class="dests">
                   <button v-if="!store.drive.connected" class="dlink" @click="store.connectDrive()">Conectar Google Drive</button>
-                  <span v-else class="dok">Drive: {{ store.drive.email }}</span>
+                  <template v-else><span class="dok">Drive: {{ store.drive.email }}</span><button class="dlink" @click="store.disconnectDrive()">Desconectar</button></template>
                   <a v-if="store.webdav.phoneUrl" :href="store.webdav.phoneUrl" target="_blank" class="dlink">Abrir en el móvil ↗</a>
+                </div>
+
+                <!-- color pages exclusion -->
+                <div class="colors">
+                  <button class="btn-xs" :disabled="store.colorLoading || !sel.size" @click="detectColors">
+                    <span v-if="store.colorLoading" class="xspin" />Detectar páginas a color
+                  </button>
+                  <div v-if="store.colorPages.length" class="colors__grid">
+                    <button v-for="cp in store.colorPages" :key="cp.filename" class="colorpg" :class="{ 'is-excl': store.excludedPages.includes(cp.filename) }"
+                            :title="cp.label + (store.excludedPages.includes(cp.filename) ? ' (excluida)' : '')" @click="store.toggleExclude(cp.filename)">
+                      <img :src="cp.url" loading="lazy" alt="" />
+                      <span v-if="store.excludedPages.includes(cp.filename)" class="colorpg__x"><Icon name="close" :size="12" /></span>
+                    </button>
+                  </div>
+                  <p v-else-if="!store.colorLoading && store.colorPages.length === 0 && sel.size" class="colors__hint">Pulsa para detectar y excluir páginas a color del tomo.</p>
                 </div>
               </div>
               <!-- MangaDex volumes + covers -->
@@ -185,10 +213,11 @@ async function doExport(toDrive = false) {
               <li v-for="c in store.sortedChapters" :key="c.chapter" class="chap"
                   :class="{ 'chap--4k': upState(c.chapter) === true, 'chap--part': upState(c.chapter) === 'partial' }">
                 <button class="chap__read" @click="store.read(c.chapter)">
-                  <span class="chap__num">{{ c.chapter }}</span>
+                  <span v-if="store.isChapterRead(c.chapter)" class="chap__read-dot" title="Leído" />
+                  <span class="chap__num">{{ formatChapter(c.chapter) }}</span>
                   <span class="chap__pages">{{ c.page_count }} pág.</span>
                   <span v-if="upState(c.chapter) === true" class="chap__tag chap__tag--4k">4K</span>
-                  <span v-else-if="upState(c.chapter) === 'partial'" class="chap__tag chap__tag--part">PARCIAL</span>
+                  <span v-else-if="upState(c.chapter) === 'partial'" class="chap__tag chap__tag--part" :title="store.health[c.chapter] ? `Faltan ${store.health[c.chapter].missing_upscaled} págs.` : ''">PARCIAL<template v-if="store.health[c.chapter]?.missing_upscaled"> ·{{ store.health[c.chapter].missing_upscaled }}</template></span>
                 </button>
 
                 <div class="chap__actions">
@@ -293,6 +322,19 @@ async function doExport(toDrive = false) {
 .exportbtn:disabled { opacity: .5; cursor: not-allowed; }
 .exportbtn--drive { background: transparent; color: var(--azure-bright); border: 1px solid var(--azure); margin-top: var(--s-1); }
 .exportbtn--drive:hover:not(:disabled) { background: var(--azure-haze); color: var(--azure-bright); }
+.rangebox { display: inline-flex; align-items: center; gap: 3px; }
+.rangebox input { width: 42px; padding: 4px 6px; border-radius: var(--r-xs); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-2xs); text-align: center; }
+.rangebox button { padding: 4px 8px; border-radius: var(--r-xs); font-size: var(--fs-2xs); font-weight: 600; color: var(--cyan); border: 1px solid color-mix(in srgb, var(--cyan) 30%, transparent); }
+.rangebox button:hover { background: var(--cyan-glow); color: #d6fffb; }
+.chap__read-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--jade); flex-shrink: 0; }
+.colors { margin-top: var(--s-2); }
+.colors__hint { font-size: var(--fs-2xs); color: var(--ink-faint); margin-top: var(--s-1); }
+.colors__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 5px; margin-top: var(--s-2); max-height: 150px; overflow-y: auto; }
+.colorpg { position: relative; aspect-ratio: 2/3; border-radius: var(--r-xs); overflow: hidden; border: 2px solid transparent; }
+.colorpg img { width: 100%; height: 100%; object-fit: cover; }
+.colorpg.is-excl { border-color: var(--coral); }
+.colorpg.is-excl img { opacity: .4; }
+.colorpg__x { position: absolute; inset: 0; display: grid; place-items: center; color: var(--coral); background: rgba(7,10,18,.4); }
 .dests { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; margin-top: var(--s-2); font-size: var(--fs-xs); }
 .dlink { color: var(--azure-bright); }
 .dok { color: var(--jade); }

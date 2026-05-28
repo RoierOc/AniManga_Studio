@@ -1,11 +1,12 @@
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useUiStore, VIEWS } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
 import Sidebar from '@/components/layout/Sidebar.vue'
 import TopBar from '@/components/layout/TopBar.vue'
 import Toaster from '@/components/ui/Toaster.vue'
 import TaskQueue from '@/components/ui/TaskQueue.vue'
+import ShortcutsModal from '@/components/ui/ShortcutsModal.vue'
 import MangaModal from '@/components/manga/MangaModal.vue'
 import Reader from '@/components/manga/Reader.vue'
 import LibraryView from '@/views/LibraryView.vue'
@@ -18,7 +19,15 @@ import PlaceholderView from '@/views/PlaceholderView.vue'
 
 const ui = useUiStore()
 const manga = useMangaStore()
-onMounted(() => manga.init())
+
+function onGlobalKey(e) {
+  const tag = (e.target?.tagName || '').toLowerCase()
+  if (tag === 'input' || tag === 'textarea' || tag === 'select') return
+  if (e.key === '?') { e.preventDefault(); ui.showShortcuts = !ui.showShortcuts }
+  else if (e.key === 'Escape' && ui.showShortcuts) ui.showShortcuts = false
+}
+onMounted(() => { manga.init(); window.addEventListener('keydown', onGlobalKey) })
+onUnmounted(() => window.removeEventListener('keydown', onGlobalKey))
 
 // Map each view id to its component. Migrated so far: Library, Anime Studio.
 // The rest render the placeholder until their phase lands.
@@ -50,6 +59,7 @@ const activeComponent = computed(() => VIEW_COMPONENTS[ui.currentView] || null)
     <MangaModal />
     <Reader />
     <TaskQueue />
+    <ShortcutsModal />
     <Toaster />
   </div>
 </template>

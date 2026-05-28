@@ -13,6 +13,9 @@ export const taskId = (title, chapter, type) =>
 // Canonical title for matching (lowercase, alphanumeric only)
 export const canonicalTitle = (t) => (t || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 
+// Display label for a chapter number ("one_shot" -> "One Shot")
+export const formatChapter = (ch) => ch === 'one_shot' ? 'One Shot' : 'Cap. ' + ch
+
 export function chapterSortKey(ch) {
   const n = parseFloat(ch)
   return isNaN(n) ? Infinity : n

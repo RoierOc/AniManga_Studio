@@ -40,6 +40,13 @@ export const useMangaStore = defineStore('manga', {
     updates: [],                // [{manga_id, title, cover, new_count, new_chapters}]
     updatesLoaded: false,
 
+    // chapter health + color pages + offline covers
+    health: {},                 // chapterNorm -> { status, missing_upscaled, missing_pages }
+    colorPages: [],             // [{chapter, filename, url, label}]
+    colorLoading: false,
+    excludedPages: [],          // filenames excluded from export
+    offlineCovers: null,        // { running, done, total } | null
+
     // export destinations
     drive: { configured: false, connected: false, email: '' },
     webdav: { phoneUrl: '', localUrl: '' },
@@ -211,10 +218,14 @@ export const useMangaStore = defineStore('manga', {
     async connectDrive() {
       try { const d = await api.get('/api/drive/auth'); if (d.auth_url) window.open(d.auth_url, '_blank') } catch (_) { useUiStore().toast('Drive no configurado', 'error') }
     },
+    async disconnectDrive() {
+      try { await api.post('/api/drive/disconnect', {}); this.drive = { configured: this.drive.configured, connected: false, email: '' }; useUiStore().toast('Drive desconectado', 'info') } catch (_) {}
+    },
     async exportTomo({ chapters, volumeName, format = 'cbz', quality = 92, downscaleHalf = false, coverB64 = '', toDrive = false }) {
       const body = {
         title: this.current.id, chapters, volume_name: volumeName || this.current.name,
         format, quality, downscale_half: downscaleHalf, ...(coverB64 ? { cover_data: coverB64 } : {}),
+        ...(this.excludedPages.length ? { exclude_pages: this.excludedPages } : {}),
       }
       try {
         if (toDrive) {
@@ -246,6 +257,42 @@ export const useMangaStore = defineStore('manga', {
         ui.toast('Metadatos actualizados', 'ok')
         return true
       } catch (_) { ui.toast('No se pudo actualizar', 'error'); return false }
+    },
+    async loadHealth() {
+      try {
+        const d = await api.get(`/api/library/chapter_health/${encodeURIComponent(this.current.id)}`)
+        const m = {}; for (const h of (Array.isArray(d) ? d : [])) m[h.chapter] = h; this.health = m
+      } catch (_) {}
+    },
+    async upscaleRange(from, to, fast = false) {
+      const lo = Math.min(parseFloat(from), parseFloat(to)), hi = Math.max(parseFloat(from), parseFloat(to))
+      if (isNaN(lo) || isNaN(hi)) return
+      const chapters = this.chapters.map(c => c.chapter).filter(ch => { const n = parseFloat(ch); return !isNaN(n) && n >= lo && n <= hi && this.upscaled[ch] !== true })
+      if (!chapters.length) { useUiStore().toast('Nada que escalar en ese rango', 'info'); return }
+      try { await api.post('/api/upscale/upscale_manga', { title: this.current.id, chapters, eco: this.eco, fast }); useUiStore().toast(`Escalando ${chapters.length} capítulos`, 'info') }
+      catch (_) { useUiStore().toast('No se pudo iniciar', 'error') }
+    },
+    async loadColorPages(chapters) {
+      this.colorLoading = true; this.excludedPages = []
+      try { this.colorPages = await api.post('/api/export/color_pages', { title: this.current.id, chapters }) || [] }
+      catch (_) { this.colorPages = [] }
+      finally { this.colorLoading = false }
+    },
+    toggleExclude(filename) {
+      this.excludedPages = this.excludedPages.includes(filename) ? this.excludedPages.filter(f => f !== filename) : [...this.excludedPages, filename]
+    },
+    async downloadCoversOffline() {
+      try {
+        await api.post('/api/library/download_covers_offline', {})
+        this.offlineCovers = { running: true, done: 0, total: 0 }
+        const poll = setInterval(async () => {
+          try {
+            const s = await api.get('/api/library/offline_covers_status')
+            this.offlineCovers = s
+            if (!s.running) { clearInterval(poll); useUiStore().toast('Portadas descargadas ✓', 'ok') }
+          } catch (_) { clearInterval(poll) }
+        }, 1500)
+      } catch (_) { useUiStore().toast('No se pudo iniciar la descarga de portadas', 'error') }
     },
     async scanCorrupt() {
       const ui = useUiStore()
