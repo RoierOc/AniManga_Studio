@@ -52,6 +52,15 @@ export const useMangadexStore = defineStore('mangadex', {
     async checkAuth() {
       try { this.authed = !!(await api.get('/api/mangadex/check'))?.authenticated } catch (_) {}
     },
+    async login() {
+      const ui = useUiStore()
+      ui.toast('Conectando con MangaDex…', 'info')
+      try {
+        const d = await api.post('/api/mangadex/login', {})
+        if (d.error) { ui.toast('Login falló — revisa credenciales', 'error'); return }
+        this.authed = true; ui.toast('Conectado a MangaDex ✓', 'ok'); this.loadFollowed()
+      } catch (_) { ui.toast('No se pudo iniciar sesión', 'error') }
+    },
     async loadTags() {
       if (this.allTags.length) return
       try { this.allTags = await api.get('/api/mangadex/tags') || [] } catch (_) {}

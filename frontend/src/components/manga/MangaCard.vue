@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
 
-const props = defineProps({ manga: { type: Object, required: true } })
+const props = defineProps({ manga: { type: Object, required: true }, updates: { type: Number, default: 0 } })
 const hasCover = computed(() => !!props.manga.cover)
 const upscaled = computed(() => (props.manga.upscaled || 0) > 0)
 const initials = computed(() =>
@@ -26,6 +26,7 @@ const initials = computed(() =>
           <Icon name="spark" :size="11" /> 4K · {{ manga.upscaled }}
         </span>
       </div>
+      <span v-if="updates" class="card__new" :title="`${updates} capítulos nuevos`">+{{ updates }}</span>
 
       <div class="card__hover">
         <button class="card__open"><Icon name="play" :size="18" /></button>
@@ -103,6 +104,7 @@ const initials = computed(() =>
   backdrop-filter: blur(8px);
 }
 .badge--up { background: var(--cyan-glow); color: #d6fffb; border: 1px solid rgba(70, 224, 216, 0.4); box-shadow: var(--glow-cyan); }
+.card__new { position: absolute; top: var(--s-2); right: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 7px; border-radius: var(--r-pill); color: #fff; background: var(--azure); box-shadow: var(--glow-azure); }
 
 .card__hover {
   position: absolute; inset: 0; display: grid; place-items: center;

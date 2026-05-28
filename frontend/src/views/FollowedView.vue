@@ -22,6 +22,7 @@ onMounted(() => { if (!store.followedLoaded) store.loadFollowed() })
     <div v-else-if="!store.followed.length" class="empty">
       <Icon name="heart" :size="34" />
       <p>{{ store.authed ? 'No sigues ningún manga aún.' : 'Inicia sesión en MangaDex para ver tus seguidos.' }}</p>
+      <button v-if="!store.authed" class="loginbtn" @click="store.login()">Iniciar sesión en MangaDex</button>
     </div>
     <div v-else class="grid">
       <MdCard v-for="m in store.followed" :key="m.id" :manga="m" :score="store.score(m)" @open="store.openDetail($event)" />
@@ -39,5 +40,7 @@ onMounted(() => { if (!store.followedLoaded) store.loadFollowed() })
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--s-5); }
 .skeleton { aspect-ratio: 2/3; border-radius: var(--r-md); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-8) 0; color: var(--ink-faint); text-align: center; }
+.loginbtn { margin-top: var(--s-2); padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); transition: background var(--t-fast); }
+.loginbtn:hover { background: var(--azure-bright); }
 @media (max-width: 540px) { .fl { padding: 0 var(--s-4) var(--s-8); } .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); } }
 </style>

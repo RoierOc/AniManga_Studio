@@ -15,16 +15,18 @@ const error = ref(false)
 const search = ref('')
 const filter = ref('all')
 
-const FILTERS = [
+const FILTERS = computed(() => [
   { id: 'all', label: 'Todo' },
   { id: 'upscaled', label: 'Escalado 4K' },
   { id: 'downloaded', label: 'Solo descargado' },
-]
+  { id: 'updates', label: 'Novedades', count: manga.updates.length },
+])
 
 const filtered = computed(() => {
   let list = items.value
   if (filter.value === 'upscaled') list = list.filter(m => (m.upscaled || 0) > 0)
   if (filter.value === 'downloaded') list = list.filter(m => !(m.upscaled || 0))
+  if (filter.value === 'updates') list = list.filter(m => manga.updatesByTitle[m.name])
   const q = search.value.trim().toLowerCase()
   if (q) list = list.filter(m => (m.name || '').toLowerCase().includes(q))
   return list
@@ -63,7 +65,7 @@ async function findCovers() {
   } catch (_) { ui.toast('Error buscando portadas', 'error') }
   finally { findingCovers.value = false }
 }
-onMounted(load)
+onMounted(() => { load(); if (!manga.updatesLoaded) manga.loadUpdates() })
 </script>
 
 <template>
@@ -95,7 +97,9 @@ onMounted(load)
     <div class="toolbar stagger">
       <div class="filters" style="--i:2">
         <button v-for="f in FILTERS" :key="f.id" class="pill" :class="{ 'is-active': filter === f.id }"
-                @click="filter = f.id">{{ f.label }}</button>
+                @click="filter = f.id" v-show="f.id !== 'updates' || f.count">
+          {{ f.label }}<span v-if="f.count" class="pill__n">{{ f.count }}</span>
+        </button>
       </div>
       <div class="tb-right" style="--i:2">
         <button class="covbtn" :disabled="findingCovers" @click="findCovers" title="Buscar portadas faltantes">
@@ -125,7 +129,7 @@ onMounted(load)
     </div>
 
     <div v-else class="grid">
-      <MangaCard v-for="m in filtered" :key="m.id" :manga="m" @click="manga.open(m)" />
+      <MangaCard v-for="m in filtered" :key="m.id" :manga="m" :updates="manga.updatesByTitle[m.name]?.new_count || 0" @click="manga.open(m)" />
     </div>
   </div>
 </template>
@@ -169,7 +173,8 @@ onMounted(load)
   transition: all var(--t-fast) var(--ease-silk);
 }
 .pill:hover { color: var(--ink); border-color: var(--line-strong); }
-.pill.is-active { color: #fff; background: var(--azure-haze); border-color: var(--azure); color: var(--azure-bright); }
+.pill.is-active { background: var(--azure-haze); border-color: var(--azure); color: var(--azure-bright); }
+.pill__n { margin-left: 5px; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--cyan); }
 
 .searchbox {
   display: flex; align-items: center; gap: var(--s-2);

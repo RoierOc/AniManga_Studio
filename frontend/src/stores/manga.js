@@ -36,6 +36,10 @@ export const useMangaStore = defineStore('manga', {
     compareX: 50,
     progress: (() => { try { return JSON.parse(localStorage.getItem('manga-progress-v1') || '{}') } catch { return {} } })(),
 
+    // chapter updates (followed manga with new chapters on MangaDex)
+    updates: [],                // [{manga_id, title, cover, new_count, new_chapters}]
+    updatesLoaded: false,
+
     // upscale model + mode
     models: {},                 // { key: label }
     activeModel: 'eula',
@@ -50,6 +54,8 @@ export const useMangaStore = defineStore('manga', {
       return t && ['starting', 'started', 'upscaling'].includes(t.status) ? t : null
     },
     sortedChapters: (s) => [...s.chapters].sort((a, b) => parseFloat(b.chapter) - parseFloat(a.chapter)),
+
+    updatesByTitle: (s) => { const m = {}; for (const u of s.updates) m[u.title] = u; return m },
 
     // chapter navigation within the reader (ascending order)
     chapterListAsc: (s) => [...s.chapters].sort((a, b) => (parseFloat(a.chapter) || 0) - (parseFloat(b.chapter) || 0)),
@@ -134,6 +140,10 @@ export const useMangaStore = defineStore('manga', {
         await api.post('/api/upscale/upscale_chapter', { title: this.current.id, chapter, eco: opts.eco ?? this.eco, fast: opts.fast ?? false })
         useUiStore().toast(`Escalando 4K · cap. ${chapter}`, 'info')
       } catch (_) { useUiStore().toast('No se pudo iniciar el escalado', 'error') }
+    },
+    async loadUpdates() {
+      try { this.updates = await api.get('/api/mangadex/updates') || [] } catch (_) { this.updates = [] }
+      finally { this.updatesLoaded = true }
     },
     async loadModels() {
       try { const d = await api.get('/api/upscale/models'); this.models = d.models || {}; this.activeModel = d.active || 'eula' } catch (_) {}
