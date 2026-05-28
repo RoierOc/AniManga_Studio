@@ -1,11 +1,19 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { ANIME_STATUS, STATUS_ORDER } from '@/lib/anime'
 import AnimeCard from '@/components/anime/AnimeCard.vue'
 import Icon from '@/components/ui/Icon.vue'
 
 const store = useAnimeStore()
+
+// Background sync (15s) — only refreshes while qBittorrent has active downloads,
+// matching the original app's _qbtSyncTimer behaviour.
+let sync = null
+onMounted(() => {
+  sync = setInterval(() => { if (store.hasActiveQbt()) store.loadLibrary(true) }, 15000)
+})
+onUnmounted(() => { if (sync) clearInterval(sync) })
 
 const SORTS = [
   { id: 'last_added', label: 'Recientes' },

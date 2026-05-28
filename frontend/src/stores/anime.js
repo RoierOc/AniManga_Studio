@@ -26,6 +26,15 @@ export const useAnimeStore = defineStore('anime', {
     autoplay: null,            // { anime, ep } | null
     autoplaySeconds: 0,
     nowSec: Math.floor(Date.now() / 1000),
+
+    // qBittorrent
+    qbt: { connected: false, version: '', url: 'http://localhost:8080', username: '', password: '' },
+    qbtTorrents: [],
+    qbtLoading: false,
+
+    // history
+    history: [],
+    historyLoaded: false,
   }),
 
   getters: {
@@ -166,6 +175,57 @@ export const useAnimeStore = defineStore('anime', {
       if (!anime) return
       const ep = (anime.episodes || []).find(e => String(e.num) === String(ev.ep_str))
       if (ep) ep.resume_pos = ev.position
+    },
+
+    /* ── qBittorrent ────────────────────────────────────────────────────── */
+    hasActiveQbt() {
+      return this.library.some(a => (a.episodes || []).some(e => e.in_qbt && e.progress < 100))
+    },
+    async checkQbt() {
+      try {
+        const d = await api.get('/api/anime/qbt/status')
+        this.qbt.connected = d.connected
+        this.qbt.version = d.version || ''
+        if (d.url) this.qbt.url = d.url
+      } catch (_) {}
+    },
+    async configureQbt() {
+      try {
+        const d = await api.post('/api/anime/qbt/configure', {
+          url: this.qbt.url, username: this.qbt.username, password: this.qbt.password,
+        })
+        this.qbt.connected = d.connected
+        const ui = useUiStore()
+        if (d.connected) { ui.toast('qBittorrent conectado ✓', 'ok'); this.loadQbt() }
+        else ui.toast('No se pudo conectar a qBittorrent', 'error')
+      } catch (_) { useUiStore().toast('Error configurando qBittorrent', 'error') }
+    },
+    async loadQbt() {
+      this.qbtLoading = true
+      try { this.qbtTorrents = await api.get('/api/anime/qbt/list') || [] }
+      catch (_) { this.qbtTorrents = [] }
+      finally { this.qbtLoading = false }
+    },
+    async qbtAction(action, hash, deleteFiles = false) {
+      try {
+        await api.post('/api/anime/qbt/action', { action, hash, delete_files: deleteFiles })
+        if (action === 'recheck') {
+          useUiStore().toast('Recalculando archivos… espera unos segundos', 'info')
+          await new Promise(r => setTimeout(r, 3000))
+        }
+        await this.loadQbt()
+      } catch (e) { useUiStore().toast('Error: ' + (e.message || 'qBittorrent'), 'error') }
+    },
+
+    /* ── History ────────────────────────────────────────────────────────── */
+    async loadHistory() {
+      try { this.history = await api.get('/api/anime/history') || [] }
+      catch (_) { this.history = [] }
+      finally { this.historyLoaded = true }
+    },
+    async clearHistory() {
+      try { await api.post('/api/anime/history/clear', {}); this.history = [] }
+      catch (_) { useUiStore().toast('No se pudo limpiar el historial', 'error') }
     },
   },
 })

@@ -3,6 +3,8 @@ import { onMounted } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import AnimeLibrary from './AnimeLibrary.vue'
 import AnimeDetail from './AnimeDetail.vue'
+import Downloads from './Downloads.vue'
+import History from './History.vue'
 import AutoplayModal from '@/components/anime/AutoplayModal.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 import Icon from '@/components/ui/Icon.vue'
@@ -42,6 +44,8 @@ function selectTab(id) {
       <Transition name="swap" mode="out-in">
         <AnimeDetail v-if="store.detail" key="detail" />
         <AnimeLibrary v-else-if="store.sub === 'library'" key="library" />
+        <Downloads v-else-if="store.sub === 'downloads'" key="downloads" />
+        <History v-else-if="store.sub === 'history'" key="history" />
         <PlaceholderView v-else :key="store.sub"
                          :label="TABS.find(t => t.id === store.sub)?.label"
                          :icon="TABS.find(t => t.id === store.sub)?.icon" />
