@@ -5,15 +5,16 @@ import Sidebar from '@/components/layout/Sidebar.vue'
 import TopBar from '@/components/layout/TopBar.vue'
 import Toaster from '@/components/ui/Toaster.vue'
 import LibraryView from '@/views/LibraryView.vue'
+import AnimeStudio from '@/views/anime/AnimeStudio.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 
 const ui = useUiStore()
 
-// Map each view id to its component. Only Library is migrated so far;
-// the rest render the placeholder until their phase lands.
+// Map each view id to its component. Migrated so far: Library, Anime Studio.
+// The rest render the placeholder until their phase lands.
 const meta = computed(() => VIEWS.flatMap(g => g.items).find(i => i.id === ui.currentView))
 
-const VIEW_COMPONENTS = { library: LibraryView }
+const VIEW_COMPONENTS = { library: LibraryView, anime: AnimeStudio }
 const activeComponent = computed(() => VIEW_COMPONENTS[ui.currentView] || null)
 </script>
 

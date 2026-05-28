@@ -161,8 +161,8 @@ onMounted(load)
 /* ── Grid ─────────────────────────────────────────────────────────────── */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-  gap: var(--s-5) var(--s-4);
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: var(--s-6) var(--s-5);
 }
 .skeleton {
   aspect-ratio: 2 / 3; border-radius: var(--r-md);
@@ -192,7 +192,7 @@ onMounted(load)
 
 @media (max-width: 540px) {
   .view { padding: var(--s-3) var(--s-4) var(--s-8); }
-  .grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--s-4) var(--s-3); }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--s-5) var(--s-3); }
   .hero__stats { gap: var(--s-5); }
 }
 </style>
