@@ -35,6 +35,11 @@ export const useMangaStore = defineStore('manga', {
     compareMode: false,
     compareX: 50,
     progress: (() => { try { return JSON.parse(localStorage.getItem('manga-progress-v1') || '{}') } catch { return {} } })(),
+
+    // upscale model + mode
+    models: {},                 // { key: label }
+    activeModel: 'eula',
+    eco: localStorage.getItem('upscale-eco') !== '0',   // eco on by default (lets MPV run)
   }),
 
   getters: {
@@ -126,9 +131,28 @@ export const useMangaStore = defineStore('manga', {
 
     async upscaleChapter(chapter, opts = {}) {
       try {
-        await api.post('/api/upscale/upscale_chapter', { title: this.current.id, chapter, eco: opts.eco ?? true, fast: opts.fast ?? false })
+        await api.post('/api/upscale/upscale_chapter', { title: this.current.id, chapter, eco: opts.eco ?? this.eco, fast: opts.fast ?? false })
         useUiStore().toast(`Escalando 4K · cap. ${chapter}`, 'info')
       } catch (_) { useUiStore().toast('No se pudo iniciar el escalado', 'error') }
+    },
+    async loadModels() {
+      try { const d = await api.get('/api/upscale/models'); this.models = d.models || {}; this.activeModel = d.active || 'eula' } catch (_) {}
+    },
+    async setModel(key) {
+      try {
+        const d = await api.post('/api/upscale/set_model', { model: key })
+        if (d.status === 'ok') { this.activeModel = key; useUiStore().toast(`Modelo: ${d.label}`, 'ok') }
+        else useUiStore().toast(d.message || 'Error al cambiar modelo', 'error')
+      } catch (_) { useUiStore().toast('Error al cambiar modelo', 'error') }
+    },
+    setEco(v) { this.eco = v; localStorage.setItem('upscale-eco', v ? '1' : '0'); api.post('/api/upscale/mode', { eco: v }).catch(() => {}) },
+    async upscaleAll() {
+      const chapters = this.chapters.map(c => c.chapter).filter(ch => this.upscaled[ch] !== true)
+      if (!chapters.length) { useUiStore().toast('Todos los capítulos ya están en 4K', 'info'); return }
+      try {
+        await api.post('/api/upscale/upscale_manga', { title: this.current.id, chapters, eco: this.eco })
+        useUiStore().toast(`Escalando ${chapters.length} capítulos a 4K`, 'info')
+      } catch (_) { useUiStore().toast('No se pudo iniciar', 'error') }
     },
     async repairChapter(chapter) {
       try {

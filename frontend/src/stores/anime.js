@@ -31,6 +31,10 @@ export const useAnimeStore = defineStore('anime', {
     // browse overlays
     stackBrowse: null, stackBrowseMeta: null, stackBrowseAnime: [], stackBrowseState: 'idle',
     tagBrowse: null, tagBrowseAnime: [], tagBrowseState: 'idle',
+    // hover preview
+    preview: null,             // anime object
+    previewPos: { x: 0, y: 0 },
+
     // management
     linkTorrent: { show: false, list: [], loading: false, subpath: '' },
     epOverrideMenu: null,      // { anime, ep, x, y }
@@ -165,6 +169,19 @@ export const useAnimeStore = defineStore('anime', {
     },
 
     persist() { localStorage.setItem('anime-sub', this.sub) },
+
+    showPreview(anime, ev) {
+      clearTimeout(this._previewTimer)
+      this._previewTimer = setTimeout(() => {
+        const W = 256, H = 232, pad = 12
+        let x = ev.clientX + 20, y = ev.clientY - H / 2
+        if (x + W > window.innerWidth - pad) x = ev.clientX - W - 20
+        y = Math.max(pad, Math.min(y, window.innerHeight - H - pad))
+        this.preview = anime
+        this.previewPos = { x, y }
+      }, 600)
+    },
+    hidePreview() { clearTimeout(this._previewTimer); this.preview = null },
 
     openDetail(anime) {
       this.detailId = anime.id

@@ -21,7 +21,11 @@ const showManage = ref(false)
 const renameVal = ref('')
 const coverUrlVal = ref('')
 
-watch(m, (v) => { tab.value = 'chapters'; sel.value = new Set(); volName.value = v?.name || ''; showManage.value = false; renameVal.value = v?.name || ''; coverUrlVal.value = ''; }, { immediate: true })
+watch(m, (v) => {
+  tab.value = 'chapters'; sel.value = new Set(); volName.value = v?.name || ''
+  showManage.value = false; renameVal.value = v?.name || ''; coverUrlVal.value = ''
+  if (v && !Object.keys(store.models).length) store.loadModels()
+}, { immediate: true })
 
 async function saveMeta() {
   const ok = await store.editMeta({ newTitle: renameVal.value.trim(), coverUrl: coverUrlVal.value.trim() })
@@ -67,8 +71,9 @@ async function doExport() {
                 <span><span class="lg lg--orig" /> original</span>
               </div>
               <div class="modal__hacts">
-                <button class="hbtn" @click="showManage = !showManage" :class="{ 'is-on': showManage }"><Icon name="spark" :size="13" /> Gestionar</button>
-                <button class="hbtn" @click="store.scanCorrupt()"><Icon name="check" :size="13" /> Verificar</button>
+                <button class="hbtn hbtn--accent" @click="store.upscaleAll()"><Icon name="spark" :size="13" /> Escalar todo 4K</button>
+                <button class="hbtn" @click="showManage = !showManage" :class="{ 'is-on': showManage }">Gestionar</button>
+                <button class="hbtn" @click="store.scanCorrupt()">Verificar</button>
               </div>
             </div>
           </header>
@@ -79,6 +84,16 @@ async function doExport() {
               <div class="manage__row">
                 <label class="mf"><span>Renombrar</span><input v-model="renameVal" type="text" /></label>
                 <label class="mf"><span>Portada (URL)</span><input v-model="coverUrlVal" type="text" placeholder="https://…" /></label>
+              </div>
+              <div class="manage__row">
+                <label class="mf"><span>Modelo de escalado</span>
+                  <select :value="store.activeModel" @change="store.setModel($event.target.value)">
+                    <option v-for="(label, key) in store.models" :key="key" :value="key">{{ label }}</option>
+                  </select>
+                </label>
+                <label class="mf mf--chk"><span>Modo eco (deja correr MPV)</span>
+                  <input type="checkbox" :checked="store.eco" @change="store.setEco($event.target.checked)" />
+                </label>
               </div>
               <div class="manage__actions">
                 <label class="upbtn"><Icon name="library" :size="13" /> Subir portada<input type="file" accept="image/*" @change="onCoverFile" hidden /></label>
@@ -181,6 +196,10 @@ async function doExport() {
 .hbtn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); }
 .hbtn:hover { color: var(--ink); border-color: var(--line-strong); }
 .hbtn.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
+.hbtn--accent { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 30%, transparent); }
+.hbtn--accent:hover { background: var(--cyan-glow); color: #d6fffb; }
+.mf--chk { flex-direction: row; align-items: center; justify-content: space-between; }
+.mf--chk input { width: auto; }
 .manage { padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--line); background: var(--base); overflow: hidden; }
 .manage__row { display: flex; gap: var(--s-3); }
 .mf { flex: 1; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-xs); color: var(--ink-faint); }
