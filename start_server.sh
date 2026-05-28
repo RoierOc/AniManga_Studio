@@ -63,6 +63,19 @@ if grep -qi "microsoft" /proc/version 2>/dev/null; then
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ── Frontend v2 (Vite) ────────────────────────────────────────────────────────
+# Build the SPA if dist is missing. Flask serves frontend/dist at / (legacy at /legacy).
+if [[ ! -f "$SCRIPT_DIR/frontend/dist/index.html" ]]; then
+    if command -v pnpm >/dev/null 2>&1; then
+        echo "[start] Compilando frontend (primera vez)…" >&2
+        ( cd "$SCRIPT_DIR/frontend" && pnpm install --silent && pnpm build ) >&2 \
+            || echo "[start] Aviso: falló el build del frontend; se servirá /legacy" >&2
+    else
+        echo "[start] pnpm no encontrado; se servirá la UI antigua en /legacy" >&2
+    fi
+fi
+# ─────────────────────────────────────────────────────────────────────────────
+
 cd "$SRC_DIR"
 
 # Watchdog: restart Flask automatically if it exits (e.g. OOM, uncaught exception)
