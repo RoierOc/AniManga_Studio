@@ -16,7 +16,23 @@ const fmt = ref('cbz')
 const quality = ref(92)
 const downscale = ref(false)
 
-watch(m, (v) => { tab.value = 'chapters'; sel.value = new Set(); volName.value = v?.name || ''; }, { immediate: true })
+// management panel
+const showManage = ref(false)
+const renameVal = ref('')
+const coverUrlVal = ref('')
+
+watch(m, (v) => { tab.value = 'chapters'; sel.value = new Set(); volName.value = v?.name || ''; showManage.value = false; renameVal.value = v?.name || ''; coverUrlVal.value = ''; }, { immediate: true })
+
+async function saveMeta() {
+  const ok = await store.editMeta({ newTitle: renameVal.value.trim(), coverUrl: coverUrlVal.value.trim() })
+  if (ok) showManage.value = false
+}
+function onCoverFile(e) {
+  const f = e.target.files?.[0]; if (!f) return
+  const r = new FileReader()
+  r.onload = () => store.editMeta({ coverB64: r.result })
+  r.readAsDataURL(f)
+}
 
 const toggleSel = (ch) => { const s = new Set(sel.value); s.has(ch) ? s.delete(ch) : s.add(ch); sel.value = s }
 const allSelected = computed(() => store.chapters.length > 0 && sel.value.size === store.chapters.length)
@@ -50,8 +66,26 @@ async function doExport() {
                 <span><span class="lg lg--part" /> parcial</span>
                 <span><span class="lg lg--orig" /> original</span>
               </div>
+              <div class="modal__hacts">
+                <button class="hbtn" @click="showManage = !showManage" :class="{ 'is-on': showManage }"><Icon name="spark" :size="13" /> Gestionar</button>
+                <button class="hbtn" @click="store.scanCorrupt()"><Icon name="check" :size="13" /> Verificar</button>
+              </div>
             </div>
           </header>
+
+          <!-- Management panel -->
+          <Transition name="info">
+            <div v-if="showManage" class="manage">
+              <div class="manage__row">
+                <label class="mf"><span>Renombrar</span><input v-model="renameVal" type="text" /></label>
+                <label class="mf"><span>Portada (URL)</span><input v-model="coverUrlVal" type="text" placeholder="https://…" /></label>
+              </div>
+              <div class="manage__actions">
+                <label class="upbtn"><Icon name="library" :size="13" /> Subir portada<input type="file" accept="image/*" @change="onCoverFile" hidden /></label>
+                <button class="savebtn" @click="saveMeta">Guardar</button>
+              </div>
+            </div>
+          </Transition>
 
           <div class="modal__tabs">
             <button class="mtab" :class="{ 'is-active': tab === 'chapters' }" @click="tab = 'chapters'">Capítulos</button>
@@ -142,6 +176,21 @@ async function doExport() {
 .modal__legend span { display: inline-flex; align-items: center; gap: 5px; }
 .lg { width: 8px; height: 8px; border-radius: 2px; }
 .lg--4k { background: var(--cyan); } .lg--part { background: var(--gold); } .lg--orig { background: var(--ink-ghost); }
+
+.modal__hacts { display: flex; gap: var(--s-2); margin-top: var(--s-3); }
+.hbtn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); }
+.hbtn:hover { color: var(--ink); border-color: var(--line-strong); }
+.hbtn.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
+.manage { padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--line); background: var(--base); overflow: hidden; }
+.manage__row { display: flex; gap: var(--s-3); }
+.mf { flex: 1; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-xs); color: var(--ink-faint); }
+.mf input { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); }
+.mf input:focus { outline: none; border-color: var(--azure); }
+.manage__actions { display: flex; gap: var(--s-2); margin-top: var(--s-3); justify-content: flex-end; }
+.upbtn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line-2); cursor: pointer; }
+.upbtn:hover { color: var(--ink); }
+.savebtn { padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); }
+.savebtn:hover { background: var(--azure-bright); }
 
 .modal__tabs { display: flex; gap: var(--s-1); padding: var(--s-2) var(--s-4) 0; border-bottom: 1px solid var(--line); }
 .mtab { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-4); border-radius: var(--r-sm) var(--r-sm) 0 0; font-size: var(--fs-sm); font-weight: 500; color: var(--ink-faint); border-bottom: 2px solid transparent; transition: all var(--t-fast); }

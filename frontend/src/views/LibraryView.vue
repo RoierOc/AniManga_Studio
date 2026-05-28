@@ -36,6 +36,8 @@ const totals = computed(() => ({
   upscaled: items.value.filter(m => (m.upscaled || 0) > 0).length,
 }))
 
+const findingCovers = ref(false)
+
 async function load() {
   loading.value = true; error.value = false
   try {
@@ -46,6 +48,20 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+async function findCovers() {
+  findingCovers.value = true
+  ui.toast('Buscando portadas faltantes en MangaDex…', 'info')
+  try {
+    const found = await api.get('/api/library/search-covers')
+    const n = Object.keys(found || {}).length
+    if (n) {
+      items.value = items.value.map(m => found[m.id] && !m.cover ? { ...m, cover: found[m.id] } : m)
+      ui.toast(`${n} portadas encontradas`, 'ok')
+    } else ui.toast('No se encontraron portadas nuevas', 'warn')
+  } catch (_) { ui.toast('Error buscando portadas', 'error') }
+  finally { findingCovers.value = false }
 }
 onMounted(load)
 </script>
@@ -81,10 +97,15 @@ onMounted(load)
         <button v-for="f in FILTERS" :key="f.id" class="pill" :class="{ 'is-active': filter === f.id }"
                 @click="filter = f.id">{{ f.label }}</button>
       </div>
-      <label class="searchbox" style="--i:2">
-        <Icon name="search" :size="15" />
-        <input v-model="search" type="search" placeholder="Filtrar series…" />
-      </label>
+      <div class="tb-right" style="--i:2">
+        <button class="covbtn" :disabled="findingCovers" @click="findCovers" title="Buscar portadas faltantes">
+          <span v-if="findingCovers" class="covspin" /><Icon v-else name="spark" :size="14" /> Portadas
+        </button>
+        <label class="searchbox">
+          <Icon name="search" :size="15" />
+          <input v-model="search" type="search" placeholder="Filtrar series…" />
+        </label>
+      </div>
     </div>
 
     <!-- Grid -->
@@ -159,6 +180,11 @@ onMounted(load)
 }
 .searchbox:focus-within { border-color: var(--azure); box-shadow: 0 0 0 3px var(--azure-haze); }
 .searchbox input { flex: 1; border: none; outline: none; background: none; color: var(--ink); font-size: var(--fs-sm); }
+.tb-right { display: flex; align-items: center; gap: var(--s-2); }
+.covbtn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-md); font-size: var(--fs-sm); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
+.covbtn:hover:not(:disabled) { color: var(--azure-bright); border-color: var(--azure); }
+.covbtn:disabled { opacity: .6; }
+.covspin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--azure); animation: spin .7s linear infinite; }
 
 /* ── Grid ─────────────────────────────────────────────────────────────── */
 .grid {

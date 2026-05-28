@@ -143,6 +143,33 @@ export const useMangaStore = defineStore('manga', {
       } catch (_) { useUiStore().toast('No se pudo iniciar la exportación', 'error'); return null }
     },
 
+    /* ── Management (rename, cover, health, integrity) ──────────────────── */
+    async editMeta({ newTitle, coverUrl, coverB64 }) {
+      const ui = useUiStore()
+      try {
+        const body = {}
+        if (newTitle && newTitle !== this.current.id) body.new_title = newTitle
+        if (coverUrl) body.cover_url = coverUrl
+        if (coverB64) body.cover_b64 = coverB64
+        const res = await fetch(`/api/library/meta/${encodeURIComponent(this.current.id)}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        }).then(r => r.json())
+        if (res.error) { ui.toast(res.error, 'error'); return false }
+        if (res.new_title) { this.current.id = res.new_title; this.current.name = res.new_title }
+        if (coverUrl) this.current.cover = coverUrl
+        ui.toast('Metadatos actualizados', 'ok')
+        return true
+      } catch (_) { ui.toast('No se pudo actualizar', 'error'); return false }
+    },
+    async scanCorrupt() {
+      const ui = useUiStore()
+      try {
+        const d = await api.get(`/api/library/scan_corrupt/${encodeURIComponent(this.current.id)}`)
+        ui.toast(d.corrupt?.length ? `${d.corrupt.length} páginas corruptas de ${d.checked}` : `${d.checked} páginas OK ✓`, d.corrupt?.length ? 'warn' : 'ok')
+        return d
+      } catch (_) { ui.toast('Error escaneando', 'error') }
+    },
+
     /* ── Reader ─────────────────────────────────────────────────────────── */
     async read(chapter, source = 'auto') {
       this.readerLoading = true
