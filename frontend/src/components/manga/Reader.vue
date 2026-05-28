@@ -142,8 +142,8 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
             <img :src="store.pageUpUrl" class="rd__cmp-img" :class="`fit-${store.fit}`" alt="" />
             <img :src="store.pageOrigUrl" class="rd__cmp-img rd__cmp-orig" :class="`fit-${store.fit}`" :style="{ clipPath: `inset(0 ${100 - store.compareX}% 0 0)` }" alt="" />
             <div class="rd__divider" :style="{ left: store.compareX + '%' }" @mousedown.stop="cmpStart"><span class="rd__handle">⟷</span></div>
-            <span class="rd__clabel rd__clabel--l">ORIGINAL</span>
-            <span class="rd__clabel rd__clabel--r">4K</span>
+            <span class="rd__clabel rd__clabel--l">{{ store.scanCompareMode ? 'PRINCIPAL' : 'ORIGINAL' }}</span>
+            <span class="rd__clabel rd__clabel--r">{{ store.scanCompareMode ? 'VARIANTE' : '4K' }}</span>
           </div>
           <!-- single page -->
           <img v-else :src="pageUrl(store.pages[store.page])" class="rd__img" :class="`fit-${store.fit}`" :style="{ transform }" draggable="false" :alt="`Página ${store.page + 1}`" />

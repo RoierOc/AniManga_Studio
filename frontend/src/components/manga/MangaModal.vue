@@ -230,11 +230,24 @@ async function doExport(toDrive = false) {
                     <button class="ib ib--danger" title="Cancelar" @click="store.cancelUpscale(c.chapter)"><Icon name="close" :size="13" /></button>
                   </div>
                   <template v-else>
+                    <button class="ib" title="Comparar versiones (scanlations)" :class="{ 'ib--accent': store.scanCmp.open && store.scanCmp.chapter === c.chapter }" @click="store.openComparePanel(c.chapter)"><Icon name="globe" :size="14" /></button>
                     <button class="ib" title="Leer original" @click="store.read(c.chapter, 'original')"><Icon name="library" :size="14" /></button>
                     <button v-if="upState(c.chapter) === 'partial'" class="ib ib--warn" title="Reparar upscale" @click="store.repairChapter(c.chapter)"><Icon name="spark" :size="14" /></button>
                     <button v-else-if="upState(c.chapter) !== true" class="ib ib--accent" title="Escalar a 4K" @click="store.upscaleChapter(c.chapter)"><Icon name="spark" :size="14" /></button>
                     <button class="ib ib--danger" title="Borrar capítulo" @click="store.deleteChapter(c.chapter)"><Icon name="close" :size="14" /></button>
                   </template>
+                </div>
+
+                <!-- scanlation variants compare panel -->
+                <div v-if="store.scanCmp.open && store.scanCmp.chapter === c.chapter" class="cmpvar">
+                  <div v-if="store.scanCmp.loading" class="cmpvar__load"><Spinner :size="14" /></div>
+                  <template v-else-if="store.scanCmp.variants.length">
+                    <span class="cmpvar__lbl">Comparar con variante descargada:</span>
+                    <button v-for="v in store.scanCmp.variants" :key="v.dir" class="cmpvar__item" @click="store.readCompareSources(c.chapter, v.dir)">
+                      {{ v.group }} <em>{{ v.lang }}</em> · {{ v.page_count }} pág.
+                    </button>
+                  </template>
+                  <span v-else class="cmpvar__none">No hay variantes descargadas en <code>_compare/</code> para este capítulo.</span>
                 </div>
               </li>
             </ul>
@@ -377,6 +390,14 @@ async function doExport(toDrive = false) {
 .chap__prog-bar { width: 80px; height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
 .chap__prog-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--azure)); transition: width var(--t-base); }
 .chap__prog-n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--cyan); }
+.cmpvar { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); margin-top: 2px; border-radius: var(--r-sm); background: var(--base); border: 1px solid var(--line); }
+.cmpvar__load { padding: var(--s-1); }
+.cmpvar__lbl { font-size: var(--fs-2xs); color: var(--ink-faint); }
+.cmpvar__item { padding: 4px 10px; border-radius: var(--r-pill); font-size: var(--fs-2xs); color: var(--violet); border: 1px solid color-mix(in srgb, var(--violet) 30%, transparent); }
+.cmpvar__item em { font-style: normal; color: var(--ink-faint); }
+.cmpvar__item:hover { background: color-mix(in srgb, var(--violet) 14%, transparent); }
+.cmpvar__none { font-size: var(--fs-2xs); color: var(--ink-faint); }
+.cmpvar__none code { font-family: var(--font-mono); }
 
 .modal-enter-active, .modal-leave-active { transition: opacity var(--t-base); }
 .modal-enter-active .modal { transition: transform var(--t-base) var(--ease-snap); }

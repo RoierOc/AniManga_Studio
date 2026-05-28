@@ -34,6 +34,10 @@ export const useMangaStore = defineStore('manga', {
     barsHidden: false,
     compareMode: false,
     compareX: 50,
+    // scanlation comparison (different downloaded groups of the same chapter)
+    scanCompareMode: false,
+    comparePages2: [],
+    scanCmp: { open: false, chapter: null, variants: [], loading: false },
     progress: (() => { try { return JSON.parse(localStorage.getItem('manga-progress-v1') || '{}') } catch { return {} } })(),
 
     // chapter updates (followed manga with new chapters on MangaDex)
@@ -91,6 +95,10 @@ export const useMangaStore = defineStore('manga', {
       return p.startsWith('/') ? p : '/uploads/original/' + p
     },
     pageUpUrl: (s) => {
+      if (s.scanCompareMode && s.comparePages2.length) {
+        const p2 = s.comparePages2[Math.min(s.page, s.comparePages2.length - 1)]
+        return p2 ? (p2.startsWith('/') ? p2 : '/uploads/original/' + p2) : ''
+      }
       const p = s.pages[s.page]; if (!p) return ''
       return p.startsWith('/') ? p : '/uploads/upscaled/' + p
     },
@@ -421,7 +429,41 @@ export const useMangaStore = defineStore('manga', {
     resetMdex() { this.mdex = { id: null, mdManga: null, search: '', results: [], searching: false, volumes: [], volumesLoading: false, covers: [], coversLoading: false, selectedCover: null, coverLoadingId: null, coverB64: '', coverUrl: '' } },
 
     /* ── Reader ─────────────────────────────────────────────────────────── */
-    _resetView() { this.zoom = 1.0; this.panX = 0; this.panY = 0; this.compareMode = false; this.barsHidden = false },
+    _resetView() { this.zoom = 1.0; this.panX = 0; this.panY = 0; this.compareMode = false; this.barsHidden = false; this.scanCompareMode = false; this.comparePages2 = [] },
+
+    /* ── Compare scanlations (downloaded variants of the same chapter) ───── */
+    async openComparePanel(chapter) {
+      if (this.scanCmp.chapter === chapter && this.scanCmp.open) { this.scanCmp.open = false; return }
+      this.scanCmp = { open: true, chapter, variants: [], loading: true }
+      try { this.scanCmp.variants = await api.get(`/api/library/${encodeURIComponent(this.current.id)}/compare_variants/${chapter}`) || [] }
+      catch (_) {} finally { this.scanCmp.loading = false }
+    },
+    async downloadCompareVariant(variant, chapter) {
+      try {
+        await api.post('/api/download/download_compare', {
+          chapterId: variant.id, title: this.current.id, chapter,
+          group: variant.groups?.[0] || 'unknown', lang: variant.language,
+        })
+        useUiStore().toast('Descargando variante para comparar…', 'info')
+        setTimeout(() => this.openComparePanel(chapter), 8000)
+      } catch (_) { useUiStore().toast('No se pudo descargar la variante', 'error') }
+    },
+    async readCompareSources(chapter, compareDir) {
+      this._resetView()
+      this.reader = { title: this.current.id, chapter, source: 'original', kind: 'manga' }
+      this.readerLoading = true; this.pages = []; this.page = 0
+      try {
+        const [d1, d2] = await Promise.all([
+          api.post('/api/reader/read_chapter', { title: this.current.id, chapter, source: 'original' }),
+          api.post('/api/reader/read_compare', { title: this.current.id, chapter, compare_dir: compareDir }),
+        ])
+        this.pages = d1.pages || []
+        this.comparePages2 = d2.pages || []
+        this.compareMode = true
+        this.scanCompareMode = true
+      } catch (_) { useUiStore().toast('No se pudo cargar la comparación', 'error'); this.reader = null }
+      finally { this.readerLoading = false }
+    },
 
     async read(chapter, source = 'auto') {
       this.readerLoading = true
