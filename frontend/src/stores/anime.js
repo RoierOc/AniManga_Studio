@@ -13,7 +13,7 @@ export const useAnimeStore = defineStore('anime', {
   state: () => ({
     library: [],
     loading: false,
-    sub: 'library',            // library | search | seasonal | downloads | history
+    sub: localStorage.getItem('anime-sub') || 'library',   // library | search | seasonal | downloads | history
     detailId: null,            // open anime detail id
     libSort: 'last_added',
     libFilter: 'all',
@@ -135,6 +135,8 @@ export const useAnimeStore = defineStore('anime', {
         this.loading = false
       }
     },
+
+    persist() { localStorage.setItem('anime-sub', this.sub) },
 
     openDetail(anime) {
       this.detailId = anime.id

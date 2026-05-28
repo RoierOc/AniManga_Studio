@@ -31,6 +31,7 @@ function selectTab(id) {
   store.closeDetail()
   store.closeTorrents()
   store.sub = id
+  store.persist()
 }
 </script>
 

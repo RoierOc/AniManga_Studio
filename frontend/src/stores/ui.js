@@ -6,6 +6,7 @@ function loadSession() {
   try { return JSON.parse(localStorage.getItem(SESSION_KEY) || '{}') } catch { return {} }
 }
 
+// Anime items map to currentView 'anime' + an anime sub-view (like the original sidebar).
 export const VIEWS = [
   {
     group: 'Manga',
@@ -20,7 +21,10 @@ export const VIEWS = [
   {
     group: 'Anime',
     items: [
-      { id: 'anime',    label: 'Estudio',    icon: 'film' },
+      { id: 'anime', sub: 'library',   label: 'Mi Anime',     icon: 'film' },
+      { id: 'anime', sub: 'search',    label: 'Buscar Anime', icon: 'search' },
+      { id: 'anime', sub: 'seasonal',  label: 'Temporada',    icon: 'spark' },
+      { id: 'anime', sub: 'downloads', label: 'Descargas',    icon: 'download' },
     ],
   },
 ]

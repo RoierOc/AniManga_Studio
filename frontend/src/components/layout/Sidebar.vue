@@ -1,7 +1,20 @@
 <script setup>
 import { useUiStore, VIEWS } from '@/stores/ui'
+import { useAnimeStore } from '@/stores/anime'
 import Icon from '@/components/ui/Icon.vue'
 const ui = useUiStore()
+const anime = useAnimeStore()
+
+function select(item) {
+  if (item.sub) {                       // anime sub-view
+    anime.closeDetail(); anime.closeTorrents()
+    anime.sub = item.sub
+    anime.persist?.()
+  }
+  ui.goto(item.id)
+}
+const isActive = (item) =>
+  ui.currentView === item.id && (!item.sub || anime.sub === item.sub)
 </script>
 
 <template>
@@ -26,9 +39,9 @@ const ui = useUiStore()
       <div v-for="g in VIEWS" :key="g.group" class="nav__group">
         <span class="nav__label">{{ g.group }}</span>
         <button
-          v-for="item in g.items" :key="item.id"
-          class="nav__item" :class="{ 'is-active': ui.currentView === item.id }"
-          @click="ui.goto(item.id)" :title="item.label"
+          v-for="item in g.items" :key="item.id + (item.sub || '')"
+          class="nav__item" :class="{ 'is-active': isActive(item) }"
+          @click="select(item)" :title="item.label"
         >
           <span class="nav__rail" />
           <Icon :name="item.icon" :size="19" class="nav__icon" />

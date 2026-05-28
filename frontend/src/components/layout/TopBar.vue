@@ -1,12 +1,16 @@
 <script setup>
 import { computed } from 'vue'
 import { useUiStore, VIEWS } from '@/stores/ui'
+import { useAnimeStore } from '@/stores/anime'
 import Icon from '@/components/ui/Icon.vue'
 
 const ui = useUiStore()
-const current = computed(() =>
-  VIEWS.flatMap(g => g.items).find(i => i.id === ui.currentView)
-)
+const anime = useAnimeStore()
+const current = computed(() => {
+  const items = VIEWS.flatMap(g => g.items)
+  if (ui.currentView === 'anime') return items.find(i => i.id === 'anime' && i.sub === anime.sub) || items.find(i => i.id === 'anime')
+  return items.find(i => i.id === ui.currentView)
+})
 </script>
 
 <template>
