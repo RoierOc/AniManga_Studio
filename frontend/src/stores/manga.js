@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { onStatus } from '@/lib/sse'
 import { useUiStore } from './ui'
-import { taskId } from '@/lib/manga'
+import { taskId, canonicalTitle } from '@/lib/manga'
 
 let statusBound = false
 
@@ -43,6 +43,15 @@ export const useMangaStore = defineStore('manga', {
     // export destinations
     drive: { configured: false, connected: false, email: '' },
     webdav: { phoneUrl: '', localUrl: '' },
+
+    // MangaDex Tomo Builder (volumes + covers)
+    mdex: {
+      id: null, mdManga: null,
+      search: '', results: [], searching: false,
+      volumes: [], volumesLoading: false,
+      covers: [], coversLoading: false,
+      selectedCover: null, coverLoadingId: null, coverB64: '', coverUrl: '',
+    },
 
     // upscale model + mode
     models: {},                 // { key: label }
@@ -246,6 +255,123 @@ export const useMangaStore = defineStore('manga', {
         return d
       } catch (_) { ui.toast('Error escaneando', 'error') }
     },
+
+    /* ── MangaDex Tomo Builder ──────────────────────────────────────────── */
+    async resolveMdexId() {
+      if (this.mdex.id) return this.mdex.id
+      const title = this.current?.name
+      if (!title) return null
+      try {
+        const results = await api.get('/api/mangadex/search?q=' + encodeURIComponent(title))
+        if (!Array.isArray(results) || !results.length) return null
+        const exact = results.find(r => canonicalTitle(r.title) === canonicalTitle(title))
+        if (!exact) return null
+        this.mdex.id = exact.id; this.mdex.mdManga = exact
+        return exact.id
+      } catch (_) { return null }
+    },
+    async searchMdexForTomo() {
+      const q = this.mdex.search.trim(); if (!q) return
+      this.mdex.searching = true; this.mdex.results = []
+      try { const r = await api.get('/api/mangadex/search?q=' + encodeURIComponent(q)); this.mdex.results = Array.isArray(r) ? r.slice(0, 8) : [] }
+      catch (_) {} finally { this.mdex.searching = false }
+    },
+    async selectMdexEntry(entry) {
+      this.mdex.id = entry.id; this.mdex.mdManga = entry; this.mdex.results = []; this.mdex.search = ''
+      this.mdex.volumes = []; this.mdex.covers = []
+      await this.loadMdexVolumes(); this.loadMdexCovers()
+    },
+    async loadMdexVolumes() {
+      const id = await this.resolveMdexId()
+      if (!id) { useUiStore().toast('No se encontró este manga en MangaDex', 'warn'); return }
+      this.mdex.volumesLoading = true; this.mdex.volumes = []
+      try {
+        const [vol, cov] = await Promise.all([
+          api.get(`/api/mangadex/volumes/${id}`).catch(() => []),
+          api.get(`/api/mangadex/covers/${id}`).catch(() => []),
+        ])
+        let volumes = Array.isArray(vol) ? vol : []
+        const covers = Array.isArray(cov) ? cov : []
+        const apiVolCount = volumes.filter(v => v.chapters && v.chapters.length).length
+        const feedFallback = volumes.some(v => v.feedFallback)
+        if (apiVolCount === 0 || feedFallback) {
+          try { const s = await api.get(`/api/mangadex/scrape_volumes/${id}`); if (Array.isArray(s) && s.length && !s.error) volumes = s } catch (_) {}
+        }
+        const known = new Set(volumes.map(v => v.volume))
+        for (const v of [...new Set(covers.map(c => c.volume).filter(x => x && x !== 'none'))])
+          if (!known.has(v)) volumes.push({ volume: v, label: `Tomo ${v}`, chapters: null, count: 0, noChapterData: true })
+        volumes.sort((a, b) => { const na = parseFloat(a.volume), nb = parseFloat(b.volume); if (!isNaN(na) && !isNaN(nb)) return na - nb; return isNaN(na) ? 1 : -1 })
+        this.mdex.volumes = volumes
+      } catch (_) {}
+      finally { this.mdex.volumesLoading = false }
+    },
+    // Returns { selected: [chapterNorms], label } — faithful to the original applyMdexVolume.
+    applyMdexVolume(vol) {
+      const localChaps = this.chapters
+        .map(g => ({ norm: String(g.chapter), num: parseFloat(g.chapter) }))
+        .filter(g => !isNaN(g.num))
+      const vols = this.mdex.volumes
+      let selected
+      if (vol.noChapterData || !vol.chapters || !vol.chapters.length) {
+        const volNum = parseFloat(vol.volume)
+        const known = vols.filter(v => !v.noChapterData && v.chapters && v.chapters.length)
+        if (known.length === 0) {
+          const coverVols = vols.filter(v => !isNaN(parseFloat(v.volume))).sort((a, b) => parseFloat(a.volume) - parseFloat(b.volume))
+          const idx = coverVols.findIndex(v => v.volume === vol.volume)
+          const count = coverVols.length
+          const sorted = [...localChaps].sort((a, b) => a.num - b.num)
+          const mainChaps = sorted.filter(g => Number.isInteger(g.num))
+          const bonusChaps = sorted.filter(g => !Number.isInteger(g.num))
+          const base = Math.floor(mainChaps.length / count)
+          const slices = []
+          for (let i = 0; i < count; i++) { const start = i * base; const end = (i === count - 1) ? mainChaps.length : start + base; slices.push(mainChaps.slice(start, end).map(g => g.norm)) }
+          for (const bonus of bonusChaps) { const parent = Math.floor(bonus.num); const target = slices.findIndex(s => s.some(n => parseFloat(n) === parent)); (target >= 0 ? slices[target] : slices[slices.length - 1]).push(bonus.norm) }
+          selected = slices[idx] || []
+        } else {
+          const prev = [...known].sort((a, b) => parseFloat(b.volume) - parseFloat(a.volume)).find(v => parseFloat(v.volume) < volNum)
+          const next = [...known].sort((a, b) => parseFloat(a.volume) - parseFloat(b.volume)).find(v => parseFloat(v.volume) > volNum)
+          const prevMax = prev ? Math.max(...prev.chapters.map(Number).filter(n => !isNaN(n) && n >= 1)) : 0
+          const nn = next ? next.chapters.map(Number).filter(n => !isNaN(n) && n >= 1) : []
+          const nextMin = nn.length ? Math.min(...nn) : Infinity
+          const prevDataNum = prev ? parseFloat(prev.volume) : -Infinity
+          const nextDataNum = next ? parseFloat(next.volume) : Infinity
+          const subGapVols = vols.filter(v => { const vn = parseFloat(v.volume); return !isNaN(vn) && vn > prevDataNum && vn < nextDataNum && (v.noChapterData || !v.chapters || !v.chapters.length) }).sort((a, b) => parseFloat(a.volume) - parseFloat(b.volume))
+          const gapChaps = [...localChaps].filter(g => g.num > prevMax && g.num < nextMin).sort((a, b) => a.num - b.num)
+          if (subGapVols.length <= 1) selected = gapChaps.map(g => g.norm)
+          else { const idx = subGapVols.findIndex(v => v.volume === vol.volume); const chunk = Math.ceil(gapChaps.length / subGapVols.length); selected = gapChaps.slice(idx * chunk, idx * chunk + chunk).map(g => g.norm) }
+        }
+      } else {
+        const nums = vol.chapters.map(Number).filter(n => !isNaN(n))
+        const regular = nums.filter(n => n >= 1)
+        const anchor = regular.length ? regular : nums
+        const minCh = Math.min(...anchor), maxCh = Math.max(...anchor)
+        const inRange = localChaps.filter(g => g.num >= minCh && g.num <= maxCh)
+        if (inRange.length > 0) selected = inRange.map(g => g.norm)
+        else if (!vol.fromScrape) selected = vol.chapters.map(c => String(c)).filter(c => c !== '')
+      }
+      const label = vol.label || `Tomo ${vol.volume}`
+      const ui = useUiStore()
+      if (!selected || !selected.length) { ui.toast(`${label}: ningún capítulo en este rango`, 'warn'); return { selected: [], label } }
+      const total = vol.chapters ? vol.chapters.length : 0
+      const missing = total > 0 && total > selected.length ? total - selected.length : 0
+      ui.toast(missing > 0 ? `${selected.length}/${total} caps — ${label} (faltan ${missing})` : `${selected.length} caps — ${label}`, missing > 0 ? 'warn' : 'ok')
+      return { selected, label }
+    },
+    async loadMdexCovers() {
+      const id = await this.resolveMdexId(); if (!id) return
+      this.mdex.coversLoading = true; this.mdex.covers = []
+      try { this.mdex.covers = await api.get(`/api/mangadex/covers/${id}`) || [] } catch (_) {}
+      finally { this.mdex.coversLoading = false }
+    },
+    async selectMdexCover(cover) {
+      this.mdex.selectedCover = cover; this.mdex.coverLoadingId = cover.id; this.mdex.coverB64 = ''; this.mdex.coverUrl = cover.url
+      try {
+        const d = await api.post('/api/mangadex/cover_b64', { url: cover.url })
+        if (d?.b64) { this.mdex.coverB64 = d.b64; this.mdex.coverUrl = d.data_url || cover.url }
+      } catch (_) {}
+      finally { this.mdex.coverLoadingId = null }
+    },
+    resetMdex() { this.mdex = { id: null, mdManga: null, search: '', results: [], searching: false, volumes: [], volumesLoading: false, covers: [], coversLoading: false, selectedCover: null, coverLoadingId: null, coverB64: '', coverUrl: '' } },
 
     /* ── Reader ─────────────────────────────────────────────────────────── */
     _resetView() { this.zoom = 1.0; this.panX = 0; this.panY = 0; this.compareMode = false; this.barsHidden = false },

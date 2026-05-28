@@ -26,9 +26,15 @@ watch(m, (v) => {
   tab.value = 'chapters'; sel.value = new Set(); volName.value = v?.name || ''
   showManage.value = false; renameVal.value = v?.name || ''; coverUrlVal.value = ''
   tomoCover.value = ''
+  if (v) store.resetMdex()
   if (v && !Object.keys(store.models).length) store.loadModels()
   if (v) store.loadDestinations()
 }, { immediate: true })
+
+function applyVol(vol) {
+  const { selected, label } = store.applyMdexVolume(vol)
+  if (selected.length) { sel.value = new Set(selected); volName.value = label }
+}
 
 function onTomoCover(e) {
   const f = e.target.files?.[0]; if (!f) return
@@ -53,7 +59,7 @@ const selectAll = () => { sel.value = allSelected.value ? new Set() : new Set(st
 async function doExport(toDrive = false) {
   if (!sel.value.size) return
   const chapters = [...sel.value].sort((a, b) => parseFloat(a) - parseFloat(b))
-  await store.exportTomo({ chapters, volumeName: volName.value, format: fmt.value, quality: quality.value, downscaleHalf: downscale.value, coverB64: tomoCover.value, toDrive })
+  await store.exportTomo({ chapters, volumeName: volName.value, format: fmt.value, quality: quality.value, downscaleHalf: downscale.value, coverB64: tomoCover.value || store.mdex.coverB64, toDrive })
 }
 </script>
 
@@ -143,6 +149,26 @@ async function doExport(toDrive = false) {
                   <a v-if="store.webdav.phoneUrl" :href="store.webdav.phoneUrl" target="_blank" class="dlink">Abrir en el móvil ↗</a>
                 </div>
               </div>
+              <!-- MangaDex volumes + covers -->
+              <div class="mdex">
+                <div class="mdex__head">
+                  <span>Tomos de MangaDex</span>
+                  <button class="btn-xs" :disabled="store.mdex.volumesLoading" @click="store.loadMdexVolumes(); store.loadMdexCovers()">
+                    <span v-if="store.mdex.volumesLoading" class="xspin" />{{ store.mdex.volumes.length ? 'Recargar' : 'Cargar' }}
+                  </button>
+                </div>
+                <div v-if="store.mdex.volumes.length" class="mdex__vols">
+                  <button v-for="v in store.mdex.volumes" :key="v.volume" class="volchip" @click="applyVol(v)">{{ v.label || ('Tomo ' + v.volume) }}</button>
+                </div>
+                <div v-if="store.mdex.covers.length" class="mdex__covers">
+                  <button v-for="c in store.mdex.covers" :key="c.id || c.url" class="covsel" :class="{ 'is-sel': store.mdex.selectedCover?.url === c.url }" @click="store.selectMdexCover(c)">
+                    <img :src="c.url256 || c.url" loading="lazy" alt="" />
+                    <span v-if="c.volume && c.volume !== 'none'" class="covsel__v">{{ c.volume }}</span>
+                    <span v-if="store.mdex.coverLoadingId === c.id" class="covsel__load"><span class="xspin" /></span>
+                  </button>
+                </div>
+              </div>
+
               <div class="tomo__pick">
                 <button class="selall" @click="selectAll">{{ allSelected ? 'Ninguno' : 'Todos' }}</button>
                 <ul class="picklist">
@@ -236,7 +262,25 @@ async function doExport(toDrive = false) {
 .modal__body { overflow-y: auto; padding: var(--s-3); }
 
 /* tomo export */
-.tomo { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-4); padding: var(--s-2); }
+.tomo { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-4); padding: var(--s-2); align-items: start; }
+.tomo__form { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: var(--s-3); }
+.mdex { grid-column: 1; grid-row: 2; border-top: 1px solid var(--line); padding-top: var(--s-3); }
+.tomo__pick { grid-column: 2; grid-row: 1 / span 2; }
+
+.mdex__head { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-xs); color: var(--ink-faint); margin-bottom: var(--s-2); }
+.btn-xs { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); }
+.btn-xs:hover { background: var(--azure-haze); }
+.xspin { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--azure); animation: spin .7s linear infinite; display: inline-block; }
+.mdex__vols { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: var(--s-3); }
+.volchip { padding: 4px 10px; border-radius: var(--r-pill); font-size: var(--fs-2xs); color: var(--violet); border: 1px solid color-mix(in srgb, var(--violet) 30%, transparent); transition: all var(--t-fast); }
+.volchip:hover { background: color-mix(in srgb, var(--violet) 14%, transparent); }
+.mdex__covers { display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 6px; max-height: 180px; overflow-y: auto; }
+.covsel { position: relative; aspect-ratio: 2/3; border-radius: var(--r-xs); overflow: hidden; border: 2px solid transparent; }
+.covsel img { width: 100%; height: 100%; object-fit: cover; }
+.covsel.is-sel { border-color: var(--azure); }
+.covsel__v { position: absolute; bottom: 0; left: 0; right: 0; font-family: var(--font-mono); font-size: 8px; text-align: center; background: rgba(7,10,18,.75); color: var(--ice); }
+.covsel__load { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(7,10,18,.6); }
+
 .tomo__form { display: flex; flex-direction: column; gap: var(--s-3); }
 .fld { display: flex; flex-direction: column; gap: 5px; font-size: var(--fs-xs); color: var(--ink-faint); }
 .fld input[type=text], .fld select { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); }

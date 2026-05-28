@@ -10,6 +10,9 @@ export function sanitizeTitleId(title) {
 export const taskId = (title, chapter, type) =>
   `${sanitizeTitleId(title)}_${type}_ch${chapter}`
 
+// Canonical title for matching (lowercase, alphanumeric only)
+export const canonicalTitle = (t) => (t || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+
 export function chapterSortKey(ch) {
   const n = parseFloat(ch)
   return isNaN(n) ? Infinity : n
