@@ -1,0 +1,126 @@
+/* ════════════════════════════════════════════════════════════════════════
+   ANIMANGA STUDIO — DESIGN TOKENS
+   "Midnight Atelier" — ink on deep space, in blue.
+   Every visual decision flows from these variables. Nothing hard-codes a hex.
+   ════════════════════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── Surfaces — deep navy-black, layered for depth ───────────────────── */
+  --void:        #070a12;   /* page background, the cosmos */
+  --base:        #0a0e18;   /* main canvas */
+  --surface:     #111726;   /* cards, panels */
+  --surface-2:   #161d2e;   /* elevated / hover */
+  --surface-3:   #1c2438;   /* highest elevation */
+  --glass:       rgba(18, 25, 43, 0.72);   /* modals/overlays only */
+  --glass-strong:rgba(12, 17, 31, 0.86);
+
+  /* ── Hairlines & dividers ────────────────────────────────────────────── */
+  --line:        rgba(125, 158, 222, 0.10);
+  --line-2:      rgba(125, 158, 222, 0.18);
+  --line-strong: rgba(125, 158, 222, 0.30);
+
+  /* ── Ink (text) — manga white cooling into the void ──────────────────── */
+  --ink:         #eaf0fb;   /* primary */
+  --ink-soft:    #aab6cc;   /* secondary */
+  --ink-faint:   #6b7791;   /* tertiary, captions */
+  --ink-ghost:   #424d63;   /* disabled / placeholder */
+
+  /* ── Azure — the primary. Evolved from the beloved #6184d3 ───────────── */
+  --azure:       #4d8dff;
+  --azure-bright:#6ea3ff;
+  --azure-deep:  #2f6ae0;
+  --azure-ink:   #1b3a78;   /* deep fill behind glow */
+  --azure-glow:  rgba(77, 141, 255, 0.45);
+  --azure-haze:  rgba(77, 141, 255, 0.12);
+
+  /* ── Cool secondaries — used sparingly, with intent ──────────────────── */
+  --cyan:        #46e0d8;   /* "live" / active / downloading pulse */
+  --cyan-glow:   rgba(70, 224, 216, 0.35);
+  --ice:         #a8c8ff;   /* soft highlight, drama */
+  --violet:      #8b7bff;   /* genre aura: fantasy/supernatural */
+  --rose:        #ff6f9d;   /* genre aura: romance (cool magenta, NOT orange) */
+  --gold:        #ffd45e;   /* ratings only, used like a jewel */
+  --jade:        #5fd6a0;   /* success / completed */
+  --coral:       #ff647c;   /* danger / destructive (rose-red, not orange) */
+
+  /* ── Semantic ────────────────────────────────────────────────────────── */
+  --accent:      var(--azure);
+  --accent-soft: var(--azure-haze);
+  --ok:          var(--jade);
+  --warn:        var(--gold);
+  --danger:      var(--coral);
+  --live:        var(--cyan);
+
+  /* ── Typography ──────────────────────────────────────────────────────── */
+  --font-display: 'Clash Display', 'Hiragino Sans', system-ui, sans-serif;
+  --font-body:    'General Sans', 'Hiragino Kaku Gothic ProN', system-ui, sans-serif;
+  --font-jp:      'Noto Sans JP', var(--font-body);
+  --font-mono:    'JetBrains Mono', ui-monospace, 'SF Mono', monospace;
+
+  --fs-3xl: clamp(2.2rem, 4.5vw, 3.4rem);
+  --fs-2xl: clamp(1.7rem, 3vw, 2.3rem);
+  --fs-xl:  1.45rem;
+  --fs-lg:  1.18rem;
+  --fs-md:  1rem;
+  --fs-sm:  0.875rem;
+  --fs-xs:  0.78rem;
+  --fs-2xs: 0.69rem;
+
+  --lh-tight: 1.08;
+  --lh-snug:  1.32;
+  --lh-body:  1.62;
+
+  --tracking-display: -0.02em;
+  --tracking-tight:   -0.01em;
+  --tracking-wide:    0.04em;
+  --tracking-caps:    0.12em;
+
+  /* ── Spacing — strict 8px grid (with 4px half-step) ──────────────────── */
+  --s-1:  4px;
+  --s-2:  8px;
+  --s-3:  12px;
+  --s-4:  16px;
+  --s-5:  24px;
+  --s-6:  32px;
+  --s-7:  48px;
+  --s-8:  64px;
+  --s-9:  96px;
+
+  /* ── Radii ───────────────────────────────────────────────────────────── */
+  --r-xs: 6px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+  --r-xl: 28px;
+  --r-pill: 999px;
+
+  /* ── Elevation — shadows tuned for a dark, blue room ─────────────────── */
+  --shadow-sm:  0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-md:  0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-lg:  0 18px 48px rgba(0, 0, 0, 0.55);
+  --shadow-xl:  0 32px 80px rgba(0, 0, 0, 0.65);
+  --glow-azure: 0 0 0 1px var(--azure-glow), 0 8px 32px var(--azure-glow);
+  --glow-cyan:  0 0 24px var(--cyan-glow);
+
+  /* ── Motion — cinematic easing, named with intent ───────────────────── */
+  --ease-silk:  cubic-bezier(0.22, 1, 0.36, 1);    /* smooth deceleration */
+  --ease-snap:  cubic-bezier(0.34, 1.4, 0.5, 1);   /* slight overshoot */
+  --ease-drift: cubic-bezier(0.65, 0, 0.35, 1);    /* symmetric, scrubby */
+  --ease-out:   cubic-bezier(0.16, 1, 0.3, 1);
+
+  --t-fast:  140ms;
+  --t-base:  240ms;
+  --t-slow:  420ms;
+  --t-cine:  680ms;
+
+  /* ── Layout ──────────────────────────────────────────────────────────── */
+  --sidebar-w:        248px;
+  --sidebar-w-collapsed: 72px;
+  --topbar-h:         64px;
+  --content-max:      1440px;
+  --z-sidebar:  40;
+  --z-topbar:   45;
+  --z-overlay:  90;
+  --z-modal:    100;
+  --z-toast:    120;
+}

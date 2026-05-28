@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <radialGradient id="g" cx="30%" cy="25%" r="90%">
+      <stop offset="0%" stop-color="#4d8dff"/>
+      <stop offset="100%" stop-color="#1b3a78"/>
+    </radialGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="url(#g)"/>
+  <text x="16" y="23" font-size="19" text-anchor="middle" fill="#fff" font-family="serif" font-weight="700">愛</text>
+</svg>
