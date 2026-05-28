@@ -8,6 +8,7 @@ import History from './History.vue'
 import Seasonal from './Seasonal.vue'
 import Search from './Search.vue'
 import AutoplayModal from '@/components/anime/AutoplayModal.vue'
+import SubTrackModal from '@/components/anime/SubTrackModal.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 import Icon from '@/components/ui/Icon.vue'
 
@@ -58,6 +59,7 @@ function selectTab(id) {
     </div>
 
     <AutoplayModal />
+    <SubTrackModal />
   </div>
 </template>
 

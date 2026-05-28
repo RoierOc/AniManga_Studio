@@ -25,6 +25,11 @@ const infoKey = computed(() => `${props.anime.mal_id}_${props.ep.num}`)
 const infoOpen = computed(() => store.epInfoOpen === infoKey.value)
 const info = computed(() => store.epInfo[infoKey.value])
 
+const subKey = computed(() => store.subKey(props.anime, props.ep))
+const subTask = computed(() => store.subTasks[subKey.value])
+const subRunning = computed(() => subTask.value && ['starting', 'injecting', 'translating', 'downloading', 'running'].includes(subTask.value.status))
+const subFetching = computed(() => store.subFetching === subKey.value)
+
 function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 </script>
 
@@ -53,10 +58,24 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
     <div class="ep__foot">
       <div class="ep__title">{{ animeEpLabel(anime, ep) }}</div>
 
+      <!-- subtitle translation progress -->
+      <div v-if="playable && (subRunning || subTask?.status === 'done')" class="ep__sub" :class="{ 'is-done': subTask?.status === 'done' }">
+        <template v-if="subTask?.status === 'done'"><Icon name="check" :size="12" /> ESP ✓</template>
+        <template v-else>
+          <span class="ep__sub-bar"><span :style="{ width: (subTask?.progress || 0) + '%' }" /></span>
+          <span class="ep__sub-msg">{{ subTask?.engine === 'ollama' ? '🦙' : '✨' }} {{ subTask?.progress || 0 }}%</span>
+          <button class="ep__sub-x" @click.stop="store.cancelTranslate(anime, ep)"><Icon name="close" :size="11" /></button>
+        </template>
+      </div>
+
       <div class="ep__actions" v-if="playable">
         <button v-if="opEnd" class="ep__icon ep__icon--skip" :title="`Saltar OP → ${Math.floor(opEnd)}s`"
                 @click.stop="store.play(anime, ep, '', opEnd)">
           <Icon name="play" :size="13" /><span class="ep__icon-lbl">OP</span>
+        </button>
+        <button v-if="!subRunning && subTask?.status !== 'done'" class="ep__icon ep__icon--sub" :disabled="subFetching"
+                :title="subFetching ? 'Buscando…' : 'Subtítulos en español'" @click.stop="store.translateSubs(anime, ep)">
+          <span v-if="subFetching" class="ep__mini-spin" /><span v-else class="ep__sub-lbl">ES</span>
         </button>
         <button v-if="anime.mal_id" class="ep__icon" :class="{ 'is-on': infoOpen }" title="Descripción"
                 @click.stop="store.loadEpInfo(anime, ep)">
@@ -144,6 +163,17 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 .ep__icon--danger:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
 .ep__i { font-family: var(--font-display); font-style: italic; font-weight: 600; font-size: .95rem; }
 .ep__status { font-size: var(--fs-xs); color: var(--cyan); font-family: var(--font-mono); }
+.ep__icon--sub { width: auto; padding: 0 8px; color: var(--jade); border-color: color-mix(in srgb, var(--jade) 25%, transparent); }
+.ep__icon--sub:hover { background: color-mix(in srgb, var(--jade) 12%, transparent); border-color: color-mix(in srgb, var(--jade) 50%, transparent); }
+.ep__sub-lbl { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; }
+.ep__mini-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--jade); animation: spin .7s linear infinite; }
+.ep__sub { display: flex; align-items: center; gap: 6px; margin-bottom: var(--s-2); font-size: var(--fs-2xs); color: var(--jade); }
+.ep__sub.is-done { font-weight: 700; }
+.ep__sub-bar { flex: 1; height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
+.ep__sub-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--jade), var(--cyan)); transition: width var(--t-base); }
+.ep__sub-msg { font-family: var(--font-mono); color: var(--ink-soft); flex-shrink: 0; }
+.ep__sub-x { width: 18px; height: 18px; display: grid; place-items: center; border-radius: var(--r-xs); color: var(--ink-faint); flex-shrink: 0; }
+.ep__sub-x:hover { color: var(--coral); }
 
 .ep__info { padding: var(--s-3); border-top: 1px solid var(--line); background: var(--base); font-size: var(--fs-xs); line-height: 1.55; }
 .ep__info-title { font-weight: 600; color: var(--ink); margin-bottom: 4px; font-size: var(--fs-sm); }

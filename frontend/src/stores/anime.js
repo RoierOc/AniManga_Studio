@@ -7,6 +7,7 @@ import { nextUnwatchedEp, isSpanishOrMulti, isEnglishSub } from '@/lib/anime'
 let autoplayTimer = null
 let nowTimer = null
 let sseBound = false
+const subPollers = {}   // subKey -> interval handle
 
 export const useAnimeStore = defineStore('anime', {
   state: () => ({
@@ -26,6 +27,11 @@ export const useAnimeStore = defineStore('anime', {
     autoplay: null,            // { anime, ep } | null
     autoplaySeconds: 0,
     nowSec: Math.floor(Date.now() / 1000),
+
+    // subtitles
+    subTasks: {},              // subKey -> { status, progress, message, engine, task_id }
+    subTrackModal: null,       // { anime, ep, tracks, externalTracks, spanishTracks, missingKeys }
+    subFetching: null,         // subKey currently fetching tracks
 
     // qBittorrent
     qbt: { connected: false, version: '', url: 'http://localhost:8080', username: '', password: '' },
@@ -414,6 +420,90 @@ export const useAnimeStore = defineStore('anime', {
         } else ui.toast('qBittorrent: ' + (d.msg || d.error || 'Error'), 'error')
       } catch (_) { ui.toast('Error conectando qBittorrent', 'error') }
       finally { this.addingHashes = this.addingHashes.filter(k => k !== key) }
+    },
+
+    /* ── Subtitles ──────────────────────────────────────────────────────── */
+    subKey(anime, ep) { return `${anime.id}_${ep.ep_type === 'special' ? 'sp' : 'ep'}${ep.num}` },
+
+    async translateSubs(anime, ep) {
+      const ui = useUiStore()
+      const key = this.subKey(anime, ep)
+      this.subFetching = key
+      const p = new URLSearchParams({
+        info_hash: ep.info_hash || '', episode: ep.num, anime_id: anime.id,
+        ep_type: ep.ep_type || 'episode', ...(ep.local_path ? { local_path: ep.local_path } : {}),
+      })
+      try {
+        const d = await api.get(`/api/subtitle/tracks?${p}`)
+        const tracks = d.tracks || [], ext = d.external_tracks || [], spa = d.spanish_tracks || []
+        if (spa.length === 1 && !tracks.length && !ext.length) { await this.directInject(anime, ep, spa[0]); return }
+        if (spa.length || tracks.length || ext.length) {
+          this.subTrackModal = { anime, ep, tracks, externalTracks: ext, spanishTracks: spa, missingKeys: d.sources_missing_key || [] }
+          return
+        }
+        const hint = (d.sources_missing_key || []).length ? ` (sin API key: ${d.sources_missing_key.join(', ')})` : ''
+        ui.toast(`No se encontraron subtítulos${hint}`, 'warn', 7000)
+      } catch (_) { ui.toast('Error obteniendo pistas de subtítulos', 'error') }
+      finally { this.subFetching = null }
+    },
+
+    async directInject(anime, ep, subInfo) {
+      const ui = useUiStore()
+      const key = this.subKey(anime, ep)
+      this.subTrackModal = null
+      this.subTasks[key] = { status: 'injecting', progress: 50, message: 'Descargando subtítulo…' }
+      try {
+        const d = await api.post('/api/subtitle/inject_direct', {
+          info_hash: ep.info_hash || '', episode: ep.num, anime_id: anime.id,
+          ...(ep.local_path ? { local_path: ep.local_path } : {}), external_sub: subInfo,
+        })
+        if (d.error) { this.subTasks[key] = { status: 'error', progress: 0, message: d.error }; ui.toast(d.error, 'error'); return }
+        this.subTasks[key] = { status: 'done', progress: 100, message: '¡Completado!' }
+        ui.toast(`✓ Subtítulos ESP añadidos: ${d.file || ''}`, 'ok')
+      } catch (_) { this.subTasks[key] = { status: 'error', progress: 0, message: 'Error' }; ui.toast('Error al inyectar', 'error') }
+    },
+
+    async startTranslate(anime, ep, subIndex = 0, externalSub = null) {
+      const ui = useUiStore()
+      const key = this.subKey(anime, ep)
+      this.subTrackModal = null
+      this.subTasks[key] = { status: 'starting', progress: 0, message: 'Iniciando…' }
+      try {
+        const d = await api.post('/api/subtitle/translate', {
+          info_hash: ep.info_hash || '', episode: ep.num, ep_type: ep.ep_type || 'episode',
+          anime_id: anime.id, sub_index: subIndex,
+          ...(ep.local_path ? { local_path: ep.local_path } : {}),
+          ...(externalSub ? { external_sub: externalSub } : {}),
+        })
+        this.subTasks[key] = { ...this.subTasks[key], task_id: d.task_id }
+        this._subPoll(key, d.task_id)
+      } catch (e) { this.subTasks[key] = { status: 'error', progress: 0, message: e.body || 'Error' }; ui.toast('Error al traducir', 'error') }
+    },
+
+    _subPoll(key, taskId) {
+      if (subPollers[key]) clearInterval(subPollers[key])
+      subPollers[key] = setInterval(async () => {
+        try {
+          const d = await api.get(`/api/subtitle/status/${taskId}`)
+          this.subTasks[key] = { ...d, task_id: taskId }
+          if (['done', 'error', 'cancelled'].includes(d.status)) {
+            clearInterval(subPollers[key]); delete subPollers[key]
+            if (d.status === 'done') useUiStore().toast(`✓ Subtítulos ESP: ${(d.output || '').split('/').pop() || ''}`, 'ok')
+            else if (d.status === 'error') useUiStore().toast(`Error: ${d.message}`, 'error')
+          }
+        } catch (_) {
+          clearInterval(subPollers[key]); delete subPollers[key]
+          this.subTasks[key] = { status: 'cancelled', message: 'Tarea perdida', task_id: taskId }
+        }
+      }, 1500)
+    },
+
+    async cancelTranslate(anime, ep) {
+      const key = this.subKey(anime, ep)
+      const tid = this.subTasks[key]?.task_id
+      if (subPollers[key]) { clearInterval(subPollers[key]); delete subPollers[key] }
+      if (tid) { try { await api.post(`/api/subtitle/cancel/${tid}`, {}) } catch (_) {} }
+      this.subTasks[key] = { ...this.subTasks[key], status: 'cancelled', message: 'Cancelado' }
     },
 
     /* ── History ────────────────────────────────────────────────────────── */
