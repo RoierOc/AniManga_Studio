@@ -35,6 +35,14 @@ export const useAnimeStore = defineStore('anime', {
     // history
     history: [],
     historyLoaded: false,
+
+    // seasonal
+    seasonal: [],
+    seasonalLoading: false,
+    season: '',
+    year: 0,
+    seasonSort: 'score',         // score | popularity | trending
+    seasonGenre: '',
   }),
 
   getters: {
@@ -215,6 +223,49 @@ export const useAnimeStore = defineStore('anime', {
         }
         await this.loadQbt()
       } catch (e) { useUiStore().toast('Error: ' + (e.message || 'qBittorrent'), 'error') }
+    },
+
+    /* ── Seasonal ───────────────────────────────────────────────────────── */
+    async loadSeasonal() {
+      this.seasonalLoading = true
+      try {
+        const p = new URLSearchParams({ sort: this.seasonSort })
+        if (this.season) p.set('season', this.season)
+        if (this.year) p.set('year', String(this.year))
+        const d = await api.get(`/api/anime/seasonal?${p}`)
+        this.seasonal = d.results || []
+        if (!this.season) this.season = d.season || ''
+        if (!this.year) this.year = d.year || 0
+      } catch (_) { this.seasonal = [] }
+      finally { this.seasonalLoading = false }
+    },
+    seasonNav(dir) {
+      const S = ['WINTER', 'SPRING', 'SUMMER', 'FALL']
+      const idx = S.indexOf(this.season)
+      if (idx === -1) return this.loadSeasonal()
+      let ni = idx + dir
+      if (ni < 0) { ni = 3; this.year-- }
+      else if (ni > 3) { ni = 0; this.year++ }
+      this.season = S[ni]
+      this.loadSeasonal()
+    },
+    isInLibrary(anime) {
+      if (!anime) return false
+      return this.library.some(a =>
+        (anime.al_id && a.al_id === anime.al_id) ||
+        (anime.mal_id && a.mal_id === anime.mal_id) ||
+        (anime.title && a.title === anime.title))
+    },
+    async addToLibrary(anime) {
+      try {
+        const d = await api.post('/api/anime/library/add', {
+          al_id: anime.al_id, mal_id: anime.mal_id,
+          title: anime.title, title_romaji: anime.title_romaji || '',
+          cover: anime.cover || '', total_episodes: anime.episodes || null,
+          format: anime.format || '', track_only: true,
+        })
+        if (d.ok) { useUiStore().toast(`"${anime.title}" añadido a Mi Anime`, 'ok'); await this.loadLibrary(true) }
+      } catch (_) { useUiStore().toast('Error al añadir a biblioteca', 'error') }
     },
 
     /* ── History ────────────────────────────────────────────────────────── */
