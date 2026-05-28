@@ -40,6 +40,10 @@ export const useMangaStore = defineStore('manga', {
     updates: [],                // [{manga_id, title, cover, new_count, new_chapters}]
     updatesLoaded: false,
 
+    // export destinations
+    drive: { configured: false, connected: false, email: '' },
+    webdav: { phoneUrl: '', localUrl: '' },
+
     // upscale model + mode
     models: {},                 // { key: label }
     activeModel: 'eula',
@@ -190,16 +194,30 @@ export const useMangaStore = defineStore('manga', {
     },
     exportFileUrl(id) { return `/api/export/file/${id}` },
 
-    /* ── Tomo export ────────────────────────────────────────────────────── */
-    async exportTomo({ chapters, volumeName, format = 'cbz', quality = 92, downscaleHalf = false }) {
+    /* ── Tomo export + destinations ─────────────────────────────────────── */
+    async loadDestinations() {
+      try { const d = await api.get('/api/drive/status'); this.drive = { configured: !!d.configured, connected: !!d.connected, email: d.email || '' } } catch (_) {}
+      try { const w = await api.get('/api/webdav/status'); this.webdav = { phoneUrl: w.library_url_phone || '', localUrl: w.library_url_local || '' } } catch (_) {}
+    },
+    async connectDrive() {
+      try { const d = await api.get('/api/drive/auth'); if (d.auth_url) window.open(d.auth_url, '_blank') } catch (_) { useUiStore().toast('Drive no configurado', 'error') }
+    },
+    async exportTomo({ chapters, volumeName, format = 'cbz', quality = 92, downscaleHalf = false, coverB64 = '', toDrive = false }) {
+      const body = {
+        title: this.current.id, chapters, volume_name: volumeName || this.current.name,
+        format, quality, downscale_half: downscaleHalf, ...(coverB64 ? { cover_data: coverB64 } : {}),
+      }
       try {
-        const d = await api.post('/api/export/start', {
-          title: this.current.id, chapters, volume_name: volumeName || this.current.name,
-          format, quality, downscale_half: downscaleHalf,
-        })
+        if (toDrive) {
+          useUiStore().toast('Subiendo tomo a Google Drive…', 'info')
+          const d = await api.post('/api/drive/upload_tomo', body)
+          if (d.error) { useUiStore().toast(d.error, 'error'); return null }
+          useUiStore().toast('✓ Tomo subido a Drive', 'ok'); return null
+        }
+        const d = await api.post('/api/export/start', body)
         useUiStore().toast(`Exportando "${volumeName || this.current.name}"…`, 'info')
         return d.task_id
-      } catch (_) { useUiStore().toast('No se pudo iniciar la exportación', 'error'); return null }
+      } catch (_) { useUiStore().toast('No se pudo exportar', 'error'); return null }
     },
 
     /* ── Management (rename, cover, health, integrity) ──────────────────── */

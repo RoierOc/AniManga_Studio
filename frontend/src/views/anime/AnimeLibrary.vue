@@ -55,10 +55,13 @@ const counts = computed(() => {
         <p class="hero__eyebrow"><span class="hero__tick" /> TU ANIME</p>
         <h1>Estudio</h1>
       </div>
-      <label class="searchbox" style="--i:1">
-        <Icon name="search" :size="15" />
-        <input v-model="store.libSearch" type="search" placeholder="Buscar en tu anime…" />
-      </label>
+      <div class="hero__actions" style="--i:1">
+        <button class="scanbtn" @click="store.openScan()" title="Carpetas de anime local"><Icon name="folder" :size="15" /> Carpetas</button>
+        <label class="searchbox">
+          <Icon name="search" :size="15" />
+          <input v-model="store.libSearch" type="search" placeholder="Buscar en tu anime…" />
+        </label>
+      </div>
     </header>
 
     <!-- Continue watching -->
@@ -118,6 +121,9 @@ const counts = computed(() => {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); color: var(--ink-faint); transition: border-color var(--t-fast), box-shadow var(--t-fast); }
 .searchbox:focus-within { border-color: var(--azure); box-shadow: 0 0 0 3px var(--azure-haze); }
 .searchbox input { flex: 1; border: none; outline: none; background: none; color: var(--ink); font-size: var(--fs-sm); }
+.hero__actions { display: flex; align-items: center; gap: var(--s-2); }
+.scanbtn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-md); font-size: var(--fs-sm); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
+.scanbtn:hover { color: var(--azure-bright); border-color: var(--azure); }
 
 /* continue watching */
 .cw { margin-bottom: var(--s-6); }

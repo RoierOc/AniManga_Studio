@@ -20,12 +20,20 @@ const downscale = ref(false)
 const showManage = ref(false)
 const renameVal = ref('')
 const coverUrlVal = ref('')
+const tomoCover = ref('')      // b64 cover for the exported tomo
 
 watch(m, (v) => {
   tab.value = 'chapters'; sel.value = new Set(); volName.value = v?.name || ''
   showManage.value = false; renameVal.value = v?.name || ''; coverUrlVal.value = ''
+  tomoCover.value = ''
   if (v && !Object.keys(store.models).length) store.loadModels()
+  if (v) store.loadDestinations()
 }, { immediate: true })
+
+function onTomoCover(e) {
+  const f = e.target.files?.[0]; if (!f) return
+  const r = new FileReader(); r.onload = () => { tomoCover.value = r.result }; r.readAsDataURL(f)
+}
 
 async function saveMeta() {
   const ok = await store.editMeta({ newTitle: renameVal.value.trim(), coverUrl: coverUrlVal.value.trim() })
@@ -42,10 +50,10 @@ const toggleSel = (ch) => { const s = new Set(sel.value); s.has(ch) ? s.delete(c
 const allSelected = computed(() => store.chapters.length > 0 && sel.value.size === store.chapters.length)
 const selectAll = () => { sel.value = allSelected.value ? new Set() : new Set(store.chapters.map(c => c.chapter)) }
 
-async function doExport() {
+async function doExport(toDrive = false) {
   if (!sel.value.size) return
   const chapters = [...sel.value].sort((a, b) => parseFloat(a) - parseFloat(b))
-  await store.exportTomo({ chapters, volumeName: volName.value, format: fmt.value, quality: quality.value, downscaleHalf: downscale.value })
+  await store.exportTomo({ chapters, volumeName: volName.value, format: fmt.value, quality: quality.value, downscaleHalf: downscale.value, coverB64: tomoCover.value, toDrive })
 }
 </script>
 
@@ -122,9 +130,18 @@ async function doExport() {
                   <label class="fld"><span>Calidad: {{ quality }}</span><input v-model.number="quality" type="range" min="85" max="100" /></label>
                 </div>
                 <label class="chk"><input v-model="downscale" type="checkbox" /> Reducir a la mitad (menor tamaño)</label>
-                <button class="exportbtn" :disabled="!sel.size" @click="doExport">
+                <label class="upbtn"><Icon name="library" :size="13" /> {{ tomoCover ? 'Portada elegida ✓' : 'Portada del tomo (opcional)' }}<input type="file" accept="image/*" @change="onTomoCover" hidden /></label>
+                <button class="exportbtn" :disabled="!sel.size" @click="doExport(false)">
                   <Icon name="download" :size="15" /> Exportar {{ sel.size }} {{ sel.size === 1 ? 'capítulo' : 'capítulos' }}
                 </button>
+                <button v-if="store.drive.connected" class="exportbtn exportbtn--drive" :disabled="!sel.size" @click="doExport(true)">
+                  <Icon name="globe" :size="15" /> Exportar a Google Drive
+                </button>
+                <div class="dests">
+                  <button v-if="!store.drive.connected" class="dlink" @click="store.connectDrive()">Conectar Google Drive</button>
+                  <span v-else class="dok">Drive: {{ store.drive.email }}</span>
+                  <a v-if="store.webdav.phoneUrl" :href="store.webdav.phoneUrl" target="_blank" class="dlink">Abrir en el móvil ↗</a>
+                </div>
               </div>
               <div class="tomo__pick">
                 <button class="selall" @click="selectAll">{{ allSelected ? 'Ninguno' : 'Todos' }}</button>
@@ -230,6 +247,11 @@ async function doExport() {
 .exportbtn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; margin-top: var(--s-2); padding: var(--s-3); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); transition: background var(--t-fast); }
 .exportbtn:hover:not(:disabled) { background: var(--azure-bright); }
 .exportbtn:disabled { opacity: .5; cursor: not-allowed; }
+.exportbtn--drive { background: transparent; color: var(--azure-bright); border: 1px solid var(--azure); margin-top: var(--s-1); }
+.exportbtn--drive:hover:not(:disabled) { background: var(--azure-haze); color: var(--azure-bright); }
+.dests { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; margin-top: var(--s-2); font-size: var(--fs-xs); }
+.dlink { color: var(--azure-bright); }
+.dok { color: var(--jade); }
 
 .tomo__pick { display: flex; flex-direction: column; min-height: 0; }
 .selall { align-self: flex-start; margin-bottom: var(--s-2); font-size: var(--fs-xs); color: var(--azure-bright); }

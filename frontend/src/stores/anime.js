@@ -35,6 +35,10 @@ export const useAnimeStore = defineStore('anime', {
     preview: null,             // anime object
     previewPos: { x: 0, y: 0 },
 
+    // local scan paths
+    scan: { show: false, paths: [], folders: [], loading: false, newPath: '',
+            browseOpen: false, browsePath: '', browseWin: '', browseParent: null, browseItems: [] },
+
     // management
     linkTorrent: { show: false, list: [], loading: false, subpath: '' },
     epOverrideMenu: null,      // { anime, ep, x, y }
@@ -647,6 +651,52 @@ export const useAnimeStore = defineStore('anime', {
       if (subPollers[key]) { clearInterval(subPollers[key]); delete subPollers[key] }
       if (tid) { try { await api.post(`/api/subtitle/cancel/${tid}`, {}) } catch (_) {} }
       this.subTasks[key] = { ...this.subTasks[key], status: 'cancelled', message: 'Cancelado' }
+    },
+
+    /* ── Local scan paths ───────────────────────────────────────────────── */
+    async openScan() {
+      this.scan.show = true
+      await this.loadScanFolders()
+    },
+    async loadScanFolders() {
+      this.scan.loading = true
+      try {
+        this.scan.paths = await api.get('/api/anime/scanpaths') || []
+        this.scan.folders = await api.get('/api/anime/scan/folders') || []
+        // lazily fetch a suggestion for unmatched folders (sequential to avoid rate-limit)
+        for (const f of this.scan.folders) {
+          if (!f.mapped_id && f.suggestion === null) {
+            f.suggestion = await api.get(`/api/anime/scan/suggest?name=${encodeURIComponent(f.name)}`).catch(() => null)
+          }
+        }
+      } catch (_) {}
+      finally { this.scan.loading = false }
+    },
+    async addScanPath(path) {
+      const p = (path || this.scan.newPath || '').trim(); if (!p) return
+      try { await api.post('/api/anime/scanpaths', { path: p }); this.scan.newPath = ''; await this.loadScanFolders() }
+      catch (_) { useUiStore().toast('No se pudo añadir la ruta', 'error') }
+    },
+    async removeScanPath(path) {
+      try { await api.del('/api/anime/scanpaths', { body: { path } }); await this.loadScanFolders() } catch (_) {}
+    },
+    async matchFolder(folder, sug) {
+      if (!sug) return
+      try {
+        await api.post('/api/anime/scan/match', { folder: folder.folder, anilist_id: sug.id, title: sug.title, cover: sug.cover })
+        useUiStore().toast(`"${sug.title}" enlazado`, 'ok')
+        await this.loadLibrary(true); await this.loadScanFolders()
+      } catch (_) { useUiStore().toast('No se pudo enlazar', 'error') }
+    },
+    async unmatchFolder(folder) {
+      try { await api.post('/api/anime/scan/unmatch', { folder: folder.folder }); await this.loadScanFolders(); await this.loadLibrary(true) } catch (_) {}
+    },
+    async browse(path = '') {
+      try {
+        const d = await api.get(`/api/anime/browse?path=${encodeURIComponent(path)}`)
+        this.scan.browseOpen = true
+        this.scan.browsePath = d.path; this.scan.browseWin = d.win_path; this.scan.browseParent = d.parent; this.scan.browseItems = d.items || []
+      } catch (_) { useUiStore().toast('No se pudo explorar', 'error') }
     },
 
     /* ── History ────────────────────────────────────────────────────────── */
