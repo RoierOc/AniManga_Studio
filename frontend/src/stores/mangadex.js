@@ -30,6 +30,16 @@ export const useMangadexStore = defineStore('mangadex', {
     followedLoaded: false,
     localIds: [],               // ids present in local_library
     authed: false,
+
+    // AniList Top
+    alTop: [],
+    alLoading: false,
+    alPage: 1,
+    alHasMore: false,
+    alSort: 'SCORE_DESC',
+    alGenres: [],
+    alFilter: '',               // selected genre/tag name
+    alFilterType: 'genre',      // genre | tag
   }),
 
   getters: {
@@ -152,6 +162,38 @@ export const useMangadexStore = defineStore('mangadex', {
     },
     async follow(m) {
       try { await api.post(`/api/mangadex/follow/${m.id}`, {}); useUiStore().toast('Siguiendo', 'ok') } catch (_) {}
+    },
+
+    /* ── AniList Top ────────────────────────────────────────────────────── */
+    async loadAnilistGenres() {
+      if (this.alGenres.length) return
+      try { this.alGenres = await api.get('/api/anilist/genres') || [] } catch (_) {}
+    },
+    setAlFilter(g) {
+      if (g && this.alFilter === g.name) { this.alFilter = ''; this.alFilterType = 'genre' }
+      else if (g) { this.alFilter = g.name; this.alFilterType = g.type }
+      else { this.alFilter = '' }
+      this.loadAnilistTop(1)
+    },
+    async loadAnilistTop(page = 1) {
+      this.alLoading = true
+      this.alPage = page
+      try {
+        const qs = [`sort=${this.alSort}`, `page=${page}`]
+        if (this.alFilter) qs.push(`${this.alFilterType}=${encodeURIComponent(this.alFilter)}`)
+        const d = await api.get(`/api/anilist/top?${qs.join('&')}`)
+        const results = d.results || []
+        this.alTop = page === 1 ? results : [...this.alTop, ...results]
+        this.alHasMore = !!d.hasNextPage
+        // these carry mal_id → reuse the score cache directly
+        for (const m of results) if (m.mal_id && m.score) this.scores[m.mal_id] = m.score
+      } catch (_) { useUiStore().toast('Error cargando AniList', 'error') }
+      finally { this.alLoading = false }
+    },
+    // open an AniList result by searching MangaDex for its title
+    openAnilistResult(m) {
+      this.query = m.title_romaji || m.title
+      this.setTab('search')
     },
     async unfollow(m) {
       try { await api.post(`/api/mangadex/unfollow/${m.id}`, {}); this.followed = this.followed.filter(x => x.id !== m.id) } catch (_) {}

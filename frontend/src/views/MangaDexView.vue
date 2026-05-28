@@ -17,7 +17,19 @@ const RATINGS = [
   { id: 'suggestive', label: '16+' },
   { id: 'erotica', label: '18+' },
 ]
-const canMore = computed(() => store.tab !== 'search' && store.popular.length < store.total)
+const AL_SORTS = [
+  { id: 'SCORE_DESC', label: 'Puntuación' },
+  { id: 'POPULARITY_DESC', label: 'Popularidad' },
+  { id: 'TRENDING_DESC', label: 'Tendencia' },
+]
+const canMore = computed(() => store.tab !== 'search' && store.tab !== 'anilist' && store.popular.length < store.total)
+
+function goAnilist() {
+  store.tab = 'anilist'
+  store.loadAnilistGenres()
+  if (!store.alTop.length) store.loadAnilistTop(1)
+}
+function setAlSort(id) { store.alSort = id; store.loadAnilistTop(1) }
 
 onMounted(() => {
   store.checkAuth()
@@ -42,31 +54,56 @@ onMounted(() => {
     <div class="md__bar">
       <div class="tabs">
         <button v-for="t in TABS" :key="t.id" class="tab" :class="{ 'is-active': store.tab === t.id }" @click="store.setTab(t.id)">{{ t.label }}</button>
+        <button class="tab tab--al" :class="{ 'is-active': store.tab === 'anilist' }" @click="goAnilist">★ AniList Top</button>
         <button v-if="store.tab === 'search'" class="tab is-active">Resultados</button>
       </div>
-      <div class="md__filters">
+      <div v-if="store.tab !== 'anilist'" class="md__filters">
         <button v-for="r in RATINGS" :key="r.id" class="rpill" :class="{ 'is-active': store.ratings.includes(r.id) }" @click="store.toggleRating(r.id)">{{ r.label }}</button>
         <button class="rpill" :class="{ 'is-active': store.showTagFilter }" @click="store.showTagFilter = !store.showTagFilter"><Icon name="spark" :size="13" /> Géneros</button>
       </div>
+      <div v-else class="md__filters">
+        <button v-for="s in AL_SORTS" :key="s.id" class="rpill" :class="{ 'is-active': store.alSort === s.id }" @click="setAlSort(s.id)">{{ s.label }}</button>
+      </div>
     </div>
 
-    <div v-if="store.showTagFilter && store.allTags.length" class="tags">
+    <div v-if="store.tab !== 'anilist' && store.showTagFilter && store.allTags.length" class="tags">
       <button v-for="t in store.allTags" :key="t.id" class="tagchip" :class="{ 'is-active': store.selectedTags.includes(t.id) }" @click="store.toggleTag(t.id)">{{ t.name }}</button>
     </div>
-
-    <div v-if="store.loading && !store.list.length" class="grid">
-      <div v-for="n in 12" :key="n" class="skeleton" />
+    <div v-if="store.tab === 'anilist' && store.alGenres.length" class="tags">
+      <button class="tagchip" :class="{ 'is-active': !store.alFilter }" @click="store.setAlFilter(null)">Todos</button>
+      <button v-for="g in store.alGenres" :key="g.type + g.name" class="tagchip" :class="{ 'is-active': store.alFilter === g.name }" @click="store.setAlFilter(g)">{{ g.name }}</button>
     </div>
-    <div v-else-if="!store.list.length" class="empty"><Icon name="search" :size="34" /><p>{{ store.tab === 'search' ? 'Sin resultados.' : 'Nada que mostrar.' }}</p></div>
+
+    <!-- AniList Top -->
+    <template v-if="store.tab === 'anilist'">
+      <div v-if="store.alLoading && !store.alTop.length" class="grid"><div v-for="n in 12" :key="n" class="skeleton" /></div>
+      <div v-else-if="!store.alTop.length" class="empty"><Icon name="spark" :size="34" /><p>Sin resultados.</p></div>
+      <template v-else>
+        <div class="grid">
+          <MdCard v-for="m in store.alTop" :key="m.al_id" :manga="{ ...m, contentRating: 'safe' }" :score="m.score" @open="store.openAnilistResult($event)" />
+        </div>
+        <div v-if="store.alHasMore" class="more">
+          <button class="morebtn" :disabled="store.alLoading" @click="store.loadAnilistTop(store.alPage + 1)">{{ store.alLoading ? 'Cargando…' : 'Cargar más' }}</button>
+        </div>
+      </template>
+    </template>
+
+    <!-- Popular / Search -->
     <template v-else>
-      <div class="grid">
-        <MdCard v-for="m in store.list" :key="m.id" :manga="m" :score="store.score(m)" @open="store.openDetail($event)" />
+      <div v-if="store.loading && !store.list.length" class="grid">
+        <div v-for="n in 12" :key="n" class="skeleton" />
       </div>
-      <div v-if="canMore" class="more">
-        <button class="morebtn" :disabled="store.loading" @click="store.loadPopular(store.tab, store.page + 1)">
-          {{ store.loading ? 'Cargando…' : 'Cargar más' }}
-        </button>
-      </div>
+      <div v-else-if="!store.list.length" class="empty"><Icon name="search" :size="34" /><p>{{ store.tab === 'search' ? 'Sin resultados.' : 'Nada que mostrar.' }}</p></div>
+      <template v-else>
+        <div class="grid">
+          <MdCard v-for="m in store.list" :key="m.id" :manga="m" :score="store.score(m)" @open="store.openDetail($event)" />
+        </div>
+        <div v-if="canMore" class="more">
+          <button class="morebtn" :disabled="store.loading" @click="store.loadPopular(store.tab, store.page + 1)">
+            {{ store.loading ? 'Cargando…' : 'Cargar más' }}
+          </button>
+        </div>
+      </template>
     </template>
 
     <MdDetailModal />
