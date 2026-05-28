@@ -72,7 +72,12 @@ trap 'echo "[watchdog] Detenido." >&2; exit 0' INT TERM
 while true; do
     "$PYTHON_BIN" -c "
 from app import app
-app.run(port=5101, debug=False, threaded=True, host='127.0.0.1')
+try:
+    from waitress import serve
+    print('[server] waitress WSGI — http://127.0.0.1:5101', flush=True)
+    serve(app, host='127.0.0.1', port=5101, threads=8)
+except ImportError:
+    app.run(port=5101, debug=False, threaded=True, host='127.0.0.1')
 " || true
     echo "[watchdog] El servidor se detuvo. Reiniciando en 5s..." >&2
     sleep 5

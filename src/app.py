@@ -17,14 +17,17 @@ os.makedirs(str(MANGA_DIR), exist_ok=True)
 os.makedirs(str(UPSCALED_DIR), exist_ok=True)
 
 from flask import Flask, render_template, jsonify, request, send_from_directory
+from flask_compress import Compress
 
-app = Flask(__name__, 
+app = Flask(__name__,
     template_folder=str(BASE_DIR.parent / 'templates'),
     static_folder=str(BASE_DIR.parent / 'static'),
     static_url_path='/static')
 app.secret_key = os.environ.get('SECRET_KEY', 'manga-secret-key-change-in-production')
 app.jinja_env.auto_reload = False
 app.jinja_env.cache = None
+
+Compress(app)
 
 from api.library import library_bp
 from api.search import search_bp
@@ -57,6 +60,21 @@ app.register_blueprint(cbz_bp, url_prefix='/api/cbz')
 app.register_blueprint(anilist_bp, url_prefix='/api/anilist')
 app.register_blueprint(anime_bp, url_prefix='/api/anime')
 app.register_blueprint(subtitle_bp, url_prefix='/api/subtitle')
+
+
+def _try_start_suwayomi():
+    """Auto-start Suwayomi when Flask loads — safe to call multiple times (start.sh checks PID)."""
+    import subprocess
+    script = BASE_DIR.parent / 'suwayomi' / 'start.sh'
+    if script.exists():
+        try:
+            subprocess.Popen(['bash', str(script)],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            print('[startup] Suwayomi launch requested', flush=True)
+        except Exception as e:
+            print(f'[startup] Suwayomi start failed: {e}', flush=True)
+
+_try_start_suwayomi()
 
 
 @app.route('/library')
@@ -127,6 +145,11 @@ def serve_upload(filename):
     return 'Not found', 404
 
 if __name__ == '__main__':
-    print("🚀 Manga Upscaler Pro - http://localhost:5100")
-    print("📡 WebDAV library   - http://localhost:5005/")
-    app.run(port=5101, debug=False, host='127.0.0.1')
+    print("🚀 Manga Upscaler Pro - http://localhost:5101")
+    try:
+        from waitress import serve
+        print("   WSGI server: waitress")
+        serve(app, host='127.0.0.1', port=5101, threads=8)
+    except ImportError:
+        print("   WSGI server: Flask dev (install waitress for production)")
+        app.run(port=5101, debug=False, host='127.0.0.1')

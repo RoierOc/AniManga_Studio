@@ -53,22 +53,59 @@ def _build_prompt(src_lang: str = 'eng') -> str:
     """Build translation prompt for the given ISO 639-2/1 language tag."""
     lang = _LANG_NAMES.get((src_lang or 'eng').lower(), src_lang or 'inglés')
     return (
-        f'Traduce subtítulos de anime del {lang} al español latinoamericano neutro.\n\n'
-        'REGLAS:\n'
-        '1. Traducción natural y fluida. Tuteo casual; usted con personajes formales o de alto rango.\n'
-        '2. NO traduzcas: honoríficos (-san, -kun, -chan, -sama, -senpai, -sensei, -dono, -nii, -nee, -tan), '
-        'nombres de ataques/técnicas/magia, nombres propios de personajes y lugares.\n'
-        '3. Adapta registro: arcaico→arcaico, dialectal→equivalente, GRITOS→MAYÚSCULAS, susurros→minúsculas.\n'
-        '4. COPIA EXACTO sin ninguna modificación:\n'
-        '   - \\N  (salto de línea técnico de subtítulos)\n'
-        '   - Cualquier bloque {…}: {\\an8} {\\i1} {\\pos(x,y)} {\\t(...)} {\\move(...)} {\\alpha(...)} etc.\n'
-        '     Son tags ASS críticos para posición, timing y efectos — tocarlos rompe la sincronía.\n'
-        '   - Símbolos musicales ♪ ♫ y caracteres especiales — … — « »\n'
-        '5. Líneas con solo puntuación, ♪, o vacías → cópialas idénticas.\n\n'
-        'FORMATO ESTRICTO:\n'
-        '- Entrada: N|texto  →  Salida: N|traducción  (exactamente el mismo número N, empezando en 1)\n'
-        '- Líneas de salida = líneas de entrada EXACTAMENTE. Ni una más ni una menos.\n'
-        '- Responde ÚNICAMENTE con las líneas numeradas. Sin explicaciones ni texto adicional.'
+        f'Eres un traductor especializado en subtítulos de anime del {lang} al español latinoamericano neutro. '
+        f'Responde ÚNICAMENTE con las líneas traducidas en el formato indicado. Sin saludos, sin explicaciones.\n\n'
+
+        '══ REGLA CRÍTICA — LÍNEAS ══\n'
+        'Cada línea de entrada produce EXACTAMENTE una línea de salida con el MISMO número N.\n'
+        'Entrada: N|texto original\n'
+        'Salida:  N|traducción al español\n'
+        'El conteo NUNCA puede variar: si entran 60 líneas, salen 60 líneas. '
+        'Agregar, omitir o partir líneas desincroniza todos los subtítulos del episodio.\n\n'
+
+        '══ TRADUCCIÓN ══\n'
+        '1. Traduce el texto del idioma fuente aplicando criterio: no toda palabra extranjera '
+        '   necesita traducirse (ver sección PRÉSTAMOS más abajo).\n'
+        '2. NO traduzcas (cópialos tal cual): honoríficos (-san, -kun, -chan, -sama, -senpai, '
+        '   -sensei, -dono, -nii, -nee, -tan), nombres propios de personajes y lugares, '
+        '   nombres de ataques/técnicas/magia, términos culturales japoneses del fandom '
+        '   (isekai, kami, onii-chan, nee-san, kawaii, sugoi, nakama, daijoubu, mendokusai…).\n'
+        '3. Estilo: español neutro latinoamericano, tuteo casual. '
+        '   Usted solo con personajes formales o de rango superior.\n'
+        '4. Registro: GRITOS→MAYÚSCULAS, arcaísmos→arcaísmos, onomatopeyas→equivalente español.\n\n'
+
+        '══ PRÉSTAMOS Y ANGLICISMOS — cuándo NO traducir ══\n'
+        'Mantén en el idioma original cuando la versión española suena forzada o pierde el matiz:\n'
+        '• Jerga gaming/internet consolidada en español coloquial:\n'
+        '  tier, god-tier, S-tier, op (overpowered), buff, nerf, meta, grind, boss, skill,\n'
+        '  level, combo, noob, pro, hype, spoiler, flashback, plot twist, badass, savage,\n'
+        '  cringe, toxic, simp, troll, spam, lag, glitch, bug, patch, DLC, raid…\n'
+        '• Expresiones compuestas donde traducir una parte suena ridículo:\n'
+        '  "god-tier" → queda "god-tier" (NO "dios-tier")\n'
+        '  "power level" → queda "power level" si el contexto es gaming/ki/energía\n'
+        '  "death flag" → queda "death flag" (es un concepto de fandom)\n'
+        '  "flag" (evento narrativo) → queda "flag"\n'
+        '• Términos del fandom anime globalmente usados en español:\n'
+        '  waifu, husbando, tsundere, yandere, kuudere, moe, OP (opening), ED (ending),\n'
+        '  filler, canon, ship, shipping, spoiler, arc, power-up, backstory…\n'
+        '• Marcas, títulos, acrónimos y nombres de organizaciones — cópialos tal cual.\n'
+        '• Regla de oro: si al traducir literalmente el resultado suena más raro '
+        '  que el original, deja el original.\n\n'
+
+        '══ CARACTERES INTOCABLES (copia byte a byte) ══\n'
+        r'• \N            → salto de línea de subtítulo, NO lo conviertas en salto real'
+        '\n'
+        r'• {cualquier_cosa}  → tags ASS (\an8, \i1, \pos, \t, \move, \alpha…) — NO los toques'
+        '\n'
+        '• ♪ ♫ … — « »  → símbolos especiales, cópialos idénticos\n'
+        '• Líneas que solo contienen ♪, puntuación o están vacías → devuélvelas sin cambios\n\n'
+
+        '══ FORMATO DE RESPUESTA ══\n'
+        '1|primera línea traducida\n'
+        '2|segunda línea traducida\n'
+        '…\n'
+        'N|última línea traducida\n\n'
+        'Nada más. Ni una palabra fuera de ese bloque.'
     )
 
 
@@ -196,7 +233,9 @@ def _ext_search_opensubtitles(titles: list, episode: int, languages: str = '') -
         if not title:
             continue
         try:
-            q: dict = {'query': title, 'type': 'episode', 'season_number': 1, 'episode_number': episode}
+            q: dict = {'query': title}
+            if episode > 0:
+                q.update({'type': 'episode', 'season_number': 1, 'episode_number': episode})
             if languages:
                 q['languages'] = languages
             params = _up.urlencode(q)
@@ -286,14 +325,14 @@ def _ext_search_subdl(titles: list, episode: int, season: int = 1) -> list:
         try:
             # Try Spanish (Latin America) first, then general Spanish
             for lang in ('SL', 'ES'):
-                params = _up.urlencode({
-                    'api_key':       key,
-                    'film_name':     title,
-                    'type':          'tv',
-                    'season_number': season,
-                    'episode_number': episode,
-                    'languages':     lang,
-                })
+                q: dict = {
+                    'api_key':   key,
+                    'film_name': title,
+                    'languages': lang,
+                }
+                if episode > 0:
+                    q.update({'type': 'tv', 'season_number': season, 'episode_number': episode})
+                params = _up.urlencode(q)
                 req = _ur.Request(
                     f'https://api.subdl.com/api/v1/subtitles?{params}',
                     headers={'User-Agent': 'MangaUpscaler/1.0'},
@@ -620,7 +659,7 @@ def _inject_sub(mkv_path: str, sub_path: str, n_existing_subs: int) -> str:
     # Identify tracks via mkvmerge; collect subtitle track IDs to exclude existing spa ones
     id_result = subprocess.run(
         ['mkvmerge', '--identify', '--identification-format', 'json', mkv_path],
-        capture_output=True, text=True, env={**os.environ, 'LC_ALL': 'C'},
+        capture_output=True, text=True, env={**os.environ, 'LC_ALL': 'C.UTF-8'},
     )
     id_data = json.loads(id_result.stdout or '{}')
     tracks = id_data.get('tracks', [])
@@ -651,7 +690,7 @@ def _inject_sub(mkv_path: str, sub_path: str, n_existing_subs: int) -> str:
     ]
 
     result = subprocess.run(cmd, capture_output=True, text=True,
-                            env={**os.environ, 'LC_ALL': 'C'})
+                            env={**os.environ, 'LC_ALL': 'C.UTF-8'})
     if result.returncode not in (0, 1):   # mkvmerge returns 1 for warnings (ok)
         if os.path.exists(tmp_out):
             os.remove(tmp_out)
@@ -935,10 +974,10 @@ def _translate_batch_ollama(texts: list, src_lang: str = 'eng') -> list:
     import urllib.request as _ur
 
     n = len(texts)
-    # system ~300t + user header ~20t + n lines ~12t input + ~12t output each
-    # 3200 minimum: for n=80 real usage is ~2500t, smaller ctx = faster attention
-    num_ctx = max(3200, 300 + (n * 26))
-    n_predict = min(n * 20, 2200)
+    # system ~600t (extended prompt) + user header ~20t + n lines ~14t input + ~14t output each
+    num_ctx = max(3600, 600 + (n * 30))
+    # ~18 tokens/line output; +25% headroom so trailing lines never get cut off
+    n_predict = min(int(n * 23), 2800)
 
     system_prompt = _build_prompt(src_lang)
 
@@ -953,7 +992,7 @@ def _translate_batch_ollama(texts: list, src_lang: str = 'eng') -> list:
             'stream': False,
             'keep_alive': '30m',
             'options': {
-                'temperature': 0.05,
+                'temperature': 0.01,    # casi greedy; temperatura 0 causa output vacío en Qwen
                 'num_predict': n_predict,
                 'num_ctx':     num_ctx,
                 'num_gpu':     -1,      # all layers on GPU
@@ -982,7 +1021,35 @@ def _translate_batch_ollama(texts: list, src_lang: str = 'eng') -> list:
     result, found = _call()
     if found < n * 0.85:
         print(f'[subtitle] Ollama returned {found}/{n} lines — retrying batch…')
-        result, _ = _call()
+        result2, found2 = _call()
+        if found2 > found:
+            result, found = result2, found2
+        if found == 0:
+            # Log raw response to help diagnose model format failures
+            numbered = '\n'.join(f'{i+1}|{t}' for i, t in enumerate(texts))
+            payload_debug = json.dumps({
+                'model': _OLLAMA_MODEL,
+                'messages': [
+                    {'role': 'system', 'content': system_prompt},
+                    {'role': 'user',   'content': f'Traduce estas {n} líneas:\n\n{numbered}'},
+                ],
+                'stream': False,
+                'options': {'temperature': 0.01, 'num_predict': 200, 'num_ctx': num_ctx, 'num_gpu': -1},
+            }).encode()
+            try:
+                req2 = _ur.Request(f'{_OLLAMA_URL}/api/chat', data=payload_debug,
+                                   headers={'Content-Type': 'application/json'}, method='POST')
+                with _ur.urlopen(req2, timeout=30) as resp2:
+                    debug_raw = ((json.loads(resp2.read()).get('message') or {}).get('content') or '').strip()
+                print(f'[subtitle] Ollama debug raw (primeras 300 chars): {debug_raw[:300]!r}')
+            except Exception:
+                pass
+
+    # Warn if result lines are identical to input (translation may not have happened)
+    unchanged = sum(1 for orig, tr in zip(texts, result) if orig.strip() and orig == tr)
+    if unchanged > n * 0.15:
+        print(f'[subtitle] Ollama warning: {unchanged}/{n} lines sin cambio — posible fallo de traducción')
+
     return result
 
 
@@ -1286,6 +1353,7 @@ def subtitle_tracks():
     episode    = int(request.args.get('episode', 1))
     anime_id   = request.args.get('anime_id', '')
     local_path = request.args.get('local_path', '')
+    ep_type    = request.args.get('ep_type', 'episode')
 
     path = _resolve_video_path(info_hash, episode, anime_id, local_path)
     if not path or not os.path.exists(path):
@@ -1297,18 +1365,21 @@ def subtitle_tracks():
     spanish_tracks  = []
     sources_missing_key = []
 
+    # Specials/OVAs are not indexed by episode number — search by title only
+    effective_episode = 0 if ep_type == 'special' else episode
+
     if not os.environ.get('OPENSUBTITLES_API_KEY'):
         sources_missing_key.append('opensubtitles')
     else:
         # Always search for pre-made Spanish subs (no GPU needed)
-        spanish_tracks = _ext_find_spanish_subs(titles, episode)
+        spanish_tracks = _ext_find_spanish_subs(titles, effective_episode)
 
     if not tracks:
         # No internal text tracks — also search English external sources for translation
         if not os.environ.get('JIMAKU_API_KEY'):
             sources_missing_key.append('jimaku')
         print(f'[subtitle] No text tracks in {os.path.basename(path)} — searching external sources')
-        external_tracks = _ext_find_subs(anime_id, titles, episode)
+        external_tracks = _ext_find_subs(anime_id, titles, effective_episode)
         print(f'[subtitle] External search found {len(external_tracks)} subs')
 
     return jsonify({

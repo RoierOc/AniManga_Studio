@@ -9,7 +9,7 @@
   <meta name="theme-color" content="#6184d3">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="stylesheet" href="/static/css/styles.css?v=20260526-20">
+  <link rel="stylesheet" href="/static/css/styles.css?v=20260527-16">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
   <script src="/static/js/vue.js"></script>
@@ -851,6 +851,10 @@
           </div>
         </div>
 
+        <div v-else-if="animeLoading && !animeResults.length" class="anime-grid">
+          <div v-for="n in 8" :key="n" class="skel-anime-card"></div>
+        </div>
+
         <div v-else-if="animeResults.length === 0 && !animeLoading" class="anime-empty">
           <svg width="56" height="56" viewBox="0 0 24 24" fill="currentColor" opacity="0.25"><path d="M8 5v14l11-7z"/></svg>
           <p>Busca un anime para ver torrents disponibles en Nyaa</p>
@@ -858,7 +862,8 @@
         </div>
 
         <div v-else class="anime-grid">
-          <div v-for="anime in animeResults" :key="anime.al_id" class="anime-card" @click="openAnime(anime)">
+          <div v-for="anime in animeResults" :key="anime.al_id" class="anime-card" @click="openAnime(anime)"
+               @mouseenter="showPreview(anime, $event)" @mouseleave="hidePreview()">
             <div class="anime-card-cover">
               <img v-if="anime.cover" :src="anime.cover" :alt="anime.title" loading="lazy" @error="$event.target.style.display='none'">
               <div v-else class="anime-cover-placeholder">
@@ -1275,7 +1280,7 @@
         </div>
 
         <!-- Anime detail in library -->
-        <div v-else-if="animeLibraryDetail">
+        <div v-else-if="animeLibraryDetail" class="allib-detail-view">
           <div class="allib-detail-header">
             <button class="allib-back-btn" @click="animeLibraryDetail = null">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg>
@@ -1317,6 +1322,15 @@
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z"/></svg>
                     Comunidad MAL
                   </a>
+                </div>
+
+                <!-- Next episode countdown -->
+                <div v-if="nextEpCountdown" class="next-ep-countdown">
+                  <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67V7z"/></svg>
+                  Ep {{ nextEpCountdown.episode }}
+                  <template v-if="nextEpCountdown.d > 0">en {{ nextEpCountdown.d }}d {{ nextEpCountdown.h }}h</template>
+                  <template v-else-if="nextEpCountdown.h > 0">en {{ nextEpCountdown.h }}h {{ nextEpCountdown.m }}m</template>
+                  <template v-else>en {{ nextEpCountdown.m }} min</template>
                 </div>
               </div>
             </div>
@@ -1387,8 +1401,11 @@
 
           <!-- Episode grid -->
           <div class="epgrid">
-            <div v-for="ep in animeLibraryDetail.episodes.filter(e => e.num !== 0 && e.ep_type !== 'special')" :key="ep.num"
+            <div v-for="(ep, epIdx) in animeLibraryDetail.episodes.filter(e => e.num !== 0 && e.ep_type !== 'special')" :key="ep.num"
                  class="ep-card"
+                 :data-ep-key="subTaskKey(animeLibraryDetail.id, ep.num, ep.ep_type)"
+                 :style="{ '--card-i': epIdx }"
+                 @mouseenter.once="loadSkipTimes(animeLibraryDetail, ep)"
                  :class="{
                    'ep-card--done':    (ep.in_qbt && ep.progress >= 100) || (ep.num > 0 && libDetailBatchDone) || ep.in_local,
                    'ep-card--dl':      (ep.in_qbt && ep.progress < 100 && !libDetailHasBatch) || (ep.num > 0 && libDetailHasBatch && !libDetailBatchDone),
@@ -1445,14 +1462,6 @@
                 <div v-if="ep.watched" class="ep-card-watched-overlay">
                   <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
                   Visto
-                </div>
-
-                <!-- Watch progress bar (bottom of thumb — Crunchyroll style) -->
-                <div v-if="(ep.resume_pos > 0 || ep.watched) && ep.duration > 0"
-                     class="ep-watch-progress">
-                  <div class="ep-watch-progress-fill"
-                       :style="{ width: (ep.watched ? 100 : Math.min(100, ep.resume_pos / ep.duration * 100)) + '%' }">
-                  </div>
                 </div>
 
                 <!-- Download progress bar (bottom of thumb) -->
@@ -1549,8 +1558,23 @@
                       </div>
                     </div>
 
-                    <!-- Right: watched (no delete for local) -->
+                    <!-- Right: skip OP / ep-info / watched (no delete for local) -->
                     <div class="ep-card-actions-right">
+                      <!-- Skip OP: appears after hover loads skip-times -->
+                      <button v-if="epSkipTimes[`${animeLibraryDetail.id}_${ep.num}`]?.op_end"
+                              class="ep-card-icon-btn ep-skip-btn"
+                              @click.stop="playEpisode(animeLibraryDetail, ep, '', epSkipTimes[`${animeLibraryDetail.id}_${ep.num}`].op_end)"
+                              :title="`Skip OP → ${Math.floor(epSkipTimes[animeLibraryDetail.id + '_' + ep.num].op_end)}s`">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M6 18l8.5-6L6 6v12zm2.5-6l-2.5 1.8V10.2L8.5 12zm8-6v12h2V6h-2z"/></svg>
+                      </button>
+                      <!-- Episode info toggle -->
+                      <button v-if="animeLibraryDetail.mal_id"
+                              class="ep-card-icon-btn ep-info-toggle-btn"
+                              :class="epInfoActive === `${animeLibraryDetail.mal_id}_${ep.num}` ? 'ep-card-icon-btn--active' : ''"
+                              @click.stop="loadEpInfo(animeLibraryDetail, ep)"
+                              title="Descripción del episodio">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z"/></svg>
+                      </button>
                       <button class="ep-card-icon-btn" :class="ep.watched ? 'ep-card-icon-btn--active' : ''"
                               @click="toggleWatched(animeLibraryDetail, ep)"
                               :title="ep.watched ? 'Marcar como no visto' : 'Marcar como visto'">
@@ -1580,6 +1604,30 @@
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></svg>
                       Buscar
                     </button>
+                  </template>
+                </div>
+
+                <!-- Episode info panel -->
+                <div v-if="animeLibraryDetail.mal_id && epInfoActive === `${animeLibraryDetail.mal_id}_${ep.num}`"
+                     class="ep-info-panel">
+                  <template v-if="epInfoCache[`${animeLibraryDetail.mal_id}_${ep.num}`] === null">
+                    <div class="ep-info-loading">
+                      <div class="md-spinner" style="width:12px;height:12px;border-width:2px"></div>
+                    </div>
+                  </template>
+                  <template v-else-if="epInfoCache[`${animeLibraryDetail.mal_id}_${ep.num}`]?.synopsis">
+                    <div v-if="epInfoCache[`${animeLibraryDetail.mal_id}_${ep.num}`].title" class="ep-info-title">
+                      {{ epInfoCache[`${animeLibraryDetail.mal_id}_${ep.num}`].title }}
+                    </div>
+                    <div class="ep-info-synopsis">{{ epInfoCache[`${animeLibraryDetail.mal_id}_${ep.num}`].synopsis }}</div>
+                    <div v-if="epInfoCache[`${animeLibraryDetail.mal_id}_${ep.num}`].aired" class="ep-info-meta">
+                      {{ epInfoCache[`${animeLibraryDetail.mal_id}_${ep.num}`].aired }}
+                      <span v-if="epInfoCache[`${animeLibraryDetail.mal_id}_${ep.num}`].filler" class="ep-info-badge ep-info-badge--filler">Filler</span>
+                      <span v-if="epInfoCache[`${animeLibraryDetail.mal_id}_${ep.num}`].recap" class="ep-info-badge ep-info-badge--recap">Recap</span>
+                    </div>
+                  </template>
+                  <template v-else>
+                    <div class="ep-info-empty">Sin descripción disponible</div>
                   </template>
                 </div>
               </div>
@@ -1621,19 +1669,19 @@
                 <div class="ep-card-foot">
                   <div class="ep-card-title">{{ ep.title || ('Especial ' + ep.num) }}</div>
                   <div class="ep-card-actions">
-                    <button v-if="subFetchingKey === subTaskKey(animeLibraryDetail.id, ep.num)"
+                    <button v-if="subFetchingKey === subTaskKey(animeLibraryDetail.id, ep.num, ep.ep_type)"
                             class="ep-card-btn ep-card-btn--sub" disabled>
                       <svg class="spin" width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
                       <span>Buscando…</span>
                     </button>
-                    <button v-else-if="!subTasks[subTaskKey(animeLibraryDetail.id, ep.num)] ||
-                                   ['done','error','cancelled'].includes(subTasks[subTaskKey(animeLibraryDetail.id, ep.num)].status)"
+                    <button v-else-if="!subTasks[subTaskKey(animeLibraryDetail.id, ep.num, ep.ep_type)] ||
+                                   ['done','error','cancelled'].includes(subTasks[subTaskKey(animeLibraryDetail.id, ep.num, ep.ep_type)].status)"
                             class="ep-card-btn ep-card-btn--sub"
-                            :class="subTasks[subTaskKey(animeLibraryDetail.id, ep.num)]?.status === 'done' ? 'ep-card-btn--sub-done' : ''"
+                            :class="subTasks[subTaskKey(animeLibraryDetail.id, ep.num, ep.ep_type)]?.status === 'done' ? 'ep-card-btn--sub-done' : ''"
                             @click="translateSubs(animeLibraryDetail, ep)"
-                            :title="subTasks[subTaskKey(animeLibraryDetail.id, ep.num)]?.status === 'done' ? 'Re-traducir' : 'Traducir al español'">
+                            :title="subTasks[subTaskKey(animeLibraryDetail.id, ep.num, ep.ep_type)]?.status === 'done' ? 'Re-traducir' : 'Traducir al español'">
                       <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z"/></svg>
-                      <span>{{ subTasks[subTaskKey(animeLibraryDetail.id, ep.num)]?.status === 'done' ? 'ESP ✓' : 'Sub ES' }}</span>
+                      <span>{{ subTasks[subTaskKey(animeLibraryDetail.id, ep.num, ep.ep_type)]?.status === 'done' ? 'ESP ✓' : 'Sub ES' }}</span>
                     </button>
                     <div class="ep-card-actions-right">
                       <button class="ep-card-icon-btn" :class="ep.watched ? 'ep-card-icon-btn--active' : ''"
@@ -1688,7 +1736,7 @@
             <div v-else-if="animeRecsState[animeLibraryDetail.al_id] === 'done'" class="allib-recs-grid">
               <div v-for="rec in animeRecs[animeLibraryDetail.al_id]" :key="rec.al_id"
                    class="allib-rec-card"
-                   @click="openAnime({ al_id: rec.al_id, title: rec.title, title_romaji: rec.title_romaji, cover: rec.cover, format: rec.format })">
+                   @click="openRecAnime(rec)">
                 <div class="allib-rec-cover">
                   <img v-if="rec.cover" :src="rec.cover" :alt="rec.title" loading="lazy"
                        @error="$event.target.style.display='none'">
@@ -1715,6 +1763,11 @@
 
         <!-- Library grid -->
         <div v-else>
+
+          <!-- Skeleton while initial load -->
+          <div v-if="animeLibraryLoading && !animeLibrary.length" class="allib-grid">
+            <div v-for="n in 12" :key="n" class="skel-allib-card"></div>
+          </div>
 
           <!-- ─── Continuar viendo ─────────────────────────────────── -->
           <div v-if="continueWatching.length" class="cw-section">
@@ -1792,14 +1845,30 @@
                 <span class="allib-status-group-count">{{ group.items.length }}</span>
               </div>
               <div class="allib-grid">
-                <div v-for="a in group.items" :key="a.id" class="allib-card" @click="openAnimeLibraryDetail(a)">
+                <div v-for="(a, i) in group.items" :key="a.id" class="allib-card"
+                     :class="{ 'allib-card--active': !!animeSubProgress(a.id) }"
+                     :style="{ '--card-i': i }"
+                     @click="openAnimeLibraryDetail(a)"
+                     @mouseenter="showPreview(a, $event)" @mouseleave="hidePreview()">
                   <div class="allib-card-cover">
                     <div class="allib-card-status-strip" :style="{ background: ANIME_STATUS[a.status]?.color || 'transparent' }"></div>
                     <img v-if="a.cover" :src="a.cover" :alt="a.title"
+                         crossorigin="anonymous"
                          @load="$event.target.classList.add('img-loaded')">
                     <div v-else class="allib-card-placeholder">{{ (a.title||'?')[0].toUpperCase() }}</div>
                     <div v-if="a.total_episodes && a.total_episodes > 0" class="allib-card-dl-strip"
                          :style="{ width: Math.min(100, (a.downloaded_count||0) / a.total_episodes * 100) + '%' }"></div>
+                    <!-- Translation progress bar (shows when any episode is being translated) -->
+                    <template v-if="animeSubProgress(a.id)">
+                      <div class="allib-ep-sub-progress">
+                        <div class="allib-ep-sub-bar"
+                             :style="{ width: (animeSubProgress(a.id).progress || 2) + '%' }"></div>
+                      </div>
+                      <div class="allib-card-sub-badge">
+                        <svg class="spin" width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><path d="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/></svg>
+                        {{ animeSubProgress(a.id).progress || 0 }}%
+                      </div>
+                    </template>
                     <div class="allib-card-hover-actions">
                       <select class="allib-card-status-sel"
                               :value="a.status || ''"
@@ -1840,10 +1909,15 @@
 
           <!-- ─── Normal grid ─────────────────────────────────────────── -->
           <div v-else class="allib-grid">
-            <div v-for="a in sortedAnimeLibrary" :key="a.id" class="allib-card" @click="openAnimeLibraryDetail(a)">
+            <div v-for="(a, i) in sortedAnimeLibrary" :key="a.id" class="allib-card"
+                 :class="{ 'allib-card--active': !!animeSubProgress(a.id) }"
+                 :style="{ '--card-i': i }"
+                 @click="openAnimeLibraryDetail(a)"
+                 @mouseenter="showPreview(a, $event)" @mouseleave="hidePreview()">
               <div class="allib-card-cover">
                 <div class="allib-card-status-strip" :style="{ background: ANIME_STATUS[a.status]?.color || 'transparent' }"></div>
                 <img v-if="a.cover" :src="a.cover" :alt="a.title"
+                     crossorigin="anonymous"
                      @load="$event.target.classList.add('img-loaded')">
                 <div v-else class="allib-card-placeholder">{{ (a.title||'?')[0].toUpperCase() }}</div>
                 <div v-if="a.total_episodes && a.total_episodes > 0" class="allib-card-dl-strip"
@@ -1925,8 +1999,10 @@
           </div>
         </div>
 
-        <!-- Loading -->
-        <div v-if="animeSeasonalLoading" class="md-loading"><div class="md-spinner"></div></div>
+        <!-- Loading skeleton -->
+        <div v-if="animeSeasonalLoading && !animeSeasonalResults.length" class="anime-grid">
+          <div v-for="n in 10" :key="n" class="skel-anime-card"></div>
+        </div>
 
         <!-- Empty -->
         <div v-else-if="filteredSeasonalAnime.length === 0" class="anime-empty">
@@ -1936,7 +2012,8 @@
         <!-- Grid -->
         <div v-else class="seasonal-grid">
           <div v-for="anime in filteredSeasonalAnime" :key="anime.al_id || anime.mal_id"
-               class="anime-card seasonal-card" @click="openAnime(anime)">
+               class="anime-card seasonal-card" @click="openAnime(anime)"
+               @mouseenter="showPreview(anime, $event)" @mouseleave="hidePreview()">
             <div class="anime-card-cover">
               <img v-if="anime.cover" :src="anime.cover" :alt="anime.title" loading="lazy">
               <div v-else class="anime-cover-placeholder">
@@ -3359,11 +3436,49 @@
     </div>
   </div>
 
-  <!-- TOAST -->
-  <div v-if="toast.show" class="md-toast" :class="toast.type">
-    <span class="toast-msg">{{ toast.message }}</span>
-    <button class="toast-dismiss" @click="dismissToast" title="Cerrar">×</button>
-  </div>
+  <!-- HOVER PREVIEW -->
+  <Transition name="hp">
+    <div v-if="previewAnime" class="anime-hover-preview"
+         :style="{ left: previewPos.x + 'px', top: previewPos.y + 'px' }">
+      <img v-if="previewAnime.cover" :src="previewAnime.cover" class="ahp-cover" :alt="previewAnime.title" crossorigin="anonymous">
+      <div class="ahp-body">
+        <div class="ahp-title">{{ previewAnime.title }}</div>
+        <div class="ahp-meta">
+          <span v-if="previewAnime.format" class="ahp-badge">{{ animeFormatLabel(previewAnime.format) }}</span>
+          <span v-if="previewAnime.episodes" class="ahp-eps">{{ previewAnime.episodes }} ep.</span>
+          <span v-if="previewAnime.year" class="ahp-year">{{ previewAnime.year }}</span>
+        </div>
+        <div v-if="previewAnime.score" class="ahp-score">
+          <span class="ahp-score-num" :class="getBadgeClass(previewAnime.score)">{{ (previewAnime.score / 10).toFixed(1) }}</span>
+          <span class="ahp-score-label">/ 10</span>
+        </div>
+        <div v-if="previewAnime.genres?.length" class="ahp-genres">
+          <span v-for="g in previewAnime.genres.slice(0,3)" :key="g" class="ahp-genre">{{ g }}</span>
+        </div>
+        <div v-if="previewAnime.status" class="ahp-status" :class="'ahp-status--' + previewAnime.status.toLowerCase()">
+          {{ previewAnime.status === 'RELEASING' ? '● En emisión' : previewAnime.status === 'FINISHED' ? 'Terminado' : previewAnime.status }}
+        </div>
+      </div>
+    </div>
+  </Transition>
+
+  <!-- TOASTS -->
+  <TransitionGroup tag="div" name="toast" class="toast-stack">
+    <div v-for="t in toasts" :key="t.id"
+         class="md-toast" :class="t.type"
+         :style="{ '--toast-dur': t.duration + 'ms' }">
+      <div class="toast-icon">
+        <svg v-if="t.type === 'success'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+        <svg v-else-if="t.type === 'error'" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      </div>
+      <span class="toast-msg">{{ t.message }}</span>
+      <button class="toast-dismiss" @click="dismissToast(t.id)" title="Cerrar">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+      <div class="toast-progress"></div>
+    </div>
+  </TransitionGroup>
 
   </div><!-- /main-wrapper -->
 
@@ -3506,8 +3621,40 @@
     </div>
   </teleport>
 
+  <!-- Auto-play next episode modal -->
+  <teleport to="body">
+    <div v-if="autoplayModal" class="autoplay-overlay" @click.self="dismissAutoplay">
+      <div class="autoplay-inner">
+        <img v-if="autoplayModal.anime.cover" :src="autoplayModal.anime.cover" class="autoplay-cover" alt="">
+        <div class="autoplay-content">
+          <div class="autoplay-label">A continuación</div>
+          <div class="autoplay-ep-title">{{ animeEpLabel(autoplayModal.anime, autoplayModal.ep) }}</div>
+          <div class="autoplay-countdown-ring">
+            <svg viewBox="0 0 40 40" width="56" height="56">
+              <circle cx="20" cy="20" r="17" fill="none" stroke="rgba(255,255,255,.15)" stroke-width="3"/>
+              <circle cx="20" cy="20" r="17" fill="none" stroke="#6184d3" stroke-width="3"
+                      stroke-dasharray="106.8"
+                      :stroke-dashoffset="106.8 * (1 - autoplaySeconds / 10)"
+                      stroke-linecap="round"
+                      style="transform:rotate(-90deg);transform-origin:center;transition:stroke-dashoffset .9s linear"/>
+              <text x="20" y="25" text-anchor="middle" fill="white" font-size="13" font-weight="600">{{ autoplaySeconds }}</text>
+            </svg>
+          </div>
+          <div class="autoplay-actions">
+            <button class="autoplay-play-btn"
+                    @click="() => { const a = autoplayModal; dismissAutoplay(); playEpisode(a.anime, a.ep); }">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+              Reproducir ahora
+            </button>
+            <button class="autoplay-cancel-btn" @click="dismissAutoplay">Cancelar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </teleport>
+
 </div>
-<script src="/static/js/app.js?v=20260526-20"></script>
+<script src="/static/js/app.js?v=20260527-16"></script>
 <script>
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js').catch(() => {});

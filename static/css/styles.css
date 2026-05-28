@@ -2538,32 +2538,106 @@ body::before {
 
 /* ─── Toast ───────────────────────────────────────────────────────────────── */
 
-.md-toast {
+/* Toast stack — new system */
+.toast-stack {
     position: fixed;
     bottom: 24px;
-    left: 50%;
-    transform: translateX(-50%);
-    padding: 11px 22px;
-    background: #1e1e2a;
-    border: 1px solid var(--border-l);
-    border-radius: 8px;
-    color: var(--text);
-    font-size: 13.5px;
-    font-weight: 500;
-    z-index: 4000;
-    box-shadow: 0 8px 24px rgba(0,0,0,.4);
-    white-space: nowrap;
-    animation: toastIn .25s ease;
+    right: 24px;
+    z-index: 9000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    align-items: flex-end;
+    pointer-events: none;
 }
+
+.md-toast {
+    pointer-events: all;
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px 12px 16px;
+    min-width: 260px;
+    max-width: 360px;
+    border-radius: 10px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text);
+    background: rgba(14,16,28,.82);
+    backdrop-filter: blur(16px) saturate(1.4);
+    -webkit-backdrop-filter: blur(16px) saturate(1.4);
+    border: 1px solid rgba(255,255,255,.07);
+    box-shadow: 0 8px 32px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.3);
+    overflow: hidden;
+    white-space: normal;
+}
+
+/* Left accent bar */
+.md-toast::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    border-radius: 10px 0 0 10px;
+    background: currentColor;
+    opacity: .7;
+}
+
+/* Type colors */
+.md-toast.success { color: #34d399; }
+.md-toast.error   { color: #f87171; }
+.md-toast.info    { color: #60a5fa; }
+
+/* Icon */
+.toast-icon {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    opacity: .9;
+}
+
+/* Progress bar */
+.toast-progress {
+    position: absolute;
+    bottom: 0; left: 0; right: 0;
+    height: 2px;
+    background: currentColor;
+    opacity: .25;
+    transform-origin: left;
+    animation: toast-drain var(--toast-dur, 3500ms) linear forwards;
+}
+@keyframes toast-drain {
+    from { transform: scaleX(1); }
+    to   { transform: scaleX(0); }
+}
+
+/* Dismiss button */
+.toast-dismiss {
+    flex-shrink: 0;
+    margin-left: auto;
+    background: none;
+    border: none;
+    color: inherit;
+    opacity: .4;
+    cursor: pointer;
+    padding: 2px;
+    display: flex;
+    align-items: center;
+    transition: opacity .15s;
+}
+.toast-dismiss:hover { opacity: .9; }
+
+/* Transitions */
+.toast-enter-active { transition: transform .32s cubic-bezier(.22,1,.36,1), opacity .25s ease; }
+.toast-leave-active { transition: transform .22s ease, opacity .2s ease; }
+.toast-enter-from  { transform: translateX(40px); opacity: 0; }
+.toast-leave-to    { transform: translateX(40px); opacity: 0; }
 
 @keyframes toastIn {
     from { opacity: 0; transform: translate(-50%, 12px); }
     to   { opacity: 1; transform: translate(-50%, 0); }
 }
-
-.md-toast.success { border-color: rgba(16,185,129,.5); color: #6ee7b7; }
-.md-toast.error   { border-color: rgba(239,68,68,.5); color: #fca5a5; }
-.md-toast.info    { border-color: rgba(232,146,74,.5); color: var(--accent-h); }
 
 /* ─── Sources / Mihon view ────────────────────────────────────────────────── */
 
@@ -3915,9 +3989,24 @@ body::before {
 .allib-ep-sub-btn:hover { background: rgba(16,185,129,.35); }
 .allib-ep-sub-progress {
   position: absolute; bottom: 0; left: 0; right: 0; height: 3px;
-  background: rgba(16,185,129,.15); border-radius: 0 0 4px 4px; overflow: hidden;
+  background: rgba(16,185,129,.1); border-radius: 0 0 4px 4px; overflow: hidden;
+  z-index: 4;
 }
-.allib-ep-sub-bar { height: 100%; background: #34d399; transition: width .4s; }
+.allib-ep-sub-bar {
+  height: 100%;
+  background: linear-gradient(90deg, #34d399, #6ee7b7);
+  transition: width .6s ease;
+  min-width: 4px;
+}
+.allib-card-sub-badge {
+  position: absolute; top: 6px; right: 6px; z-index: 5;
+  display: flex; align-items: center; gap: 4px;
+  background: rgba(4,5,10,.78); backdrop-filter: blur(4px);
+  color: #34d399; font-size: 10px; font-weight: 700;
+  padding: 3px 7px; border-radius: 20px;
+  border: 1px solid rgba(52,211,153,.3);
+  pointer-events: none;
+}
 
 /* ── Episode list (replaces pill grid in detail view) ──────────── */
 .eplist { display: flex; flex-direction: column; gap: 6px; }
@@ -4759,7 +4848,7 @@ body::before {
 .allib-rec-eps { font-size: 9px; color: var(--text-dim); }
 .allib-rec-genres { display: flex; gap: 4px; flex-wrap: wrap; }
 .allib-rec-genre {
-    font-size: 9px; color: var(--accent); background: rgba(232,146,74,.12);
+    font-size: 9px; color: #0d9488; background: rgba(13,148,136,.12);
     padding: 1px 5px; border-radius: 3px; font-weight: 500;
 }
 
@@ -5245,28 +5334,7 @@ body::before {
 }
 
 /* ─── Toast — dismiss button ─────────────────────────────────────────────── */
-.md-toast {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    white-space: normal;
-    max-width: 380px;
-    text-align: left;
-}
-.toast-msg { flex: 1; }
-.toast-dismiss {
-    flex-shrink: 0;
-    background: none;
-    border: none;
-    color: inherit;
-    opacity: .55;
-    cursor: pointer;
-    font-size: 18px;
-    line-height: 1;
-    padding: 0 2px;
-    transition: opacity .15s;
-}
-.toast-dismiss:hover { opacity: 1; }
+.toast-msg { flex: 1; font-size: 13px; line-height: 1.4; }
 
 /* ─── Scroll-to-top button ───────────────────────────────────────────────── */
 .scroll-top-btn {
@@ -6916,3 +6984,576 @@ body { background: #06080d !important; }
         0 0 60px -10px rgba(var(--modal-glow-rgb, 107,143,189), .22),
         inset 0 1px 0 rgba(255,255,255,.04) !important;
 }
+
+
+/* ═══════════════════════════════════════════════════════════════
+   QUALITY OF LIFE + CINEMATIC DETAILS  v=20260527-04
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 1. Card entrance animations ──────────────────────────────── */
+@keyframes card-enter {
+    from { opacity: 0; transform: translateY(20px) scale(.97); }
+    to   { opacity: 1; transform: translateY(0)    scale(1); }
+}
+
+/* Anime library cards */
+.allib-card {
+    animation: card-enter .38s cubic-bezier(.22,1,.36,1) both;
+    animation-delay: calc(var(--card-i, 0) * 38ms);
+}
+
+/* Episode cards */
+.ep-card {
+    animation: card-enter .32s cubic-bezier(.22,1,.36,1) both;
+    animation-delay: calc(var(--card-i, 0) * 28ms);
+}
+
+/* Manga cards reuse --reveal-delay already set per-card via idx*40 */
+/* Replace the slow reveal-up with the snappier keyframe animation   */
+.md-card.reveal-up {
+    opacity: 0;
+    transform: translateY(20px) scale(.97);
+    transition: none !important;
+    animation: card-enter .38s cubic-bezier(.22,1,.36,1) both;
+    animation-delay: var(--reveal-delay, 0ms);
+}
+.md-card.reveal-up.is-visible { /* keep compat but let animation handle it */ }
+
+/* ── 2. View enter transition (pure CSS — no template change needed) ── */
+@keyframes view-enter {
+    from { opacity: 0; transform: translateY(12px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.md-section {
+    animation: view-enter .22s cubic-bezier(.22,1,.36,1) both;
+}
+
+/* ── 3. ESP badge pop ─────────────────────────────────────────── */
+@keyframes esp-pop {
+    0%   { transform: scale(.25) rotate(-12deg); opacity: 0; filter: blur(3px); }
+    55%  { transform: scale(1.22) rotate(4deg);  opacity: 1; filter: blur(0); }
+    75%  { transform: scale(.92); }
+    90%  { transform: scale(1.05); }
+    100% { transform: scale(1); }
+}
+.ep-card-chip--esp {
+    animation: esp-pop .58s cubic-bezier(.34,1.56,.64,1) both;
+    transform-origin: center;
+}
+
+/* ── 4. ESP card flash (triggered by JS class) ────────────────── */
+@keyframes esp-card-flash {
+    0%   { box-shadow: none; border-color: inherit; }
+    18%  {
+        box-shadow: 0 0 0 2px rgba(52,211,153,.75),
+                    0 6px 36px -4px rgba(52,211,153,.6),
+                    inset 0 0 28px rgba(52,211,153,.08);
+        border-color: rgba(52,211,153,.7);
+    }
+    100% {
+        box-shadow: none;
+        border-color: inherit;
+    }
+}
+.ep-card--esp-flash {
+    animation: esp-card-flash 1.6s ease-out both;
+}
+
+/* ── 5. Film grain overlay ────────────────────────────────────── */
+@keyframes grain-drift {
+    0%,100% { transform: translate(0%,0%); }
+    10%     { transform: translate(-3%,-2%); }
+    20%     { transform: translate(2%, 3%); }
+    30%     { transform: translate(-2%, 1%); }
+    40%     { transform: translate(3%,-1%); }
+    50%     { transform: translate(-1%, 2%); }
+    60%     { transform: translate(2%,-3%); }
+    70%     { transform: translate(-2%, 2%); }
+    80%     { transform: translate(3%, 1%); }
+    90%     { transform: translate(-1%,-2%); }
+}
+
+body::after {
+    content: '';
+    position: fixed;
+    inset: -60%;
+    width: 220%; height: 220%;
+    z-index: 99998;
+    pointer-events: none;
+    opacity: .038;
+    background-image: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='g'><feTurbulence type='fractalNoise' baseFrequency='.72' numOctaves='4' stitchTiles='stitch'/><feColorMatrix type='saturate' values='0'/></filter><rect width='180' height='180' filter='url(%23g)'/></svg>");
+    background-repeat: repeat;
+    background-size: 180px 180px;
+    animation: grain-drift .42s steps(1) infinite;
+    will-change: transform;
+}
+
+/* ── 6. Custom scrollbar (4px teal) ──────────────────────────── */
+::-webkit-scrollbar              { width: 4px; height: 4px; }
+::-webkit-scrollbar-track        { background: transparent; }
+::-webkit-scrollbar-thumb        { background: rgba(13,148,136,.45); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover  { background: rgba(20,184,166,.75); }
+::-webkit-scrollbar-corner       { background: transparent; }
+/* Firefox */
+* { scrollbar-width: thin; scrollbar-color: rgba(13,148,136,.45) transparent; }
+
+/* ═══════════════════════════════════════════════════════════════
+   VISUAL INTERACTION  v=20260527-07
+   cursor spotlight · ambient glow (all card types)
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 7a. anime-card: glow hover (search + seasonal) ───────────── */
+.anime-card {
+    transition: transform .2s ease, box-shadow .32s ease, border-color .32s ease !important;
+}
+.anime-card:hover {
+    transform: translateY(-5px) scale(1.02) !important;
+    border-color: rgba(var(--card-glow-rgb, 107,143,189), .55) !important;
+    box-shadow:
+        0 18px 50px rgba(0,0,0,.65),
+        0 0 0 1px rgba(var(--card-glow-rgb, 107,143,189), .18),
+        0 0 38px -6px rgba(var(--card-glow-rgb, 107,143,189), .52) !important;
+}
+.anime-card-cover img { transition: transform .5s ease !important; }
+.anime-card:hover .anime-card-cover img { transform: scale(1.06) !important; }
+
+/* ═══════════════════════════════════════════════════════════════
+   VISUAL INTERACTION  v=20260527-09
+   holo shine · detail ambient tint · sidebar indicator
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── 1. Holographic shine sweep ────────────────────────────────── */
+@keyframes holo-sweep {
+    from { transform: translateX(-180%); }
+    to   { transform: translateX(180%); }
+}
+.allib-card::after,
+.md-card::after,
+.anime-card::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        112deg,
+        transparent 30%,
+        rgba(255,255,255,.13) 48%,
+        rgba(255,255,255,.05) 53%,
+        transparent 64%
+    );
+    transform: translateX(-180%);
+    pointer-events: none;
+    z-index: 12;
+    border-radius: inherit;
+}
+.allib-card:hover::after,
+.md-card:hover::after,
+.anime-card:hover::after {
+    animation: holo-sweep .72s cubic-bezier(.4,0,.2,1) forwards;
+}
+
+/* ── 2. Anime detail ambient tint from cover color ─────────────── */
+.allib-detail-view {
+    position: relative;
+}
+.allib-detail-view::before {
+    content: '';
+    position: absolute;
+    top: -40px; left: -40px; right: -40px;
+    height: 480px;
+    background: radial-gradient(
+        ellipse 85% 60% at 22% -8%,
+        rgba(var(--detail-aura, 107,143,189), .12) 0%,
+        rgba(var(--detail-aura, 107,143,189), .04) 45%,
+        transparent 70%
+    );
+    pointer-events: none;
+    z-index: 0;
+    transition: background 1.4s ease;
+}
+
+/* ── 3. Sidebar sliding nav indicator ─────────────────────────── */
+.sidebar-body { position: relative; }
+#sb-indicator {
+    position: absolute;
+    left: 3px;
+    top: 0;
+    width: 3px;
+    height: 22px;
+    border-radius: 99px;
+    background: rgba(var(--da-rgb, 122,184,130), 1);
+    box-shadow: 0 0 10px rgba(var(--da-rgb, 122,184,130), .55);
+    transition: top .3s cubic-bezier(.22,1,.36,1),
+                opacity .18s ease,
+                background .35s ease,
+                box-shadow .35s ease;
+    pointer-events: none;
+    opacity: 0;
+    z-index: 10;
+}
+.sidebar.is-collapsed #sb-indicator { opacity: 0 !important; }
+
+/* ═══════════════════════════════════════════════════════════════
+   v=20260527-11 — skeleton · breathing pulse · hover preview
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Skeleton shimmer ─────────────────────────────────────────── */
+@keyframes skel-shimmer {
+    from { background-position: -500px 0; }
+    to   { background-position:  500px 0; }
+}
+.skel-allib-card,
+.skel-anime-card {
+    border-radius: 10px;
+    overflow: hidden;
+    aspect-ratio: 2/3;
+    background: rgba(255,255,255,.03);
+    border: 1px solid rgba(255,255,255,.05);
+    position: relative;
+}
+.skel-allib-card::after,
+.skel-anime-card::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        90deg,
+        transparent 0%,
+        rgba(255,255,255,.06) 40%,
+        rgba(255,255,255,.1)  50%,
+        rgba(255,255,255,.06) 60%,
+        transparent 100%
+    );
+    background-size: 500px 100%;
+    animation: skel-shimmer 1.5s ease-in-out infinite;
+}
+/* Stagger shimmer across cards */
+.skel-allib-card:nth-child(2n)::after,
+.skel-anime-card:nth-child(2n)::after { animation-delay: .15s; }
+.skel-allib-card:nth-child(3n)::after,
+.skel-anime-card:nth-child(3n)::after { animation-delay: .3s; }
+.skel-allib-card:nth-child(4n)::after,
+.skel-anime-card:nth-child(4n)::after { animation-delay: .45s; }
+
+/* ── Breathing pulse on active cards ─────────────────────────── */
+@keyframes card-breathe {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(13,148,136,0);
+        border-color: rgba(255,255,255,.05);
+    }
+    50% {
+        box-shadow: 0 0 0 2px rgba(13,148,136,.28),
+                    0 0 22px -4px rgba(13,148,136,.45);
+        border-color: rgba(13,148,136,.5);
+    }
+}
+.allib-card--active {
+    animation: card-breathe 2.6s ease-in-out infinite !important;
+}
+
+/* ── Hover preview panel ──────────────────────────────────────── */
+.anime-hover-preview {
+    position: fixed;
+    z-index: 8000;
+    width: 252px;
+    background: rgba(10,12,22,.88);
+    backdrop-filter: blur(18px) saturate(1.5);
+    -webkit-backdrop-filter: blur(18px) saturate(1.5);
+    border: 1px solid rgba(255,255,255,.09);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 24px 60px rgba(0,0,0,.7), 0 4px 16px rgba(0,0,0,.4);
+    pointer-events: none;
+}
+.ahp-cover {
+    width: 100%;
+    height: 140px;
+    object-fit: cover;
+    display: block;
+}
+.ahp-body {
+    padding: 10px 12px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.ahp-title {
+    font-size: 12.5px;
+    font-weight: 700;
+    color: rgba(255,255,255,.95);
+    line-height: 1.35;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+.ahp-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+.ahp-badge {
+    font-size: 9px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--text-dim);
+    background: rgba(255,255,255,.07);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+.ahp-eps, .ahp-year {
+    font-size: 10px;
+    color: var(--text-dim);
+}
+.ahp-score {
+    display: flex;
+    align-items: baseline;
+    gap: 3px;
+}
+.ahp-score-num {
+    font-size: 18px;
+    font-weight: 800;
+    line-height: 1;
+}
+.ahp-score-num.score-green { color: #34d399; }
+.ahp-score-num.score-yellow { color: #fbbf24; }
+.ahp-score-num.score-red { color: #f87171; }
+.ahp-score-label { font-size: 10px; color: var(--text-dim); }
+.ahp-genres {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+.ahp-genre {
+    font-size: 9px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(13,148,136,.15);
+    color: #0d9488;
+    font-weight: 500;
+}
+.ahp-status {
+    font-size: 10px;
+    font-weight: 600;
+}
+.ahp-status--releasing { color: #34d399; }
+.ahp-status--finished  { color: var(--text-dim); }
+
+/* Enter/leave transitions */
+.hp-enter-active { transition: opacity .18s ease, transform .2s cubic-bezier(.22,1,.36,1); }
+.hp-leave-active { transition: opacity .14s ease, transform .15s ease; }
+.hp-enter-from, .hp-leave-to { opacity: 0; transform: scale(.95) translateY(4px); }
+
+/* ═══════════════════════════════════════════════════════════════
+   v=20260527-12 — ep-card visual parity con allib/md/anime-card
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Necesario para que ::after se posicione dentro de la card */
+.ep-card { position: relative !important; }
+
+/* Mejorar transición para incluir glow */
+.ep-card {
+    transition: transform .22s cubic-bezier(.34,1.56,.64,1),
+                box-shadow .3s ease,
+                border-color .3s ease !important;
+}
+
+/* Hover: lift + ambient glow por portada */
+.ep-card:hover {
+    transform: translateY(-5px) scale(1.02) !important;
+    box-shadow:
+        0 16px 42px rgba(0,0,0,.65),
+        0 0 0 1px rgba(var(--card-glow-rgb, 107,143,189), .2),
+        0 0 32px -6px rgba(var(--card-glow-rgb, 107,143,189), .5) !important;
+}
+/* Mantener colores de estado en el borde pero agregar glow en sombra */
+.ep-card:not(.ep-card--done):not(.ep-card--watched):not(.ep-card--missing):hover {
+    border-color: rgba(var(--card-glow-rgb, 107,143,189), .55) !important;
+}
+
+/* Zoom de imagen al hacer hover */
+.ep-card-thumb-img {
+    transition: opacity .3s ease, transform .5s ease !important;
+}
+.ep-card:hover .ep-card-thumb-img { transform: scale(1.07) !important; }
+
+/* Holo shine sweep (::after libre en .ep-card — el grad inferior es en .ep-card-thumb::after) */
+.ep-card::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+        112deg,
+        transparent 30%,
+        rgba(255,255,255,.11) 48%,
+        rgba(255,255,255,.04) 53%,
+        transparent 64%
+    );
+    transform: translateX(-180%);
+    pointer-events: none;
+    z-index: 12;
+    border-radius: inherit;
+}
+.ep-card:hover::after {
+    animation: holo-sweep .72s cubic-bezier(.4,0,.2,1) forwards;
+}
+
+/* ── Next episode countdown ──────────────────────────────────────────────── */
+.next-ep-countdown {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin-top: 8px;
+    padding: 4px 10px;
+    background: rgba(97,132,211,.15);
+    border: 1px solid rgba(97,132,211,.3);
+    border-radius: 20px;
+    font-size: .72rem;
+    color: #a5b4fc;
+    font-weight: 500;
+    letter-spacing: .01em;
+}
+.next-ep-countdown svg { opacity: .75; flex-shrink: 0; }
+
+/* ── Skip OP button ──────────────────────────────────────────────────────── */
+.ep-skip-btn {
+    color: #facc15 !important;
+    border-color: rgba(250,204,21,.25) !important;
+}
+.ep-skip-btn:hover {
+    background: rgba(250,204,21,.12) !important;
+    border-color: rgba(250,204,21,.5) !important;
+}
+
+/* ── Episode info toggle button ──────────────────────────────────────────── */
+.ep-info-toggle-btn { color: #94a3b8 !important; }
+
+/* ── Episode info panel ──────────────────────────────────────────────────── */
+.ep-info-panel {
+    margin-top: 8px;
+    padding: 10px 12px;
+    background: rgba(255,255,255,.04);
+    border: 1px solid rgba(255,255,255,.07);
+    border-radius: 8px;
+    font-size: .73rem;
+    line-height: 1.5;
+    color: var(--text-dim);
+    animation: fadeIn .18s ease;
+}
+.ep-info-title {
+    font-size: .78rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 5px;
+}
+.ep-info-synopsis { color: var(--text-secondary); }
+.ep-info-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 6px;
+    font-size: .68rem;
+    color: var(--text-dim);
+}
+.ep-info-badge {
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: .65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+}
+.ep-info-badge--filler { background: rgba(234,179,8,.18); color: #fbbf24; }
+.ep-info-badge--recap  { background: rgba(99,102,241,.18); color: #a5b4fc; }
+.ep-info-loading {
+    display: flex;
+    justify-content: center;
+    padding: 6px 0;
+}
+.ep-info-empty { color: var(--text-dim); font-style: italic; }
+
+/* ── Auto-play overlay ───────────────────────────────────────────────────── */
+.autoplay-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 9500;
+    background: rgba(0,0,0,.72);
+    backdrop-filter: blur(6px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn .22s ease;
+}
+.autoplay-inner {
+    display: flex;
+    align-items: stretch;
+    border-radius: 16px;
+    overflow: hidden;
+    box-shadow: 0 24px 64px rgba(0,0,0,.7);
+    max-width: 500px;
+    width: calc(100vw - 40px);
+    background: var(--bg-card, #1e2030);
+    border: 1px solid rgba(255,255,255,.1);
+}
+.autoplay-cover {
+    width: 120px;
+    object-fit: cover;
+    flex-shrink: 0;
+}
+.autoplay-content {
+    flex: 1;
+    padding: 22px 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.autoplay-label {
+    font-size: .7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: #6184d3;
+}
+.autoplay-ep-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text-primary, #e2e8f0);
+    line-height: 1.3;
+}
+.autoplay-countdown-ring {
+    display: flex;
+    align-items: center;
+}
+.autoplay-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+    flex-wrap: wrap;
+}
+.autoplay-play-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    border-radius: 8px;
+    background: #6184d3;
+    color: #fff;
+    border: none;
+    cursor: pointer;
+    font-size: .82rem;
+    font-weight: 600;
+    transition: background .15s;
+}
+.autoplay-play-btn:hover { background: #7c9be8; }
+.autoplay-cancel-btn {
+    padding: 8px 14px;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-dim, #94a3b8);
+    border: 1px solid rgba(255,255,255,.12);
+    cursor: pointer;
+    font-size: .82rem;
+    transition: border-color .15s, color .15s;
+}
+.autoplay-cancel-btn:hover { border-color: rgba(255,255,255,.3); color: var(--text-secondary); }

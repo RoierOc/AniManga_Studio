@@ -12,8 +12,8 @@ const app = createApp({
             const av = animeView.value;
             localStorage.setItem(_SESSION_KEY, JSON.stringify({
                 view: currentView.value,
-                // only restore persistent sub-views, not ephemeral ones
                 animeView: ['library','history'].includes(av) ? av : 'library',
+                animeDetailId: animeLibraryDetail.value?.id || null,
                 libFilter: libFilter.value,
                 libSearch: libSearch.value,
                 animeLibFilter: animeLibFilter.value,
@@ -92,7 +92,9 @@ const app = createApp({
         const activeTasks = ref({});
         const downloadedLang = ref({});  // tracks which language was downloaded per chapter key
         const taskQueueExpanded = ref(true);
-        const toast = ref({ show: false, message: '', type: 'info' });
+        const toast  = ref({ show: false, message: '', type: 'info' }); // legacy compat
+        const toasts = ref([]);  // new stacked toast system
+        let _toastSeq = 0;
         const showShortcuts = ref(false);
         const mainScrolled = ref(false);
 
@@ -305,14 +307,76 @@ const app = createApp({
         const qbtConfigShow = ref(false);
         const qbtTorrents = ref([]);
         const qbtLoading = ref(false);
-        let qbtPollTimer = null;
-        let libPollTimer  = null;
+        let qbtPollTimer  = null;
+        let _qbtSyncTimer = null;
         const qbtAddingHashes = ref(new Set());
         const qbtAddedHashes  = ref(new Set());
         const animeLibrary = ref([]);
         const animeLibraryLoading = ref(false);
         const animeLibraryDetail  = ref(null);
-        const animeLibSort   = ref(_sess.animeLibSort   || 'last_added');  // 'last_added'|'last_watched'|'last_downloaded'|'title'|'progress'|'episodes'|'status'
+        const animeLibSort   = ref(_sess.animeLibSort   || 'last_added');
+
+        // ── Auto-play next episode ──────────────────────────────────────────────
+        const autoplayModal   = ref(null);   // { anime, ep } | null
+        const autoplaySeconds = ref(0);
+        let   _autoplayTimer  = null;
+
+        const dismissAutoplay = () => {
+            if (_autoplayTimer) { clearInterval(_autoplayTimer); _autoplayTimer = null; }
+            autoplayModal.value = null;
+        };
+        const showAutoplayModal = (anime, ep) => {
+            dismissAutoplay();
+            autoplayModal.value = { anime, ep };
+            autoplaySeconds.value = 10;
+            _autoplayTimer = setInterval(() => {
+                autoplaySeconds.value--;
+                if (autoplaySeconds.value <= 0) {
+                    const a = autoplayModal.value;
+                    dismissAutoplay();
+                    if (a) playEpisode(a.anime, a.ep);
+                }
+            }, 1000);
+        };
+
+        // ── Episode skip times (AniSkip) ───────────────────────────────────────
+        const epSkipTimes = ref({});   // key `${animeId}_${epNum}` → {op_start, op_end, ...}
+
+        const loadSkipTimes = async (anime, ep) => {
+            const malId = anime?.mal_id;
+            if (!malId) return;
+            const key = `${anime.id}_${ep.num}`;
+            if (epSkipTimes.value[key] !== undefined) return;
+            epSkipTimes.value[key] = {};
+            try {
+                const r = await fetch(`/api/anime/skip_times/${malId}/${ep.num}`);
+                const d = await r.json();
+                epSkipTimes.value[key] = d;
+            } catch (_) {}
+        };
+
+        // ── Episode info (synopsis) ────────────────────────────────────────────
+        const epInfoCache  = ref({});    // key `${malId}_${epNum}` → {title, synopsis, ...}
+        const epInfoActive = ref(null);  // key currently expanded
+
+        const loadEpInfo = async (anime, ep) => {
+            const malId = anime?.mal_id;
+            if (!malId) return;
+            const key = `${malId}_${ep.num}`;
+            epInfoActive.value = epInfoActive.value === key ? null : key;
+            if (epInfoCache.value[key] !== undefined) return;
+            epInfoCache.value[key] = null;  // mark loading
+            try {
+                const r = await fetch(`/api/anime/episode_info/${malId}/${ep.num}`);
+                const d = await r.json();
+                epInfoCache.value[key] = d;
+            } catch (_) { epInfoCache.value[key] = {}; }
+        };
+
+        // ── Next airing countdown ──────────────────────────────────────────────
+        const animeNextAiring = ref({});   // al_id → {episode, airing_at}
+        const _nowSec = ref(Math.floor(Date.now() / 1000));
+        setInterval(() => { _nowSec.value = Math.floor(Date.now() / 1000); }, 30000);  // 'last_added'|'last_watched'|'last_downloaded'|'title'|'progress'|'episodes'|'status'
         const animeLibFilter = ref(_sess.animeLibFilter || 'all');     // 'all' | status values
         const animeLibSearch = ref('');
 
@@ -1755,16 +1819,57 @@ const app = createApp({
         
         let _toastTimer = null;
         const showToast = (msg, type = 'info', duration = 3500) => {
-            if (_toastTimer) { clearTimeout(_toastTimer); _toastTimer = null; }
-            toast.value = { show: true, message: msg, type };
-            _toastTimer = setTimeout(() => { toast.value.show = false; _toastTimer = null; }, duration);
+            const id = ++_toastSeq;
+            // Cap at 4 visible toasts — drop the oldest
+            if (toasts.value.length >= 4) toasts.value.shift();
+            toasts.value.push({ id, message: msg, type, duration });
+            setTimeout(() => { toasts.value = toasts.value.filter(t => t.id !== id); }, duration);
         };
-        const dismissToast = () => {
-            if (_toastTimer) { clearTimeout(_toastTimer); _toastTimer = null; }
-            toast.value.show = false;
+        const dismissToast = (id) => {
+            if (id !== undefined) {
+                toasts.value = toasts.value.filter(t => t.id !== id);
+            } else {
+                toasts.value = [];
+            }
         };
         const scrollToTop = () => {
             document.querySelector('.main-wrapper')?.scrollTo({ top: 0, behavior: 'smooth' });
+        };
+
+        // ── Hover preview panel ───────────────────────────────────────────────
+        const previewAnime = ref(null);
+        const previewPos   = ref({ x: 0, y: 0 });
+        let _previewTimer  = null;
+
+        const showPreview = (rawAnime, event) => {
+            if (_previewTimer) clearTimeout(_previewTimer);
+            _previewTimer = setTimeout(() => {
+                _previewTimer = null;
+                const al = String(rawAnime.al_id || '');
+                const sc = anilistScores.value[al] || {};
+                const preview = {
+                    title:    rawAnime.title || rawAnime.title_romaji || '',
+                    cover:    rawAnime.cover  || '',
+                    format:   rawAnime.format || '',
+                    episodes: rawAnime.total_episodes || rawAnime.episodes || null,
+                    score:    rawAnime.score  || sc.score || null,
+                    genres:   rawAnime.genres || sc.genres || [],
+                    status:   rawAnime.status || '',
+                    year:     rawAnime.year   || null,
+                };
+                const rect  = event.currentTarget.getBoundingClientRect();
+                const PW    = 252, PH = 230;
+                let x = rect.right + 10;
+                if (x + PW > window.innerWidth  - 12) x = rect.left - PW - 10;
+                let y = rect.top + (rect.height - PH) / 2;
+                y = Math.max(10, Math.min(y, window.innerHeight - PH - 10));
+                previewPos.value  = { x, y };
+                previewAnime.value = preview;
+            }, 600);
+        };
+        const hidePreview = () => {
+            if (_previewTimer) { clearTimeout(_previewTimer); _previewTimer = null; }
+            previewAnime.value = null;
         };
         
         // SSE — replaces pollTasks + pollExports setIntervals
@@ -1878,6 +1983,14 @@ const app = createApp({
                         };
                         applyWatched(animeLibrary.value.find(a => a.id === aid));
                         if (animeLibraryDetail.value?.id === aid) applyWatched(animeLibraryDetail.value);
+                        // Auto-play next episode when MPV finishes (not manual toggle)
+                        if (ev.from_mpv && newState) {
+                            const animeObj = animeLibrary.value.find(a => a.id === aid);
+                            if (animeObj) {
+                                const next = nextUnwatchedEp(animeObj);
+                                if (next) showAutoplayModal(animeObj, next);
+                            }
+                        }
                     } else if (ev.type === 'position') {
                         const aid = ev.anime_id;
                         const applyPos = (animeObj) => {
@@ -1891,11 +2004,11 @@ const app = createApp({
                         applyPos(animeLibrary.value.find(a => a.id === aid));
                         if (animeLibraryDetail.value?.id === aid) applyPos(animeLibraryDetail.value);
                     } else if (ev.type === 'download_complete') {
-                        // Immediate chapter list refresh when the open manga just got a chapter
                         if (currentTitle.value && canonicalTitle(currentTitle.value) === canonicalTitle(ev.title || '')) {
                             loadChapters(currentTitle.value);
                         }
                         loadLibrary();
+                        if (currentView.value === 'anime') loadAnimeLibrary(true);
                     }
                 }
             };
@@ -3320,6 +3433,17 @@ const app = createApp({
             }
         };
 
+        const _hasActiveQbt = () => animeLibrary.value.some(a =>
+            (a.episodes || []).some(e => e.in_qbt && e.progress < 100));
+
+        const _startQbtSync = () => {
+            if (_qbtSyncTimer) clearInterval(_qbtSyncTimer);
+            _qbtSyncTimer = setInterval(() => {
+                if (animeView.value !== 'library') { clearInterval(_qbtSyncTimer); _qbtSyncTimer = null; return; }
+                if (_hasActiveQbt()) loadAnimeLibrary(true);
+            }, 15000);
+        };
+
         const switchToAnimeView = async (view) => {
             const prev = animeView.value;
             if (view !== prev) {
@@ -3328,24 +3452,22 @@ const app = createApp({
             }
             animeView.value = view;
             if (view === 'downloads') {
-                if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
+                if (_qbtSyncTimer) { clearInterval(_qbtSyncTimer); _qbtSyncTimer = null; }
                 await checkQbt();
                 await loadQbtTorrents();
                 if (qbtPollTimer) clearInterval(qbtPollTimer);
                 qbtPollTimer = setInterval(loadQbtTorrents, 5000);
             } else if (view === 'library') {
-                if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
-                // Load silently if we already have data (instant view, refresh in background)
+                if (qbtPollTimer) { clearInterval(qbtPollTimer); qbtPollTimer = null; }
                 await loadAnimeLibrary(animeLibrary.value.length > 0);
-                if (libPollTimer) clearInterval(libPollTimer);
-                libPollTimer = setInterval(() => loadAnimeLibrary(true), 3500);
+                _startQbtSync();
             } else if (view === 'seasonal') {
                 if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
-                if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
+                if (_qbtSyncTimer) { clearInterval(_qbtSyncTimer); _qbtSyncTimer = null; }
                 await loadSeasonalAnime();
             } else {
                 if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
-                if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
+                if (_qbtSyncTimer) { clearInterval(_qbtSyncTimer); _qbtSyncTimer = null; }
             }
         };
 
@@ -3416,12 +3538,13 @@ const app = createApp({
             } catch (_) { epSubtitles.value[key] = []; }
         };
 
-        const playEpisode = async (anime, ep, subFile = '') => {
+        const playEpisode = async (anime, ep, subFile = '', startPos = 0) => {
             if ((!ep.in_qbt || ep.progress < 100) && !(ep.num > 0 && libDetailBatchDone.value) && !ep.in_local) return;
             try {
-                const body = ep.in_local
+                const base = ep.in_local
                     ? { anime_id: anime.id, episode: ep.num, local_path: ep.local_path, sub_file: subFile }
                     : { anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash, sub_file: subFile };
+                const body = startPos > 0 ? { ...base, start_pos: startPos } : base;
                 const r = await fetch('/api/anime/play', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -3712,9 +3835,21 @@ const app = createApp({
         };
 
         // ── Subtitle translation ──────────────────────────────────────────────────
-        // Key format: "{animeId}_{epNum}" — persisted to localStorage across reloads
-        const subTaskKey = (animeId, epNum) => `${animeId}_${epNum}`;
-        const _loadSubTasks = () => { try { return JSON.parse(localStorage.getItem('subTasks') || '{}'); } catch { return {}; } };
+        // Key format: "{animeId}_ep{N}" or "{animeId}_sp{N}" — prevents specials and
+        // regular episodes from sharing the same slot when they share the same num.
+        const subTaskKey = (animeId, epNum, epType = '') =>
+            `${animeId}_${epType === 'special' ? 'sp' : 'ep'}${epNum}`;
+        const _loadSubTasks = () => {
+            try {
+                const raw = JSON.parse(localStorage.getItem('subTasks') || '{}');
+                // Migrate old key format: `${id}_${num}` → `${id}_ep${num}` (added ep/sp prefix)
+                const out = {};
+                for (const [k, v] of Object.entries(raw)) {
+                    out[k.replace(/_(\d+)$/, '_ep$1')] = v;
+                }
+                return out;
+            } catch { return {}; }
+        };
         const subTasks = ref(_loadSubTasks());
         watch(subTasks, (val) => { try { localStorage.setItem('subTasks', JSON.stringify(val)); } catch {} }, { deep: true });
 
@@ -3736,9 +3871,14 @@ const app = createApp({
                     subTasks.value = { ...subTasks.value, [key]: { ...d, task_id: taskId } };
                     if (d.status === 'done' || d.status === 'error' || d.status === 'cancelled') {
                         clearInterval(iv);
-                        if (d.status === 'done')
+                        if (d.status === 'done') {
                             showToast(`✓ Subtítulos ESP añadidos: ${d.output?.split('/').pop() || ''}`, 'success');
-                        else if (d.status === 'error')
+                            const cardEl = document.querySelector(`[data-ep-key="${key}"]`);
+                            if (cardEl) {
+                                cardEl.classList.add('ep-card--esp-flash');
+                                setTimeout(() => cardEl.classList.remove('ep-card--esp-flash'), 1700);
+                            }
+                        } else if (d.status === 'error')
                             showToast(`Error traduciendo: ${d.message}`, 'error');
                     }
                 } catch { clearInterval(iv); }
@@ -3747,7 +3887,7 @@ const app = createApp({
 
         const directInjectSub = async (anime, ep, subInfo) => {
             subTrackModal.value = null;
-            const key = subTaskKey(anime.id, ep.num);
+            const key = subTaskKey(anime.id, ep.num, ep.ep_type);
             subTasks.value = { ...subTasks.value, [key]: { status: 'injecting', progress: 50, message: 'Descargando subtítulo…' } };
             try {
                 const r = await fetch('/api/subtitle/inject_direct', {
@@ -3769,6 +3909,12 @@ const app = createApp({
                 }
                 subTasks.value = { ...subTasks.value, [key]: { status: 'done', progress: 100, message: '¡Completado!' } };
                 showToast(`✓ Subtítulos ESP añadidos: ${d.file || ''}`, 'success');
+                // Flash the ep-card green
+                const cardEl = document.querySelector(`[data-ep-key="${key}"]`);
+                if (cardEl) {
+                    cardEl.classList.add('ep-card--esp-flash');
+                    setTimeout(() => cardEl.classList.remove('ep-card--esp-flash'), 1700);
+                }
             } catch (e) {
                 subTasks.value = { ...subTasks.value, [key]: { status: 'error', progress: 0, message: String(e) } };
                 showToast('Error de conexión', 'error');
@@ -3777,7 +3923,7 @@ const app = createApp({
 
         const startTranslate = async (anime, ep, subIndex = 0, externalSub = null) => {
             subTrackModal.value = null;
-            const key = subTaskKey(anime.id, ep.num);
+            const key = subTaskKey(anime.id, ep.num, ep.ep_type);
             subTasks.value = { ...subTasks.value, [key]: { status: 'starting', progress: 0, message: 'Iniciando…' } };
             try {
                 const r = await fetch('/api/subtitle/translate', {
@@ -3786,6 +3932,7 @@ const app = createApp({
                     body: JSON.stringify({
                         info_hash:  ep.info_hash || '',
                         episode:    ep.num,
+                        ep_type:    ep.ep_type || 'episode',
                         anime_id:   anime.id,
                         sub_index:  subIndex,
                         ...(ep.local_path ? { local_path: ep.local_path } : {}),
@@ -3808,10 +3955,11 @@ const app = createApp({
         };
 
         const translateSubs = async (anime, ep) => {
-            const key = subTaskKey(anime.id, ep.num);
+            const key = subTaskKey(anime.id, ep.num, ep.ep_type);
             subFetchingKey.value = key;
             const params = new URLSearchParams({
                 info_hash: ep.info_hash || '', episode: ep.num, anime_id: anime.id,
+                ep_type: ep.ep_type || 'episode',
                 ...(ep.local_path ? { local_path: ep.local_path } : {}),
             });
             try {
@@ -3847,8 +3995,8 @@ const app = createApp({
             }
         };
 
-        const cancelTranslation = async (animeId, epNum) => {
-            const key = subTaskKey(animeId, epNum);
+        const cancelTranslation = async (animeId, epNum, epType = '') => {
+            const key = subTaskKey(animeId, epNum, epType);
             const taskId = subTasks.value[key]?.task_id;
             // If no task_id yet (cancelled during 'starting' phase), mark cancelled locally
             if (!taskId) {
@@ -3958,7 +4106,7 @@ const app = createApp({
 
         // Extract MAL numeric ID from a MAL URL like https://myanimelist.net/anime/20/Naruto
         const _malIdFromUrl = (url) => {
-            const m = (url || '').match(/\/anime\/(\d+)\//);
+            const m = (url || '').match(/\/anime\/(\d+)(?:\/|$)/);
             return m ? parseInt(m[1]) : null;
         };
 
@@ -3973,8 +4121,9 @@ const app = createApp({
                 animeTags.value[id]    = data.tags || [];
                 animeMalUrls.value[id] = data.mal_url || '';
                 animeTagsState.value[id] = (data.tags || []).length ? 'done' : 'none';
+                if (data.next_airing) animeNextAiring.value[id] = data.next_airing;
                 // Now we know the mal_id — trigger stacks if not already loading
-                const mid = anime.mal_id || _malIdFromUrl(data.mal_url);
+                const mid = data.mal_id || anime.mal_id || _malIdFromUrl(data.mal_url);
                 if (mid) loadAnimeStacks({ ...anime, mal_id: mid });
             } catch (_) {
                 animeTagsState.value[id] = 'error';
@@ -4010,7 +4159,7 @@ const app = createApp({
 
         const loadAnimeStacks = async (anime) => {
             const alId = anime?.al_id;
-            if (!alId || animeStacksState.value[alId]) return;
+            if (!alId || (animeStacksState.value[alId] === 'loading' || animeStacksState.value[alId] === 'done' || animeStacksState.value[alId] === 'none')) return;
             // Resolve mal_id: from library data first, then animeMalUrls
             const mid = anime.mal_id || _malIdFromUrl(animeMalUrls.value[alId] || '');
             if (!mid) return;   // no mal_id available yet (tags not loaded)
@@ -4049,14 +4198,61 @@ const app = createApp({
             }
         };
 
-        const openAnimeLibraryDetail = (anime) => {
+        const openAnimeLibraryDetail = async (anime) => {
             const prev = animeLibraryDetail.value;
             _navStack.push(() => { animeLibraryDetail.value = prev; });
             history.pushState({ depth: _navStack.length }, '');
+            // If al_id is missing but mal_id is present, resolve it so tags/recs/stacks work
+            if (!anime.al_id && anime.mal_id) {
+                try {
+                    const r = await fetch(`/api/anime/resolve_al_id?mal_id=${anime.mal_id}`);
+                    const d = await r.json();
+                    if (d.al_id) {
+                        anime = { ...anime, al_id: d.al_id };
+                        // Patch the reactive library entry so subsequent opens don't re-resolve
+                        const libEntry = animeLibrary.value.find(a => a.id === anime.id || a.mal_id === anime.mal_id);
+                        if (libEntry) libEntry.al_id = d.al_id;
+                    }
+                } catch (_) {}
+            }
             animeLibraryDetail.value = anime;
             loadAnimeRecs(anime);
             loadAnimeTags(anime);
             loadAnimeStacks(anime);
+            // Extract cover color for ambient detail tint
+            if (anime.cover) {
+                const _ai = new Image();
+                _ai.crossOrigin = 'anonymous';
+                _ai.onload = () => {
+                    try {
+                        const _ac = document.createElement('canvas');
+                        _ac.width = 8; _ac.height = 8;
+                        const _ax = _ac.getContext('2d', { willReadFrequently: true });
+                        _ax.drawImage(_ai, 0, 0, 8, 8);
+                        const _ad = _ax.getImageData(0, 0, 8, 8).data;
+                        let _r=0,_g=0,_b=0;
+                        const _n = _ad.length/4;
+                        for(let _i=0;_i<_ad.length;_i+=4){_r+=_ad[_i];_g+=_ad[_i+1];_b+=_ad[_i+2];}
+                        document.documentElement.style.setProperty('--detail-aura',
+                            `${Math.min(255,(_r/_n*1.4)|0)},${Math.min(255,(_g/_n*1.4)|0)},${Math.min(255,(_b/_n*1.4)|0)}`);
+                    } catch(_e) {}
+                };
+                _ai.src = anime.cover;
+            }
+        };
+
+        // Open a recommendation card: go to library detail if already in library, else search
+        const openRecAnime = (rec) => {
+            const libEntry = animeLibrary.value.find(a =>
+                (rec.al_id  && a.al_id  === rec.al_id)  ||
+                (rec.mal_id && a.mal_id === rec.mal_id) ||
+                (rec.title  && a.title  === rec.title)
+            );
+            if (libEntry) {
+                openAnimeLibraryDetail(libEntry);
+            } else {
+                openAnime({ al_id: rec.al_id, title: rec.title, title_romaji: rec.title_romaji, cover: rec.cover, format: rec.format });
+            }
         };
 
         const isInAnimeLibrary = (anime) => {
@@ -4172,6 +4368,28 @@ const app = createApp({
             if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
             return `${m}:${String(s).padStart(2,'0')}`;
         };
+
+        // Returns active translation state for an anime: {progress, message, engine} or null
+        const animeSubProgress = (animeId) => {
+            const _terminal = new Set(['done', 'error', 'cancelled']);
+            const prefix = `${animeId}_`;
+            for (const [k, v] of Object.entries(subTasks.value)) {
+                if (k.startsWith(prefix) && v && !_terminal.has(v.status))
+                    return v;
+            }
+            return null;
+        };
+
+        const nextEpCountdown = computed(() => {
+            const na = animeNextAiring.value[animeLibraryDetail.value?.al_id];
+            if (!na?.airing_at) return null;
+            const diff = na.airing_at - _nowSec.value;
+            if (diff <= 0) return null;
+            const d = Math.floor(diff / 86400);
+            const h = Math.floor((diff % 86400) / 3600);
+            const m = Math.floor((diff % 3600) / 60);
+            return { episode: na.episode, d, h, m, diff };
+        });
 
         const nextUnwatchedEp = (anime) => {
             if (!anime?.episodes) return null;
@@ -4384,19 +4602,18 @@ const app = createApp({
         watch(currentView, (val) => {
             if (val === 'anime') {
                 loadAnimeLibrary();
-                if (libPollTimer) clearInterval(libPollTimer);
-                libPollTimer = setInterval(() => loadAnimeLibrary(true), 3500);
+                if (animeView.value === 'library') _startQbtSync();
             } else if (val === 'mangadex' || val === 'followed') {
                 if (val === 'mangadex' && !_mdTagsLoaded) { _mdTagsLoaded = true; loadMdTags(); }
                 if (!_mdLibraryLoaded) { _mdLibraryLoaded = true; loadMdLibrary(); }
-                if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
+                if (_qbtSyncTimer) { clearInterval(_qbtSyncTimer); _qbtSyncTimer = null; }
                 if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
             } else if (val === 'cbz') {
                 if (!_cbzLoaded) { _cbzLoaded = true; loadCbzLibrary(); }
-                if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
+                if (_qbtSyncTimer) { clearInterval(_qbtSyncTimer); _qbtSyncTimer = null; }
                 if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
             } else {
-                if (libPollTimer)  { clearInterval(libPollTimer);  libPollTimer  = null; }
+                if (_qbtSyncTimer) { clearInterval(_qbtSyncTimer); _qbtSyncTimer = null; }
                 if (qbtPollTimer)  { clearInterval(qbtPollTimer);  qbtPollTimer  = null; }
             }
         });
@@ -4413,8 +4630,9 @@ const app = createApp({
             if (ids.length) fetchAnilistScores(ids);
         });
 
-        // Persist session on every view/filter change
-        watch([currentView, animeView, libFilter, libSearch, animeLibFilter, animeLibSort], _saveSession, { flush: 'post' });
+        // Persist session on every view/filter change + when detail opens/closes
+        const _sessDetailId = computed(() => animeLibraryDetail.value?.id || null);
+        watch([currentView, animeView, libFilter, libSearch, animeLibFilter, animeLibSort, _sessDetailId], _saveSession, { flush: 'post' });
 
         onMounted(() => {
             loadLibrary();
@@ -4430,8 +4648,13 @@ const app = createApp({
             // (the currentView watch doesn't fire on initial value, so we do it manually)
             const _initView = currentView.value;
             if (_initView === 'anime') {
-                loadAnimeLibrary(false);
-                libPollTimer = setInterval(() => loadAnimeLibrary(true), 3500);
+                loadAnimeLibrary(false).then(() => {
+                    if (_sess.animeDetailId) {
+                        const saved = animeLibrary.value.find(a => a.id === _sess.animeDetailId);
+                        if (saved) openAnimeLibraryDetail(saved);
+                    }
+                });
+                if (animeView.value === 'library') _startQbtSync();
                 if (animeView.value === 'history') loadWatchHistory();
             } else if (_initView === 'mangadex' || _initView === 'followed') {
                 if (!_mdTagsLoaded) { _mdTagsLoaded = true; loadMdTags(); }
@@ -4463,7 +4686,7 @@ const app = createApp({
             currentView, library, localLibrary, mdLibrary, searchQuery, searchResults,
             chapters, mdChapters, mdChaptersLoading, chapterStatus, showModal, showReader,
             currentManga, currentMdManga, currentTitle, currentCover, currentCoverUrl,
-            currentChapter, currentPage, pages, isZoomed, selectedLang, toast,
+            currentChapter, currentPage, pages, isZoomed, selectedLang, toast, toasts,
             stats, groupedChapters, filteredChapters, availableLangs, currentPageUrl, combinedLibrary, filteredLibrary, libSearch, libFilter,
             mangaUpdates, updatesLoading, updatesById, loadMangaUpdates, refreshMangaUpdates,
             getLangName, getLangFlag, getUniqueLangs, openManga, openMdManga, openLibraryItem, closeModal, addToLibrary, removeLibraryItem,
@@ -4540,10 +4763,10 @@ const app = createApp({
             groupedAnimeEpisodes, animeExpandedEps, toggleEpGroup, isEpExpanded, isSpanishOrMulti, isEnglishSub,
             animeLibrary, animeLibraryLoading, animeLibraryDetail,
             animeLibSort, animeLibFilter, sortedAnimeLibrary, animeLibGroups, animeLibCounts,
-            nextUnwatchedEp, continueWatching, fmtPos,
+            nextUnwatchedEp, continueWatching, fmtPos, animeSubProgress,
             ANIME_STATUS, STATUS_ORDER,
             loadAnimeLibrary, removeFromAnimeLibrary, openAnimeLibraryDetail, searchEpisodeInNyaa,
-            isInAnimeLibrary, addAnimeToLibrary, libDetailHasBatch, libDetailBatchDone, libDetailBatchEp,
+            isInAnimeLibrary, openRecAnime, addAnimeToLibrary, libDetailHasBatch, libDetailBatchDone, libDetailBatchEp,
             setAnimeStatus, clearAnimeEpisodes,
             linkTorrentShow, linkTorrentList, linkTorrentLoading, linkTorrentSubpath, openLinkTorrent, linkExistingTorrent,
             animeRecs, animeRecsState,
@@ -4552,6 +4775,10 @@ const app = createApp({
             stackBrowse, stackBrowseMeta, stackBrowseAnime, stackBrowseState, browseStack,
             tagBrowse, tagBrowseAnime, tagBrowseState,
             playEpisode, toggleWatched, deleteEpisode,
+            autoplayModal, autoplaySeconds, dismissAutoplay,
+            epSkipTimes, loadSkipTimes,
+            epInfoCache, epInfoActive, loadEpInfo,
+            animeNextAiring, nextEpCountdown,
             scanPathsShow, scanPaths, scanNewPath, scanFolders, scanFoldersLoading,
             scanBrowsing, scanBrowsePath, scanBrowseWinPath, scanBrowseParent, scanBrowseItems, scanBrowseLoading,
             openScanPaths, addScanPath, removeScanPath, loadScanFolders,
@@ -4563,6 +4790,7 @@ const app = createApp({
             animeSeasonSeason, animeSeasonYear, seasonLabel, seasonYears, filteredSeasonalAnime, seasonalGenres,
             loadSeasonalAnime, seasonNav, onSeasonChange, onYearChange, SEASON_ES,
             gotoView,
+            previewAnime, previewPos, showPreview, hidePreview,
             sidebarCollapsed, sidebarMobileOpen, saveSidebarState,
             showShortcuts, mainScrolled, scrollToTop, dismissToast,
         };
@@ -4707,5 +4935,72 @@ app.mount('#app');
         const modal = img.closest('.md-modal');
         if (modal) { modal.style.setProperty('--modal-glow-rgb', rgb); }
     }, true);
+
+    // ── 7. Ambient glow: async canvas extraction with CORS ───────────────────
+    // The existing load-event extractor fails silently on cross-origin images.
+    // On first hover we re-fetch the image with crossOrigin set, canvas-sample
+    // it, cache the result, and write --card-glow-rgb back on the card.
+    const _glowCache = new Map();
+    function _asyncGlow(src, card) {
+        if (_glowCache.has(src)) { card.style.setProperty('--card-glow-rgb', _glowCache.get(src)); return; }
+        const fresh = new Image();
+        fresh.crossOrigin = 'anonymous';
+        fresh.onload = () => {
+            try {
+                const c = document.createElement('canvas');
+                c.width = 10; c.height = 10;
+                const ctx = c.getContext('2d', { willReadFrequently: true });
+                ctx.drawImage(fresh,
+                    fresh.naturalWidth * .08, fresh.naturalHeight * .12,
+                    fresh.naturalWidth * .84, fresh.naturalHeight * .76,
+                    0, 0, 10, 10);
+                const d = ctx.getImageData(0, 0, 10, 10).data;
+                let r = 0, g = 0, b = 0;
+                const n = d.length / 4;
+                for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i+1]; b += d[i+2]; }
+                // Boost saturation slightly so dark covers still pop
+                const rgb = `${Math.min(255, (r/n * 1.25)|0)},${Math.min(255, (g/n * 1.25)|0)},${Math.min(255, (b/n * 1.25)|0)}`;
+                _glowCache.set(src, rgb);
+                card.style.setProperty('--card-glow-rgb', rgb);
+            } catch(_) {}
+        };
+        fresh.src = src;
+    }
+    document.body.addEventListener('mouseenter', (e) => {
+        const card = e.target.closest('.allib-card, .md-card, .anime-card, .ep-card');
+        if (!card || card.dataset.glowDone) return;
+        // ep-card: prefer the extracted frame thumbnail, fall back to cover bg
+        const img = card.querySelector('.ep-card-thumb-img') || card.querySelector('img');
+        if (!img?.src) return;
+        card.dataset.glowDone = '1';
+        _asyncGlow(img.src, card);
+    }, true);
+
+    // ── Sidebar sliding nav indicator ─────────────────────────────────────────
+    const _sbBody = document.querySelector('.sidebar-body');
+    if (_sbBody) {
+        const _ind = document.createElement('div');
+        _ind.id = 'sb-indicator';
+        _sbBody.appendChild(_ind);
+
+        function _moveSbIndicator() {
+            const active = _sbBody.querySelector('.sb-item.active');
+            if (!active) { _ind.style.opacity = '0'; return; }
+            const bodyTop  = _sbBody.getBoundingClientRect().top;
+            const itemTop  = active.getBoundingClientRect().top;
+            const offset   = itemTop - bodyTop + _sbBody.scrollTop;
+            const itemH    = active.offsetHeight;
+            _ind.style.top     = (offset + (itemH - 22) / 2) + 'px';
+            _ind.style.opacity = '1';
+        }
+
+        // Initial position after Vue renders
+        setTimeout(_moveSbIndicator, 250);
+
+        // Track class changes on sidebar items
+        new MutationObserver(_moveSbIndicator).observe(_sbBody, {
+            attributes: true, subtree: true, attributeFilter: ['class']
+        });
+    }
 
 })();

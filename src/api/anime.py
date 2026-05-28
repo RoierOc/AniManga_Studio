@@ -108,42 +108,57 @@ def _find_subtitles(video_path: str) -> list:
 _backfill_done = False
 
 def _backfill_anime_metadata():
-    """Backfill total_episodes / format / al_id for local anime entries that lack them.
-    Runs once in background on first library request. Keys that are numeric strings
-    are AniList IDs — fetch metadata from AniList to fill missing fields."""
+    """Backfill total_episodes / format / al_id for library entries that lack them.
+    Runs once in background on first library request.
+    Pass 1: numeric keys (AniList IDs) missing total_episodes — fetch from AniList.
+    Pass 2: entries with mal_id but no al_id — resolve via AniList idMal filter."""
     global _backfill_done
     lib = _lib_read()
-    to_fetch = [(k, v) for k, v in lib.items()
-                if not v.get('total_episodes') and k.isdigit()]
-    if not to_fetch:
-        _backfill_done = True
-        return
-
     changed = False
+
+    # Pass 1: AniList-keyed entries missing total_episodes
     q = '''query($id:Int){Media(id:$id,type:ANIME){
         episodes format status
         title{romaji english}
         coverImage{large}
     }}'''
-    for al_id_str, _ in to_fetch:
+    for k, v in lib.items():
+        if not k.isdigit() or v.get('total_episodes'):
+            continue
         try:
-            r = _http.post(_ANILIST, json={'query': q, 'variables': {'id': int(al_id_str)}}, timeout=8)
+            r = _http.post(_ANILIST, json={'query': q, 'variables': {'id': int(k)}}, timeout=8)
             media = (r.json().get('data') or {}).get('Media') or {}
             if not media:
                 continue
             t = media.get('title') or {}
-            if media.get('episodes') and not lib[al_id_str].get('total_episodes'):
-                lib[al_id_str]['total_episodes'] = media['episodes']
+            if media.get('episodes') and not lib[k].get('total_episodes'):
+                lib[k]['total_episodes'] = media['episodes']
                 changed = True
-            if media.get('format') and not lib[al_id_str].get('format'):
-                lib[al_id_str]['format'] = media['format']
+            if media.get('format') and not lib[k].get('format'):
+                lib[k]['format'] = media['format']
                 changed = True
-            if not lib[al_id_str].get('al_id'):
-                lib[al_id_str]['al_id'] = int(al_id_str)
+            if not lib[k].get('al_id'):
+                lib[k]['al_id'] = int(k)
                 changed = True
-            if not lib[al_id_str].get('title_romaji') and t.get('romaji'):
-                lib[al_id_str]['title_romaji'] = t['romaji']
+            if not lib[k].get('title_romaji') and t.get('romaji'):
+                lib[k]['title_romaji'] = t['romaji']
                 changed = True
+            time.sleep(0.4)  # AniList rate limit: 90 req/min
+        except Exception:
+            pass
+
+    # Pass 2: entries with mal_id but no al_id (e.g. added from Jikan search)
+    q2 = 'query($mid:Int){Media(idMal:$mid,type:ANIME){id}}'
+    for k, v in lib.items():
+        if not v.get('mal_id') or v.get('al_id'):
+            continue
+        try:
+            r = _http.post(_ANILIST, json={'query': q2, 'variables': {'mid': v['mal_id']}}, timeout=8)
+            media = (r.json().get('data') or {}).get('Media') or {}
+            if media.get('id'):
+                lib[k]['al_id'] = media['id']
+                changed = True
+            time.sleep(0.4)
         except Exception:
             pass
 
@@ -671,7 +686,7 @@ def _track_mpv_session(proc, wl_dir: str, anime_id: str, ep_str: str, duration: 
             print(f'[mpv] marked watched: anime={anime_id} ep={ep_str}', flush=True)
             push_sse_event('watched', anime_id=anime_id, ep_str=ep_str,
                            last_watched_at=now, watched=True,
-                           duration=int(duration))
+                           duration=int(duration), from_mpv=True)
         else:
             _lib_write(lib)
             push_sse_event('position', anime_id=anime_id, ep_str=ep_str,
@@ -1882,11 +1897,14 @@ def anime_play():
         sub_file   = (data.get('sub_file') or '').strip()
         ep_str     = str(episode)
 
-        # Read saved resume position from library
-        start_pos = 0.0
-        if anime_id:
+        # Explicit start_pos override (e.g. skip intro) takes priority over saved resume position
+        if data.get('start_pos') is not None:
+            start_pos = float(data['start_pos'])
+        elif anime_id:
             lib_peek = _lib_read()
             start_pos = float((lib_peek.get(anime_id) or {}).get('positions', {}).get(ep_str, 0))
+        else:
+            start_pos = 0.0
 
         def _launch_and_track(video):
             ok, proc, wl_dir = _launch_mpv(video, sub_file, start_pos)
@@ -2186,6 +2204,115 @@ def anime_thumb(anime_id, episode):
     return send_file(str(cache_path), mimetype='image/jpeg', max_age=604800)
 
 
+# ── Background thumbnail pre-generation ───────────────────────────────────────
+
+def _pregen_thumbs():
+    """Pre-generate missing episode thumbnails for all local anime at startup.
+    Runs in background with a 30s startup delay and 2s throttle between thumbs."""
+    time.sleep(30)  # let the server finish starting up
+    _THUMBS_DIR.mkdir(parents=True, exist_ok=True)
+    lib = _lib_read()
+    for anime_id, anime in lib.items():
+        local_path = anime.get('local_path', '')
+        if not local_path:
+            continue
+        try:
+            episodes = _scan_local_episodes(local_path, anime.get('episode_overrides', {}))
+        except Exception:
+            continue
+        for ep in episodes:
+            ep_type = ep.get('ep_type', 'episode')
+            ep_num  = ep['num']
+            cache_key  = f'{anime_id}_sp{ep_num}.jpg' if ep_type == 'special' else f'{anime_id}_{ep_num}.jpg'
+            cache_path = _THUMBS_DIR / cache_key
+            if cache_path.exists() and cache_path.stat().st_size > 0:
+                continue
+            video = ep['path']
+            try:
+                duration   = _video_duration(video)
+                seek_secs  = duration * 0.50 if duration > 0 else 30.0
+                fine_margin = min(6.0, seek_secs)
+                pre_ts  = _secs_to_hms(max(0.0, seek_secs - fine_margin))
+                fine_ts = _secs_to_hms(fine_margin)
+                subprocess.run(
+                    ['ffmpeg', '-y', '-ss', pre_ts, '-i', video, '-ss', fine_ts,
+                     '-vframes', '1', '-vf', 'scale=480:-2', '-q:v', '2', str(cache_path)],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
+                )
+            except Exception:
+                pass
+            time.sleep(2.0)  # throttle to avoid CPU saturation while server is running
+
+
+threading.Thread(target=_pregen_thumbs, daemon=True).start()
+
+
+# ── AniSkip — OP/ED timestamp lookup ──────────────────────────────────────────
+
+_ANISKIP = 'https://api.aniskip.com/v2'
+_aniskip_cache: dict = {}   # (mal_id, episode) → {op_start, op_end, ed_start, ed_end}
+
+
+@anime_bp.route('/skip_times/<int:mal_id>/<int:episode>')
+def anime_skip_times(mal_id, episode):
+    key = (mal_id, episode)
+    if key in _aniskip_cache:
+        return jsonify(_aniskip_cache[key])
+    try:
+        r = _http.get(
+            f'{_ANISKIP}/skip-times/{mal_id}/{episode}',
+            params=[('types[]', 'op'), ('types[]', 'ed'), ('episodeLength', '0')],
+            timeout=6,
+        )
+        r.raise_for_status()
+        data = r.json()
+        result: dict = {}
+        for item in (data.get('results') or []):
+            iv  = item.get('interval') or {}
+            st  = item.get('skipType', '')
+            if st == 'op':
+                result['op_start'] = round(iv.get('startTime', 0), 2)
+                result['op_end']   = round(iv.get('endTime',   0), 2)
+            elif st in ('ed', 'recap'):
+                result['ed_start'] = round(iv.get('startTime', 0), 2)
+                result['ed_end']   = round(iv.get('endTime',   0), 2)
+        _aniskip_cache[key] = result
+        return jsonify(result)
+    except Exception:
+        return jsonify({})
+
+
+# ── Episode info (Jikan) ───────────────────────────────────────────────────────
+
+_ep_info_cache: dict = {}   # (mal_id, episode) → {title, synopsis, aired, filler, recap}
+
+
+@anime_bp.route('/episode_info/<int:mal_id>/<int:episode>')
+def anime_episode_info(mal_id, episode):
+    key = (mal_id, episode)
+    if key in _ep_info_cache:
+        return jsonify(_ep_info_cache[key])
+    try:
+        r = _http.get(
+            f'{_JIKAN}/anime/{mal_id}/episodes/{episode}',
+            timeout=8, headers={'User-Agent': 'Mozilla/5.0'},
+        )
+        r.raise_for_status()
+        d = r.json().get('data') or {}
+        result = {
+            'title':    (d.get('title') or '').strip(),
+            'title_jp': (d.get('title_japanese') or '').strip(),
+            'synopsis': (d.get('synopsis') or '').strip(),
+            'aired':    (d.get('aired') or '').strip(),
+            'filler':   bool(d.get('filler')),
+            'recap':    bool(d.get('recap')),
+        }
+        _ep_info_cache[key] = result
+        return jsonify(result)
+    except Exception:
+        return jsonify({})
+
+
 # ── Subtitle list endpoint ─────────────────────────────────────────────────────
 
 @anime_bp.route('/subtitles/<anime_id>/<int:episode>')
@@ -2327,6 +2454,9 @@ query ($id: Int) {
 
 @anime_bp.route('/recommendations/<int:al_id>')
 def anime_recommendations(al_id):
+    cached = _al_cache_get('recs', al_id)
+    if cached is not None:
+        return jsonify(cached)
     try:
         resp = _http.post(
             _ANILIST,
@@ -2357,6 +2487,7 @@ def anime_recommendations(al_id):
                 'status':       m.get('status', ''),
                 'rating':       node['rating'],
             })
+        threading.Thread(target=_al_cache_set, args=('recs', al_id, recs), daemon=True).start()
         return jsonify(recs)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -2369,6 +2500,7 @@ query ($id: Int) {
   Media(id: $id) {
     tags { name rank category isAdult }
     idMal
+    nextAiringEpisode { episode airingAt }
   }
 }
 """
@@ -2390,6 +2522,9 @@ query ($tag: String) {
 
 @anime_bp.route('/tags/<int:al_id>')
 def anime_tags(al_id):
+    cached = _al_cache_get('tags', al_id)
+    if cached is not None:
+        return jsonify(cached)
     try:
         resp = _http.post(
             _ANILIST,
@@ -2411,12 +2546,15 @@ def anime_tags(al_id):
         mal_url = ''
         if mal_id:
             try:
-                jk = _http.get(f'{_JIKAN}/anime/{mal_id}', timeout=6)
-                mal_url = (jk.json().get('data') or {}).get('url', '') or ''
+                mal_url = f'https://myanimelist.net/anime/{mal_id}'
             except Exception:
                 pass
 
-        return jsonify({'tags': result, 'mal_url': mal_url, 'mal_id': mal_id})
+        nae = media.get('nextAiringEpisode') or {}
+        next_airing = {'episode': nae['episode'], 'airing_at': nae['airingAt']} if nae.get('airingAt') else None
+        payload = {'tags': result, 'mal_url': mal_url, 'mal_id': mal_id, 'next_airing': next_airing}
+        threading.Thread(target=_al_cache_set, args=('tags', al_id, payload), daemon=True).start()
+        return jsonify(payload)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -2478,6 +2616,62 @@ def browse_by_tag():
 
 _stacks_cache: dict = {}  # mal_id → list of stacks
 
+_STACKS_CACHE_PATH = _Path.home() / '.animanga_stacks_cache.json'
+
+
+def _load_stacks_cache():
+    global _stacks_cache
+    try:
+        with open(_STACKS_CACHE_PATH) as f:
+            _stacks_cache = {int(k): v for k, v in json.load(f).items()}
+    except Exception:
+        pass
+
+
+def _save_stacks_cache():
+    try:
+        with open(_STACKS_CACHE_PATH, 'w') as f:
+            json.dump({str(k): v for k, v in _stacks_cache.items()}, f)
+    except Exception:
+        pass
+
+
+_load_stacks_cache()
+
+# ── AniList disk cache (tags + recs) ──────────────────────────────────────────
+
+_AL_CACHE_PATH = _Path.home() / '.animanga_cache.json'
+_AL_CACHE_TTL  = 7 * 86400  # 7 days — tags/recs rarely change
+
+
+def _al_cache_get(section: str, key) -> object:
+    """Return cached value for (section, key) if it exists and is within TTL, else None."""
+    try:
+        with open(_AL_CACHE_PATH) as f:
+            data = json.load(f)
+        entry = (data.get(section) or {}).get(str(key))
+        if entry and time.time() - entry.get('ts', 0) < _AL_CACHE_TTL:
+            return entry['data']
+    except Exception:
+        pass
+    return None
+
+
+def _al_cache_set(section: str, key, value):
+    """Persist a value in the AniList disk cache under (section, key)."""
+    try:
+        try:
+            with open(_AL_CACHE_PATH) as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+        data.setdefault(section, {})[str(key)] = {'data': value, 'ts': int(time.time())}
+        with open(_AL_CACHE_PATH, 'w') as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
 _MAL_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
 
@@ -2504,6 +2698,38 @@ def _scrape_stacks(mal_url: str) -> list:
     return stacks
 
 
+@anime_bp.route('/resolve_al_id')
+def anime_resolve_al_id():
+    """Resolve AniList ID (al_id) from a MAL ID and optionally patch the library entry."""
+    mal_id = request.args.get('mal_id', type=int)
+    if not mal_id:
+        return jsonify({'error': 'mal_id required'}), 400
+    _q = 'query($mid:Int){Media(idMal:$mid,type:ANIME){id idMal title{english romaji} coverImage{large} episodes format}}'
+    try:
+        resp = _http.post(_ANILIST, json={'query': _q, 'variables': {'mid': mal_id}}, timeout=8)
+        m = (resp.json().get('data') or {}).get('Media') or {}
+        if not m:
+            return jsonify({'error': 'not found on AniList'}), 404
+        al_id = m['id']
+        # Patch the library entry if it exists with this mal_id but lacks al_id
+        lib = _lib_read()
+        for _key, entry in lib.items():
+            if entry.get('mal_id') == mal_id and not entry.get('al_id'):
+                entry['al_id'] = al_id
+                if m.get('episodes') and not entry.get('total_episodes'):
+                    entry['total_episodes'] = m['episodes']
+                if m.get('format') and not entry.get('format'):
+                    entry['format'] = m['format']
+                t = m.get('title') or {}
+                if not entry.get('title_romaji') and t.get('romaji'):
+                    entry['title_romaji'] = t['romaji']
+                _lib_write(lib)
+                break
+        return jsonify({'al_id': al_id, 'mal_id': mal_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @anime_bp.route('/stacks')
 def anime_stacks():
     mal_id = request.args.get('mal_id', type=int)
@@ -2512,12 +2738,11 @@ def anime_stacks():
     if mal_id in _stacks_cache:
         return jsonify(_stacks_cache[mal_id])
     try:
-        jk = _http.get(f'{_JIKAN}/anime/{mal_id}', timeout=6)
-        mal_url = (jk.json().get('data') or {}).get('url', '') or ''
-        if not mal_url:
-            return jsonify([])
+        # MAL accepts the numeric-only URL without the slug — no Jikan needed
+        mal_url = f'https://myanimelist.net/anime/{mal_id}'
         stacks = _scrape_stacks(mal_url)
         _stacks_cache[mal_id] = stacks
+        threading.Thread(target=_save_stacks_cache, daemon=True).start()
         return jsonify(stacks)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
