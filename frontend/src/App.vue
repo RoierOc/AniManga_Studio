@@ -8,6 +8,8 @@ import Toaster from '@/components/ui/Toaster.vue'
 import MangaModal from '@/components/manga/MangaModal.vue'
 import Reader from '@/components/manga/Reader.vue'
 import LibraryView from '@/views/LibraryView.vue'
+import MangaDexView from '@/views/MangaDexView.vue'
+import FollowedView from '@/views/FollowedView.vue'
 import AnimeStudio from '@/views/anime/AnimeStudio.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 
@@ -19,7 +21,7 @@ onMounted(() => manga.init())
 // The rest render the placeholder until their phase lands.
 const meta = computed(() => VIEWS.flatMap(g => g.items).find(i => i.id === ui.currentView))
 
-const VIEW_COMPONENTS = { library: LibraryView, anime: AnimeStudio }
+const VIEW_COMPONENTS = { library: LibraryView, mangadex: MangaDexView, followed: FollowedView, anime: AnimeStudio }
 const activeComponent = computed(() => VIEW_COMPONENTS[ui.currentView] || null)
 </script>
 

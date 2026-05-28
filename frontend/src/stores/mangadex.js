@@ -1,0 +1,160 @@
+import { defineStore } from 'pinia'
+import { api } from '@/lib/api'
+import { useUiStore } from './ui'
+
+const ALL_RATINGS = ['safe', 'suggestive', 'erotica']
+
+export const useMangadexStore = defineStore('mangadex', {
+  state: () => ({
+    tab: 'followed',            // followed | latest | rating | search
+    query: '',
+    results: [],                // search results
+    popular: [],                // popular/latest/rating list
+    loading: false,
+    page: 1,
+    total: 0,
+
+    ratings: ['safe', 'suggestive'],
+    allTags: [],
+    selectedTags: [],
+    showTagFilter: false,
+
+    scores: {},                 // mal_id -> anilist score
+
+    detail: null,               // full manga meta
+    chapters: [],
+    detailLoading: false,
+    detailLang: '',             // language filter in detail
+
+    followed: [],               // mangadex /library
+    followedLoaded: false,
+    localIds: [],               // ids present in local_library
+    authed: false,
+  }),
+
+  getters: {
+    list: (s) => s.tab === 'search' ? s.results : s.popular,
+    detailLangs: (s) => [...new Set(s.chapters.map(c => c.language))].sort(),
+    detailChapters: (s) => s.detailLang ? s.chapters.filter(c => c.language === s.detailLang) : s.chapters,
+  },
+
+  actions: {
+    async checkAuth() {
+      try { this.authed = !!(await api.get('/api/mangadex/check'))?.authenticated } catch (_) {}
+    },
+    async loadTags() {
+      if (this.allTags.length) return
+      try { this.allTags = await api.get('/api/mangadex/tags') || [] } catch (_) {}
+    },
+    toggleRating(r) {
+      this.ratings = this.ratings.includes(r) ? this.ratings.filter(x => x !== r) : [...this.ratings, r]
+      this.refresh()
+    },
+    toggleTag(id) {
+      this.selectedTags = this.selectedTags.includes(id) ? this.selectedTags.filter(x => x !== id) : [...this.selectedTags, id]
+      this.refresh()
+    },
+    _ratingParams() {
+      return (this.ratings.length ? this.ratings : ALL_RATINGS).map(r => `rating[]=${r}`).join('&')
+    },
+    _tagParams() {
+      return this.selectedTags.map(t => `tags[]=${t}`).join('&')
+    },
+
+    refresh() {
+      if (this.tab === 'search') this.search()
+      else this.loadPopular(this.tab, 1)
+    },
+    setTab(tab) {
+      this.tab = tab
+      if (tab === 'search') { if (this.query.trim()) this.search() }
+      else this.loadPopular(tab, 1)
+    },
+
+    async loadPopular(type, page = 1) {
+      this.loading = true
+      this.page = page
+      try {
+        const qs = [`type=${type}`, `page=${page}`, this._ratingParams(), this._tagParams()].filter(Boolean).join('&')
+        const d = await api.get(`/api/mangadex/popular?${qs}`)
+        const results = d.results || []
+        this.popular = page === 1 ? results : [...this.popular, ...results]
+        this.total = d.total || 0
+        this._fetchScores(results)
+      } catch (_) { useUiStore().toast('Error cargando MangaDex', 'error') }
+      finally { this.loading = false }
+    },
+    async search() {
+      const q = this.query.trim()
+      if (q.length < 2 && !this.selectedTags.length) { this.results = []; return }
+      this.tab = 'search'
+      this.loading = true
+      try {
+        const qs = [`q=${encodeURIComponent(q)}`, this._ratingParams(), this._tagParams()].filter(Boolean).join('&')
+        this.results = await api.get(`/api/mangadex/search?${qs}`) || []
+        this._fetchScores(this.results)
+      } catch (_) { useUiStore().toast('Error buscando', 'error') }
+      finally { this.loading = false }
+    },
+
+    async _fetchScores(list) {
+      const ids = list.map(m => m.mal_id).filter(id => id && !(id in this.scores))
+      if (!ids.length) return
+      try {
+        const d = await api.post('/api/anilist/scores', { mal_ids: ids })
+        Object.assign(this.scores, d || {})
+      } catch (_) {}
+    },
+    score(m) { return m.mal_id ? this.scores[m.mal_id] : null },
+
+    async openDetail(m) {
+      this.detail = m
+      this.chapters = []
+      this.detailLang = ''
+      this.detailLoading = true
+      try {
+        const [full, chs] = await Promise.all([
+          api.get(`/api/mangadex/manga/${m.id}`).catch(() => null),
+          api.get(`/api/mangadex/chapters/${m.id}`).catch(() => []),
+        ])
+        if (full) this.detail = { ...m, ...full }
+        this.chapters = chs || []
+        // default language: english if present, else first
+        const langs = [...new Set(this.chapters.map(c => c.language))]
+        this.detailLang = langs.includes('en') ? 'en' : (langs[0] || '')
+      } catch (_) {}
+      finally { this.detailLoading = false }
+    },
+    closeDetail() { this.detail = null },
+
+    async downloadChapter(ch) {
+      try {
+        await api.post('/api/download/download_chapter', {
+          title: this.detail.title, chapter: ch.chapter, chapterId: ch.id, mangaId: this.detail.id,
+        })
+        useUiStore().toast(`Descargando cap. ${ch.chapter}`, 'info')
+      } catch (_) { useUiStore().toast('No se pudo iniciar la descarga', 'error') }
+    },
+
+    async addLocal(m) {
+      try {
+        await api.post('/api/mangadex/local_library/add', { title: m.title, cover: m.cover, mal_id: m.mal_id, al_id: m.al_id, manga_id: m.id })
+        if (!this.localIds.includes(m.id)) this.localIds.push(m.id)
+        useUiStore().toast('Añadido a tu biblioteca', 'ok')
+      } catch (_) { useUiStore().toast('No se pudo añadir', 'error') }
+    },
+
+    async loadFollowed() {
+      this.loading = true
+      try { this.followed = await api.get('/api/mangadex/library') || []; this._fetchScores(this.followed) }
+      catch (_) { this.followed = [] }
+      finally { this.followedLoaded = true; this.loading = false }
+    },
+    async follow(m) {
+      try { await api.post(`/api/mangadex/follow/${m.id}`, {}); useUiStore().toast('Siguiendo', 'ok') } catch (_) {}
+    },
+    async unfollow(m) {
+      try { await api.post(`/api/mangadex/unfollow/${m.id}`, {}); this.followed = this.followed.filter(x => x.id !== m.id) } catch (_) {}
+    },
+  },
+})
