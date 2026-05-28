@@ -26,8 +26,15 @@ export const useMangaStore = defineStore('manga', {
     page: 0,
     readerLoading: false,
     mode: localStorage.getItem('reader-mode') || 'paged',   // paged | webtoon
-    fit: localStorage.getItem('reader-fit') || 'width',     // width | height
+    fit: localStorage.getItem('reader-fit') || 'width',     // width | height | original
     dir: localStorage.getItem('reader-dir') || 'rtl',       // rtl | ltr
+    zoom: 1.0,
+    panX: 0,
+    panY: 0,
+    barsHidden: false,
+    compareMode: false,
+    compareX: 50,
+    progress: (() => { try { return JSON.parse(localStorage.getItem('manga-progress-v1') || '{}') } catch { return {} } })(),
   }),
 
   getters: {
@@ -38,6 +45,24 @@ export const useMangaStore = defineStore('manga', {
       return t && ['starting', 'started', 'upscaling'].includes(t.status) ? t : null
     },
     sortedChapters: (s) => [...s.chapters].sort((a, b) => parseFloat(b.chapter) - parseFloat(a.chapter)),
+
+    // chapter navigation within the reader (ascending order)
+    chapterListAsc: (s) => [...s.chapters].sort((a, b) => (parseFloat(a.chapter) || 0) - (parseFloat(b.chapter) || 0)),
+    chapterIndex() { return this.chapterListAsc.findIndex(c => String(c.chapter) === String(this.reader?.chapter)) },
+    canPrevChapter() { return this.chapterIndex > 0 },
+    canNextChapter() { return this.chapterIndex >= 0 && this.chapterIndex < this.chapterListAsc.length - 1 },
+
+    // compare (original vs upscaled) — only paged manga, chapter has an upscale
+    canCompare: (s) => s.reader?.kind === 'manga' && s.mode === 'paged' &&
+      (s.reader?.source === 'upscaled' || s.upscaled[s.reader?.chapter] === true || s.upscaled[s.reader?.chapter] === 'partial'),
+    pageOrigUrl: (s) => {
+      const p = s.pages[s.page]; if (!p) return ''
+      return p.startsWith('/') ? p : '/uploads/original/' + p
+    },
+    pageUpUrl: (s) => {
+      const p = s.pages[s.page]; if (!p) return ''
+      return p.startsWith('/') ? p : '/uploads/upscaled/' + p
+    },
 
     // Unified active task list for the global queue widget.
     activeTasks: (s) => {
@@ -171,8 +196,11 @@ export const useMangaStore = defineStore('manga', {
     },
 
     /* ── Reader ─────────────────────────────────────────────────────────── */
+    _resetView() { this.zoom = 1.0; this.panX = 0; this.panY = 0; this.compareMode = false; this.barsHidden = false },
+
     async read(chapter, source = 'auto') {
       this.readerLoading = true
+      this._resetView()
       this.reader = { title: this.current.id, chapter, source, kind: 'manga' }
       this.pages = []
       this.page = 0
@@ -180,20 +208,76 @@ export const useMangaStore = defineStore('manga', {
         const d = await api.post('/api/reader/read_chapter', { title: this.current.id, chapter, source })
         this.pages = d.pages || []
         if (this.reader) this.reader.source = d.source
+        // restore last-read page for this chapter
+        const pr = this.progress[this.current.id]
+        if (pr && String(pr.lastChapter) === String(chapter) && pr.lastPage > 0 && pr.lastPage < this.pages.length)
+          this.page = pr.lastPage
       } catch (_) { useUiStore().toast('No se pudo abrir el capítulo', 'error'); this.reader = null }
       finally { this.readerLoading = false }
     },
-    // Open the reader with pre-resolved page URLs (CBZ / external).
     openReaderRaw(title, pages, label = '') {
+      this._resetView()
       this.reader = { title, chapter: label, source: '', kind: 'cbz' }
       this.pages = pages
       this.page = 0
     },
-    closeReader() { this.reader = null; this.pages = [] },
-    nextPage() { if (this.page < this.pages.length - 1) this.page++ },
-    prevPage() { if (this.page > 0) this.page-- },
-    setMode(m) { this.mode = m; localStorage.setItem('reader-mode', m) },
-    setFit(f) { this.fit = f; localStorage.setItem('reader-fit', f) },
+    closeReader() { this.reader = null; this.pages = []; this._resetView() },
+
+    setPage(i) {
+      if (i < 0 || i >= this.pages.length) return
+      this.page = i; this.panX = 0; this.panY = 0
+      this._saveProgress()
+      if (i >= this.pages.length - 1) this.markRead(this.reader?.chapter)
+    },
+    nextPage() { this.setPage(this.page + 1) },
+    prevPage() { this.setPage(this.page - 1) },
+
+    setMode(m) { this.mode = m; localStorage.setItem('reader-mode', m); this._resetView() },
+    cycleFit() { const M = ['width', 'height', 'original']; this.fit = M[(M.indexOf(this.fit) + 1) % 3]; localStorage.setItem('reader-fit', this.fit) },
     toggleDir() { this.dir = this.dir === 'rtl' ? 'ltr' : 'rtl'; localStorage.setItem('reader-dir', this.dir) },
+
+    zoomBy(delta) {
+      this.zoom = Math.max(0.5, Math.min(3.0, this.zoom + delta))
+      if (this.zoom <= 1.0) { this.panX = 0; this.panY = 0 }
+    },
+    resetZoom() { this.zoom = 1.0; this.panX = 0; this.panY = 0 },
+
+    toggleCompare() { if (!this.canCompare) { this.compareMode = false; return } this.compareMode = !this.compareMode; if (this.compareMode) this.compareX = 50 },
+
+    async goNextChapter() {
+      if (!this.canNextChapter) return
+      const next = this.chapterListAsc[this.chapterIndex + 1]
+      await this.read(next.chapter, this.upscaled[next.chapter] ? 'upscaled' : 'auto')
+    },
+    async goPrevChapter() {
+      if (!this.canPrevChapter) return
+      const prev = this.chapterListAsc[this.chapterIndex - 1]
+      await this.read(prev.chapter, this.upscaled[prev.chapter] ? 'upscaled' : 'auto')
+    },
+
+    /* reading progress (localStorage, per manga id) */
+    _persistProgress() { localStorage.setItem('manga-progress-v1', JSON.stringify(this.progress)) },
+    _saveProgress() {
+      if (this.reader?.kind !== 'manga') return
+      const k = this.reader.title
+      const e = this.progress[k] || (this.progress[k] = { read: {} })
+      e.lastChapter = String(this.reader.chapter); e.lastPage = this.page
+      this._persistProgress()
+    },
+    markRead(chapter) {
+      if (this.reader?.kind !== 'manga' || chapter == null) return
+      const k = this.reader.title
+      const e = this.progress[k] || (this.progress[k] = { read: {} })
+      ;(e.read ||= {})[String(chapter)] = true
+      this._persistProgress()
+    },
+    isChapterRead(chapter) { return !!this.progress[this.current?.id]?.read?.[String(chapter)] },
+    toggleChapterRead(chapter) {
+      const k = this.current?.id; if (!k) return
+      const e = this.progress[k] || (this.progress[k] = { read: {} })
+      e.read ||= {}
+      if (e.read[String(chapter)]) delete e.read[String(chapter)]; else e.read[String(chapter)] = true
+      this._persistProgress()
+    },
   },
 })
