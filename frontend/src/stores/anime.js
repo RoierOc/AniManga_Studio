@@ -24,6 +24,19 @@ export const useAnimeStore = defineStore('anime', {
     epInfoOpen: null,          // currently expanded ep-info key
     nextAiring: {},            // al_id -> {episode, airing_at}
 
+    // discovery in detail (keyed by al_id)
+    recs: {}, recsState: {},
+    stacks: {}, stacksState: {},
+    tags: {}, malUrls: {},
+    // browse overlays
+    stackBrowse: null, stackBrowseMeta: null, stackBrowseAnime: [], stackBrowseState: 'idle',
+    tagBrowse: null, tagBrowseAnime: [], tagBrowseState: 'idle',
+    // management
+    linkTorrent: { show: false, list: [], loading: false, subpath: '' },
+    epOverrideMenu: null,      // { anime, ep, x, y }
+    rename: null,              // { id, items } | null
+    renameBusy: false,
+
     autoplay: null,            // { anime, ep } | null
     autoplaySeconds: 0,
     nowSec: Math.floor(Date.now() / 1000),
@@ -141,16 +154,112 @@ export const useAnimeStore = defineStore('anime', {
     openDetail(anime) {
       this.detailId = anime.id
       this.epInfoOpen = null
-      if (anime.al_id) this.loadTags(anime)
+      this.linkTorrent = { show: false, list: [], loading: false, subpath: '' }
+      if (anime.al_id) { this.loadTags(anime); this.loadRecs(anime) }
     },
     closeDetail() { this.detailId = null },
 
     async loadTags(anime) {
-      if (!anime.al_id || this.nextAiring[anime.al_id]) return
+      const id = anime.al_id
+      if (!id || this.tags[id] !== undefined) return
+      this.tags[id] = []
       try {
-        const d = await api.get(`/api/anime/tags/${anime.al_id}`)
-        if (d?.next_airing) this.nextAiring[anime.al_id] = d.next_airing
+        const d = await api.get(`/api/anime/tags/${id}`)
+        this.tags[id] = d?.tags || []
+        this.malUrls[id] = d?.mal_url || ''
+        if (d?.next_airing) this.nextAiring[id] = d.next_airing
+        // stacks need a mal_id (from tags response or the anime entry)
+        const malId = anime.mal_id || (d?.mal_url || '').match(/anime\/(\d+)/)?.[1]
+        if (malId) this.loadStacks(id, malId)
       } catch (_) {}
+    },
+
+    async loadRecs(anime) {
+      const id = anime.al_id
+      if (!id || this.recsState[id]) return
+      this.recsState[id] = 'loading'
+      try {
+        const d = await api.get(`/api/anime/recommendations/${id}`)
+        this.recs[id] = d || []
+        this.recsState[id] = (d && d.length) ? 'done' : 'none'
+      } catch (_) { this.recsState[id] = 'error' }
+    },
+    openRec(rec) {
+      const lib = this.library.find(a => (rec.al_id && a.al_id === rec.al_id) || (rec.mal_id && a.mal_id === rec.mal_id) || (rec.title && a.title === rec.title))
+      if (lib) this.openDetail(lib)
+      else { this.sub = 'search'; this.openTorrents(rec) }   // discover via torrents
+    },
+
+    async loadStacks(alId, malId) {
+      if (this.stacksState[alId]) return
+      this.stacksState[alId] = 'loading'
+      try {
+        const d = await api.get(`/api/anime/stacks?mal_id=${malId}`)
+        this.stacks[alId] = d || []
+        this.stacksState[alId] = (d && d.length) ? 'done' : 'none'
+      } catch (_) { this.stacksState[alId] = 'error' }
+    },
+    async browseStack(stack) {
+      this.stackBrowse = stack; this.stackBrowseMeta = null; this.stackBrowseAnime = []; this.stackBrowseState = 'loading'
+      try {
+        const d = await api.get(`/api/anime/stacks/browse/${stack.id}`)
+        this.stackBrowseMeta = d.stack || null
+        this.stackBrowseAnime = d.items || []
+        this.stackBrowseState = 'done'
+      } catch (_) { this.stackBrowseState = 'error' }
+    },
+    closeStackBrowse() { this.stackBrowse = null; this.stackBrowseState = 'idle' },
+
+    async browseByTag(tagName, alId = null) {
+      this.tagBrowse = tagName; this.tagBrowseAnime = []; this.tagBrowseState = 'loading'
+      try {
+        const qs = new URLSearchParams({ tag: tagName }); if (alId) qs.set('al_id', alId)
+        this.tagBrowseAnime = await api.get(`/api/anime/browse_tag?${qs}`) || []
+        this.tagBrowseState = 'done'
+      } catch (_) { this.tagBrowseState = 'error' }
+    },
+    closeTagBrowse() { this.tagBrowse = null; this.tagBrowseState = 'idle' },
+
+    /* ── Management ─────────────────────────────────────────────────────── */
+    async openLinkTorrent() {
+      this.linkTorrent = { show: true, list: [], loading: true, subpath: '' }
+      try { this.linkTorrent.list = await api.get('/api/anime/qbt/list') || [] } catch (_) {}
+      finally { this.linkTorrent.loading = false }
+    },
+    async linkExistingTorrent(anime, t) {
+      try {
+        await api.post(`/api/anime/library/${anime.id}/link_torrent`, { info_hash: t.hash, episode: 0, torrent_title: t.name, subpath: this.linkTorrent.subpath })
+        this.linkTorrent.show = false
+        useUiStore().toast('Torrent enlazado ✓', 'ok')
+        await this.loadLibrary(true)
+      } catch (_) { useUiStore().toast('No se pudo enlazar', 'error') }
+    },
+    async clearEpisodes(anime) {
+      if (!confirm(`¿Borrar todos los episodios de "${anime.title}"? La serie permanece en la biblioteca.`)) return
+      try { await api.post(`/api/anime/library/${anime.id}/clear_episodes`, { remove_from_qbt: false, delete_files: false }); await this.loadLibrary(true) }
+      catch (_) { useUiStore().toast('No se pudo borrar', 'error') }
+    },
+    async removeFromLibrary(animeId) {
+      if (!confirm('¿Eliminar esta serie de la biblioteca?')) return
+      try { await api.del(`/api/anime/library/${animeId}`, { body: { delete_files: false } }); this.detailId = null; await this.loadLibrary(true) }
+      catch (_) { useUiStore().toast('No se pudo eliminar', 'error') }
+    },
+    openEpOverrideMenu(ev, anime, ep) { this.epOverrideMenu = { anime, ep, x: ev.clientX, y: ev.clientY } },
+    async setEpOverride(type) {
+      const m = this.epOverrideMenu; this.epOverrideMenu = null; if (!m) return
+      try { await api.post(`/api/anime/library/${m.anime.id}/ep_override`, { filename: m.ep.filename, type }); await this.loadLibrary(true) }
+      catch (_) { useUiStore().toast('No se pudo cambiar el tipo', 'error') }
+    },
+    async openRename(anime) {
+      try { const d = await api.get(`/api/anime/rename_preview/${anime.id}`); this.rename = { id: anime.id, items: d.renames || [] } }
+      catch (_) { useUiStore().toast('No se pudo previsualizar', 'error') }
+    },
+    async applyRename() {
+      if (!this.rename) return
+      this.renameBusy = true
+      try { await api.post(`/api/anime/rename_apply/${this.rename.id}`, { renames: this.rename.items }); this.rename = null; await this.loadLibrary(true); useUiStore().toast('Episodios renombrados', 'ok') }
+      catch (_) { useUiStore().toast('Error al renombrar', 'error') }
+      finally { this.renameBusy = false }
     },
 
     async play(anime, ep, subFile = '', startPos = 0) {

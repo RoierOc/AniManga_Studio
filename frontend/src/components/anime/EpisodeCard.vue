@@ -85,6 +85,10 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
                 @click.stop="store.toggleWatched(anime, ep)">
           <Icon name="check" :size="14" />
         </button>
+        <button v-if="ep.in_local" class="ep__icon" title="Cambiar tipo de episodio"
+                @click.stop="store.openEpOverrideMenu($event, anime, ep)">
+          <span class="ep__dots3">⋮</span>
+        </button>
         <button v-if="!ep.in_local" class="ep__icon ep__icon--danger" title="Borrar"
                 @click.stop="store.deleteEpisode(anime, ep)">
           <Icon name="close" :size="13" />
