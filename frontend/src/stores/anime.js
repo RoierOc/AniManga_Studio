@@ -188,6 +188,7 @@ export const useAnimeStore = defineStore('anime', {
     hidePreview() { clearTimeout(this._previewTimer); this.preview = null },
 
     openDetail(anime) {
+      this.hidePreview()
       this.detailId = anime.id
       this.epInfoOpen = null
       this.linkTorrent = { show: false, list: [], loading: false, subpath: '' }
@@ -505,6 +506,7 @@ export const useAnimeStore = defineStore('anime', {
       return merged
     },
     async openTorrents(anime) {
+      this.hidePreview()
       this.torrentAnime = anime
       this.torrents = []
       this.flt = { lang: 'all', hideDead: true, quality: '', group: '', ep: 'all' }

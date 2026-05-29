@@ -6,6 +6,12 @@ import { animeFormatLabel } from '@/lib/anime'
 const store = useAnimeStore()
 const a = computed(() => store.preview)
 const tier = computed(() => { const s = a.value?.score; return !s ? '' : s >= 75 ? 'is-high' : s >= 60 ? 'is-mid' : 'is-low' })
+// library entries store `episodes` as an array; search/discover store it as a number.
+const epCount = computed(() => {
+  const e = a.value?.episodes
+  if (typeof e === 'number') return e
+  return a.value?.total_episodes || 0
+})
 </script>
 
 <template>
@@ -20,7 +26,7 @@ const tier = computed(() => { const s = a.value?.score; return !s ? '' : s >= 75
           <div class="prev__title">{{ a.title }}</div>
           <div class="prev__meta">
             <span class="prev__fmt">{{ animeFormatLabel(a.format) }}</span>
-            <span v-if="a.episodes">{{ a.episodes }} ep</span>
+            <span v-if="epCount">{{ epCount }} ep</span>
             <span v-if="a.score" class="prev__score" :class="tier">★ {{ (a.score / 10).toFixed(1) }}</span>
           </div>
           <div v-if="a.genres?.length" class="prev__genres">{{ a.genres.slice(0, 3).join(' · ') }}</div>
