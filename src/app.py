@@ -151,6 +151,13 @@ def serve_upload_upscaled(filename):
     path = Path(UPSCALED_DIR) / filename
     if path.exists():
         return send_from_directory(str(path.parent), path.name)
+    # The requested extension may differ from the file on disk (upscaled output is
+    # usually .jpg, but originals/pages can be .png/.webp) — try alternatives so the
+    # compare slider always resolves the right upscaled page.
+    for ext in ('.jpg', '.png', '.webp', '.jpeg'):
+        alt = path.with_suffix(ext)
+        if alt != path and alt.exists():
+            return send_from_directory(str(alt.parent), alt.name)
     return 'Not found', 404
 
 @app.route('/uploads/<path:filename>')
