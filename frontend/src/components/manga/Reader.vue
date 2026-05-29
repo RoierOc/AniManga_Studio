@@ -20,11 +20,13 @@ const transform = computed(() => `translate(${store.panX}px, ${store.panY}px) sc
 // ── drag-to-pan + click navigation ──
 let drag = { active: false, moved: false, ox: 0, oy: 0, px: 0, py: 0 }
 function onDown(e) {
-  if (store.zoom <= 1.01 || store.compareMode) return
+  if (store.compareMode) return
+  // Always register the press so a plain click navigates; panning only kicks in when zoomed.
   drag = { active: true, moved: false, ox: e.clientX, oy: e.clientY, px: store.panX, py: store.panY }
 }
 function onMove(e) {
-  if (!drag.active) return
+  // Pan only while dragging AND zoomed in — never on a plain cursor move.
+  if (!drag.active || store.zoom <= 1.01 || store.compareMode) return
   const dx = e.clientX - drag.ox, dy = e.clientY - drag.oy
   if (Math.abs(dx) > 4 || Math.abs(dy) > 4) drag.moved = true
   if (drag.moved) {
@@ -35,14 +37,17 @@ function onMove(e) {
   }
 }
 function onUp(e) {
+  const active = drag.active
   const wasDrag = drag.active && drag.moved
   drag.active = false
-  if (wasDrag || store.mode !== 'paged' || store.compareMode) return
-  // click navigation (respect reading direction)
+  // Navigate only on a genuine click (mouse was pressed here, no drag, not compare/zoom)
+  if (!active || wasDrag || store.mode !== 'paged' || store.compareMode || store.zoom > 1.01) return
   const x = e.clientX / window.innerWidth
   const goNext = isRTL.value ? x < 0.5 : x > 0.5
   goNext ? store.nextPage() : store.prevPage()
 }
+// Leaving the area must NOT navigate — only cancel an in-progress drag.
+function endDrag() { drag.active = false }
 function onWheel(e) {
   if (store.mode === 'webtoon' && !(e.ctrlKey || e.metaKey)) return
   e.preventDefault()
@@ -132,7 +137,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
         <!-- Paged -->
         <div v-else-if="store.mode === 'paged'" class="rd__paged"
              :class="{ 'is-grab': store.zoom > 1.01, 'is-cmp': store.compareMode }"
-             @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="onUp" @wheel="onWheel">
+             @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="endDrag" @wheel="onWheel">
           <!-- chapter ghost zones -->
           <button v-if="isManga && store.canPrevChapter" class="rd__ghost rd__ghost--prev" @click.stop="store.goPrevChapter()"><span>‹ Cap. {{ store.chapterListAsc[store.chapterIndex - 1]?.chapter }}</span></button>
           <button v-if="isManga && store.canNextChapter" class="rd__ghost rd__ghost--next" @click.stop="store.goNextChapter()"><span>Cap. {{ store.chapterListAsc[store.chapterIndex + 1]?.chapter }} ›</span></button>
@@ -215,8 +220,10 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__cmp-img.fit-width { width: 100%; max-width: 1000px; }
 .rd__cmp-img.fit-height { height: 100vh; }
 .rd__cmp-orig { position: absolute; inset: 0; }
-.rd__divider { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--azure); box-shadow: 0 0 12px var(--azure-glow); cursor: col-resize; z-index: 5; }
-.rd__handle { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 30px; height: 30px; display: grid; place-items: center; border-radius: 50%; background: var(--azure); color: #fff; font-size: 13px; }
+/* 24px-wide invisible grab zone centred on a 2px visible line — much easier to drag */
+.rd__divider { position: absolute; top: 0; bottom: 0; width: 24px; transform: translateX(-50%); cursor: col-resize; z-index: 5; display: grid; place-items: center; }
+.rd__divider::before { content: ''; position: absolute; top: 0; bottom: 0; width: 2px; background: var(--azure); box-shadow: 0 0 12px var(--azure-glow); }
+.rd__handle { position: relative; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; background: var(--azure); color: #fff; font-size: 14px; box-shadow: var(--glow-azure); }
 .rd__clabel { position: absolute; top: var(--s-3); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 8px; border-radius: var(--r-xs); background: rgba(7,10,18,.7); }
 .rd__clabel--l { left: var(--s-3); color: var(--ink-soft); }
 .rd__clabel--r { right: var(--s-3); color: var(--cyan); }
