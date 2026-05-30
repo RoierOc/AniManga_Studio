@@ -142,6 +142,12 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
           <button v-if="isManga && store.canPrevChapter" class="rd__ghost rd__ghost--prev" @click.stop="store.goPrevChapter()"><span>‹ Cap. {{ store.chapterListAsc[store.chapterIndex - 1]?.chapter }}</span></button>
           <button v-if="isManga && store.canNextChapter" class="rd__ghost rd__ghost--next" @click.stop="store.goNextChapter()"><span>Cap. {{ store.chapterListAsc[store.chapterIndex + 1]?.chapter }} ›</span></button>
 
+          <!-- click-zone hints (visible on hover) -->
+          <div class="rd__zones">
+            <span class="rd__zone rd__zone--prev"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M19 12H5M12 19l-7-7 7-7"/></svg></span>
+            <span class="rd__zone rd__zone--next"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg></span>
+          </div>
+
           <!-- compare overlay: both images fill the same container so they render at identical
                CSS dimensions regardless of their natural pixel counts (1440 vs 5760). -->
           <div v-if="store.compareMode" ref="wrap" class="rd__cmp" :class="`fit-${store.fit}`" :style="{ transform }">
@@ -204,8 +210,12 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 
 .rd__paged { flex: 1; display: grid; place-items: center; overflow: hidden; position: relative; cursor: pointer; }
 .rd__paged.is-grab { cursor: grab; }
-.rd__paged.is-grab:active { cursor: grabbing; }
-.rd__paged.is-cmp { cursor: col-resize; }
+.rd__zones { position: absolute; inset: 0; pointer-events: none; z-index: 3; opacity: 0; transition: opacity .12s ease; }
+.rd__paged:hover .rd__zones { opacity: .35; }
+.rd__paged.is-cmp .rd__zones { display: none; }
+.rd__zone { position: absolute; top: 50%; transform: translateY(-50%); color: #fff; filter: drop-shadow(0 1px 4px rgba(0,0,0,.7)); }
+.rd__zone--prev { left: var(--s-5); }
+.rd__zone--next { right: var(--s-5); }
 .rd__img { display: block; will-change: transform; user-select: none; }
 .rd__img.fit-width { width: 100%; max-width: 1000px; height: auto; }
 .rd__img.fit-height { height: 100vh; width: auto; }
