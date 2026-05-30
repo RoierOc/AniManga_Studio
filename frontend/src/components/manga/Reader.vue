@@ -142,10 +142,12 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
           <button v-if="isManga && store.canPrevChapter" class="rd__ghost rd__ghost--prev" @click.stop="store.goPrevChapter()"><span>‹ Cap. {{ store.chapterListAsc[store.chapterIndex - 1]?.chapter }}</span></button>
           <button v-if="isManga && store.canNextChapter" class="rd__ghost rd__ghost--next" @click.stop="store.goNextChapter()"><span>Cap. {{ store.chapterListAsc[store.chapterIndex + 1]?.chapter }} ›</span></button>
 
-          <!-- compare overlay -->
-          <div v-if="store.compareMode" ref="wrap" class="rd__cmp" :style="{ transform }">
-            <img :src="store.pageUpUrl" class="rd__cmp-img" :class="`fit-${store.fit}`" alt="" />
-            <img :src="store.pageOrigUrl" class="rd__cmp-img rd__cmp-orig" :class="`fit-${store.fit}`" :style="{ clipPath: `inset(0 ${100 - store.compareX}% 0 0)` }" alt="" />
+          <!-- compare overlay: both images fill the same container so they render at identical
+               CSS dimensions regardless of their natural pixel counts (1440 vs 5760). -->
+          <div v-if="store.compareMode" ref="wrap" class="rd__cmp" :class="`fit-${store.fit}`" :style="{ transform }">
+            <img :src="store.pageUpUrl" class="rd__cmp-img" alt="" />
+            <img :src="store.pageOrigUrl" class="rd__cmp-img rd__cmp-orig"
+                 :style="{ clipPath: `inset(0 ${100 - store.compareX}% 0 0)` }" alt="" />
             <div class="rd__divider" :style="{ left: store.compareX + '%' }" @mousedown.stop="cmpStart"><span class="rd__handle">⟷</span></div>
             <span class="rd__clabel rd__clabel--l">{{ store.scanCompareMode ? 'PRINCIPAL' : 'ORIGINAL' }}</span>
             <span class="rd__clabel rd__clabel--r">{{ store.scanCompareMode ? 'VARIANTE' : '4K' }}</span>
@@ -216,10 +218,13 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__ghost span { font-size: var(--fs-xs); color: var(--ice); font-weight: 600; text-shadow: 0 1px 4px #000; }
 
 .rd__cmp { position: relative; will-change: transform; }
-.rd__cmp-img { display: block; }
-.rd__cmp-img.fit-width { width: 100%; max-width: 1000px; }
-.rd__cmp-img.fit-height { height: 100vh; }
-.rd__cmp-orig { position: absolute; inset: 0; }
+/* Fit behaviour goes on the wrapper; both images fill it at identical dimensions. */
+.rd__cmp.fit-width  { width: 100%; max-width: 1000px; }
+.rd__cmp.fit-height { height: 100vh; }
+.rd__cmp.fit-original { width: auto; height: auto; }
+.rd__cmp-img { display: block; width: 100%; height: auto; }
+.rd__cmp.fit-height .rd__cmp-img { width: auto; height: 100%; }
+.rd__cmp-orig { position: absolute; inset: 0; width: 100% !important; height: 100% !important; object-fit: cover; }
 /* 24px-wide invisible grab zone centred on a 2px visible line — much easier to drag */
 .rd__divider { position: absolute; top: 0; bottom: 0; width: 24px; transform: translateX(-50%); cursor: col-resize; z-index: 5; display: grid; place-items: center; }
 .rd__divider::before { content: ''; position: absolute; top: 0; bottom: 0; width: 2px; background: var(--azure); box-shadow: 0 0 12px var(--azure-glow); }
