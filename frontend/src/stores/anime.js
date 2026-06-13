@@ -17,7 +17,7 @@ export const useAnimeStore = defineStore('anime', {
     sub: ['library', 'search', 'seasonal', 'downloads', 'history'].includes(localStorage.getItem('anime-sub'))
       ? localStorage.getItem('anime-sub') : 'library',   // library | search | seasonal | downloads | history
     detailId: null,            // open anime detail id
-    libSort: 'last_added',
+    libSort: localStorage.getItem('anime-libsort') || 'last_watched',  // recently-watched first by default
     libFilter: 'all',
     libSearch: '',
 
@@ -232,6 +232,8 @@ export const useAnimeStore = defineStore('anime', {
       try { this.airing = await api.get('/api/anime/airing') || {} } catch (_) {}
     },
 
+    setLibSort(id) { this.libSort = id; localStorage.setItem('anime-libsort', id) },
+
     async loadLibrary(silent = false) {
       if (!silent) this.loading = true
       try {
@@ -357,9 +359,15 @@ export const useAnimeStore = defineStore('anime', {
       } catch (_) { useUiStore().toast('No se pudo enlazar', 'error') }
     },
     async clearEpisodes(anime) {
-      if (!confirm(`¿Borrar todos los episodios de "${anime.title}"? La serie permanece en la biblioteca.`)) return
-      try { await api.post(`/api/anime/library/${anime.id}/clear_episodes`, { remove_from_qbt: false, delete_files: false }); await this.loadLibrary(true) }
-      catch (_) { useUiStore().toast('No se pudo borrar', 'error') }
+      if (!confirm(`¿Borrar los episodios de "${anime.title}" para liberar espacio?\n\nSe eliminan los archivos y el torrent de qBittorrent, pero la serie (portada, estado, progreso visto) se conserva en tu biblioteca. Podrás volver a descargarla desde Torrents cuando quieras.`)) return
+      try {
+        // delete the files (free space) AND remove the torrent so qBittorrent no
+        // longer flags it as "missing files" and re-downloads it. The library entry
+        // itself is kept by the backend.
+        await api.post(`/api/anime/library/${anime.id}/clear_episodes`, { remove_from_qbt: true, delete_files: true })
+        useUiStore().toast(`Episodios de "${anime.title}" liberados`, 'ok')
+        await this.loadLibrary(true)
+      } catch (_) { useUiStore().toast('No se pudo borrar', 'error') }
     },
     async removeFromLibrary(animeId) {
       if (!confirm('¿Eliminar esta serie de la biblioteca?')) return

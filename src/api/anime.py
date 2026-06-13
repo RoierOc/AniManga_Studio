@@ -1491,6 +1491,20 @@ def anime_library_get():
 
         episodes_out.sort(key=lambda e: (e['num'] < 0, e['num']))
 
+        # Movies / single-episode entries: a single-file torrent is registered under
+        # episode -1 (unknown). Treat the downloaded file as episode 1 so the detail
+        # doesn't show a phantom "-1" next to a placeholder ep 1.
+        fmt = anime.get('format', '')
+        is_single = (total == 1 or fmt in ('MOVIE', 'MUSIC')
+                     or (total == 0 and len(episodes_out) == 1 and episodes_out[0]['num'] < 1))
+        if is_single:
+            dl = next((e for e in episodes_out if e.get('info_hash')), None)
+            if dl:
+                dl['num'] = 1
+                episodes_out = [dl]
+            else:
+                episodes_out = [e for e in episodes_out if e['num'] > 0]
+
         if total > 0:
             known = {e['num'] for e in episodes_out}
             for n in range(1, total + 1):

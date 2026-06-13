@@ -110,7 +110,7 @@ const counts = computed(() => {
       </div>
       <div class="sorts" style="--i:2">
         <button v-for="s in SORTS" :key="s.id" class="sort" :class="{ 'is-active': store.libSort === s.id }"
-                @click="store.libSort = s.id">{{ s.label }}</button>
+                @click="store.setLibSort(s.id)">{{ s.label }}</button>
       </div>
     </div>
 
