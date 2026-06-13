@@ -10,9 +10,17 @@ const store = useAnimeStore()
 const anime = computed(() => store.detail)
 
 const batch = computed(() => batchInfo(anime.value?.episodes || []))
-const mainEps = computed(() =>
+const realEps = computed(() =>
   (anime.value?.episodes || []).filter(e => e.num !== 0 && e.ep_type !== 'special').sort((a, b) => a.num - b.num)
 )
+// Generate placeholder episodes when none are downloaded but total is known
+const placeholders = computed(() => {
+  if (realEps.value.length > 0 || !anime.value) return []
+  const t = anime.value.total_episodes || 0
+  if (t <= 0) return []
+  return Array.from({ length: t }, (_, i) => ({ num: i + 1, ep_type: 'episode', in_local: false, in_qbt: false, watched: false }))
+})
+const mainEps = computed(() => realEps.value.length ? realEps.value : placeholders.value)
 const specials = computed(() => (anime.value?.episodes || []).filter(e => e.ep_type === 'special'))
 
 const total = computed(() => anime.value?.total_episodes || 0)
@@ -74,6 +82,7 @@ const malUrl = computed(() => store.malUrls[alId.value])
         </div>
 
         <div class="detail__mgmt">
+          <button v-if="anime.al_id" class="mbtn mbtn--accent" @click="store.openTorrents(anime)" title="Buscar torrents">+ Torrents</button>
           <button class="mbtn" @click="store.openRename(anime)" title="Renombrar episodios">Renombrar</button>
           <button class="mbtn" @click="store.openLinkTorrent()" title="Enlazar torrent de qBittorrent">Enlazar</button>
           <button class="mbtn" @click="store.clearEpisodes(anime)" title="Borrar episodios">Borrar eps</button>
@@ -230,7 +239,7 @@ const malUrl = computed(() => store.malUrls[alId.value])
 .detail__back:hover { color: var(--ink); border-color: var(--line-strong); }
 
 .detail__head { display: flex; gap: var(--s-5); margin-bottom: var(--s-7); }
-.detail__cover { width: 180px; aspect-ratio: 2/3; object-fit: cover; border-radius: var(--r-md); box-shadow: var(--shadow-lg); border: 1px solid var(--line-2); flex-shrink: 0; }
+.detail__cover { width: 180px; aspect-ratio: 2/3; object-fit: cover; border-radius: var(--r-md); box-shadow: var(--shadow-lg); border: 1px solid var(--line-2); flex-shrink: 0; overflow: hidden; }
 .detail__meta { display: flex; flex-direction: column; gap: var(--s-3); padding-top: var(--s-3); min-width: 0; }
 .detail__fmt { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); }
 .detail__title { font-size: var(--fs-3xl); }

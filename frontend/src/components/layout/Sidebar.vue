@@ -105,7 +105,9 @@ const isActive = (item) =>
   transition: all var(--t-fast) var(--ease-silk);
 }
 .brand__collapse:hover { color: var(--ink); border-color: var(--line-strong); background: var(--surface-2); }
-.is-collapsed .brand__text, .is-collapsed .brand__collapse { display: none; }
+.is-collapsed .brand__text { display: none; }
+.is-collapsed .brand { flex-direction: column; gap: var(--s-2); padding: var(--s-3) var(--s-3); height: auto; align-items: center; }
+.is-collapsed .brand__collapse { margin-left: 0; }
 
 /* ── Nav ──────────────────────────────────────────────────────────────── */
 .nav { flex: 1; padding: var(--s-4) var(--s-3); overflow-y: auto; }

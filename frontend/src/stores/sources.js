@@ -6,20 +6,37 @@ export const useSourcesStore = defineStore('sources', {
   state: () => ({
     online: false,
     checked: false,
-    sources: [],                // [{id, name, lang, iconUrl, isNsfw, supportsLatest}]
-    activeSource: '',           // '' = all sources
+    sources: [],
+
+    // Array of selected source IDs (never Set — Pinia can't serialize Set)
+    activeSources: [],
 
     query: '',
-    results: [],                // flat manga results [{id,title,thumbnailUrl,inLibrary,sourceId,sourceName,sourceLang}]
+    results: [],
+    resultGroups: [],          // [{ source, results }] for search display
     searching: false,
     progress: { done: 0, total: 0 },
     _es: null,
 
-    detail: null,               // {id, title, description, thumbnailUrl, sourceId, sourceName, sourceLang, ...}
+    // Popular
+    popular: [],
+    popularLoading: false,
+
+    detail: null,
     chapters: [],
     detailLoading: false,
-    downloading: {},            // chapterId -> true
+    downloading: {},
+
+    // Track which manga (by sourceId + mangaId) are already in the library
+    libraryIds: [],
   }),
+
+  getters: {
+    hasSelection: (s) => s.activeSources.length > 0,
+    selectedCount: (s) => s.activeSources.length,
+    allSourcesSelected: (s) => s.activeSources.length === s.sources.length && s.sources.length > 0,
+    inLibrary: (s) => (sourceId, mangaId) => s.libraryIds.includes(`${sourceId}_${mangaId}`),
+  },
 
   actions: {
     async checkHealth() {
@@ -32,41 +49,89 @@ export const useSourcesStore = defineStore('sources', {
       try { this.sources = await api.get('/api/sources/list') || [] } catch (_) {}
     },
 
-    /* Global search via SSE stream (progressive results across all sources). */
+    toggleSource(id) {
+      const idx = this.activeSources.indexOf(id)
+      if (idx >= 0) this.activeSources.splice(idx, 1)
+      else this.activeSources.push(id)
+      this.popular = []
+      this.resultGroups = []
+    },
+
+    selectAll() {
+      this.activeSources = this.sources.map(s => s.id)
+      this.popular = []
+      this.resultGroups = []
+    },
+
+    clearAll() {
+      this.activeSources = []
+      this.popular = []
+      this.resultGroups = []
+    },
+
+    _stopStream() {
+      if (this._es) { this._es.close(); this._es = null }
+      this.searching = false
+      this.popularLoading = false
+    },
+
+    /* Search via SSE — results grouped by source. */
     search() {
       const q = this.query.trim()
       if (q.length < 2) return
       this._stopStream()
-      this.results = []
+      this.resultGroups = []
+      this.popular = []
       this.searching = true
-      this.progress = { done: 0, total: 0 }
+      this.progress = { done: 0, total: this.sources.length }
 
-      if (this.activeSource) return this._searchOne(q)
+      const srcs = this.activeSources.length > 0 ? this.activeSources.join(',') : ''
+      let url = `/api/sources/search_all_stream?q=${encodeURIComponent(q)}`
+      if (srcs) url += `&sources=${encodeURIComponent(srcs)}`
 
       try {
-        const es = new EventSource(`/api/sources/search_all_stream?q=${encodeURIComponent(q)}`)
+        const es = new EventSource(url)
         this._es = es
         es.onmessage = (e) => {
           let d; try { d = JSON.parse(e.data) } catch { return }
           if (d.type === 'start') this.progress.total = d.total
-          else if (d.type === 'result' && d.manga) this.results.push(d.manga)
+          else if (d.type === 'result') {
+            if (d.results?.length) {
+              const existing = this.resultGroups.find(g => g.source.id === d.source.id)
+              if (existing) existing.results.push(...d.results)
+              else this.resultGroups.push({ source: d.source, results: [...d.results] })
+            }
+          }
           else if (d.type === 'progress') this.progress = { done: d.done, total: d.total }
-          else if (d.type === 'done') this._stopStream()
+          else if (d.type === 'done') { this._stopStream(); this.progress.done = this.progress.total }
         }
         es.onerror = () => this._stopStream()
       } catch (_) { this.searching = false }
     },
-    async _searchOne(q) {
+
+    /* Popular via SSE. */
+    loadPopular() {
+      this._stopStream()
+      this.popular = []
+      this.popularLoading = true
+      this.progress = { done: 0, total: this.sources.length }
+
+      const srcs = this.activeSources.length > 0 ? this.activeSources.join(',') : ''
+      let url = `/api/sources/search_all_stream?kind=POPULAR`
+      if (srcs) url += `&sources=${encodeURIComponent(srcs)}`
+
       try {
-        const d = await api.get(`/api/sources/search?source=${encodeURIComponent(this.activeSource)}&q=${encodeURIComponent(q)}&page=1`)
-        const src = this.sources.find(s => s.id === this.activeSource)
-        this.results = (d.results || []).map(m => ({ ...m, sourceId: this.activeSource, sourceName: src?.name, sourceLang: src?.lang }))
-      } catch (_) { useUiStore().toast('Error buscando en la fuente', 'error') }
-      finally { this.searching = false }
-    },
-    _stopStream() {
-      if (this._es) { this._es.close(); this._es = null }
-      this.searching = false
+        const es = new EventSource(url)
+        this._es = es
+        es.onmessage = (e) => {
+          let d; try { d = JSON.parse(e.data) } catch { return }
+          if (d.type === 'start') this.progress.total = d.total
+          else if (d.type === 'result' && d.results) d.results.forEach(m => this.popular.push(m))
+          else if (d.type === 'progress') this.progress = { done: d.done, total: d.total }
+          else if (d.type === 'done') { this._stopStream(); this.progress.done = this.progress.total }
+        }
+        es.onerror = () => this._stopStream()
+      } catch (_) { this.popularLoading = false }
     },
 
     async openDetail(m) {
@@ -78,11 +143,75 @@ export const useSourcesStore = defineStore('sources', {
           api.get(`/api/sources/manga/${m.id}`).catch(() => null),
           api.get(`/api/sources/manga/${m.id}/chapters`).catch(() => []),
         ])
-        if (meta) this.detail = { ...m, ...meta, sourceId: m.sourceId, sourceName: m.sourceName, sourceLang: m.sourceLang }
-        this.chapters = chs || []
-      } catch (_) {}
+        if (meta) {
+          this.detail = {
+            ...m,
+            ...meta,
+            sourceId: m.sourceId || meta.source?.id,
+            sourceName: m.sourceName || meta.source?.name,
+            sourceLang: m.sourceLang || meta.source?.lang,
+          }
+        }
+        // Format chapters
+        this.chapters = (chs || []).map(ch => ({
+          ...ch,
+          chapterNumber: ch.chapterNumber ?? 0,
+          name: ch.name || `Cap. ${ch.chapterNumber ?? '?'}`,
+        }))
+        // Check if already in library
+        this._checkLibrary()
+        // Save source meta to library if manga already has a folder
+        if (this.detail.sourceId && this.detail.id) {
+          api.post('/api/sources/save_to_library', {
+            title: this.detail.title,
+            sourceId: this.detail.sourceId,
+            mangaId: this.detail.id,
+            thumbnailUrl: this.detail.thumbnailUrl || null,
+            sourceName: this.detail.sourceName || null,
+            sourceLang: this.detail.sourceLang || null,
+            onlyIfExists: true,
+          }).catch(() => {})
+        }
+      } catch (e) { console.error('[sources] openDetail error:', e) }
       finally { this.detailLoading = false }
     },
+    async _checkLibrary() {
+      try {
+        const items = await api.get('/api/library') || []
+        const sd = this.detail
+        const found = items.find(m => {
+          const name = (m.name || m.id || '').toLowerCase()
+          const title = (sd?.title || '').toLowerCase()
+          const sm = m.source_meta
+          return sm && String(sm.sourceId) === String(sd?.sourceId) && String(sm.mangaId) === String(sd?.id)
+              || name === title
+        })
+        const key = `${sd?.sourceId}_${sd?.id}`
+        if (found && !this.libraryIds.includes(key)) this.libraryIds.push(key)
+      } catch (_) {}
+    },
+
+    async addToLibrary() {
+      const ui = useUiStore()
+      const d = this.detail
+      if (!d) return
+      try {
+        const res = await api.post('/api/sources/save_to_library', {
+          title: d.title,
+          sourceId: d.sourceId,
+          mangaId: d.id,
+          thumbnailUrl: d.thumbnailUrl || null,
+          sourceName: d.sourceName || null,
+          sourceLang: d.sourceLang || null,
+        })
+        const key = `${d.sourceId}_${d.id}`
+        if (!this.libraryIds.includes(key)) this.libraryIds.push(key)
+        ui.toast('Añadido a biblioteca', 'ok')
+      } catch (e) {
+        ui.toast('No se pudo añadir', 'error')
+      }
+    },
+
     closeDetail() { this.detail = null },
 
     async downloadChapter(ch) {

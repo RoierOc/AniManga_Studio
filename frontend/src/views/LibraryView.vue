@@ -43,7 +43,32 @@ const findingCovers = ref(false)
 async function load() {
   loading.value = true; error.value = false
   try {
-    items.value = await api.get('/api/library')
+    const [local, mdLib] = await Promise.all([
+      api.get('/api/library'),
+      api.get('/api/mangadex/local_library').catch(() => []),
+    ])
+    // Build a name→md lookup from local_library.json
+    const mdByName = {}
+    for (const m of (mdLib || [])) {
+      const key = (m.title || m.name || '').toLowerCase().trim()
+      if (key) mdByName[key] = m
+    }
+    // Merge local manga with MD entries
+    const seen = new Set()
+    const merged = []
+    for (const m of (local || [])) {
+      seen.add((m.name || '').toLowerCase().trim())
+      const mdKey = (m.name || '').toLowerCase().trim()
+      merged.push({ ...m, mdId: mdByName[mdKey]?.id })
+    }
+    // Add MD-only entries (saved but not downloaded)
+    for (const m of (mdLib || [])) {
+      const key = (m.title || '').toLowerCase().trim()
+      if (key && !seen.has(key)) {
+        merged.push({ id: m.title, name: m.title, chapter_count: 0, upscaled: 0, cover: m.cover || null, mdId: m.id, mdOnly: true })
+      }
+    }
+    items.value = merged
   } catch (e) {
     error.value = true
     ui.toast('No se pudo cargar la biblioteca', 'error')
@@ -198,8 +223,8 @@ onMounted(() => { load(); if (!manga.updatesLoaded) manga.loadUpdates() })
 /* ── Grid ─────────────────────────────────────────────────────────────── */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: var(--s-5) var(--s-5);
+  grid-template-columns: repeat(auto-fill, minmax(225px, 1fr));
+  gap: var(--s-6) var(--s-5);
 }
 .skeleton {
   aspect-ratio: 2 / 3; border-radius: var(--r-md);
@@ -224,7 +249,7 @@ onMounted(() => { load(); if (!manga.updatesLoaded) manga.loadUpdates() })
 
 @media (max-width: 540px) {
   .view { padding: var(--s-3) var(--s-4) var(--s-8); }
-  .grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--s-5) var(--s-3); }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--s-5) var(--s-3); }
   .hero__stats { gap: var(--s-5); }
 }
 </style>

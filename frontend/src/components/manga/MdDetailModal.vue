@@ -9,6 +9,7 @@ import Spinner from '@/components/ui/Spinner.vue'
 const store = useMangadexStore()
 const manga = useMangaStore()        // for live download progress via its `downloads` map
 const d = computed(() => store.detail)
+const inLib = computed(() => d.value?.id ? store.localIds.includes(d.value.id) : false)
 
 const LANG_FLAG = { en: '🇬🇧', es: '🇪🇸', 'es-la': '🌎', ja: '🇯🇵', 'pt-br': '🇧🇷', fr: '🇫🇷', ko: '🇰🇷', zh: '🇨🇳', 'zh-hk': '🇭🇰', it: '🇮🇹', de: '🇩🇪', ru: '🇷🇺' }
 const flag = (l) => LANG_FLAG[l] || l
@@ -38,8 +39,14 @@ function dlState(ch) {
                 <span v-if="store.score(d)" class="chip chip--score">★ {{ (store.score(d) / 10).toFixed(1) }}</span>
               </div>
               <div class="modal__acts">
-                <button class="abtn abtn--accent" @click="store.addLocal(d)"><Icon name="heart" :size="13" /> Mi biblioteca</button>
+                <button class="abtn" :class="inLib ? 'abtn--added' : 'abtn--accent'" @click="store.addLocal(d)" :disabled="inLib">
+                  <Icon :name="inLib ? 'check' : 'heart'" :size="13" />
+                  {{ inLib ? 'En biblioteca' : 'Mi biblioteca' }}
+                </button>
                 <button v-if="store.authed" class="abtn" @click="store.follow(d)"><Icon name="spark" :size="13" /> Seguir</button>
+                <a v-if="d.id" :href="'https://mangadex.org/title/' + d.id" target="_blank" rel="noopener" class="abtn abtn--mdlink" title="Ver en MangaDex">
+                  <Icon name="globe" :size="13" /> MangaDex
+                </a>
               </div>
             </div>
           </header>
@@ -50,6 +57,7 @@ function dlState(ch) {
             <div class="modal__chhead">
               <span>Capítulos</span>
               <select v-if="store.detailLangs.length > 1" v-model="store.detailLang" class="langsel">
+                <option value="">Todos</option>
                 <option v-for="l in store.detailLangs" :key="l" :value="l">{{ flag(l) }} {{ l }}</option>
               </select>
             </div>
@@ -97,6 +105,10 @@ function dlState(ch) {
 .abtn:hover { color: var(--ink); border-color: var(--line-strong); }
 .abtn--accent { background: var(--azure); color: #fff; border-color: transparent; }
 .abtn--accent:hover { background: var(--azure-bright); color: #fff; }
+.abtn--mdlink { color: var(--violet); border-color: color-mix(in srgb, var(--violet) 30%, transparent); text-decoration: none; }
+.abtn--mdlink:hover { background: color-mix(in srgb, var(--violet) 12%, transparent); border-color: var(--violet); }
+.abtn--added { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 30%, transparent); background: color-mix(in srgb, var(--jade) 8%, transparent); }
+.abtn--added:hover { color: var(--jade); }
 
 .modal__desc { padding: 0 var(--s-5) var(--s-3); font-size: var(--fs-sm); color: var(--ink-soft); line-height: var(--lh-body); max-height: 110px; overflow-y: auto; }
 .modal__chapters { flex: 1; overflow: hidden; display: flex; flex-direction: column; border-top: 1px solid var(--line); }

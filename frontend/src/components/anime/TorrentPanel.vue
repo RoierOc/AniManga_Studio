@@ -47,6 +47,17 @@ const keyOf = (t) => t.info_hash || t.torrent_url
       </div>
     </header>
 
+    <!-- Target episode stepper (from anime detail) -->
+    <div v-if="store.targetEp !== null" class="tep">
+      <span class="tep__label">Registrar como episodio:</span>
+      <div class="tep__stepper">
+        <button class="tep__btn" @click="store.targetEp = Math.max(1, store.targetEp - 1)">−</button>
+        <span class="tep__num">{{ store.targetEp }}</span>
+        <button class="tep__btn" @click="store.targetEp = store.targetEp + 1">+</button>
+      </div>
+      <button class="tep__clear" @click="store.targetEp = null">Ver todos</button>
+    </div>
+
     <!-- Filters -->
     <div class="tp__filters">
       <div class="seg">
@@ -133,6 +144,15 @@ const keyOf = (t) => t.info_hash || t.torrent_url
 .seg button.is-active { background: var(--azure-haze); color: var(--azure-bright); }
 .seg__n { font-family: var(--font-mono); font-size: var(--fs-2xs); opacity: .7; }
 .sel { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); }
+/* Target episode stepper */
+.tep { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-4); margin-bottom: var(--s-4); background: var(--azure-haze); border: 1px solid color-mix(in srgb, var(--azure) 25%, transparent); border-radius: var(--r-md); font-size: var(--fs-sm); }
+.tep__label { color: var(--azure-bright); font-weight: 500; }
+.tep__stepper { display: inline-flex; align-items: center; gap: 2px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-sm); }
+.tep__btn { width: 30px; height: 28px; display: grid; place-items: center; font-size: var(--fs-lg); font-weight: 600; color: var(--ink-soft); transition: all var(--t-fast); }
+.tep__btn:hover { color: var(--azure-bright); background: var(--azure-haze); }
+.tep__num { font-family: var(--font-mono); font-size: var(--fs-md); font-weight: 700; color: var(--azure-bright); min-width: 44px; text-align: center; }
+.tep__clear { margin-left: auto; font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); border-radius: var(--r-sm); padding: var(--s-1) var(--s-3); }
+.tep__clear:hover { color: var(--ink); border-color: var(--line-strong); }
 .chk { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--ink-soft); cursor: pointer; }
 
 .center { display: grid; place-items: center; padding: var(--s-8); }

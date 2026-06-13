@@ -1,6 +1,17 @@
 import { defineStore } from 'pinia'
 
 const SESSION_KEY = 'animanga:session:v2'
+let _navStack = []
+let _navInit = false
+
+function saveHistory() {
+  const s = {
+    view: _navStack.length > 0 ? _navStack[_navStack.length - 1].view : 'library',
+    sub: _navStack.length > 0 ? _navStack[_navStack.length - 1].sub : '',
+    animeDetail: _navStack.length > 0 ? _navStack[_navStack.length - 1].animeDetail : null,
+  }
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)) } catch {}
+}
 
 function loadSession() {
   try { return JSON.parse(localStorage.getItem(SESSION_KEY) || '{}') } catch { return {} }
@@ -47,17 +58,37 @@ export const useUiStore = defineStore('ui', {
     goto(view) {
       if (VALID.has(view)) this.currentView = view
       this.sidebarMobileOpen = false
+      this.pushNav(view)
       this.persist()
+    },
+    pushNav(view, sub = '', animeDetail = null) {
+      if (!_navInit) {
+        _navInit = true
+        history.replaceState({ pos: 0 }, '')
+        window.addEventListener('popstate', (e) => {
+          if (e.state && _navStack.length > 0) {
+            const prev = _navStack.pop()
+            if (prev.restore) prev.restore()
+            else {
+              this.currentView = e.state.view || 'library'
+              saveHistory()
+            }
+          }
+        })
+      }
+      _navStack.push({ view: view || this.currentView, sub, animeDetail, restore: this._navRestore })
+      history.pushState({ pos: _navStack.length, view: view || this.currentView }, '')
+      saveHistory()
+    },
+    _setNavRestore(fn) {
+      if (_navStack.length > 0) _navStack[_navStack.length - 1].restore = fn
     },
     toggleSidebar() {
       this.sidebarCollapsed = !this.sidebarCollapsed
       this.persist()
     },
     persist() {
-      localStorage.setItem(SESSION_KEY, JSON.stringify({
-        view: this.currentView,
-        sidebarCollapsed: this.sidebarCollapsed,
-      }))
+      saveHistory()
     },
     toast(message, type = 'info', ms = 3600) {
       const id = ++this._toastSeq

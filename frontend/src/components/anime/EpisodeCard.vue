@@ -46,6 +46,11 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 
       <div v-if="ep.watched" class="ep__chip ep__chip--seen"><Icon name="check" :size="11" /> Visto</div>
 
+      <!-- resume progress bar (partially watched) -->
+      <div v-if="!ep.watched && ep.resume_pos > 0 && ep.duration > 0 && !downloading" class="ep__resumebar">
+        <span :style="{ width: Math.min(100, (ep.resume_pos / ep.duration) * 100) + '%' }" />
+      </div>
+
       <!-- downloading overlay -->
       <div v-if="downloading" class="ep__dlbar"><span :style="{ width: dlPct + '%' }" /><em>{{ Math.round(dlPct) }}%</em></div>
 
@@ -77,6 +82,11 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
                 :title="subFetching ? 'Buscando…' : 'Subtítulos en español'" @click.stop="store.translateSubs(anime, ep)">
           <span v-if="subFetching" class="ep__mini-spin" /><span v-else class="ep__sub-lbl">ES</span>
         </button>
+        <button v-if="subTask?.status === 'error' || subTask?.status === 'done'" class="ep__icon ep__icon--retry"
+                :title="subTask?.status === 'error' ? 'Reintentar' : 'Re-inyectar subtítulo'"
+                @click.stop="store.translateSubs(anime, ep)">
+          <Icon name="spark" :size="13" />
+        </button>
         <button v-if="anime.mal_id" class="ep__icon" :class="{ 'is-on': infoOpen }" title="Descripción"
                 @click.stop="store.loadEpInfo(anime, ep)">
           <span class="ep__i">i</span>
@@ -95,6 +105,11 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
         </button>
       </div>
       <div v-else-if="downloading" class="ep__status">↓ Descargando</div>
+      <div v-else class="ep__actions">
+        <button class="ep__searchbtn" :title="'Buscar torrent para Ep. ' + ep.num" @click.stop="store.openTorrents(anime, ep.num)">
+          <Icon name="search" :size="13" /> Buscar
+        </button>
+      </div>
     </div>
 
     <!-- expandable episode info -->
@@ -141,6 +156,8 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 .ep__chip--seen { color: var(--ice); background: rgba(7,10,18,.6); }
 .ep__seen-veil { position: absolute; inset: 0; z-index: 2; background: rgba(7,10,18,.5); backdrop-filter: saturate(.6) brightness(.8); }
 
+.ep__resumebar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 3px; background: rgba(0,0,0,.4); }
+.ep__resumebar span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--azure-bright); box-shadow: 0 0 8px var(--azure-glow); transition: width .6s var(--ease-silk); }
 .ep__dlbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 22px; background: rgba(7,10,18,.7); display: flex; align-items: center; }
 .ep__dlbar span { position: absolute; left: 0; bottom: 0; top: 0; background: linear-gradient(90deg, var(--cyan), var(--azure)); opacity: .35; }
 .ep__dlbar em { position: relative; margin-left: auto; margin-right: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-style: normal; color: var(--cyan); }
@@ -171,6 +188,10 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 .ep__icon--sub:hover { background: color-mix(in srgb, var(--jade) 12%, transparent); border-color: color-mix(in srgb, var(--jade) 50%, transparent); }
 .ep__sub-lbl { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; }
 .ep__mini-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--jade); animation: spin .7s linear infinite; }
+.ep__icon--retry { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 25%, transparent); }
+.ep__icon--retry:hover { background: color-mix(in srgb, var(--amber) 12%, transparent); border-color: color-mix(in srgb, var(--amber) 50%, transparent); }
+.ep__searchbtn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 14px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); background: transparent; transition: all var(--t-fast); }
+.ep__searchbtn:hover { background: var(--azure-haze); color: #fff; border-color: var(--azure-bright); }
 .ep__sub { display: flex; align-items: center; gap: 6px; margin-bottom: var(--s-2); font-size: var(--fs-2xs); color: var(--jade); }
 .ep__sub.is-done { font-weight: 700; }
 .ep__sub-bar { flex: 1; height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }

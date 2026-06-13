@@ -929,6 +929,7 @@ def search_anime():
           title { romaji english native }
           meanScore episodes status season seasonYear format
           coverImage { large medium }
+          bannerImage
           genres
           nextAiringEpisode { episode }
         }
@@ -961,6 +962,7 @@ def search_anime():
             'episodes':     it.get('episodes'),
             'status':       it.get('status'),
             'cover':        (it.get('coverImage') or {}).get('large') or (it.get('coverImage') or {}).get('medium'),
+            'banner':       it.get('bannerImage') or '',
             'genres':       (it.get('genres') or [])[:4],
             'next_episode': nae.get('episode'),
             'format':       it.get('format') or '',
@@ -1994,6 +1996,7 @@ def anime_seasonal():
           title { romaji english native }
           meanScore popularity episodes status season seasonYear format
           coverImage { large medium }
+          bannerImage
           genres
           nextAiringEpisode { episode airingAt }
         }
@@ -2023,6 +2026,7 @@ def anime_seasonal():
             'episodes':     it.get('episodes'),
             'status':       it.get('status'),
             'cover':        (it.get('coverImage') or {}).get('large') or (it.get('coverImage') or {}).get('medium'),
+            'banner':       it.get('bannerImage') or '',
             'genres':       (it.get('genres') or [])[:4],
             'next_episode': nae.get('episode'),
             'airing_at':    nae.get('airingAt'),

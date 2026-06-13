@@ -48,6 +48,15 @@ function onUp(e) {
 }
 // Leaving the area must NOT navigate — only cancel an in-progress drag.
 function endDrag() { drag.active = false }
+
+// Click handler on the page image itself — this is the element that receives mouse events.
+function pageClick(e) {
+  if (store.mode !== 'paged' || store.compareMode || store.zoom > 1.01) return
+  if (drag.moved) { drag.moved = false; return }
+  const x = e.clientX / window.innerWidth
+  const goNext = isRTL.value ? x < 0.5 : x > 0.5
+  goNext ? store.nextPage() : store.prevPage()
+}
 function onWheel(e) {
   if (store.mode === 'webtoon' && !(e.ctrlKey || e.metaKey)) return
   e.preventDefault()
@@ -137,7 +146,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
         <!-- Paged -->
         <div v-else-if="store.mode === 'paged'" class="rd__paged"
              :class="{ 'is-grab': store.zoom > 1.01, 'is-cmp': store.compareMode }"
-             @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="endDrag" @wheel="onWheel">
+             @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="endDrag" @wheel="onWheel" @click="onClick">
           <!-- chapter ghost zones -->
           <button v-if="isManga && store.canPrevChapter" class="rd__ghost rd__ghost--prev" @click.stop="store.goPrevChapter()"><span>‹ Cap. {{ store.chapterListAsc[store.chapterIndex - 1]?.chapter }}</span></button>
           <button v-if="isManga && store.canNextChapter" class="rd__ghost rd__ghost--next" @click.stop="store.goNextChapter()"><span>Cap. {{ store.chapterListAsc[store.chapterIndex + 1]?.chapter }} ›</span></button>
@@ -159,7 +168,8 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
             <span class="rd__clabel rd__clabel--r">{{ store.scanCompareMode ? 'VARIANTE' : '4K' }}</span>
           </div>
           <!-- single page -->
-          <img v-else :src="pageUrl(store.pages[store.page])" class="rd__img" :class="`fit-${store.fit}`" :style="{ transform }" draggable="false" :alt="`Página ${store.page + 1}`" />
+          <img v-else :src="pageUrl(store.pages[store.page])" class="rd__img" :class="`fit-${store.fit}`" :style="{ transform }" draggable="false" :alt="`Página ${store.page + 1}`"
+               @click.stop.prevent="pageClick" />
 
           <div class="rd__counter" :class="{ 'is-hidden': store.barsHidden }">{{ store.page + 1 }} / {{ store.pages.length }}</div>
         </div>

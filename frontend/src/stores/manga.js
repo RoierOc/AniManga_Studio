@@ -10,9 +10,17 @@ export const useMangaStore = defineStore('manga', {
   state: () => ({
     // detail modal
     current: null,            // { id, name, source_meta } of the open manga
-    chapters: [],             // [{ chapter, page_count }]
+    chapters: [],             // [{ chapter, page_count }] — local downloaded chapters
     upscaled: {},             // { chapterNorm: true | 'partial' }
     modalLoading: false,
+    sourceChapters: [],       // [{ id, chapterNumber, name, scanlator, pageCount }] — from Suwayomi source
+    sourceLoading: false,
+    mdId: null,               // MangaDex UUID for library manga with MD pairing
+    mdChapters: [],           // MangaDex chapters for library manga
+    mdChaptersLoading: false,
+    mdLang: '',               // language filter for MD chapters ('' = all)
+    dlTasks: {},              // { chapterKey: taskId } — maps chapter to SSE download task ID
+    upTasks: {},              // { chapterKey: taskId } — maps chapter to SSE upscale task ID
 
     // live task status (from SSE aggregated payload)
     downloads: {},
@@ -77,7 +85,40 @@ export const useMangaStore = defineStore('manga', {
       const t = s.upscale[taskId(s.current.id, chapter, 'upscale')]
       return t && ['starting', 'started', 'upscaling'].includes(t.status) ? t : null
     },
+    // Download/upscale progress — optimistic stub until SSE/poll data arrives
+    dlForChapter: (s) => (ch) => {
+      const tid = s.dlTasks[String(ch.chapter)]
+      if (!tid) return null
+      return s.downloads[tid] || { status: 'starting', progress: 0, total: 0 }
+    },
+    upForChapter: (s) => (ch) => {
+      const tid = s.upTasks[String(ch)]
+      if (!tid) return null
+      return s.upscale[tid] || { status: 'starting', progress: 0, total: 0 }
+    },
     sortedChapters: (s) => [...s.chapters].sort((a, b) => parseFloat(b.chapter) - parseFloat(a.chapter)),
+    mdLangs: (s) => [...new Set(s.mdChapters.map(c => c.language).filter(Boolean))].sort(),
+    // Merge local + source + MD chapters, showing all available for download
+    mergedChapters: (s) => {
+      const dlNorms = new Set(s.chapters.map(c => String(c.chapter)))
+      const result = [...s.chapters]
+      for (const sc of s.sourceChapters) {
+        if (!dlNorms.has(sc.chapterNorm)) {
+          result.push({ chapter: sc.chapterNorm, page_count: sc.pageCount || 0, _sourceId: sc.id, _sourceName: sc.name, _scanlator: sc.scanlator })
+        }
+      }
+      for (const mc of s.mdChapters) {
+        if (s.mdLang && mc.language !== s.mdLang) continue
+        const cNorm = String(mc.chapter)
+        if (!dlNorms.has(cNorm)) {
+          result.push({ chapter: cNorm, page_count: mc.pages || 0, _mdChapterId: mc.id, _mdGroup: (mc.groups || []).join(', '), _mdTitle: mc.title, _mdLang: mc.language })
+        }
+      }
+      return result.sort((a, b) => parseFloat(b.chapter) - parseFloat(a.chapter))
+    },
+    hasSourceMeta: (s) => !!(s.current?.source_meta?.sourceId && s.current?.source_meta?.mangaId) || !!s.mdId,
+    // Whether we have any external chapters to show (source, MD, or local)
+    hasAnyChapters: (s) => s.mergedChapters.length > 0,
 
     updatesByTitle: (s) => { const m = {}; for (const u of s.updates) m[u.title] = u; return m },
 
@@ -132,29 +173,120 @@ export const useMangaStore = defineStore('manga', {
         this.downloads = data.downloads || {}
         this.upscale = data.upscale || {}
         this.exports = data.exports || {}
-        // when an upscale for the open manga finishes, refresh its chapter map
         if (this.current) {
-          const finished = Object.entries(this.upscale).some(([k, v]) =>
+          const upDone = Object.entries(this.upscale).some(([k, v]) =>
             k.startsWith(taskId(this.current.id, '', 'upscale').slice(0, -3)) && v.status === 'done')
-          if (finished) this._refreshUpscaled()
+          if (upDone) this._refreshUpscaled()
         }
       })
+      // Direct poll for download & upscale progress — bypass SSE getter issue
+      setInterval(async () => {
+        for (const [ch, tid] of Object.entries(this.dlTasks)) {
+          try {
+            const s = await api.get(`/api/status/download/${encodeURIComponent(tid)}`)
+            if (!s) continue
+            if (['complete', 'done'].includes(s.status)) {
+              delete this.dlTasks[ch]; this._refreshChapters()
+            }
+            this.downloads = { ...this.downloads, [tid]: s }
+          } catch (_) {}
+        }
+        for (const [ch, tid] of Object.entries(this.upTasks)) {
+          try {
+            const s = await api.get(`/api/status/upscale/${encodeURIComponent(tid)}`)
+            if (!s) continue
+            if (['done', 'complete'].includes(s.status)) {
+              delete this.upTasks[ch]; this._refreshUpscaled()
+            }
+            this.upscale = { ...this.upscale, [tid]: s }
+          } catch (_) {}
+        }
+      }, 1000)
     },
 
     async open(manga) {
       this.current = { id: manga.id || manga.name, name: manga.name, cover: manga.cover, source_meta: manga.source_meta }
       this.chapters = []
+      this.sourceChapters = []
+      this.mdChapters = []
+      this.mdId = manga.mdId || null
+      this.mdLang = ''
       this.upscaled = {}
       this.modalLoading = true
       try {
-        const d = await api.get(`/api/library/${encodeURIComponent(this.current.id)}`)
-        this.chapters = d.chapters || []
-        this.upscaled = d.upscaled || {}
-        if (d.source_meta) this.current.source_meta = d.source_meta
+        // Load local chapters if downloaded (skip for MD-only entries)
+        if (!manga.mdOnly) {
+          const d = await api.get(`/api/library/${encodeURIComponent(this.current.id)}`)
+          this.chapters = d.chapters || []
+          this.upscaled = d.upscaled || {}
+          if (d.source_meta) this.current.source_meta = d.source_meta
+          // If source_meta exists, load source chapters
+          const sm = this.current.source_meta
+          if (sm?.sourceId && sm?.mangaId) {
+            this.sourceLoading = true
+            api.get(`/api/sources/manga/${sm.mangaId}/chapters`)
+              .then(chs => {
+                this.sourceChapters = (chs || []).map(ch => ({
+                  ...ch,
+                  chapterNorm: String(ch.chapterNumber ?? '').replace(/\.0$/, ''),
+                  name: ch.name || `Cap. ${ch.chapterNumber ?? '?'}`,
+                }))
+              })
+              .catch(() => {})
+              .finally(() => { this.sourceLoading = false })
+          }
+        }
+        // If mdId exists, load MangaDex chapters
+        if (this.mdId) {
+          this.mdChaptersLoading = true
+          api.get(`/api/mangadex/chapters/${this.mdId}`)
+            .then(chs => { this.mdChapters = chs || [] })
+            .catch(() => {})
+            .finally(() => { this.mdChaptersLoading = false })
+        }
       } catch (_) { useUiStore().toast('No se pudieron cargar los capítulos', 'error') }
       finally { this.modalLoading = false }
     },
     close() { this.current = null },
+
+    async downloadSourceChapter(ch) {
+      const ui = useUiStore()
+      const sm = this.current?.source_meta
+      const sid = ch._sourceId || ch.id
+      if (!sm?.sourceId || !sid) return
+      const chKey = String(ch.chapter)
+      this.dlTasks[chKey] = taskId(this.current.id, chKey, 'download')
+      try {
+        const pg = await api.get(`/api/sources/chapter/${sid}/pages`)
+        const pageUrls = pg.pages || []
+        if (!pageUrls.length) { ui.toast('Capítulo sin páginas', 'error'); delete this.dlTasks[chKey]; return }
+        const res = await api.post('/api/download/download_source_chapter', {
+          title: this.current.id,
+          chapter: ch.chapterNorm || ch.chapterNumber || ch.chapter,
+          pageUrls,
+          sourceId: sm.sourceId,
+          mangaId: sm.mangaId,
+          sourceName: sm.sourceName || '',
+          sourceLang: sm.sourceLang || '',
+        })
+        // Use real task_id if different from estimated
+        if (res.task_id) this.dlTasks[chKey] = res.task_id
+      } catch (_) { ui.toast('No se pudo descargar', 'error'); delete this.dlTasks[chKey] }
+    },
+
+    async downloadMdChapter(ch) {
+      const ui = useUiStore()
+      const cid = ch._mdChapterId
+      if (!cid) return
+      const chKey = String(ch.chapter)
+      this.dlTasks[chKey] = taskId(this.current.id, chKey, 'download')
+      try {
+        const res = await api.post('/api/download/download_chapter', {
+          title: this.current.id, chapter: ch.chapter, chapterId: cid, mangaId: this.mdId,
+        })
+        if (res.task_id) this.dlTasks[chKey] = res.task_id
+      } catch (_) { ui.toast('No se pudo iniciar la descarga', 'error'); delete this.dlTasks[chKey] }
+    },
 
     async _refreshUpscaled() {
       try {
@@ -162,12 +294,22 @@ export const useMangaStore = defineStore('manga', {
         this.upscaled = d.upscaled || {}
       } catch (_) {}
     },
+    async _refreshChapters() {
+      try {
+        const d = await api.get(`/api/library/${encodeURIComponent(this.current.id)}`)
+        this.chapters = d.chapters || []
+        this.upscaled = d.upscaled || {}
+        if (d.source_meta) this.current.source_meta = d.source_meta
+      } catch (_) {}
+    },
 
     async upscaleChapter(chapter, opts = {}) {
+      const chKey = String(chapter)
+      this.upTasks[chKey] = taskId(this.current.id, chKey, 'upscale')
       try {
         await api.post('/api/upscale/upscale_chapter', { title: this.current.id, chapter, eco: opts.eco ?? this.eco, fast: opts.fast ?? false })
         useUiStore().toast(`Escalando 4K · cap. ${chapter}`, 'info')
-      } catch (_) { useUiStore().toast('No se pudo iniciar el escalado', 'error') }
+      } catch (_) { useUiStore().toast('No se pudo iniciar el escalado', 'error'); delete this.upTasks[chKey] }
     },
     async loadUpdates() {
       try { this.updates = await api.get('/api/mangadex/updates') || [] } catch (_) { this.updates = [] }
@@ -187,16 +329,19 @@ export const useMangaStore = defineStore('manga', {
     async upscaleAll() {
       const chapters = this.chapters.map(c => c.chapter).filter(ch => this.upscaled[ch] !== true)
       if (!chapters.length) { useUiStore().toast('Todos los capítulos ya están en 4K', 'info'); return }
+      for (const ch of chapters) this.upTasks[String(ch)] = taskId(this.current.id, String(ch), 'upscale')
       try {
         await api.post('/api/upscale/upscale_manga', { title: this.current.id, chapters, eco: this.eco })
         useUiStore().toast(`Escalando ${chapters.length} capítulos a 4K`, 'info')
-      } catch (_) { useUiStore().toast('No se pudo iniciar', 'error') }
+      } catch (_) { useUiStore().toast('No se pudo iniciar', 'error'); this.upTasks = {} }
     },
     async repairChapter(chapter) {
+      const chKey = String(chapter)
+      this.upTasks[chKey] = taskId(this.current.id, chKey, 'upscale')
       try {
         await api.post('/api/upscale/repair_chapter', { title: this.current.id, chapter })
         useUiStore().toast(`Reparando cap. ${chapter}`, 'info')
-      } catch (_) { useUiStore().toast('No se pudo reparar', 'error') }
+      } catch (_) { useUiStore().toast('No se pudo reparar', 'error'); delete this.upTasks[chKey] }
     },
     async cancelUpscale(chapter) {
       try { await api.post(`/api/upscale/cancel/${taskId(this.current.id, chapter, 'upscale')}`, {}) } catch (_) {}

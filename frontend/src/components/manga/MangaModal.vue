@@ -9,6 +9,9 @@ const store = useMangaStore()
 const m = computed(() => store.current)
 const upState = (ch) => store.upscaled[ch]          // true | 'partial' | undefined
 
+const LANG_FLAG = { en: '🇬🇧', es: '🇪🇸', 'es-la': '🌎', ja: '🇯🇵', 'pt-br': '🇧🇷', fr: '🇫🇷', ko: '🇰🇷', zh: '🇨🇳', 'zh-hk': '🇭🇰', it: '🇮🇹', de: '🇩🇪', ru: '🇷🇺' }
+const flag = (l) => LANG_FLAG[l] || l
+
 // bulk upscale range
 const rangeFrom = ref('')
 const rangeTo = ref('')
@@ -87,6 +90,9 @@ async function doExport(toDrive = false) {
                 {{ chapters?.length || store.chapters.length }} capítulos
                 <template v-if="m.source_meta?.sourceName"> · {{ m.source_meta.sourceName }}</template>
               </p>
+              <a v-if="store.mdId" :href="'https://mangadex.org/title/' + store.mdId" target="_blank" rel="noopener" class="mdlink" title="Ver en MangaDex">
+                <Icon name="globe" :size="13" /> MangaDex
+              </a>
               <div class="modal__legend">
                 <span><span class="lg lg--4k" /> 4K</span>
                 <span><span class="lg lg--part" /> parcial</span>
@@ -136,7 +142,7 @@ async function doExport(toDrive = false) {
 
           <div class="modal__body">
             <div v-if="store.modalLoading" class="center"><Spinner /></div>
-            <div v-else-if="!store.chapters.length" class="empty">Sin capítulos descargados.</div>
+            <div v-else-if="!store.chapters.length && !store.hasSourceMeta" class="empty">Sin capítulos descargados.</div>
 
             <!-- TOMO EXPORT -->
             <div v-else-if="tab === 'tomo'" class="tomo">
@@ -209,24 +215,61 @@ async function doExport(toDrive = false) {
               </div>
             </div>
 
-            <ul v-else class="chaps">
-              <li v-for="c in store.sortedChapters" :key="c.chapter" class="chap"
-                  :class="{ 'chap--4k': upState(c.chapter) === true, 'chap--part': upState(c.chapter) === 'partial' }">
-                <button class="chap__read" @click="store.read(c.chapter)">
+            <div class="modal__chhead">
+              <span>Capítulos{{ store.mdLangs.length > 1 ? '' : '' }}</span>
+              <select v-if="store.mdLangs.length > 1" v-model="store.mdLang" class="langsel">
+                <option value="">Todos</option>
+                <option v-for="l in store.mdLangs" :key="l" :value="l">{{ flag(l) }} {{ l }}</option>
+              </select>
+            </div>
+
+            <ul class="chaps">
+              <template v-for="c in (store.hasSourceMeta ? store.mergedChapters : store.sortedChapters)" :key="c.chapter">
+              <li class="chap"
+                  :class="{ 'chap--4k': upState(c.chapter) === true, 'chap--part': upState(c.chapter) === 'partial', 'chap--src': c._sourceId || c._mdChapterId, 'chap--md': !!c._mdChapterId }">
+                <!-- Downloaded chapter: clickable to read -->
+                <button v-if="!c._sourceId && !c._mdChapterId" class="chap__read" @click="store.read(c.chapter)">
                   <span v-if="store.isChapterRead(c.chapter)" class="chap__read-dot" title="Leído" />
                   <span class="chap__num">{{ formatChapter(c.chapter) }}</span>
                   <span class="chap__pages">{{ c.page_count }} pág.</span>
                   <span v-if="upState(c.chapter) === true" class="chap__tag chap__tag--4k">4K</span>
                   <span v-else-if="upState(c.chapter) === 'partial'" class="chap__tag chap__tag--part" :title="store.health[c.chapter] ? `Faltan ${store.health[c.chapter].missing_upscaled} págs.` : ''">PARCIAL<template v-if="store.health[c.chapter]?.missing_upscaled"> ·{{ store.health[c.chapter].missing_upscaled }}</template></span>
                 </button>
+                <!-- Source/MD chapter: not clickable, show download info -->
+                <div v-else class="chap__read">
+                  <span class="chap__num">{{ formatChapter(c.chapter) }}</span>
+                  <span class="chap__pages" v-if="c._sourceId">vía {{ store.current.source_meta?.sourceName }}</span>
+                  <span class="chap__pages" v-else-if="c._mdLang">{{ c._mdLang?.toUpperCase() }}<template v-if="c._mdGroup"> · {{ c._mdGroup }}</template></span>
+                  <span class="chap__pages" v-else>MangaDex</span>
+                </div>
 
                 <div class="chap__actions">
+                  <!-- Source / MD chapter: download button with spinner -->
+                  <template v-if="c._sourceId || c._mdChapterId">
+                    <span v-if="c._mdGroup || c._mdTitle" class="chap__srcmeta">{{ c._mdGroup || c._scanlator }}<template v-if="c._mdTitle"> · {{ c._mdTitle }}</template></span>
+                    <template v-if="store.dlForChapter(c)">
+                      <div class="chap__dlprog">
+                        <svg class="dl-ring" viewBox="0 0 24 24">
+                          <circle class="dl-ring__track" cx="12" cy="12" r="9" />
+                          <circle class="dl-ring__fill" cx="12" cy="12" r="9"
+                            :style="{ strokeDashoffset: 56.5 - (56.5 * ((store.dlForChapter(c).progress || 0) / Math.max(store.dlForChapter(c).total || 1, 1))) }" />
+                        </svg>
+                        <span class="chap__dlprog-n" v-if="store.dlForChapter(c).total">{{ Math.round(((store.dlForChapter(c).progress || 0) / store.dlForChapter(c).total) * 100) }}%</span>
+                      </div>
+                    </template>
+                    <button v-else class="chap__dlbtn"
+                      @click="c._sourceId ? store.downloadSourceChapter(c) : store.downloadMdChapter(c)">
+                      <Icon name="download" :size="14" /> Descargar
+                    </button>
+                  </template>
                   <!-- running upscale -->
-                  <div v-if="store.chapterTask(c.chapter)" class="chap__prog">
-                    <div class="chap__prog-bar">
-                      <span :style="{ width: ((store.chapterTask(c.chapter).progress || 0) / (store.chapterTask(c.chapter).total || 1) * 100) + '%' }" />
-                    </div>
-                    <span class="chap__prog-n">{{ store.chapterTask(c.chapter).progress || 0 }}/{{ store.chapterTask(c.chapter).total || '?' }}</span>
+                  <template v-else>
+                  <div v-if="store.upForChapter(c.chapter)" class="chap__dlprog">
+                    <svg class="dl-ring" viewBox="0 0 24 24">
+                      <circle class="dl-ring__track" cx="12" cy="12" r="9" />
+                      <circle class="dl-ring__fill" cx="12" cy="12" r="9" :style="{ strokeDashoffset: 56.5 - (56.5 * ((store.upForChapter(c.chapter).progress || 0) / Math.max(store.upForChapter(c.chapter).total || 1, 1))) }" />
+                    </svg>
+                    <span class="chap__dlprog-n" v-if="store.upForChapter(c.chapter).total">{{ Math.round(((store.upForChapter(c.chapter).progress || 0) / store.upForChapter(c.chapter).total) * 100) }}%</span>
                     <button class="ib ib--danger" title="Cancelar" @click="store.cancelUpscale(c.chapter)"><Icon name="close" :size="13" /></button>
                   </div>
                   <template v-else>
@@ -235,6 +278,7 @@ async function doExport(toDrive = false) {
                     <button v-if="upState(c.chapter) === 'partial'" class="ib ib--warn" title="Reparar upscale" @click="store.repairChapter(c.chapter)"><Icon name="spark" :size="14" /></button>
                     <button v-else-if="upState(c.chapter) !== true" class="ib ib--accent" title="Escalar a 4K" @click="store.upscaleChapter(c.chapter)"><Icon name="spark" :size="14" /></button>
                     <button class="ib ib--danger" title="Borrar capítulo" @click="store.deleteChapter(c.chapter)"><Icon name="close" :size="14" /></button>
+                  </template>
                   </template>
                 </div>
 
@@ -250,6 +294,7 @@ async function doExport(toDrive = false) {
                   <span v-else class="cmpvar__none">No hay variantes descargadas en <code>_compare/</code> para este capítulo.</span>
                 </div>
               </li>
+              </template>
             </ul>
           </div>
         </div>
@@ -272,6 +317,8 @@ async function doExport(toDrive = false) {
 .modal__info { min-width: 0; padding-right: var(--s-7); }
 .modal__title { font-size: var(--fs-xl); line-height: var(--lh-snug); }
 .modal__sub { color: var(--ink-faint); font-size: var(--fs-sm); margin-top: var(--s-1); }
+.mdlink { display: inline-flex; align-items: center; gap: 5px; margin-top: var(--s-2); font-size: var(--fs-xs); font-weight: 500; color: var(--violet); text-decoration: none; padding: 4px 10px; border-radius: var(--r-sm); border: 1px solid color-mix(in srgb, var(--violet) 25%, transparent); transition: all var(--t-fast); }
+.mdlink:hover { background: color-mix(in srgb, var(--violet) 10%, transparent); border-color: var(--violet); }
 .modal__legend { display: flex; gap: var(--s-3); margin-top: var(--s-3); font-size: var(--fs-2xs); color: var(--ink-faint); }
 .modal__legend span { display: inline-flex; align-items: center; gap: 5px; }
 .lg { width: 8px; height: 8px; border-radius: 2px; }
@@ -368,10 +415,16 @@ async function doExport(toDrive = false) {
 .empty { text-align: center; color: var(--ink-faint); padding: var(--s-7); }
 
 .chaps { display: flex; flex-direction: column; gap: 4px; }
+.modal__chhead { display: flex; align-items: center; justify-content: space-between; padding: var(--s-3) var(--s-3); font-weight: 600; font-size: var(--fs-sm); border-bottom: 1px solid var(--line); }
+.langsel { padding: 4px 8px; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-xs); }
+.langsel:focus { outline: none; border-color: var(--azure); }
 .chap { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid transparent; transition: background var(--t-fast), border-color var(--t-fast); }
 .chap:hover { background: var(--surface); border-color: var(--line); }
 .chap--4k { border-left: 2px solid var(--cyan); }
 .chap--part { border-left: 2px solid var(--gold); }
+.chap--src { border-left: 2px solid var(--violet); opacity: .85; }
+.chap--md { border-left: 2px solid var(--coral); opacity: .85; }
+.chap--src .chap__read, .chap--md .chap__read { cursor: default; }
 .chap__read { flex: 1; display: flex; align-items: center; gap: var(--s-3); text-align: left; min-width: 0; }
 .chap__num { font-family: var(--font-display); font-weight: 600; font-size: var(--fs-md); min-width: 48px; }
 .chap__pages { font-size: var(--fs-xs); color: var(--ink-faint); }
@@ -385,6 +438,15 @@ async function doExport(toDrive = false) {
 .ib--accent:hover { color: var(--cyan); border-color: var(--cyan-glow); }
 .ib--warn:hover { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 40%, transparent); }
 .ib--danger:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
+.chap__dlbtn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); background: transparent; transition: all var(--t-fast); }
+.chap__dlbtn:hover:not(:disabled) { background: var(--azure-haze); color: #fff; }
+.chap__dlbtn:disabled { opacity: .5; cursor: not-allowed; }
+.chap__srcmeta { font-size: var(--fs-2xs); color: var(--ink-ghost); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chap__dlprog { display: inline-flex; align-items: center; gap: var(--s-2); padding: 4px 10px; border-radius: var(--r-sm); background: var(--azure-haze); border: 1px solid var(--azure); }
+.chap__dlprog-n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--azure-bright); min-width: 28px; }
+.dl-ring { width: 16px; height: 16px; flex-shrink: 0; }
+.dl-ring__track { fill: none; stroke: var(--surface-3); stroke-width: 3; }
+.dl-ring__fill { fill: none; stroke: var(--azure); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 56.5; transform: rotate(-90deg); transform-origin: 12px 12px; transition: stroke-dashoffset .4s var(--ease-silk); }
 
 .chap__prog { display: flex; align-items: center; gap: var(--s-2); }
 .chap__prog-bar { width: 80px; height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }

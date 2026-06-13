@@ -6,6 +6,7 @@ import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useSourcesStore()
 const d = computed(() => store.detail)
+const isInLib = computed(() => store.inLibrary(d.value?.sourceId, d.value?.id))
 const genres = computed(() => {
   const g = d.value?.genre
   return Array.isArray(g) ? g : (typeof g === 'string' ? g.split(',').map(x => x.trim()).filter(Boolean) : [])
@@ -25,6 +26,12 @@ const genres = computed(() => {
               <span class="modal__src">{{ d.sourceName }}<template v-if="d.sourceLang"> · {{ d.sourceLang }}</template></span>
               <h2 class="modal__title">{{ d.title }}</h2>
               <p v-if="d.author" class="modal__by">{{ d.author }}</p>
+              <div class="modal__acts">
+                <button class="abtn" :class="{ 'abtn--added': isInLib }" @click="store.addToLibrary()" :disabled="isInLib">
+                  <Icon :name="isInLib ? 'check' : 'heart'" :size="13" />
+                  {{ isInLib ? 'En biblioteca' : 'Añadir' }}
+                </button>
+              </div>
               <div v-if="genres.length" class="modal__genres">
                 <span v-for="g in genres.slice(0, 5)" :key="g" class="g">{{ g }}</span>
               </div>
@@ -34,14 +41,14 @@ const genres = computed(() => {
           <p v-if="d.description" class="modal__desc">{{ d.description }}</p>
 
           <div class="modal__chapters">
-            <div class="modal__chhead">Capítulos <span v-if="chapters.length" class="muted">({{ store.chapters.length }})</span></div>
+            <div class="modal__chhead">Capítulos <span v-if="store.chapters.length" class="muted">({{ store.chapters.length }})</span></div>
             <div v-if="store.detailLoading" class="center"><Spinner /></div>
             <div v-else-if="!store.chapters.length" class="empty">Sin capítulos.</div>
             <ul v-else class="chaps">
               <li v-for="ch in store.chapters" :key="ch.id" class="chap" :class="{ 'is-read': ch.isRead }">
                 <div class="chap__main">
                   <span class="chap__name">{{ ch.name }}</span>
-                  <span class="chap__sub">{{ ch.scanlator || '' }}<template v-if="ch.pageCount"> · {{ ch.pageCount }} pág.</template></span>
+                  <span class="chap__sub">{{ ch.scanlator || '' }}<template v-if="ch.pageCount && ch.pageCount > 0"> · {{ ch.pageCount }} pág.</template></span>
                 </div>
                 <div v-if="store.downloading[ch.id]" class="chap__prog"><Spinner :size="13" /></div>
                 <button v-else class="chap__dl" @click="store.downloadChapter(ch)"><Icon name="download" :size="14" /> Descargar</button>
@@ -66,6 +73,11 @@ const genres = computed(() => {
 .modal__src { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--azure); letter-spacing: .04em; }
 .modal__title { font-size: var(--fs-xl); line-height: var(--lh-snug); margin: 2px 0; }
 .modal__by { color: var(--ink-soft); font-size: var(--fs-sm); }
+.modal__acts { display: flex; gap: var(--s-2); margin-top: var(--s-3); }
+.abtn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line-2); background: transparent; transition: all var(--t-fast); }
+.abtn:hover:not(:disabled) { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
+.abtn--added { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 30%, transparent); background: color-mix(in srgb, var(--jade) 8%, transparent); }
+.abtn:disabled { cursor: default; opacity: .85; }
 .modal__genres { display: flex; flex-wrap: wrap; gap: var(--s-1); margin-top: var(--s-3); }
 .g { font-size: var(--fs-2xs); padding: 2px 8px; border-radius: var(--r-pill); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-soft); }
 .modal__desc { padding: var(--s-3) var(--s-5); font-size: var(--fs-sm); color: var(--ink-soft); line-height: var(--lh-body); max-height: 100px; overflow-y: auto; }

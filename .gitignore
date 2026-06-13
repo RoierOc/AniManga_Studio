@@ -37,6 +37,10 @@ suwayomi/data/
 # Environment secrets
 .env
 
+# MPV screenshot artifacts
+src/mpv-shot*.jpg
+mpv-shot*.jpg
+
 # Local configuration and public repository metadata.
 /.*/
 !/.github/

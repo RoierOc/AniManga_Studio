@@ -1,5 +1,6 @@
 <script setup>
 import { onMounted } from 'vue'
+import { useUiStore } from '@/stores/ui'
 import { useAnimeStore } from '@/stores/anime'
 import AnimeLibrary from './AnimeLibrary.vue'
 import AnimeDetail from './AnimeDetail.vue'
@@ -34,6 +35,7 @@ function selectTab(id) {
   store.closeTorrents()
   store.sub = id
   store.persist()
+  useUiStore().pushNav('anime', id)
 }
 </script>
 

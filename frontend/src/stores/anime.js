@@ -81,6 +81,7 @@ export const useAnimeStore = defineStore('anime', {
     torrentQuery: '',
     torrentCategory: '1_2',
     flt: { lang: 'all', hideDead: true, quality: '', group: '', ep: 'all' },
+    targetEp: null,             // target episode when navigating from detail
     addingHashes: [],            // keys currently being added to qbt
     addedHashes: [],             // keys just added (transient ✓)
   }),
@@ -88,10 +89,17 @@ export const useAnimeStore = defineStore('anime', {
   getters: {
     detail: (s) => s.library.find(a => a.id === s.detailId) || null,
 
-    // "Continue watching": in-progress or next-unwatched episode per recently-watched anime
+    // "Continue watching": in-progress or next-unwatched episode per recently-watched anime.
+    // Excludes fully-watched series (where every available episode is watched).
     continueWatching: (s) => {
       return s.library
-        .filter(a => a.last_watched_at > 0)
+        .filter(a => {
+          if (!a.last_watched_at) return false
+          const eps = (a.episodes || []).filter(e => e.num > 0 && e.ep_type !== 'special' && (e.in_local || (e.in_qbt && e.progress >= 100)))
+          // Exclude anime where ALL available episodes are watched
+          if (eps.length > 0 && eps.every(e => e.watched)) return false
+          return true
+        })
         .map(a => {
           const eps = (a.episodes || [])
           const inProg = eps.find(e => e.num > 0 && e.ep_type !== 'special' && (e.resume_pos > 0) && !e.watched && (e.in_local || (e.in_qbt && e.progress >= 100)))
@@ -101,6 +109,30 @@ export const useAnimeStore = defineStore('anime', {
         .filter(Boolean)
         .sort((x, y) => (y.anime.last_watched_at || 0) - (x.anime.last_watched_at || 0))
         .slice(0, 12)
+    },
+
+    // Hero banner: seasonal anime only, sorted by popularity then next airing
+    heroItems: (s) => {
+      if (!s.seasonal.length) return []
+      return s.seasonal
+        .filter(a => !s.library.find(lib => lib.al_id === a.al_id || lib.mal_id === a.mal_id))
+        .sort((x, y) => {
+          const xAt = (s.nextAiring[x.al_id])?.airing_at || 0
+          const yAt = (s.nextAiring[y.al_id])?.airing_at || 0
+          if (xAt && yAt) return xAt - yAt
+          if (xAt) return -1
+          if (yAt) return 1
+          return (y.popularity || 0) - (x.popularity || 0)
+        })
+        .slice(0, 8)
+        .map(a => {
+          const na = s.nextAiring[a.al_id]
+          return {
+            anime: { ...a, id: a.al_id || a.id, episodes: [], last_watched_at: 0, status: a.status || 'RELEASING' },
+            ep: na ? { num: na.episode } : { num: a.next_episode || a.episodes || '?' },
+            kind: 'seasonal',
+          }
+        })
     },
 
     filteredTorrents: (s) => {
@@ -193,8 +225,14 @@ export const useAnimeStore = defineStore('anime', {
       this.epInfoOpen = null
       this.linkTorrent = { show: false, list: [], loading: false, subpath: '' }
       if (anime.al_id) { this.loadTags(anime); this.loadRecs(anime) }
+      // Browser history: back button closes detail
+      useUiStore().pushNav(this.sub, this.sub, anime.id)
+      useUiStore()._setNavRestore(() => { this.detailId = null })
     },
-    closeDetail() { this.detailId = null },
+    closeDetail() {
+      this.detailId = null
+      useUiStore().pushNav(this.sub, this.sub, null)
+    },
 
     async loadTags(anime) {
       const id = anime.al_id
@@ -224,7 +262,7 @@ export const useAnimeStore = defineStore('anime', {
     openRec(rec) {
       const lib = this.library.find(a => (rec.al_id && a.al_id === rec.al_id) || (rec.mal_id && a.mal_id === rec.mal_id) || (rec.title && a.title === rec.title))
       if (lib) this.openDetail(lib)
-      else { this.sub = 'search'; this.openTorrents(rec) }   // discover via torrents
+      else this.openTorrents(rec)   // navigates to search + opens torrents
     },
 
     async loadStacks(alId, malId) {
@@ -314,11 +352,16 @@ export const useAnimeStore = defineStore('anime', {
 
     async toggleWatched(anime, ep) {
       const was = !!ep.watched
-      ep.watched = !was                         // optimistic
+      // Optimistic update — both the passed ep and the one in library
+      ep.watched = !was
+      if (!was) ep.resume_pos = 0
+      const libAnime = this.library.find(a => a.id === anime.id)
+      const libEp = libAnime?.episodes?.find(e => e.num === ep.num)
+      if (libEp) { libEp.watched = !was; if (!was) libEp.resume_pos = 0 }
       try {
         await api.post(`/api/anime/library/${anime.id}/watched`, { episode: ep.num })
       } catch (_) {
-        ep.watched = was
+        ep.watched = was; if (libEp) libEp.watched = was
         useUiStore().toast('No se pudo actualizar', 'error')
       }
     },
@@ -382,9 +425,13 @@ export const useAnimeStore = defineStore('anime', {
       const anime = this.library.find(a => a.id === ev.anime_id)
       if (!anime) return
       const ep = (anime.episodes || []).find(e => String(e.num) === String(ev.ep_str))
-      if (ep) ep.watched = !!ev.watched
-      anime.last_watched_at = ev.last_watched_at
-      // MPV finished an episode → offer the next one.
+      if (ep) {
+        ep.watched = ev.watched !== undefined ? !!ev.watched : true
+        ep.resume_pos = 0
+        if (ev.duration) ep.duration = ev.duration
+      }
+      if (ev.last_watched_at) anime.last_watched_at = ev.last_watched_at
+      // MPV finished → autoplay next
       if (ev.from_mpv && ev.watched) {
         const next = nextUnwatchedEp(anime)
         if (next) this.showAutoplay(anime, next)
@@ -394,7 +441,10 @@ export const useAnimeStore = defineStore('anime', {
       const anime = this.library.find(a => a.id === ev.anime_id)
       if (!anime) return
       const ep = (anime.episodes || []).find(e => String(e.num) === String(ev.ep_str))
-      if (ep) ep.resume_pos = ev.position
+      if (ep) {
+        ep.resume_pos = ev.position || 0
+        if (ev.duration) ep.duration = ev.duration
+      }
     },
 
     /* ── qBittorrent ────────────────────────────────────────────────────── */
@@ -473,7 +523,8 @@ export const useAnimeStore = defineStore('anime', {
         const d = await api.post('/api/anime/library/add', {
           al_id: anime.al_id, mal_id: anime.mal_id,
           title: anime.title, title_romaji: anime.title_romaji || '',
-          cover: anime.cover || '', total_episodes: anime.episodes || null,
+          cover: anime.cover || '', banner: anime.banner || '',
+          total_episodes: anime.episodes || null,
           format: anime.format || '', track_only: true,
         })
         if (d.ok) { useUiStore().toast(`"${anime.title}" añadido a Mi Anime`, 'ok'); await this.loadLibrary(true) }
@@ -505,11 +556,15 @@ export const useAnimeStore = defineStore('anime', {
       }
       return merged
     },
-    async openTorrents(anime) {
+    async openTorrents(anime, targetEpisode = null) {
       this.hidePreview()
+      this.closeDetail()
+      this.sub = 'search'
       this.torrentAnime = anime
       this.torrents = []
-      this.flt = { lang: 'all', hideDead: true, quality: '', group: '', ep: 'all' }
+      this.flt = { lang: 'all', hideDead: true, quality: '', group: '', ep: targetEpisode ? 'episodes' : 'all' }
+      const fmt = anime.format || ''
+      this.targetEp = (fmt === 'MOVIE' || fmt === 'MUSIC') ? null : (targetEpisode && targetEpisode > 0 ? targetEpisode : null)
       const variants = [...new Set([anime.title_romaji, anime.title_english, anime.title].map(t => (t || '').trim()).filter(Boolean))]
       this.torrentQuery = variants[0] || ''
       this.torrentsLoading = true
@@ -585,7 +640,6 @@ export const useAnimeStore = defineStore('anime', {
       try {
         const d = await api.get(`/api/subtitle/tracks?${p}`)
         const tracks = d.tracks || [], ext = d.external_tracks || [], spa = d.spanish_tracks || []
-        if (spa.length === 1 && !tracks.length && !ext.length) { await this.directInject(anime, ep, spa[0]); return }
         if (spa.length || tracks.length || ext.length) {
           this.subTrackModal = { anime, ep, tracks, externalTracks: ext, spanishTracks: spa, missingKeys: d.sources_missing_key || [] }
           return
@@ -620,13 +674,14 @@ export const useAnimeStore = defineStore('anime', {
       try {
         const d = await api.post('/api/subtitle/translate', {
           info_hash: ep.info_hash || '', episode: ep.num, ep_type: ep.ep_type || 'episode',
-          anime_id: anime.id, sub_index: subIndex,
+          anime_id: anime.id, sub_index: subIndex, force: true,
           ...(ep.local_path ? { local_path: ep.local_path } : {}),
           ...(externalSub ? { external_sub: externalSub } : {}),
         })
+        if (d.error) { this.subTasks[key] = { status: 'error', progress: 0, message: d.error }; ui.toast(d.error, 'error'); return }
         this.subTasks[key] = { ...this.subTasks[key], task_id: d.task_id }
         this._subPoll(key, d.task_id)
-      } catch (e) { this.subTasks[key] = { status: 'error', progress: 0, message: e.body || 'Error' }; ui.toast('Error al traducir', 'error') }
+      } catch (e) { this.subTasks[key] = { status: 'error', progress: 0, message: e.body || 'Error' }; ui.toast(e.body || 'Error al traducir', 'error') }
     },
 
     _subPoll(key, taskId) {
@@ -645,6 +700,21 @@ export const useAnimeStore = defineStore('anime', {
           this.subTasks[key] = { status: 'cancelled', message: 'Tarea perdida', task_id: taskId }
         }
       }, 1500)
+    },
+
+    async reinjectSub(anime, ep) {
+      const ui = useUiStore()
+      const key = this.subKey(anime, ep)
+      this.subTrackModal = null
+      this.subTasks[key] = { status: 'injecting', progress: 50, message: 'Re-inyectando…' }
+      try {
+        await api.post('/api/subtitle/reinject', {
+          info_hash: ep.info_hash || '', episode: ep.num, anime_id: anime.id,
+          ...(ep.local_path ? { local_path: ep.local_path } : {}), force: true,
+        })
+        this.subTasks[key] = { status: 'done', progress: 100, message: 'Re-inyectado ✓' }
+        ui.toast('Subtítulo español re-inyectado ✓', 'ok')
+      } catch (e) { this.subTasks[key] = { status: 'error', progress: 0, message: e.body || 'Error' }; ui.toast('Error al re-inyectar', 'error') }
     },
 
     async cancelTranslate(anime, ep) {

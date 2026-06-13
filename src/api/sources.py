@@ -145,9 +145,11 @@ _GQL_STREAM_TIMEOUT = 5  # per-source timeout for streaming search
 @sources_bp.route("/search_all_stream", methods=["GET"])
 def search_all_stream():
     """Stream global search results as SSE — results arrive as each source responds."""
-    query = (request.args.get("q") or "").strip()
-    lang  = (request.args.get("lang") or "").strip().lower()
-    if not query:
+    query   = (request.args.get("q") or "").strip()
+    lang    = (request.args.get("lang") or "").strip().lower()
+    src_ids = request.args.get("sources", "").strip()  # comma-separated source IDs
+    kind    = request.args.get("kind", "SEARCH").upper()  # SEARCH | POPULAR
+    if not query and kind == "SEARCH":
         return jsonify({"error": "q is required"}), 400
 
     try:
@@ -156,21 +158,35 @@ def search_all_stream():
     except Exception as e:
         return jsonify({"error": str(e), "offline": not _suwayomi_online()}), 503
 
+    # Filter by explicit source IDs if provided
+    if src_ids:
+        ids_set = {s.strip() for s in src_ids.split(",") if s.strip()}
+        source_nodes = [s for s in source_nodes if s["id"] in ids_set]
+
     if lang:
         source_nodes = [s for s in source_nodes if s["lang"].lower() == lang]
 
     def _search_one(source):
         try:
+            if kind == "POPULAR":
+                gql_type = "POPULAR"
+                variables = {"source": source["id"], "type": gql_type, "page": 1}
+                query_str = """mutation FetchPopular($source: LongString!, $type: FetchSourceMangaType!, $page: Int!) {
+                  fetchSourceManga(input: { source: $source, type: $type, page: $page }) {
+                    mangas { id title thumbnailUrl inLibrary }
+                  }
+                }"""
+            else:
+                gql_type = "SEARCH"
+                variables = {"source": source["id"], "query": query, "page": 1}
+                query_str = """mutation SearchManga($source: LongString!, $query: String, $page: Int!) {
+                  fetchSourceManga(input: { source: $source, type: SEARCH, query: $query, page: $page }) {
+                    mangas { id title thumbnailUrl inLibrary }
+                  }
+                }"""
             resp = http_requests.post(
                 SUWAYOMI_URL,
-                json={
-                    "query": """mutation SearchManga($source: LongString!, $query: String, $page: Int!) {
-                      fetchSourceManga(input: { source: $source, type: SEARCH, query: $query, page: $page }) {
-                        mangas { id title thumbnailUrl inLibrary }
-                      }
-                    }""",
-                    "variables": {"source": source["id"], "query": query, "page": 1},
-                },
+                json={"query": query_str, "variables": variables},
                 timeout=_GQL_STREAM_TIMEOUT,
             )
             resp.raise_for_status()

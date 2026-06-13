@@ -51,6 +51,7 @@ export const useMangadexStore = defineStore('mangadex', {
   actions: {
     async checkAuth() {
       try { this.authed = !!(await api.get('/api/mangadex/check'))?.authenticated } catch (_) {}
+      this.loadLocalLibrary()
     },
     async login() {
       const ui = useUiStore()
@@ -138,9 +139,8 @@ export const useMangadexStore = defineStore('mangadex', {
         ])
         if (full) this.detail = { ...m, ...full }
         this.chapters = chs || []
-        // default language: english if present, else first
-        const langs = [...new Set(this.chapters.map(c => c.language))]
-        this.detailLang = langs.includes('en') ? 'en' : (langs[0] || '')
+        // Show all languages by default (empty = no filter)
+        this.detailLang = ''
       } catch (_) {}
       finally { this.detailLoading = false }
     },
@@ -156,11 +156,24 @@ export const useMangadexStore = defineStore('mangadex', {
     },
 
     async addLocal(m) {
+      const ui = useUiStore()
       try {
-        await api.post('/api/mangadex/local_library/add', { title: m.title, cover: m.cover, mal_id: m.mal_id, al_id: m.al_id, manga_id: m.id })
+        await api.post('/api/mangadex/local_library/add', {
+          manga: {
+            id: m.id,
+            title: m.title,
+            cover: m.cover,
+            mal_id: m.mal_id,
+            al_id: m.al_id,
+          }
+        })
         if (!this.localIds.includes(m.id)) this.localIds.push(m.id)
-        useUiStore().toast('Añadido a tu biblioteca', 'ok')
-      } catch (_) { useUiStore().toast('No se pudo añadir', 'error') }
+        ui.toast('Añadido a tu biblioteca', 'ok')
+      } catch (_) { ui.toast('No se pudo añadir', 'error') }
+    },
+
+    async loadLocalLibrary() {
+      try { this.localIds = (await api.get('/api/mangadex/local_library') || []).map(m => String(m.id || m.mangaId || '')) } catch (_) {}
     },
 
     async loadFollowed() {
