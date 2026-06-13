@@ -366,7 +366,10 @@ async function doExport(toDrive = false) {
 .mtab:hover { color: var(--ink); }
 .mtab.is-active { color: var(--azure-bright); border-bottom-color: var(--azure); }
 
-.modal__body { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: var(--s-3); }
+/* flex-basis auto (not 0): the modal has max-height, not a fixed height, so basis:0
+   would collapse this scroll region to 0 and hide the chapters. auto lets it size to
+   content and only shrink+scroll once the modal hits its max-height. */
+.modal__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: var(--s-3); }
 
 /* tomo export */
 .tomo { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-4); padding: var(--s-2); align-items: start; }
