@@ -316,6 +316,21 @@ def _scanpaths_write(data: dict):
     p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
 
 
+def _anime_settings_path() -> _Path:
+    return _Path(os.environ.get('MANGA_DIR', str(_Path.home() / 'MangaLibrary'))) / 'anime_settings.json'
+
+def _anime_settings_read() -> dict:
+    try:
+        return json.loads(_anime_settings_path().read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+
+def _anime_settings_write(data: dict):
+    p = _anime_settings_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+
+
 def _list_anime_folders(root: str) -> list:
     if _is_wsl() and re.match(r'^[A-Za-z]:[/\\]', root):
         root = _win_to_wsl(root)
@@ -1272,18 +1287,21 @@ def qbt_add():
         return jsonify({'error': 'no link'}), 400
     try:
         form = {'urls': link}
-        if data.get('save_path'):
-            form['savepath'] = data['save_path']
-        elif data.get('anime_title'):
-            try:
-                prefs = _q('get', '/app/preferences').json()
-                base = prefs.get('save_path', '')
-                if base:
-                    folder = _sanitize_folder(data['anime_title'])
-                    if folder:
-                        form['savepath'] = _build_save_path(base, folder)
-            except Exception:
-                pass
+        explicit = (data.get('save_path') or '').strip()
+        if explicit:
+            form['savepath'] = explicit
+        else:
+            # Prefer the user-configured anime download folder (another disk), falling
+            # back to qBittorrent's own default save path. Each anime gets a subfolder.
+            base = (_anime_settings_read().get('download_path') or '').strip()
+            if not base:
+                try:
+                    base = (_q('get', '/app/preferences').json() or {}).get('save_path', '')
+                except Exception:
+                    base = ''
+            if base:
+                folder = _sanitize_folder(data.get('anime_title') or '')
+                form['savepath'] = _build_save_path(base, folder) if folder else base
         r = _q('post', '/torrents/add', data=form)
         body = r.text.strip()
         ok = r.status_code in (200, 204) and body in ('Ok.', '')
@@ -1296,6 +1314,29 @@ def qbt_add():
         return jsonify({'ok': ok, 'msg': body or 'Ok.'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@anime_bp.route('/settings', methods=['GET'])
+def anime_settings_get():
+    """Anime download settings. download_path is the base folder new torrents save to
+    (each anime in a subfolder); qbt_default is qBittorrent's own default, for reference."""
+    s = _anime_settings_read()
+    qbt_default = ''
+    try:
+        qbt_default = (_q('get', '/app/preferences').json() or {}).get('save_path', '')
+    except Exception:
+        pass
+    return jsonify({'download_path': s.get('download_path', ''), 'qbt_default': qbt_default})
+
+
+@anime_bp.route('/settings', methods=['POST'])
+def anime_settings_set():
+    data = request.get_json(silent=True) or {}
+    s = _anime_settings_read()
+    if 'download_path' in data:
+        s['download_path'] = (data.get('download_path') or '').strip()
+    _anime_settings_write(s)
+    return jsonify({'ok': True, 'download_path': s.get('download_path', '')})
 
 
 @anime_bp.route('/qbt/list')

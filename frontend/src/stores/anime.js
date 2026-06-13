@@ -42,6 +42,10 @@ export const useAnimeStore = defineStore('anime', {
     scan: { show: false, paths: [], folders: [], loading: false, newPath: '',
             browseOpen: false, browsePath: '', browseWin: '', browseParent: null, browseItems: [] },
 
+    // anime download location (qBittorrent save path)
+    dlSettings: { download_path: '', qbt_default: '' },
+    dlBrowse: { open: false, path: '', win: '', parent: null, items: [], loading: false },
+
     // management
     linkTorrent: { show: false, list: [], loading: false, subpath: '' },
     epOverrideMenu: null,      // { anime, ep, x, y }
@@ -233,6 +237,27 @@ export const useAnimeStore = defineStore('anime', {
     },
 
     setLibSort(id) { this.libSort = id; localStorage.setItem('anime-libsort', id) },
+
+    /* ── Download location ──────────────────────────────────────────────── */
+    async loadDlSettings() {
+      try { this.dlSettings = await api.get('/api/anime/settings') || this.dlSettings } catch (_) {}
+    },
+    async saveDlPath(path) {
+      const p = (path || '').trim()
+      try {
+        await api.post('/api/anime/settings', { download_path: p })
+        this.dlSettings.download_path = p
+        useUiStore().toast(p ? 'Carpeta de descargas guardada' : 'Usando la carpeta por defecto de qBittorrent', 'ok')
+      } catch (_) { useUiStore().toast('No se pudo guardar', 'error') }
+    },
+    async openDlBrowse(path = '') {
+      this.dlBrowse.open = true; this.dlBrowse.loading = true
+      try {
+        const d = await api.get(`/api/anime/browse?path=${encodeURIComponent(path)}`)
+        this.dlBrowse = { open: true, path: d.path, win: d.win_path, parent: d.parent, items: d.items || [], loading: false }
+      } catch (_) { this.dlBrowse.loading = false; useUiStore().toast('No se pudo explorar', 'error') }
+    },
+    closeDlBrowse() { this.dlBrowse.open = false },
 
     async loadLibrary(silent = false) {
       if (!silent) this.loading = true

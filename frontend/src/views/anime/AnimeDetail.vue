@@ -246,7 +246,9 @@ const malUrl = computed(() => store.malUrls[alId.value])
 .detail__back:hover { color: var(--ink); border-color: var(--line-strong); }
 
 .detail__head { display: flex; gap: var(--s-5); margin-bottom: var(--s-7); }
-.detail__cover { width: 180px; aspect-ratio: 2/3; object-fit: cover; border-radius: var(--r-md); box-shadow: var(--shadow-lg); border: 1px solid var(--line-2); flex-shrink: 0; overflow: hidden; }
+/* natural aspect (height auto) + align-self:flex-start → cover shown whole, not
+   side-cropped by object-fit:cover nor stretched by the flex row. */
+.detail__cover { width: 188px; height: auto; align-self: flex-start; border-radius: var(--r-md); box-shadow: var(--shadow-lg); border: 1px solid var(--line-2); flex-shrink: 0; }
 .detail__meta { display: flex; flex-direction: column; gap: var(--s-3); padding-top: var(--s-3); min-width: 0; }
 .detail__fmt { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); }
 .detail__title { font-size: var(--fs-3xl); }
