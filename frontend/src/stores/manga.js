@@ -203,7 +203,7 @@ export const useMangaStore = defineStore('manga', {
           try {
             const s = await api.get(`/api/status/download/${encodeURIComponent(tid)}`)
             if (!s) continue
-            if (['complete', 'done'].includes(s.status)) {
+            if (['complete', 'done', 'cancelled', 'error'].includes(s.status)) {
               delete this.dlTasks[ch]; this._refreshChapters()
             }
             this.downloads = { ...this.downloads, [tid]: s }
@@ -213,7 +213,7 @@ export const useMangaStore = defineStore('manga', {
           try {
             const s = await api.get(`/api/status/upscale/${encodeURIComponent(tid)}`)
             if (!s) continue
-            if (['done', 'complete'].includes(s.status)) {
+            if (['done', 'complete', 'cancelled', 'error'].includes(s.status)) {
               delete this.upTasks[ch]; this._refreshUpscaled()
             }
             this.upscale = { ...this.upscale, [tid]: s }
@@ -365,7 +365,15 @@ export const useMangaStore = defineStore('manga', {
       } catch (_) { useUiStore().toast('No se pudo reparar', 'error'); delete this.upTasks[chKey] }
     },
     async cancelUpscale(chapter) {
-      try { await api.post(`/api/upscale/cancel/${taskId(this.current.id, chapter, 'upscale')}`, {}) } catch (_) {}
+      const chKey = String(chapter)
+      // Use the real task id stored when the upscale started (falls back to the
+      // optimistic one), then drop it so the progress ring disappears at once.
+      const tid = this.upTasks[chKey] || taskId(this.current.id, chapter, 'upscale')
+      delete this.upTasks[chKey]
+      try { await api.post(`/api/upscale/cancel/${encodeURIComponent(tid)}`, {}) } catch (_) {}
+      // Cancellation is cooperative; refresh shortly after so the chapter reflects
+      // its final 4K/partial state.
+      setTimeout(() => this._refreshUpscaled(), 1500)
     },
     async deleteChapter(chapter) {
       try {

@@ -114,24 +114,30 @@ async function doExport(toDrive = false) {
           <!-- Management panel -->
           <Transition name="info">
             <div v-if="showManage" class="manage">
-              <div class="manage__row">
-                <label class="mf"><span>Renombrar</span><input v-model="renameVal" type="text" /></label>
-                <label class="mf"><span>Portada (URL)</span><input v-model="coverUrlVal" type="text" placeholder="https://…" /></label>
-              </div>
-              <div class="manage__row">
-                <label class="mf"><span>Modelo de escalado</span>
-                  <select :value="store.activeModel" @change="store.setModel($event.target.value)">
-                    <option v-for="(label, key) in store.models" :key="key" :value="key">{{ label }}</option>
-                  </select>
-                </label>
-                <label class="mf mf--chk"><span>Modo eco (deja correr MPV)</span>
-                  <input type="checkbox" :checked="store.eco" @change="store.setEco($event.target.checked)" />
-                </label>
-              </div>
-              <div class="manage__actions">
-                <label class="upbtn"><Icon name="library" :size="13" /> Subir portada<input type="file" accept="image/*" @change="onCoverFile" hidden /></label>
-                <button class="savebtn" @click="saveMeta">Guardar</button>
-              </div>
+              <section class="manage__sect">
+                <span class="manage__label">Información del manga</span>
+                <div class="manage__row">
+                  <label class="mf"><span>Renombrar</span><input v-model="renameVal" type="text" /></label>
+                  <label class="mf"><span>Portada (URL)</span><input v-model="coverUrlVal" type="text" placeholder="https://…" /></label>
+                </div>
+                <div class="manage__actions">
+                  <label class="upbtn"><Icon name="library" :size="13" /> Subir portada<input type="file" accept="image/*" @change="onCoverFile" hidden /></label>
+                  <button class="savebtn" @click="saveMeta">Guardar cambios</button>
+                </div>
+              </section>
+              <section class="manage__sect manage__sect--up">
+                <span class="manage__label">Escalado 4K <em>· se aplica al instante</em></span>
+                <div class="manage__row">
+                  <label class="mf"><span>Modelo</span>
+                    <select :value="store.activeModel" @change="store.setModel($event.target.value)">
+                      <option v-for="(label, key) in store.models" :key="key" :value="key">{{ label }}</option>
+                    </select>
+                  </label>
+                  <label class="mf mf--chk"><span>Modo eco <em>(deja correr MPV al escalar)</em></span>
+                    <input type="checkbox" :checked="store.eco" @change="store.setEco($event.target.checked)" />
+                  </label>
+                </div>
+              </section>
             </div>
           </Transition>
 
@@ -215,8 +221,9 @@ async function doExport(toDrive = false) {
               </div>
             </div>
 
+            <template v-if="tab === 'chapters' && !store.modalLoading && (store.chapters.length || store.hasSourceMeta)">
             <div class="modal__chhead">
-              <span>Capítulos{{ store.mdLangs.length > 1 ? '' : '' }}</span>
+              <span>Capítulos</span>
               <select v-if="store.mdLangs.length > 1" v-model="store.mdLang" class="langsel">
                 <option value="">Todos</option>
                 <option v-for="l in store.mdLangs" :key="l" :value="l">{{ flag(l) }} {{ l }}</option>
@@ -296,6 +303,7 @@ async function doExport(toDrive = false) {
               </li>
               </template>
             </ul>
+            </template>
           </div>
         </div>
       </div>
@@ -311,7 +319,7 @@ async function doExport(toDrive = false) {
 .modal__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 2; width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); transition: all var(--t-fast); }
 .modal__x:hover { color: var(--ink); border-color: var(--line-strong); }
 
-.modal__head { display: flex; gap: var(--s-4); padding: var(--s-5); border-bottom: 1px solid var(--line); }
+.modal__head { display: flex; gap: var(--s-4); padding: var(--s-5); border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .modal__cover { width: 96px; aspect-ratio: 2/3; object-fit: cover; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
 .modal__cover--ph { display: grid; place-items: center; background: var(--surface-2); color: var(--ink-ghost); }
 .modal__info { min-width: 0; padding-right: var(--s-7); }
@@ -332,7 +340,17 @@ async function doExport(toDrive = false) {
 .hbtn--accent:hover { background: var(--cyan-glow); color: #d6fffb; }
 .mf--chk { flex-direction: row; align-items: center; justify-content: space-between; }
 .mf--chk input { width: auto; }
-.manage { padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--line); background: var(--base); overflow: hidden; }
+.manage { padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--line); background: var(--base); overflow: hidden; flex-shrink: 0; }
+/* expand/collapse animation for the management panel */
+.info-enter-active, .info-leave-active { transition: max-height var(--t-base) var(--ease-silk), opacity var(--t-base) var(--ease-silk); overflow: hidden; }
+.info-enter-from, .info-leave-to { max-height: 0; opacity: 0; }
+.info-enter-to, .info-leave-from { max-height: 340px; opacity: 1; }
+.manage__sect { display: flex; flex-direction: column; gap: var(--s-2); }
+.manage__sect + .manage__sect { margin-top: var(--s-3); padding-top: var(--s-3); border-top: 1px solid var(--line); }
+.manage__label { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--ink-faint); }
+.manage__label em { font-style: normal; text-transform: none; letter-spacing: 0; color: var(--ink-ghost); }
+.manage__sect--up .manage__label { color: var(--cyan); }
+.mf em { font-style: normal; color: var(--ink-ghost); }
 .manage__row { display: flex; gap: var(--s-3); }
 .mf { flex: 1; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-xs); color: var(--ink-faint); }
 .mf input { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); }
@@ -343,12 +361,12 @@ async function doExport(toDrive = false) {
 .savebtn { padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); }
 .savebtn:hover { background: var(--azure-bright); }
 
-.modal__tabs { display: flex; gap: var(--s-1); padding: var(--s-2) var(--s-4) 0; border-bottom: 1px solid var(--line); }
+.modal__tabs { display: flex; gap: var(--s-1); padding: var(--s-2) var(--s-4) 0; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .mtab { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-4); border-radius: var(--r-sm) var(--r-sm) 0 0; font-size: var(--fs-sm); font-weight: 500; color: var(--ink-faint); border-bottom: 2px solid transparent; transition: all var(--t-fast); }
 .mtab:hover { color: var(--ink); }
 .mtab.is-active { color: var(--azure-bright); border-bottom-color: var(--azure); }
 
-.modal__body { overflow-y: auto; padding: var(--s-3); }
+.modal__body { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: var(--s-3); }
 
 /* tomo export */
 .tomo { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-4); padding: var(--s-2); align-items: start; }
