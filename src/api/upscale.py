@@ -517,7 +517,7 @@ def repair_chapter():
         data = request.get_json()
         title = data.get('title')
         chapter = data.get('chapter')
-        mode = data.get('mode', 'full')
+        mode = _mode_from(data)
 
         if not title or chapter is None:
             return jsonify({'status': 'error', 'message': 'title and chapter required'}), 400
@@ -634,10 +634,28 @@ def set_model():
     return jsonify({'status': 'ok', 'model': key, 'label': cfg['label']})
 
 
+def _mode_from(data):
+    """Normalize the throttle mode from either contract.
+
+    The Vite frontend sends {eco: bool}; the legacy UI sends {mode: 'eco'|'full'}.
+    Accept both so eco mode (MPV-friendly GPU throttling) actually takes effect.
+    """
+    if 'mode' in data and data.get('mode'):
+        return data['mode']
+    if 'eco' in data:
+        return 'eco' if data.get('eco') else 'full'
+    return 'full'
+
+
+def _fast_from(data):
+    """fast_mode (legacy) or fast (Vite)."""
+    return bool(data.get('fast_mode', data.get('fast', False)))
+
+
 @upscale_bp.route('/mode', methods=['POST'])
 def set_upscale_mode():
     data = request.get_json(silent=True) or {}
-    mode = data.get('mode', 'full')
+    mode = _mode_from(data)
     if mode == 'eco':
         _gpu_throttle_ms[0] = _ECO_THROTTLE_MS
         _gpu_tile_throttle_ms[0] = _ECO_TILE_THROTTLE_MS
@@ -653,8 +671,8 @@ def upscale_chapter():
         data = request.get_json()
         title = data.get('title')
         chapter = data.get('chapter')
-        mode = data.get('mode', 'full')
-        fast_mode = bool(data.get('fast_mode', False))
+        mode = _mode_from(data)
+        fast_mode = _fast_from(data)
 
         if not title or chapter is None:
             return jsonify({'status': 'error', 'message': 'title required'}), 400

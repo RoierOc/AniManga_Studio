@@ -169,6 +169,9 @@ export const useMangaStore = defineStore('manga', {
     init() {
       if (statusBound) return
       statusBound = true
+      // Sync the eco toggle (default on) to the backend so MPV-friendly GPU
+      // throttling applies from first load, not only after the user toggles it.
+      api.post('/api/upscale/mode', { eco: this.eco }).catch(() => {})
       onStatus((data) => {
         this.downloads = data.downloads || {}
         this.upscale = data.upscale || {}
