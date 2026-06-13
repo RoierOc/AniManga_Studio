@@ -599,6 +599,26 @@ def _make_wl_dir_wsl() -> tuple:
         return wl_win, wl_linux
 
 
+_SKIP_LUA = _Path(__file__).resolve().parents[2] / 'mpv' / 'skip-intro.lua'
+_SKIP_SECS = int(os.environ.get('ANIME_SKIP_SECS', '90'))      # 1:30 default
+_SKIP_WINDOW = int(os.environ.get('ANIME_SKIP_WINDOW', '240'))  # show button for first N s
+
+
+def _skip_args(dest_dir_linux: str, script_path_for_mpv: str) -> list:
+    """Copy skip-intro.lua next to the watch-later dir and return the mpv args that load
+    it (floating 'Saltar OP' button + key). script_path_for_mpv is the path string mpv
+    will read (a Windows path under WSL, a linux path otherwise)."""
+    if not _SKIP_LUA.exists():
+        return []
+    try:
+        os.makedirs(dest_dir_linux, exist_ok=True)
+        shutil.copy2(str(_SKIP_LUA), str(_Path(dest_dir_linux) / 'skip-intro.lua'))
+    except Exception:
+        return []
+    return [f'--script={script_path_for_mpv}',
+            f'--script-opts=skip-intro-skip={_SKIP_SECS},skip-intro-window={_SKIP_WINDOW}']
+
+
 def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> tuple:
     """Open the video file with mpv.
     Returns (ok, proc, wl_dir): proc is Popen|None; wl_dir is the Linux watch-later dir for reading.
@@ -635,6 +655,7 @@ def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> t
             try:
                 # Use PowerShell Start-Process so MPV opens in the foreground
                 args = [win_path] + _wl_args(wl_win)
+                args += _skip_args(wl_dir, wl_win + '\\skip-intro.lua')
                 if win_sub:
                     args.append(f'--sub-file={win_sub}')
 
@@ -658,6 +679,7 @@ def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> t
                 print(f'[mpv] Start-Process failed: {e}, trying direct Popen', flush=True)
                 try:
                     cmd = [mpv_bin, win_path] + _wl_args(wl_win)
+                    cmd += _skip_args(wl_dir, wl_win + '\\skip-intro.lua')
                     if win_sub:
                         cmd += [f'--sub-file={win_sub}']
                     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -682,6 +704,7 @@ def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> t
         for mpv_bin in ['mpv']:
             try:
                 cmd = [mpv_bin, file_path] + _wl_args(wl_dir)
+                cmd += _skip_args(wl_dir, str(_Path(wl_dir) / 'skip-intro.lua'))
                 if sub_file and _Path(sub_file).exists():
                     cmd += [f'--sub-file={sub_file}']
                 proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
