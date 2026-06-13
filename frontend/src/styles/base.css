@@ -7,7 +7,13 @@
 
 /* color-scheme: dark makes native controls — crucially the <select> options
    popup, scrollbars and pickers — render dark instead of stark white. */
-html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; color-scheme: dark; }
+/* Adaptive root size: the whole UI is built on rem, so scaling this scales
+   everything uniformly (like browser zoom). Small screens stay ~16px; larger
+   monitors grow so the app doesn't look tiny. Tune the middle term to taste. */
+html {
+  scroll-behavior: smooth; -webkit-text-size-adjust: 100%; color-scheme: dark;
+  font-size: clamp(16px, 0.45vw + 9.5px, 21px);
+}
 
 body {
   background: var(--void);

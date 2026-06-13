@@ -55,7 +55,7 @@ const current = computed(() => {
 .topbar__search {
   margin-left: auto;
   display: flex; align-items: center; gap: var(--s-2);
-  width: min(360px, 38vw);
+  width: min(22.5rem, 38vw);
   padding: var(--s-2) var(--s-3);
   background: var(--surface);
   border: 1px solid var(--line);

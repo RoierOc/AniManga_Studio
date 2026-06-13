@@ -133,7 +133,7 @@ const counts = computed(() => {
 .hero__eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
 .hero__tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
 
-.searchbox { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); width: min(280px, 50vw);
+.searchbox { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); width: min(17.5rem, 50vw);
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); color: var(--ink-faint); transition: border-color var(--t-fast), box-shadow var(--t-fast); }
 .searchbox:focus-within { border-color: var(--azure); box-shadow: 0 0 0 3px var(--azure-haze); }
 .searchbox input { flex: 1; border: none; outline: none; background: none; color: var(--ink); font-size: var(--fs-sm); }
@@ -176,12 +176,12 @@ const counts = computed(() => {
 .sort:hover { color: var(--ink); }
 .sort.is-active { background: var(--surface-3); color: var(--ink); }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(225px, 1fr)); gap: var(--s-6) var(--s-5); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14.0625rem, 1fr)); gap: var(--s-6) var(--s-5); }
 .skeleton { aspect-ratio: 2/3; border-radius: var(--r-md); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-9) 0; color: var(--ink-faint); }
 
 @media (max-width: 540px) {
   .alib { padding: 0 var(--s-4); }
-  .grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--s-5) var(--s-3); }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: var(--s-5) var(--s-3); }
 }
 </style>

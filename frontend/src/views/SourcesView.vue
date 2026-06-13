@@ -178,7 +178,7 @@ function openMangaFromGroup(m, groupSource) {
 
 .center { display: grid; place-items: center; padding: var(--s-8); }
 .hint { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-9) 0; color: var(--ink-faint); }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--s-4); }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: var(--s-4); }
 
 .sc { outline: none; cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }
 .sc:hover, .sc:focus-visible { transform: translateY(-5px); }
@@ -205,5 +205,5 @@ function openMangaFromGroup(m, groupSource) {
 .src-group__lang { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); padding: 1px 5px; border-radius: var(--r-xs); border: 1px solid var(--line-2); }
 .src-group__count { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
 
-@media (max-width: 540px) { .src { padding: 0 var(--s-4) var(--s-8); } .grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); } }
+@media (max-width: 540px) { .src { padding: 0 var(--s-4) var(--s-8); } .grid { grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); } }
 </style>

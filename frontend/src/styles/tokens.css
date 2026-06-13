@@ -75,23 +75,24 @@
   --tracking-wide:    0.04em;
   --tracking-caps:    0.12em;
 
-  /* ── Spacing — strict 8px grid (with 4px half-step) ──────────────────── */
-  --s-1:  4px;
-  --s-2:  8px;
-  --s-3:  12px;
-  --s-4:  16px;
-  --s-5:  24px;
-  --s-6:  32px;
-  --s-7:  48px;
-  --s-8:  64px;
-  --s-9:  96px;
+  /* ── Spacing — 8px grid expressed in rem so it scales with the root size
+       (see html{font-size:clamp(...)} in base.css → adaptive, zoom-like UI). ── */
+  --s-1:  0.25rem;   /* 4px  */
+  --s-2:  0.5rem;    /* 8px  */
+  --s-3:  0.75rem;   /* 12px */
+  --s-4:  1rem;      /* 16px */
+  --s-5:  1.5rem;    /* 24px */
+  --s-6:  2rem;      /* 32px */
+  --s-7:  3rem;      /* 48px */
+  --s-8:  4rem;      /* 64px */
+  --s-9:  6rem;      /* 96px */
 
-  /* ── Radii ───────────────────────────────────────────────────────────── */
-  --r-xs: 6px;
-  --r-sm: 10px;
-  --r-md: 14px;
-  --r-lg: 20px;
-  --r-xl: 28px;
+  /* ── Radii (rem so corners scale with the UI) ────────────────────────── */
+  --r-xs: 0.375rem;  /* 6px  */
+  --r-sm: 0.625rem;  /* 10px */
+  --r-md: 0.875rem;  /* 14px */
+  --r-lg: 1.25rem;   /* 20px */
+  --r-xl: 1.75rem;   /* 28px */
   --r-pill: 999px;
 
   /* ── Elevation — shadows tuned for a dark, blue room ─────────────────── */
@@ -113,11 +114,11 @@
   --t-slow:  420ms;
   --t-cine:  680ms;
 
-  /* ── Layout ──────────────────────────────────────────────────────────── */
-  --sidebar-w:        248px;
-  --sidebar-w-collapsed: 72px;
-  --topbar-h:         64px;
-  --content-max:      1440px;
+  /* ── Layout (rem → scales with the adaptive root size) ───────────────── */
+  --sidebar-w:        15.5rem;   /* 248px */
+  --sidebar-w-collapsed: 4.5rem; /* 72px  */
+  --topbar-h:         4rem;      /* 64px  */
+  --content-max:      90rem;     /* 1440px @16px — grows on larger monitors */
   --z-sidebar:  40;
   --z-topbar:   45;
   --z-overlay:  90;

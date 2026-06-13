@@ -266,7 +266,7 @@ const malUrl = computed(() => store.malUrls[alId.value])
 .detail__link { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line); color: var(--ink-soft); font-size: var(--fs-sm); transition: all var(--t-fast); }
 .detail__link:hover { color: var(--azure-bright); border-color: var(--azure); }
 
-.epgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--s-4); }
+.epgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: var(--s-4); }
 .epgrid__sep { display: flex; align-items: center; gap: var(--s-2); margin: var(--s-7) 0 var(--s-4); color: var(--ink-soft); font-family: var(--font-display); font-weight: 600; }
 .epgrid__sep :deep(svg) { color: var(--gold); }
 
@@ -300,7 +300,7 @@ const malUrl = computed(() => store.malUrls[alId.value])
 .chip--stack { color: var(--violet); border-color: color-mix(in srgb, var(--violet) 30%, transparent); }
 .chip--stack:hover { background: color-mix(in srgb, var(--violet) 12%, transparent); }
 
-.recgrid, .bgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: var(--s-4); }
+.recgrid, .bgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.125rem, 1fr)); gap: var(--s-4); }
 .rec { cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }
 .rec:hover { transform: translateY(-5px); }
 .rec__poster { position: relative; aspect-ratio: 2/3; border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
@@ -314,7 +314,7 @@ const malUrl = computed(() => store.malUrls[alId.value])
 
 /* browse overlays */
 .ov { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--s-5); background: rgba(7,10,18,.72); backdrop-filter: blur(8px); }
-.bmodal { position: relative; width: min(780px, 100%); max-height: 86vh; display: flex; flex-direction: column; background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); padding: var(--s-5); overflow-y: auto; }
+.bmodal { position: relative; width: min(48.75rem, 100%); max-height: 86vh; display: flex; flex-direction: column; background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); padding: var(--s-5); overflow-y: auto; }
 .bmodal__x { position: absolute; top: var(--s-3); right: var(--s-3); width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); }
 .bmodal__head { margin-bottom: var(--s-4); padding-right: var(--s-7); }
 .bmodal__head h2 { font-size: var(--fs-xl); }
@@ -328,7 +328,7 @@ const malUrl = computed(() => store.malUrls[alId.value])
 .ctx { position: fixed; display: flex; flex-direction: column; min-width: 200px; padding: var(--s-1); border-radius: var(--r-md); background: var(--glass-strong); backdrop-filter: blur(16px); border: 1px solid var(--line-2); box-shadow: var(--shadow-lg); }
 .ctx button { text-align: left; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink-soft); }
 .ctx button:hover { background: var(--surface-2); color: var(--ink); }
-.bmodal--rename { width: min(620px, 100%); }
+.bmodal--rename { width: min(38.75rem, 100%); }
 .renlist { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .renrow { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2); border-radius: var(--r-xs); font-size: var(--fs-xs); opacity: .55; }
 .renrow.is-changed { opacity: 1; }
@@ -340,6 +340,6 @@ const malUrl = computed(() => store.malUrls[alId.value])
   .detail { padding: var(--s-3) var(--s-4) var(--s-8); }
   .detail__head { flex-direction: column; }
   .detail__cover { width: 130px; }
-  .epgrid { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: var(--s-3); }
+  .epgrid { grid-template-columns: repeat(auto-fill, minmax(11.25rem, 1fr)); gap: var(--s-3); }
 }
 </style>

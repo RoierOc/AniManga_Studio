@@ -45,7 +45,7 @@ const GLOBAL = [
 
 <style scoped>
 .ov { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--s-5); background: rgba(7,10,18,.72); backdrop-filter: blur(8px); }
-.sc { position: relative; width: min(640px, 100%); background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); padding: var(--s-6); }
+.sc { position: relative; width: min(40rem, 100%); background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); padding: var(--s-6); }
 .sc__x { position: absolute; top: var(--s-3); right: var(--s-3); width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); border: 1px solid var(--line); }
 .sc__title { font-size: var(--fs-xl); margin-bottom: var(--s-4); }
 .sc__cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-6); }

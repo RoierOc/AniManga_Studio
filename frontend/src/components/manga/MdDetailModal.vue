@@ -86,7 +86,7 @@ function dlState(ch) {
 
 <style scoped>
 .ov { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--s-5); background: rgba(7,10,18,.72); backdrop-filter: blur(8px); }
-.modal { position: relative; width: min(760px, 100%); max-height: 88vh; display: flex; flex-direction: column; background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); overflow: hidden; }
+.modal { position: relative; width: min(47.5rem, 100%); max-height: 88vh; display: flex; flex-direction: column; background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); overflow: hidden; }
 .modal__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 3; width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r-sm); color: #fff; background: rgba(7,10,18,.5); border: 1px solid var(--line); transition: all var(--t-fast); }
 .modal__x:hover { background: rgba(7,10,18,.8); }
 

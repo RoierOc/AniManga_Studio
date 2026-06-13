@@ -48,7 +48,7 @@ function playNow() {
 <style scoped>
 .ap { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center;
   background: rgba(7,10,18,.72); backdrop-filter: blur(8px); }
-.ap__card { display: flex; width: min(500px, calc(100vw - 40px)); border-radius: var(--r-lg); overflow: hidden;
+.ap__card { display: flex; width: min(31.25rem, calc(100vw - 40px)); border-radius: var(--r-lg); overflow: hidden;
   background: var(--glass-strong); border: 1px solid var(--line-2); box-shadow: var(--shadow-xl); }
 .ap__cover { width: 124px; object-fit: cover; flex-shrink: 0; }
 .ap__body { flex: 1; padding: var(--s-5); display: flex; flex-direction: column; gap: var(--s-2); }

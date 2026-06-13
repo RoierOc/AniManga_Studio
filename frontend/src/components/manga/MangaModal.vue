@@ -327,7 +327,7 @@ async function doExport(toDrive = false) {
 <style scoped>
 .ov { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--s-5);
   background: rgba(7,10,18,.72); backdrop-filter: blur(8px); }
-.modal { position: relative; width: min(720px, 100%); max-height: 88vh; display: flex; flex-direction: column;
+.modal { position: relative; width: min(45rem, 100%); max-height: 88vh; display: flex; flex-direction: column;
   background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); overflow: hidden; }
 .modal__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 2; width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); transition: all var(--t-fast); }
 .modal__x:hover { color: var(--ink); border-color: var(--line-strong); }
@@ -411,7 +411,7 @@ async function doExport(toDrive = false) {
 .mdex__vols { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: var(--s-3); }
 .volchip { padding: 4px 10px; border-radius: var(--r-pill); font-size: var(--fs-2xs); color: var(--violet); border: 1px solid color-mix(in srgb, var(--violet) 30%, transparent); transition: all var(--t-fast); }
 .volchip:hover { background: color-mix(in srgb, var(--violet) 14%, transparent); }
-.mdex__covers { display: grid; grid-template-columns: repeat(auto-fill, minmax(48px, 1fr)); gap: 6px; max-height: 180px; overflow-y: auto; }
+.mdex__covers { display: grid; grid-template-columns: repeat(auto-fill, minmax(3rem, 1fr)); gap: 6px; max-height: 180px; overflow-y: auto; }
 .covsel { position: relative; aspect-ratio: 2/3; border-radius: var(--r-xs); overflow: hidden; border: 2px solid transparent; }
 .covsel img { width: 100%; height: 100%; object-fit: cover; }
 .covsel.is-sel { border-color: var(--azure); }
@@ -437,7 +437,7 @@ async function doExport(toDrive = false) {
 .chap__read-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--jade); flex-shrink: 0; }
 .colors { margin-top: var(--s-2); }
 .colors__hint { font-size: var(--fs-2xs); color: var(--ink-faint); margin-top: var(--s-1); }
-.colors__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(44px, 1fr)); gap: 5px; margin-top: var(--s-2); max-height: 150px; overflow-y: auto; }
+.colors__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(2.75rem, 1fr)); gap: 5px; margin-top: var(--s-2); max-height: 150px; overflow-y: auto; }
 .colorpg { position: relative; aspect-ratio: 2/3; border-radius: var(--r-xs); overflow: hidden; border: 2px solid transparent; }
 .colorpg img { width: 100%; height: 100%; object-fit: cover; }
 .colorpg.is-excl { border-color: var(--coral); }

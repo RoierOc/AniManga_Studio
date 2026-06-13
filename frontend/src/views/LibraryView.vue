@@ -209,7 +209,7 @@ watch(() => manga.libraryDirty, () => load())
 
 .searchbox {
   display: flex; align-items: center; gap: var(--s-2);
-  padding: var(--s-2) var(--s-3); width: min(280px, 50vw);
+  padding: var(--s-2) var(--s-3); width: min(17.5rem, 50vw);
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
   color: var(--ink-faint);
   transition: border-color var(--t-fast), box-shadow var(--t-fast);
@@ -225,7 +225,7 @@ watch(() => manga.libraryDirty, () => load())
 /* ── Grid ─────────────────────────────────────────────────────────────── */
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(225px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(14.0625rem, 1fr));
   gap: var(--s-6) var(--s-5);
 }
 .skeleton {
@@ -251,7 +251,7 @@ watch(() => manga.libraryDirty, () => load())
 
 @media (max-width: 540px) {
   .view { padding: var(--s-3) var(--s-4) var(--s-8); }
-  .grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: var(--s-5) var(--s-3); }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: var(--s-5) var(--s-3); }
   .hero__stats { gap: var(--s-5); }
 }
 </style>
