@@ -42,7 +42,9 @@ def _clear_thumb_cache():
             try: f.unlink()
             except Exception: pass
 
-threading.Thread(target=_clear_thumb_cache, daemon=True).start()
+# NOTE: thumbnails are intentionally NOT cleared on startup — they persist so that an
+# anime whose episodes were freed (clear_episodes) still shows its episode thumbnails
+# when you revisit it, which looks organic and survives restarts. They're small JPGs.
 
 # ── Anime library persistence ──────────────────────────────────────────────────
 
@@ -1339,6 +1341,12 @@ def anime_library_get():
         _backfill_done = True  # prevent re-spawning; thread sets it True when done
 
     lib = _lib_read()
+    # Cached episode thumbnails (one glob) → so the UI can show thumbs for episodes
+    # whose files were freed, keeping a revisited series looking organic.
+    try:
+        all_thumbs = {f.name for f in _THUMBS_DIR.glob('*.jpg')}
+    except Exception:
+        all_thumbs = set()
     try:
         torrents_raw = _q('get', '/torrents/info').json()
         hash_map = {t['hash'].lower(): t for t in torrents_raw}
@@ -1421,6 +1429,10 @@ def anime_library_get():
                             'ep_type': 'episode',
                         })
                 episodes_out.sort(key=lambda e: (e.get('ep_type', 'episode') != 'episode', e['num']))
+
+            for e in episodes_out:
+                _tk = f'{anime_id}_sp{e["num"]}.jpg' if e.get('ep_type') == 'special' else f'{anime_id}_{e["num"]}.jpg'
+                e['has_thumb'] = _tk in all_thumbs
 
             result.append({
                 'id': anime_id,
@@ -1532,6 +1544,9 @@ def anime_library_get():
                     e['state']     = batch_ep.get('state', 'downloading')
                     if not e.get('title'):
                         e['title'] = ep_files_b.get(e['num'], '')
+
+        for e in episodes_out:
+            e['has_thumb'] = f'{anime_id}_{e["num"]}.jpg' in all_thumbs
 
         done_count = sum(1 for e in episodes_out if e.get('in_qbt') and e.get('num', 0) > 0)
         # added_at fallback: earliest episode added_on (for entries created before this field existed)
@@ -1739,10 +1754,27 @@ def anime_clear_episodes(anime_id):
     if anime_id not in lib:
         return jsonify({'error': 'not found'}), 404
 
+    entry = lib[anime_id]
+
+    # Local-folder-linked anime have no torrent. Free space by deleting the scanned
+    # video files and unlinking the folder (+ its scan mapping) so it isn't re-linked.
+    # The entry is kept (cover/status/watch progress) → re-downloadable via torrents.
+    local_path = entry.get('local_path', '')
+    if local_path and delete_files:
+        for ep in _scan_local_episodes(local_path, entry.get('episode_overrides', {})):
+            try:
+                _Path(ep['path']).unlink()
+            except Exception:
+                pass
+        entry.pop('local_path', None)
+        entry.pop('episode_overrides', None)
+        sp = _scanpaths_read()
+        if sp.get('mappings', {}).pop(local_path, None) is not None:
+            _scanpaths_write(sp)
+
     if remove_from_qbt:
-        episodes = lib[anime_id].get('episodes', {})
         seen_hashes = set()
-        for ep in episodes.values():
+        for ep in entry.get('episodes', {}).values():
             ih = ep.get('info_hash', '')
             if ih and ih not in seen_hashes:
                 seen_hashes.add(ih)
@@ -1752,7 +1784,7 @@ def anime_clear_episodes(anime_id):
                 except Exception:
                     pass
 
-    lib[anime_id]['episodes'] = {}
+    entry['episodes'] = {}
     _lib_write(lib)
     return jsonify({'ok': True})
 

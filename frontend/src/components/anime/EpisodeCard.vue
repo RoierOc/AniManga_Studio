@@ -39,7 +39,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 
     <div class="ep__thumb" @click="onPlay">
       <div class="ep__bg" :style="anime.cover ? `background-image:url('${anime.cover}')` : ''" />
-      <img v-if="playable" class="ep__img" :src="`/api/anime/thumb/${anime.id}/${ep.num}`"
+      <img v-if="playable || ep.has_thumb" class="ep__img" :src="`/api/anime/thumb/${anime.id}/${ep.num}${ep.ep_type === 'special' ? '?special=1' : ''}`"
            loading="lazy" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
 
       <div class="ep__num"><span class="ep__num-k">{{ ep.ep_type === 'special' ? 'SP' : 'EP' }}</span><span class="ep__num-v">{{ String(ep.num).padStart(2, '0') }}</span></div>

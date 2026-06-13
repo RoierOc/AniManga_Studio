@@ -359,7 +359,7 @@ export const useAnimeStore = defineStore('anime', {
       } catch (_) { useUiStore().toast('No se pudo enlazar', 'error') }
     },
     async clearEpisodes(anime) {
-      if (!confirm(`¿Borrar los episodios de "${anime.title}" para liberar espacio?\n\nSe eliminan los archivos y el torrent de qBittorrent, pero la serie (portada, estado, progreso visto) se conserva en tu biblioteca. Podrás volver a descargarla desde Torrents cuando quieras.`)) return
+      if (!confirm(`¿Borrar los episodios de "${anime.title}" para liberar espacio?\n\nSe eliminan los archivos (su torrent en qBittorrent, o los vídeos de la carpeta vinculada), pero la serie —portada, estado, progreso visto y miniaturas— se conserva. Podrás volver a descargarla desde Torrents cuando quieras.`)) return
       try {
         // delete the files (free space) AND remove the torrent so qBittorrent no
         // longer flags it as "missing files" and re-downloads it. The library entry
