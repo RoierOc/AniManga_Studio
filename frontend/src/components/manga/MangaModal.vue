@@ -247,14 +247,14 @@ async function doExport(toDrive = false) {
                   <!-- Source / MD chapter: download button with spinner -->
                   <template v-if="c._sourceId || c._mdChapterId">
                     <span v-if="c._mdGroup || c._mdTitle" class="chap__srcmeta">{{ c._mdGroup || c._scanlator }}<template v-if="c._mdTitle"> · {{ c._mdTitle }}</template></span>
-                    <template v-if="store.dlForChapter(c)">
+                    <template v-if="store.downloadByChapter[c.chapter]">
                       <div class="chap__dlprog">
                         <svg class="dl-ring" viewBox="0 0 24 24">
                           <circle class="dl-ring__track" cx="12" cy="12" r="9" />
                           <circle class="dl-ring__fill" cx="12" cy="12" r="9"
-                            :style="{ strokeDashoffset: 56.5 - (56.5 * ((store.dlForChapter(c).progress || 0) / Math.max(store.dlForChapter(c).total || 1, 1))) }" />
+                            :style="{ strokeDashoffset: 56.5 - (56.5 * (store.downloadByChapter[c.chapter].pct / 100)) }" />
                         </svg>
-                        <span class="chap__dlprog-n" v-if="store.dlForChapter(c).total">{{ Math.round(((store.dlForChapter(c).progress || 0) / store.dlForChapter(c).total) * 100) }}%</span>
+                        <span class="chap__dlprog-n" v-if="store.downloadByChapter[c.chapter].total">{{ store.downloadByChapter[c.chapter].pct }}%</span>
                       </div>
                     </template>
                     <button v-else class="chap__dlbtn"
@@ -264,12 +264,12 @@ async function doExport(toDrive = false) {
                   </template>
                   <!-- running upscale -->
                   <template v-else>
-                  <div v-if="store.upForChapter(c.chapter)" class="chap__dlprog">
+                  <div v-if="store.upscaleByChapter[c.chapter]" class="chap__dlprog">
                     <svg class="dl-ring" viewBox="0 0 24 24">
                       <circle class="dl-ring__track" cx="12" cy="12" r="9" />
-                      <circle class="dl-ring__fill" cx="12" cy="12" r="9" :style="{ strokeDashoffset: 56.5 - (56.5 * ((store.upForChapter(c.chapter).progress || 0) / Math.max(store.upForChapter(c.chapter).total || 1, 1))) }" />
+                      <circle class="dl-ring__fill" cx="12" cy="12" r="9" :style="{ strokeDashoffset: 56.5 - (56.5 * (store.upscaleByChapter[c.chapter].pct / 100)) }" />
                     </svg>
-                    <span class="chap__dlprog-n" v-if="store.upForChapter(c.chapter).total">{{ Math.round(((store.upForChapter(c.chapter).progress || 0) / store.upForChapter(c.chapter).total) * 100) }}%</span>
+                    <span class="chap__dlprog-n" v-if="store.upscaleByChapter[c.chapter].total">{{ store.upscaleByChapter[c.chapter].pct }}%</span>
                     <button class="ib ib--danger" title="Cancelar" @click="store.cancelUpscale(c.chapter)"><Icon name="close" :size="13" /></button>
                   </div>
                   <template v-else>

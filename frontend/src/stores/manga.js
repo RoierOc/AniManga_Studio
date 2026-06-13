@@ -6,6 +6,26 @@ import { taskId, canonicalTitle } from '@/lib/manga'
 
 let statusBound = false
 
+// Build a plain { chapterKey: {status, progress, total, pct} } map from a
+// {chapterKey: taskId} table and the live task-status dict. Returns plain data
+// so Vue tracks it through a normal computed (the previous getter-returning-a-
+// function pattern did not re-render the progress rings).
+function buildProgressMap(taskTable, statusDict) {
+  const out = {}
+  for (const [ch, tid] of Object.entries(taskTable)) {
+    const d = statusDict[tid] || {}
+    const total = d.total || 0
+    const progress = d.progress || 0
+    out[ch] = {
+      status: d.status || 'starting',
+      progress,
+      total,
+      pct: total ? Math.min(100, Math.round((progress / total) * 100)) : 0,
+    }
+  }
+  return out
+}
+
 export const useMangaStore = defineStore('manga', {
   state: () => ({
     // detail modal
@@ -85,17 +105,12 @@ export const useMangaStore = defineStore('manga', {
       const t = s.upscale[taskId(s.current.id, chapter, 'upscale')]
       return t && ['starting', 'started', 'upscaling'].includes(t.status) ? t : null
     },
-    // Download/upscale progress — optimistic stub until SSE/poll data arrives
-    dlForChapter: (s) => (ch) => {
-      const tid = s.dlTasks[String(ch.chapter)]
-      if (!tid) return null
-      return s.downloads[tid] || { status: 'starting', progress: 0, total: 0 }
-    },
-    upForChapter: (s) => (ch) => {
-      const tid = s.upTasks[String(ch)]
-      if (!tid) return null
-      return s.upscale[tid] || { status: 'starting', progress: 0, total: 0 }
-    },
+    // Download/upscale progress as PLAIN reactive maps keyed by chapter.
+    // A computed map (clear deps on dlTasks + downloads) re-renders reliably,
+    // unlike the old getter-returning-a-function which the template read several
+    // times per binding and Vue failed to track — the rings stayed at 0%.
+    downloadByChapter: (s) => buildProgressMap(s.dlTasks, s.downloads),
+    upscaleByChapter: (s) => buildProgressMap(s.upTasks, s.upscale),
     sortedChapters: (s) => [...s.chapters].sort((a, b) => parseFloat(b.chapter) - parseFloat(a.chapter)),
     mdLangs: (s) => [...new Set(s.mdChapters.map(c => c.language).filter(Boolean))].sort(),
     // Merge local + source + MD chapters, showing all available for download
@@ -310,7 +325,10 @@ export const useMangaStore = defineStore('manga', {
       const chKey = String(chapter)
       this.upTasks[chKey] = taskId(this.current.id, chKey, 'upscale')
       try {
-        await api.post('/api/upscale/upscale_chapter', { title: this.current.id, chapter, eco: opts.eco ?? this.eco, fast: opts.fast ?? false })
+        const res = await api.post('/api/upscale/upscale_chapter', { title: this.current.id, chapter, eco: opts.eco ?? this.eco, fast: opts.fast ?? false })
+        // Use the backend's real task id so the progress ring matches SSE keys
+        // even if the optimistic id normalization differs.
+        if (res?.task_id) this.upTasks[chKey] = res.task_id
         useUiStore().toast(`Escalando 4K · cap. ${chapter}`, 'info')
       } catch (_) { useUiStore().toast('No se pudo iniciar el escalado', 'error'); delete this.upTasks[chKey] }
     },
