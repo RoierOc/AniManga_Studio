@@ -564,6 +564,9 @@ export const useAnimeStore = defineStore('anime', {
           await new Promise(r => setTimeout(r, 3000))
         }
         await this.loadQbt()
+        // Also refresh the library so episode states (e.g. "descargando") update in the
+        // series detail when a torrent is paused/deleted, not just the Downloads list.
+        await this.loadLibrary(true)
       } catch (e) { useUiStore().toast('Error: ' + (e.message || 'qBittorrent'), 'error') }
     },
 

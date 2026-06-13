@@ -233,11 +233,12 @@ const malUrl = computed(() => store.malUrls[alId.value])
 <style scoped>
 .detail { position: relative; padding: var(--s-4) var(--s-6) var(--s-8); max-width: var(--content-max); margin: 0 auto; }
 .detail__aura {
-  position: absolute; top: 0; left: 0; right: 0; height: 420px; z-index: -1;
-  background-size: cover; background-position: center 25%;
-  -webkit-mask-image: linear-gradient(180deg, rgba(0,0,0,.4), transparent 90%);
-  mask-image: linear-gradient(180deg, rgba(0,0,0,.4), transparent 90%);
-  filter: blur(30px) saturate(1.1); opacity: .35; transform: scaleY(-1);
+  position: absolute; top: 0; left: 0; right: 0; height: 460px; z-index: -1;
+  background-size: cover; background-position: center 20%;
+  filter: blur(46px) saturate(1.25); opacity: .42;
+  /* radial fade on bottom + sides → blends into the page with no hard edge */
+  -webkit-mask-image: radial-gradient(125% 88% at 50% 2%, #000 26%, transparent 74%);
+  mask-image: radial-gradient(125% 88% at 50% 2%, #000 26%, transparent 74%);
 }
 
 .detail__back { display: inline-flex; align-items: center; gap: var(--s-1); margin: var(--s-2) 0 var(--s-5);
