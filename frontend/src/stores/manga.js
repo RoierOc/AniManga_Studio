@@ -5,6 +5,7 @@ import { useUiStore } from './ui'
 import { taskId, canonicalTitle } from '@/lib/manga'
 
 let statusBound = false
+let previewTimer = null
 
 // Build a plain { chapterKey: {status, progress, total, pct} } map from a
 // {chapterKey: taskId} table and the live task-status dict. Returns plain data
@@ -79,6 +80,7 @@ export const useMangaStore = defineStore('manga', {
     colorPages: [],             // [{chapter, filename, url, label}]
     colorLoading: false,
     excludedPages: [],          // filenames excluded from export
+    exportPreview: { pages: 0, est_mb: 0, upscaled_pages: 0, original_pages: 0 },  // live tomo size/page estimate
     offlineCovers: null,        // { running, done, total } | null
 
     // export destinations
@@ -506,6 +508,23 @@ export const useMangaStore = defineStore('manga', {
     },
     toggleExclude(filename) {
       this.excludedPages = this.excludedPages.includes(filename) ? this.excludedPages.filter(f => f !== filename) : [...this.excludedPages, filename]
+    },
+    // Debounced live estimate of the tomo (pages + size) for the selected chapters.
+    loadExportPreview(chapters, quality = 92) {
+      clearTimeout(previewTimer)
+      if (!chapters?.length || !this.current) {
+        this.exportPreview = { pages: 0, est_mb: 0, upscaled_pages: 0, original_pages: 0 }
+        return
+      }
+      previewTimer = setTimeout(async () => {
+        try {
+          const d = await api.post('/api/export/preview', { title: this.current.id, chapters, quality, exclude_pages: this.excludedPages })
+          this.exportPreview = {
+            pages: d.pages || 0, est_mb: d.est_mb || 0,
+            upscaled_pages: d.upscaled_pages || 0, original_pages: d.original_pages || 0,
+          }
+        } catch (_) {}
+      }, 400)
     },
     async downloadCoversOffline() {
       try {

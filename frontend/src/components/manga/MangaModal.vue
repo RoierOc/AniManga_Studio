@@ -37,10 +37,16 @@ watch(m, (v) => {
   tab.value = 'chapters'; sel.value = new Set(); volName.value = v?.name || ''
   showManage.value = false; renameVal.value = v?.name || ''; coverUrlVal.value = ''
   tomoCover.value = ''; rangeFrom.value = ''; rangeTo.value = ''
-  if (v) { store.resetMdex(); store.loadHealth(); store.colorPages = []; store.excludedPages = [] }
+  if (v) { store.resetMdex(); store.loadHealth(); store.colorPages = []; store.excludedPages = []; store.exportPreview = { pages: 0, est_mb: 0, upscaled_pages: 0, original_pages: 0 } }
   if (v && !Object.keys(store.models).length) store.loadModels()
   if (v) store.loadDestinations()
 }, { immediate: true })
+
+// Live tomo estimate: recompute whenever the selection, quality or exclusions change
+// while the export tab is open.
+watch([sel, quality, tab, () => store.excludedPages.length], () => {
+  if (tab.value === 'tomo') store.loadExportPreview([...sel.value], quality.value)
+})
 
 function applyVol(vol) {
   const { selected, label } = store.applyMdexVolume(vol)
@@ -164,6 +170,11 @@ async function doExport(toDrive = false) {
                 </div>
                 <label class="chk"><input v-model="downscale" type="checkbox" /> Reducir a la mitad (menor tamaño)</label>
                 <label class="upbtn"><Icon name="library" :size="13" /> {{ tomoCover ? 'Portada elegida ✓' : 'Portada del tomo (opcional)' }}<input type="file" accept="image/*" @change="onTomoCover" hidden /></label>
+                <div v-if="sel.size && store.exportPreview.pages" class="tprev">
+                  <span class="tprev__main">{{ store.exportPreview.pages }} págs · ~{{ store.exportPreview.est_mb }} MB</span>
+                  <span v-if="store.exportPreview.upscaled_pages" class="tprev__tag tprev__tag--4k">{{ store.exportPreview.upscaled_pages }} en 4K</span>
+                  <span v-if="store.exportPreview.original_pages" class="tprev__tag">{{ store.exportPreview.original_pages }} original</span>
+                </div>
                 <button class="exportbtn" :disabled="!sel.size" @click="doExport(false)">
                   <Icon name="download" :size="15" /> Exportar {{ sel.size }} {{ sel.size === 1 ? 'capítulo' : 'capítulos' }}
                 </button>
@@ -432,6 +443,10 @@ async function doExport(toDrive = false) {
 .colorpg.is-excl { border-color: var(--coral); }
 .colorpg.is-excl img { opacity: .4; }
 .colorpg__x { position: absolute; inset: 0; display: grid; place-items: center; color: var(--coral); background: rgba(7,10,18,.4); }
+.tprev { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin-top: var(--s-1); font-size: var(--fs-xs); color: var(--ink-soft); }
+.tprev__main { font-family: var(--font-mono); color: var(--ink); }
+.tprev__tag { font-size: var(--fs-2xs); padding: 1px 7px; border-radius: var(--r-pill); color: var(--ink-faint); border: 1px solid var(--line-2); }
+.tprev__tag--4k { color: var(--cyan); border-color: var(--cyan-glow); }
 .dests { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; margin-top: var(--s-2); font-size: var(--fs-xs); }
 .dlink { color: var(--azure-bright); }
 .dok { color: var(--jade); }
