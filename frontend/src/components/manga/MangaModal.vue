@@ -121,6 +121,8 @@ async function doExport(toDrive = false) {
                   <label class="mf"><span>Portada (URL)</span><input v-model="coverUrlVal" type="text" placeholder="https://…" /></label>
                 </div>
                 <div class="manage__actions">
+                  <button class="delbtn" @click="store.deleteManga()" title="Eliminar este manga de la biblioteca"><Icon name="close" :size="13" /> Eliminar manga</button>
+                  <span class="manage__spacer" />
                   <label class="upbtn"><Icon name="library" :size="13" /> Subir portada<input type="file" accept="image/*" @change="onCoverFile" hidden /></label>
                   <button class="savebtn" @click="saveMeta">Guardar cambios</button>
                 </div>
@@ -366,7 +368,10 @@ async function doExport(toDrive = false) {
 .mf select:hover { border-color: var(--line-strong); }
 .mf select:focus { outline: none; border-color: var(--azure); box-shadow: 0 0 0 3px var(--azure-haze); }
 .mf select option { background: var(--surface-2); color: var(--ink); }
-.manage__actions { display: flex; gap: var(--s-2); margin-top: var(--s-3); justify-content: flex-end; }
+.manage__actions { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-3); }
+.manage__spacer { flex: 1; }
+.delbtn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--coral); border: 1px solid color-mix(in srgb, var(--coral) 35%, transparent); background: transparent; transition: all var(--t-fast); }
+.delbtn:hover { background: color-mix(in srgb, var(--coral) 12%, transparent); border-color: var(--coral); }
 .upbtn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line-2); cursor: pointer; }
 .upbtn:hover { color: var(--ink); }
 .savebtn { padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); }

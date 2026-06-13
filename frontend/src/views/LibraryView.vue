@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
@@ -91,6 +91,8 @@ async function findCovers() {
   finally { findingCovers.value = false }
 }
 onMounted(() => { load(); if (!manga.updatesLoaded) manga.loadUpdates() })
+// Reload the grid after a manga is deleted from the modal.
+watch(() => manga.libraryDirty, () => load())
 </script>
 
 <template>

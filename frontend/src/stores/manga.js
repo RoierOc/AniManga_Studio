@@ -42,6 +42,7 @@ export const useMangaStore = defineStore('manga', {
     dlTasks: {},              // { chapterKey: taskId } — maps chapter to SSE download task ID
     upTasks: {},              // { chapterKey: taskId } — maps chapter to SSE upscale task ID
     cancelledIds: [],         // task ids cancelled locally — hidden everywhere until the backend catches up
+    libraryDirty: 0,          // bumped after a manga is deleted so LibraryView reloads
 
     // live task status (from SSE aggregated payload)
     downloads: {},
@@ -400,6 +401,26 @@ export const useMangaStore = defineStore('manga', {
         this.chapters = this.chapters.filter(c => c.chapter !== chapter)
         delete this.upscaled[chapter]
       } catch (_) { useUiStore().toast('No se pudo borrar el capítulo', 'error') }
+    },
+
+    // Delete a whole manga from the library: downloaded + upscaled files, and the
+    // MangaDex local-library entry if it's tracked there (mirrors the legacy flow).
+    async deleteManga() {
+      if (!this.current) return
+      const title = this.current.id
+      const name = this.current.name || title
+      if (!confirm(`¿Borrar "${name}" de tu biblioteca?\nSe eliminarán los archivos descargados y escalados.`)) return
+      const ui = useUiStore()
+      let ok = false
+      try { await api.del('/api/download/delete_manga', { body: { title } }); ok = true } catch (_) {}
+      if (this.mdId) { try { await api.del(`/api/mangadex/local_library/remove/${encodeURIComponent(this.mdId)}`); ok = true } catch (_) {} }
+      if (ok) {
+        ui.toast(`"${name}" eliminado de la biblioteca`, 'ok')
+        this.libraryDirty++
+        this.close()
+      } else {
+        ui.toast('No se pudo eliminar el manga', 'error')
+      }
     },
 
     /* ── Task queue actions ─────────────────────────────────────────────── */

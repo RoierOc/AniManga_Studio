@@ -23,7 +23,10 @@ app = Flask(__name__,
     template_folder=str(BASE_DIR.parent / 'templates'),
     static_folder=str(BASE_DIR.parent / 'static'),
     static_url_path='/static')
-app.secret_key = os.environ.get('SECRET_KEY', 'manga-secret-key-change-in-production')
+import secrets as _secrets
+# Prefer SECRET_KEY from the environment (start_server.sh sources .env); fall back
+# to a random per-process key rather than a known, committed default string.
+app.secret_key = os.environ.get('SECRET_KEY') or _secrets.token_hex(32)
 app.jinja_env.auto_reload = False
 app.jinja_env.cache = None
 
