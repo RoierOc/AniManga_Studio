@@ -9,7 +9,7 @@ const store = useMangaStore()
 const m = computed(() => store.current)
 const upState = (ch) => store.upscaled[ch]          // true | 'partial' | undefined
 
-const LANG_FLAG = { en: '🇬🇧', es: '🇪🇸', 'es-la': '🌎', ja: '🇯🇵', 'pt-br': '🇧🇷', fr: '🇫🇷', ko: '🇰🇷', zh: '🇨🇳', 'zh-hk': '🇭🇰', it: '🇮🇹', de: '🇩🇪', ru: '🇷🇺' }
+const LANG_FLAG = { en: '🇬🇧', es: '🇪🇸', 'es-la': '🇲🇽', ja: '🇯🇵', 'pt-br': '🇧🇷', fr: '🇫🇷', ko: '🇰🇷', zh: '🇨🇳', 'zh-hk': '🇭🇰', it: '🇮🇹', de: '🇩🇪', ru: '🇷🇺' }
 const flag = (l) => LANG_FLAG[l] || l
 
 // bulk upscale range
@@ -336,7 +336,7 @@ async function doExport(toDrive = false) {
 .modal__head { display: flex; gap: var(--s-4); padding: var(--s-5); border-bottom: 1px solid var(--line); flex-shrink: 0; }
 /* align-self:flex-start stops the flex row from stretching the cover to the (taller)
    info column's height — which was distorting its 2/3 aspect ratio. */
-.modal__cover { width: 104px; aspect-ratio: 2/3; object-fit: cover; object-position: center top; align-self: flex-start; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
+.modal__cover { width: 128px; aspect-ratio: 2/3; object-fit: cover; object-position: center top; align-self: flex-start; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
 .modal__cover--ph { display: grid; place-items: center; background: var(--surface-2); color: var(--ink-ghost); aspect-ratio: 2/3; }
 .modal__info { min-width: 0; padding-right: var(--s-7); }
 .modal__title { font-size: var(--fs-xl); line-height: var(--lh-snug); }
