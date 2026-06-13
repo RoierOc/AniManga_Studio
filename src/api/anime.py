@@ -107,60 +107,136 @@ def _find_subtitles(video_path: str) -> list:
 
 _backfill_done = False
 
+_TMDB_KEY = os.environ.get('TMDB_API_KEY', '')
+
+
+def _norm_title(s):
+    return re.sub(r'[^a-z0-9]', '', (s or '').lower())
+
+
+def _anilist_post(query, variables, tries=4):
+    """POST to AniList honoring its rate limit (HTTP 429 + Retry-After). AniList's
+    degraded limit is ~30 req/min, so a single backfill can hit it; back off and retry
+    instead of silently dropping the entry."""
+    r = None
+    for _ in range(tries):
+        r = _http.post(_ANILIST, json={'query': query, 'variables': variables}, timeout=10)
+        if r.status_code == 429:
+            wait = r.headers.get('Retry-After')
+            time.sleep(min(int(wait) if (wait and wait.isdigit()) else 8, 60))
+            continue
+        return r
+    return r
+
+
+def _anilist_enrich(al_id):
+    """Full metadata for a library entry: episodes, format, titles, genres, season,
+    the high-res cover (extraLarge) and the wide hero bannerImage."""
+    q = '''query($id:Int){Media(id:$id,type:ANIME){
+        episodes format status season seasonYear
+        title{romaji english}
+        coverImage{extraLarge large}
+        bannerImage genres
+    }}'''
+    r = _anilist_post(q, {'id': int(al_id)})
+    return (r.json().get('data') or {}).get('Media') or {} if r is not None else {}
+
+
+def _tmdb_backdrop(title_en, title_romaji, year):
+    """Best wide, text-free backdrop from TMDB for a TV/anime title, or None.
+    Conservative match (normalized-title overlap + year ±1) so we never show wrong art."""
+    if not _TMDB_KEY:
+        return None
+    for name in [t for t in (title_en, title_romaji) if t]:
+        try:
+            params = {'api_key': _TMDB_KEY, 'query': name, 'include_adult': 'false'}
+            if year:
+                params['first_air_date_year'] = year
+            r = _http.get('https://api.themoviedb.org/3/search/tv', params=params, timeout=8)
+            target = _norm_title(name)
+            for res in ((r.json() or {}).get('results') or [])[:5]:
+                cand = _norm_title(res.get('name'))
+                cand_o = _norm_title(res.get('original_name'))
+                ry = (res.get('first_air_date') or '')[:4]
+                year_ok = (not year) or (not ry) or abs(int(ry) - int(year)) <= 1
+                match = bool(target) and (target in cand or cand in target or target in cand_o or cand_o in target)
+                if not (year_ok and match):
+                    continue
+                imgs = _http.get(
+                    f"https://api.themoviedb.org/3/tv/{res['id']}/images",
+                    params={'api_key': _TMDB_KEY, 'include_image_language': 'null,en'}, timeout=8).json()
+                backdrops = imgs.get('backdrops') or []
+                textless = [b for b in backdrops if b.get('iso_639_1') is None]
+                pool = textless or backdrops
+                if pool:
+                    best = max(pool, key=lambda b: (b.get('vote_average') or 0, b.get('width') or 0))
+                    return {'tmdb_id': res['id'], 'url': f"https://image.tmdb.org/t/p/w1280{best['file_path']}"}
+            time.sleep(0.2)
+        except Exception:
+            pass
+    return None
+
+
 def _backfill_anime_metadata():
-    """Backfill total_episodes / format / al_id for library entries that lack them.
-    Runs once in background on first library request.
-    Pass 1: numeric keys (AniList IDs) missing total_episodes — fetch from AniList.
-    Pass 2: entries with mal_id but no al_id — resolve via AniList idMal filter."""
+    """Background enrichment of library entries: AniList metadata (episodes, format,
+    genres, season, hi-res cover, wide bannerImage) plus a TMDB backdrop when one
+    matches. Runs once per process and skips already-enriched entries. The resolved
+    hero banner is cached per entry (banner / banner_source / tmdb_id)."""
     global _backfill_done
     lib = _lib_read()
     changed = False
+    processed = 0
 
-    # Pass 1: AniList-keyed entries missing total_episodes
-    q = '''query($id:Int){Media(id:$id,type:ANIME){
-        episodes format status
-        title{romaji english}
-        coverImage{large}
-    }}'''
     for k, v in lib.items():
-        if not k.isdigit() or v.get('total_episodes'):
-            continue
-        try:
-            r = _http.post(_ANILIST, json={'query': q, 'variables': {'id': int(k)}}, timeout=8)
-            media = (r.json().get('data') or {}).get('Media') or {}
-            if not media:
-                continue
-            t = media.get('title') or {}
-            if media.get('episodes') and not lib[k].get('total_episodes'):
-                lib[k]['total_episodes'] = media['episodes']
-                changed = True
-            if media.get('format') and not lib[k].get('format'):
-                lib[k]['format'] = media['format']
-                changed = True
-            if not lib[k].get('al_id'):
-                lib[k]['al_id'] = int(k)
-                changed = True
-            if not lib[k].get('title_romaji') and t.get('romaji'):
-                lib[k]['title_romaji'] = t['romaji']
-                changed = True
-            time.sleep(0.4)  # AniList rate limit: 90 req/min
-        except Exception:
-            pass
+        al_id = v.get('al_id') or (int(k) if k.isdigit() else None)
 
-    # Pass 2: entries with mal_id but no al_id (e.g. added from Jikan search)
-    q2 = 'query($mid:Int){Media(idMal:$mid,type:ANIME){id}}'
-    for k, v in lib.items():
-        if not v.get('mal_id') or v.get('al_id'):
+        # Resolve al_id from mal_id when missing (Jikan-sourced entries)
+        if not al_id and v.get('mal_id'):
+            try:
+                r = _anilist_post('query($mid:Int){Media(idMal:$mid,type:ANIME){id}}', {'mid': v['mal_id']})
+                al_id = ((r.json().get('data') or {}).get('Media') or {}).get('id') if r is not None else None
+                if al_id:
+                    v['al_id'] = al_id; changed = True
+                time.sleep(1.5)
+            except Exception:
+                pass
+        if not al_id:
             continue
-        try:
-            r = _http.post(_ANILIST, json={'query': q2, 'variables': {'mid': v['mal_id']}}, timeout=8)
-            media = (r.json().get('data') or {}).get('Media') or {}
-            if media.get('id'):
-                lib[k]['al_id'] = media['id']
-                changed = True
-            time.sleep(0.4)
-        except Exception:
-            pass
+
+        # AniList enrichment when any key field is missing
+        if not (v.get('banner') and v.get('genres') and v.get('total_episodes') and v.get('cover_xl')):
+            try:
+                m = _anilist_enrich(al_id)
+                processed += 1
+                if m:
+                    t = m.get('title') or {}
+                    ci = m.get('coverImage') or {}
+                    if not v.get('al_id'): v['al_id'] = al_id; changed = True
+                    if m.get('episodes') and not v.get('total_episodes'): v['total_episodes'] = m['episodes']; changed = True
+                    if m.get('format') and not v.get('format'): v['format'] = m['format']; changed = True
+                    if t.get('romaji') and not v.get('title_romaji'): v['title_romaji'] = t['romaji']; changed = True
+                    if t.get('english') and not v.get('title_english'): v['title_english'] = t['english']; changed = True
+                    if ci.get('extraLarge') and not v.get('cover_xl'): v['cover_xl'] = ci['extraLarge']; changed = True
+                    if m.get('genres') and not v.get('genres'): v['genres'] = (m['genres'] or [])[:5]; changed = True
+                    if m.get('season') and not v.get('season'): v['season'] = m['season']; changed = True
+                    if m.get('seasonYear') and not v.get('season_year'): v['season_year'] = m['seasonYear']; changed = True
+                    # AniList banner is the default; never overwrite a TMDB one
+                    if m.get('bannerImage') and v.get('banner_source') != 'tmdb' and v.get('banner') != m['bannerImage']:
+                        v['banner'] = m['bannerImage']; v['banner_source'] = 'anilist'; changed = True
+                time.sleep(1.5)  # AniList degraded rate limit is ~30 req/min
+            except Exception:
+                pass
+
+        # TMDB backdrop — attempt once per entry (higher quality than AniList)
+        if _TMDB_KEY and not v.get('_tmdb_tried'):
+            v['_tmdb_tried'] = True; changed = True
+            hit = _tmdb_backdrop(v.get('title_english') or v.get('title'), v.get('title_romaji'), v.get('season_year'))
+            if hit:
+                v['banner'] = hit['url']; v['banner_source'] = 'tmdb'; v['tmdb_id'] = hit['tmdb_id']; changed = True
+
+        # Persist periodically so partial progress survives interruptions/restarts.
+        if changed and processed and processed % 8 == 0:
+            _lib_write(lib)
 
     if changed:
         _lib_write(lib)
@@ -1287,6 +1363,12 @@ def anime_library_get():
                 'title': anime.get('title', ''),
                 'title_romaji': anime.get('title_romaji', ''),
                 'cover': anime.get('cover', ''),
+                'cover_xl': anime.get('cover_xl', ''),
+                'banner': anime.get('banner', ''),
+                'banner_source': anime.get('banner_source', ''),
+                'genres': anime.get('genres', []),
+                'season': anime.get('season', ''),
+                'season_year': anime.get('season_year'),
                 'total_episodes': series_total or regular_count,
                 'format': anime.get('format', ''),
                 'status': anime.get('status', ''),
@@ -1382,6 +1464,12 @@ def anime_library_get():
             'title': anime.get('title', ''),
             'title_romaji': anime.get('title_romaji', ''),
             'cover': anime.get('cover', ''),
+            'cover_xl': anime.get('cover_xl', ''),
+            'banner': anime.get('banner', ''),
+            'banner_source': anime.get('banner_source', ''),
+            'genres': anime.get('genres', []),
+            'season': anime.get('season', ''),
+            'season_year': anime.get('season_year'),
             'total_episodes': total,
             'format': anime.get('format', ''),
             'status': anime.get('status', ''),
@@ -1395,6 +1483,8 @@ def anime_library_get():
 
 @anime_bp.route('/library/add', methods=['POST'])
 def anime_library_add():
+    global _backfill_done
+    _backfill_done = False   # re-enrich (banner/genres/TMDB) for the newly added entry
     data = request.get_json(silent=True) or {}
     al_id  = data.get('al_id')
     mal_id = data.get('mal_id')

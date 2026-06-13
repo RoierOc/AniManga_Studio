@@ -113,28 +113,40 @@ export const useAnimeStore = defineStore('anime', {
         .slice(0, 12)
     },
 
-    // Hero banner: seasonal anime only, sorted by popularity then next airing
-    heroItems: (s) => {
-      if (!s.seasonal.length) return []
-      return s.seasonal
-        .filter(a => !s.library.find(lib => lib.al_id === a.al_id || lib.mal_id === a.mal_id))
-        .sort((x, y) => {
-          const xAt = (s.nextAiring[x.al_id])?.airing_at || 0
-          const yAt = (s.nextAiring[y.al_id])?.airing_at || 0
-          if (xAt && yAt) return xAt - yAt
-          if (xAt) return -1
-          if (yAt) return 1
-          return (y.popularity || 0) - (x.popularity || 0)
-        })
-        .slice(0, 8)
-        .map(a => {
-          const na = s.nextAiring[a.al_id]
-          return {
+    // Hero banner content, in priority order:
+    //   1) library anime with a newly available, unwatched episode (newest first)
+    //   2) "continue watching" (most recently watched) if nothing new
+    //   3) seasonal popular as a fallback when the library is empty
+    heroItems() {
+      // 1 — fresh, unwatched, downloaded episodes
+      const fresh = []
+      for (const a of this.library) {
+        const eps = (a.episodes || []).filter(e =>
+          e.num > 0 && e.ep_type !== 'special' &&
+          (e.in_local || (e.in_qbt && e.progress >= 100)) && !e.watched)
+        if (!eps.length) continue
+        const ep = eps.reduce((b, e) => (e.added_on || 0) > (b.added_on || 0) ? e : b)
+        fresh.push({ anime: a, ep, kind: 'new', ts: ep.added_on || 0 })
+      }
+      if (fresh.length) return fresh.sort((x, y) => y.ts - x.ts).slice(0, 8)
+
+      // 2 — continue watching
+      const cw = this.continueWatching
+      if (cw.length) return cw.slice(0, 8).map(c => ({ anime: c.anime, ep: c.ep, kind: 'continue', ts: c.anime.last_watched_at || 0 }))
+
+      // 3 — seasonal popular (not already in library)
+      if (this.seasonal.length) {
+        return this.seasonal
+          .filter(a => !this.library.find(lib => lib.al_id === a.al_id || lib.mal_id === a.mal_id))
+          .sort((x, y) => (y.popularity || 0) - (x.popularity || 0))
+          .slice(0, 8)
+          .map(a => ({
             anime: { ...a, id: a.al_id || a.id, episodes: [], last_watched_at: 0, status: a.status || 'RELEASING' },
-            ep: na ? { num: na.episode } : { num: a.next_episode || a.episodes || '?' },
-            kind: 'seasonal',
-          }
-        })
+            ep: { num: this.nextAiring[a.al_id]?.episode || a.next_episode || a.episodes || '?' },
+            kind: 'seasonal', ts: 0,
+          }))
+      }
+      return []
     },
 
     filteredTorrents: (s) => {

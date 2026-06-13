@@ -11,11 +11,16 @@ const store = useAnimeStore()
 // Background sync (15s) — only refreshes while qBittorrent has active downloads,
 // matching the original app's _qbtSyncTimer behaviour.
 let sync = null
+const reloads = []
 onMounted(() => {
   sync = setInterval(() => { if (store.hasActiveQbt()) store.loadLibrary(true) }, 15000)
   if (!store.seasonal.length) store.loadSeasonal()
+  // Hero banners/genres are backfilled server-side after the first library load;
+  // refresh silently a couple of times so HD art appears without a manual reload.
+  reloads.push(setTimeout(() => store.loadLibrary(true), 7000))
+  reloads.push(setTimeout(() => store.loadLibrary(true), 20000))
 })
-onUnmounted(() => { if (sync) clearInterval(sync) })
+onUnmounted(() => { if (sync) clearInterval(sync); reloads.forEach(clearTimeout) })
 
 const SORTS = [
   { id: 'last_added', label: 'Recientes' },
