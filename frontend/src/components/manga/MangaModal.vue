@@ -355,6 +355,17 @@ async function doExport(toDrive = false) {
 .mf { flex: 1; display: flex; flex-direction: column; gap: 4px; font-size: var(--fs-xs); color: var(--ink-faint); }
 .mf input { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); }
 .mf input:focus { outline: none; border-color: var(--azure); }
+.mf select {
+  padding: var(--s-2) 30px var(--s-2) var(--s-3); border-radius: var(--r-sm);
+  background-color: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm);
+  cursor: pointer; appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239aa7bd' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 10px center;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.mf select:hover { border-color: var(--line-strong); }
+.mf select:focus { outline: none; border-color: var(--azure); box-shadow: 0 0 0 3px var(--azure-haze); }
+.mf select option { background: var(--surface-2); color: var(--ink); }
 .manage__actions { display: flex; gap: var(--s-2); margin-top: var(--s-3); justify-content: flex-end; }
 .upbtn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line-2); cursor: pointer; }
 .upbtn:hover { color: var(--ink); }

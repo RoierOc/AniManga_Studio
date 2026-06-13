@@ -5,7 +5,9 @@
 *, *::before, *::after { box-sizing: border-box; }
 * { margin: 0; padding: 0; }
 
-html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+/* color-scheme: dark makes native controls — crucially the <select> options
+   popup, scrollbars and pickers — render dark instead of stark white. */
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; color-scheme: dark; }
 
 body {
   background: var(--void);

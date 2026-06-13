@@ -41,6 +41,7 @@ export const useMangaStore = defineStore('manga', {
     mdLang: '',               // language filter for MD chapters ('' = all)
     dlTasks: {},              // { chapterKey: taskId } — maps chapter to SSE download task ID
     upTasks: {},              // { chapterKey: taskId } — maps chapter to SSE upscale task ID
+    cancelledIds: [],         // task ids cancelled locally — hidden everywhere until the backend catches up
 
     // live task status (from SSE aggregated payload)
     downloads: {},
@@ -164,10 +165,12 @@ export const useMangaStore = defineStore('manga', {
       const out = []
       const pct = (p, t) => t ? Math.min(100, Math.round((p || 0) / t * 100)) : (p || 0)
       for (const [id, v] of Object.entries(s.downloads)) {
+        if (s.cancelledIds.includes(id)) continue
         if (['done', 'complete', 'error', 'cancelled', 'interrupted'].includes(v.status)) continue
         out.push({ id, kind: 'download', label: `${v.title || ''} · cap. ${v.chapter ?? ''}`, status: v.status, pct: pct(v.progress, v.total), msg: v.message })
       }
       for (const [id, v] of Object.entries(s.upscale)) {
+        if (s.cancelledIds.includes(id)) continue
         if (!['starting', 'started', 'upscaling'].includes(v.status)) continue
         out.push({ id, kind: 'upscale', label: `4K · ${v.title || ''} cap. ${v.chapter ?? ''}`, status: v.status, pct: pct(v.progress ?? v.current, v.total) })
       }
@@ -191,6 +194,14 @@ export const useMangaStore = defineStore('manga', {
         this.downloads = data.downloads || {}
         this.upscale = data.upscale || {}
         this.exports = data.exports || {}
+        // Drop cancelled ids once the backend has actually stopped them (terminal
+        // status or gone), so the set can't grow unbounded.
+        if (this.cancelledIds.length) {
+          this.cancelledIds = this.cancelledIds.filter(id => {
+            const v = this.downloads[id] || this.upscale[id]
+            return v && ['starting', 'started', 'upscaling', 'downloading'].includes(v.status)
+          })
+        }
         if (this.current) {
           const upDone = Object.entries(this.upscale).some(([k, v]) =>
             k.startsWith(taskId(this.current.id, '', 'upscale').slice(0, -3)) && v.status === 'done')
@@ -370,10 +381,18 @@ export const useMangaStore = defineStore('manga', {
       // optimistic one), then drop it so the progress ring disappears at once.
       const tid = this.upTasks[chKey] || taskId(this.current.id, chapter, 'upscale')
       delete this.upTasks[chKey]
+      this._markCancelled(tid)
       try { await api.post(`/api/upscale/cancel/${encodeURIComponent(tid)}`, {}) } catch (_) {}
       // Cancellation is cooperative; refresh shortly after so the chapter reflects
       // its final 4K/partial state.
       setTimeout(() => this._refreshUpscaled(), 1500)
+    },
+    // Hide a task from the queue + modal ring immediately, surviving SSE overwrites
+    // until the backend reports it as stopped.
+    _markCancelled(id) {
+      if (!this.cancelledIds.includes(id)) this.cancelledIds = [...this.cancelledIds, id]
+      for (const [ch, t] of Object.entries(this.upTasks)) if (t === id) delete this.upTasks[ch]
+      for (const [ch, t] of Object.entries(this.dlTasks)) if (t === id) delete this.dlTasks[ch]
     },
     async deleteChapter(chapter) {
       try {
@@ -385,10 +404,14 @@ export const useMangaStore = defineStore('manga', {
 
     /* ── Task queue actions ─────────────────────────────────────────────── */
     async cancelTask(task) {
+      // Hide it from the queue (and the modal ring if visible) right away.
+      this._markCancelled(task.id)
       try {
-        if (task.kind === 'download') await api.post(`/api/download/cancel/${task.id}`, {})
-        else if (task.kind === 'upscale') await api.post(`/api/upscale/cancel/${task.id}`, {})
+        if (task.kind === 'download') await api.post(`/api/download/cancel/${encodeURIComponent(task.id)}`, {})
+        else if (task.kind === 'upscale') await api.post(`/api/upscale/cancel/${encodeURIComponent(task.id)}`, {})
       } catch (_) {}
+      if (task.kind === 'upscale') setTimeout(() => this._refreshUpscaled(), 1500)
+      else if (task.kind === 'download') setTimeout(() => this._refreshChapters(), 1500)
     },
     exportFileUrl(id) { return `/api/export/file/${id}` },
 
