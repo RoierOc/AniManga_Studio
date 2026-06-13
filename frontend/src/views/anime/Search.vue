@@ -20,7 +20,7 @@ onMounted(() => { store.checkQbt() })
       <label class="bigbox">
         <Icon name="search" :size="18" />
         <input v-model="store.searchQuery" @keyup.enter="store.searchAnime()"
-               placeholder="Título del anime… (AniList)" autofocus />
+               placeholder="Título del anime…" autofocus />
         <button class="bigbox__go" @click="store.searchAnime()">Buscar</button>
       </label>
     </header>
