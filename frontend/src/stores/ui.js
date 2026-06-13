@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { useAnimeStore } from './anime'
 
 const SESSION_KEY = 'animanga:session:v2'
 let _navStack = []
@@ -66,18 +67,24 @@ export const useUiStore = defineStore('ui', {
         _navInit = true
         history.replaceState({ pos: 0 }, '')
         window.addEventListener('popstate', (e) => {
-          if (e.state && _navStack.length > 0) {
+          // Prefer a registered restore (e.g. close an open detail) over a raw view switch.
+          if (_navStack.length > 0) {
             const prev = _navStack.pop()
-            if (prev.restore) prev.restore()
-            else {
-              this.currentView = e.state.view || 'library'
-              saveHistory()
-            }
+            if (prev.restore) { prev.restore(); saveHistory(); return }
           }
+          // Fallback: land on the view (+ anime sub) we're navigating back to.
+          // Guard against stale/invalid views so we never strand on a placeholder.
+          const st = e.state || {}
+          this.currentView = VALID.has(st.view) ? st.view : 'library'
+          if (this.currentView === 'anime' && st.sub) {
+            try { useAnimeStore().sub = st.sub } catch {}
+          }
+          saveHistory()
         })
       }
-      _navStack.push({ view: view || this.currentView, sub, animeDetail, restore: this._navRestore })
-      history.pushState({ pos: _navStack.length, view: view || this.currentView }, '')
+      const v = VALID.has(view) ? view : this.currentView
+      _navStack.push({ view: v, sub, animeDetail, restore: null })
+      history.pushState({ pos: _navStack.length, view: v, sub }, '')
       saveHistory()
     },
     _setNavRestore(fn) {

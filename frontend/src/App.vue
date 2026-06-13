@@ -29,8 +29,8 @@ function onGlobalKey(e) {
 onMounted(() => { manga.init(); window.addEventListener('keydown', onGlobalKey) })
 onUnmounted(() => window.removeEventListener('keydown', onGlobalKey))
 
-// Map each view id to its component. Migrated so far: Library, Anime Studio.
-// The rest render the placeholder until their phase lands.
+// Every sidebar view has a real component below; the PlaceholderView is only a
+// defensive fallback and should never render in normal use.
 const meta = computed(() => VIEWS.flatMap(g => g.items).find(i => i.id === ui.currentView))
 
 const VIEW_COMPONENTS = { library: LibraryView, mangadex: MangaDexView, followed: FollowedView, sources: SourcesView, local: LocalView, anime: AnimeStudio }

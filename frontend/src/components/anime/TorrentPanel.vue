@@ -10,6 +10,13 @@ const store = useAnimeStore()
 const a = computed(() => store.torrentAnime)
 const expanded = ref(new Set())
 
+// openTorrents() always pushes one history entry, so back consumes it and runs
+// the guarded restore (closes the panel + restores the previous sub-tab).
+function goBack() {
+  if (window.history.state && window.history.state.pos > 0) window.history.back()
+  else store.closeTorrents()
+}
+
 const LANGS = computed(() => [
   { id: 'all', label: 'Todos', n: store.langCounts.all },
   { id: 'esp', label: 'Español', n: store.langCounts.esp },
@@ -29,7 +36,7 @@ const keyOf = (t) => t.info_hash || t.torrent_url
 
 <template>
   <div v-if="a" class="tp">
-    <button class="tp__back" @click="store.closeTorrents()">
+    <button class="tp__back" @click="goBack">
       <Icon name="chevron" :size="16" :style="{ transform: 'rotate(180deg)' }" /> Resultados
     </button>
 

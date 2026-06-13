@@ -9,6 +9,13 @@ import Spinner from '@/components/ui/Spinner.vue'
 const store = useAnimeStore()
 const anime = computed(() => store.detail)
 
+// openDetail() always pushes one history entry, so back consumes it and runs the
+// guarded restore. Fall back to a direct close if there's no app history.
+function goBack() {
+  if (window.history.state && window.history.state.pos > 0) window.history.back()
+  else store.closeDetail()
+}
+
 const batch = computed(() => batchInfo(anime.value?.episodes || []))
 const realEps = computed(() =>
   (anime.value?.episodes || []).filter(e => e.num !== 0 && e.ep_type !== 'special').sort((a, b) => a.num - b.num)
@@ -46,7 +53,7 @@ const malUrl = computed(() => store.malUrls[alId.value])
     <!-- aura backdrop from cover -->
     <div class="detail__aura" :style="anime.cover ? `background-image:url('${anime.cover}')` : ''" />
 
-    <button class="detail__back" @click="store.closeDetail()">
+    <button class="detail__back" @click="goBack">
       <Icon name="chevron" :size="16" :style="{ transform: 'rotate(180deg)' }" /> Volver
     </button>
 
