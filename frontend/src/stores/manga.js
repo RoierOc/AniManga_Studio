@@ -7,6 +7,14 @@ import { taskId, canonicalTitle } from '@/lib/manga'
 let statusBound = false
 let previewTimer = null
 
+// Preferred MangaDex chapter language (Spanish-first, then English), or the first
+// available — so a freshly opened manga shows one clean language, not all at once.
+const LANG_PRIO = ['es-la', 'es', 'en', 'pt-br', 'ja']
+function preferredLang(langs) {
+  for (const p of LANG_PRIO) if (langs.includes(p)) return p
+  return langs[0] || ''
+}
+
 // Build a plain { chapterKey: {status, progress, total, pct} } map from a
 // {chapterKey: taskId} table and the live task-status dict. Returns plain data
 // so Vue tracks it through a normal computed (the previous getter-returning-a-
@@ -272,7 +280,13 @@ export const useMangaStore = defineStore('manga', {
         if (this.mdId) {
           this.mdChaptersLoading = true
           api.get(`/api/mangadex/chapters/${this.mdId}`)
-            .then(chs => { this.mdChapters = chs || [] })
+            .then(chs => {
+              this.mdChapters = chs || []
+              // Default to one preferred language so the list isn't a confusing mix of
+              // every language at once (the user can switch via the dropdown).
+              const langs = [...new Set(this.mdChapters.map(c => c.language).filter(Boolean))]
+              this.mdLang = preferredLang(langs)
+            })
             .catch(() => {})
             .finally(() => { this.mdChaptersLoading = false })
         }

@@ -5,15 +5,6 @@ const SESSION_KEY = 'animanga:session:v2'
 let _navStack = []
 let _navInit = false
 
-function saveHistory() {
-  const s = {
-    view: _navStack.length > 0 ? _navStack[_navStack.length - 1].view : 'library',
-    sub: _navStack.length > 0 ? _navStack[_navStack.length - 1].sub : '',
-    animeDetail: _navStack.length > 0 ? _navStack[_navStack.length - 1].animeDetail : null,
-  }
-  try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)) } catch {}
-}
-
 function loadSession() {
   try { return JSON.parse(localStorage.getItem(SESSION_KEY) || '{}') } catch { return {} }
 }
@@ -70,7 +61,7 @@ export const useUiStore = defineStore('ui', {
           // Prefer a registered restore (e.g. close an open detail) over a raw view switch.
           if (_navStack.length > 0) {
             const prev = _navStack.pop()
-            if (prev.restore) { prev.restore(); saveHistory(); return }
+            if (prev.restore) { prev.restore(); this.persist(); return }
           }
           // Fallback: land on the view (+ anime sub) we're navigating back to.
           // Guard against stale/invalid views so we never strand on a placeholder.
@@ -79,13 +70,13 @@ export const useUiStore = defineStore('ui', {
           if (this.currentView === 'anime' && st.sub) {
             try { useAnimeStore().sub = st.sub } catch {}
           }
-          saveHistory()
+          this.persist()
         })
       }
       const v = VALID.has(view) ? view : this.currentView
       _navStack.push({ view: v, sub, animeDetail, restore: null })
       history.pushState({ pos: _navStack.length, view: v, sub }, '')
-      saveHistory()
+      this.persist()
     },
     _setNavRestore(fn) {
       if (_navStack.length > 0) _navStack[_navStack.length - 1].restore = fn
@@ -94,8 +85,15 @@ export const useUiStore = defineStore('ui', {
       this.sidebarCollapsed = !this.sidebarCollapsed
       this.persist()
     },
+    // Persist the real current location (survives F5, like a normal web app).
     persist() {
-      saveHistory()
+      try {
+        let sub = ''
+        try { sub = useAnimeStore().sub } catch {}
+        localStorage.setItem(SESSION_KEY, JSON.stringify({
+          view: this.currentView, sub, sidebarCollapsed: this.sidebarCollapsed,
+        }))
+      } catch {}
     },
     toast(message, type = 'info', ms = 3600) {
       const id = ++this._toastSeq

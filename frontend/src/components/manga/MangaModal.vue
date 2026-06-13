@@ -257,9 +257,10 @@ async function doExport(toDrive = false) {
                 </button>
                 <!-- Source/MD chapter: not clickable, show download info -->
                 <div v-else class="chap__read">
+                  <span v-if="c._mdLang" class="chap__flag" :title="c._mdLang">{{ flag(c._mdLang) }}</span>
                   <span class="chap__num">{{ formatChapter(c.chapter) }}</span>
                   <span class="chap__pages" v-if="c._sourceId">vía {{ store.current.source_meta?.sourceName }}</span>
-                  <span class="chap__pages" v-else-if="c._mdLang">{{ c._mdLang?.toUpperCase() }}<template v-if="c._mdGroup"> · {{ c._mdGroup }}</template></span>
+                  <span class="chap__pages" v-else-if="c._mdLang">{{ c._mdGroup || 'MangaDex' }}<template v-if="c.page_count"> · {{ c.page_count }} pág.</template></span>
                   <span class="chap__pages" v-else>MangaDex</span>
                 </div>
 
@@ -333,8 +334,10 @@ async function doExport(toDrive = false) {
 .modal__x:hover { color: var(--ink); border-color: var(--line-strong); }
 
 .modal__head { display: flex; gap: var(--s-4); padding: var(--s-5); border-bottom: 1px solid var(--line); flex-shrink: 0; }
-.modal__cover { width: 96px; aspect-ratio: 2/3; object-fit: cover; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
-.modal__cover--ph { display: grid; place-items: center; background: var(--surface-2); color: var(--ink-ghost); }
+/* align-self:flex-start stops the flex row from stretching the cover to the (taller)
+   info column's height — which was distorting its 2/3 aspect ratio. */
+.modal__cover { width: 104px; aspect-ratio: 2/3; object-fit: cover; object-position: center top; align-self: flex-start; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
+.modal__cover--ph { display: grid; place-items: center; background: var(--surface-2); color: var(--ink-ghost); aspect-ratio: 2/3; }
 .modal__info { min-width: 0; padding-right: var(--s-7); }
 .modal__title { font-size: var(--fs-xl); line-height: var(--lh-snug); }
 .modal__sub { color: var(--ink-faint); font-size: var(--fs-sm); margin-top: var(--s-1); }
@@ -435,6 +438,7 @@ async function doExport(toDrive = false) {
 .rangebox button { padding: 4px 8px; border-radius: var(--r-xs); font-size: var(--fs-2xs); font-weight: 600; color: var(--cyan); border: 1px solid color-mix(in srgb, var(--cyan) 30%, transparent); }
 .rangebox button:hover { background: var(--cyan-glow); color: #d6fffb; }
 .chap__read-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--jade); flex-shrink: 0; }
+.chap__flag { font-size: 1.05rem; line-height: 1; flex-shrink: 0; }
 .colors { margin-top: var(--s-2); }
 .colors__hint { font-size: var(--fs-2xs); color: var(--ink-faint); margin-top: var(--s-1); }
 .colors__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(2.75rem, 1fr)); gap: 5px; margin-top: var(--s-2); max-height: 150px; overflow-y: auto; }
