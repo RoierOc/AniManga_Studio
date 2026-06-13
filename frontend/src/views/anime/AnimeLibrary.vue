@@ -15,6 +15,7 @@ const reloads = []
 onMounted(() => {
   sync = setInterval(() => { if (store.hasActiveQbt()) store.loadLibrary(true) }, 15000)
   if (!store.seasonal.length) store.loadSeasonal()
+  store.loadAiring()   // fresh airing schedule → "new episode just aired" hero
   // Hero banners/genres are backfilled server-side after the first library load;
   // refresh silently a couple of times so HD art appears without a manual reload.
   reloads.push(setTimeout(() => store.loadLibrary(true), 7000))

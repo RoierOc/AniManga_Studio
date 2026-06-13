@@ -17,7 +17,7 @@ const coverUrl = computed(() => c.value?.anime?.cover_xl || c.value?.anime?.cove
 const hasBanner = computed(() => !!bannerUrl.value)
 const bgUrl = computed(() => bannerUrl.value || coverUrl.value)
 
-const EYEBROW = { new: 'NUEVO EPISODIO', continue: 'SIGUE VIENDO', seasonal: 'TEMPORADA' }
+const EYEBROW = { new: 'NUEVO EPISODIO', downloaded: 'LISTO PARA VER', continue: 'SIGUE VIENDO', seasonal: 'TEMPORADA' }
 const eyebrow = computed(() => EYEBROW[c.value?.kind] || '')
 const genres = computed(() => (Array.isArray(c.value?.anime?.genres) ? c.value.anime.genres.slice(0, 4) : []))
 
@@ -27,6 +27,7 @@ const epLabel = computed(() => {
     const na = store.nextAiring[c.value.anime.al_id || c.value.anime.id]
     return na ? `Ep ${na.episode} · Próximamente` : 'Próximamente'
   }
+  if (c.value.kind === 'new') return `Capítulo nuevo · Ep ${c.value.ep?.num}`
   return `Episodio ${c.value.ep?.num}`
 })
 const seasonLabel = computed(() => {
@@ -36,7 +37,8 @@ const seasonLabel = computed(() => {
   return a.season_year ? String(a.season_year) : ''
 })
 const freshLabel = computed(() => {
-  if (c.value?.kind === 'new' && c.value.ts) return `Disponible ${relativeTime(c.value.ts)}`
+  if (c.value?.kind === 'new' && c.value.aired_at) return `Emitido ${relativeTime(c.value.aired_at)}`
+  if (c.value?.kind === 'downloaded' && c.value.ts) return `Descargado ${relativeTime(c.value.ts)}`
   return ''
 })
 
@@ -63,10 +65,20 @@ watch([items, active], () => {
 watch(() => items.value.length, () => startTimer(), { immediate: true })
 onUnmounted(() => clearInterval(timer))
 
+// Can we play right now? (a downloaded file exists). 'new' without a file → fetch it.
+const canPlay = computed(() => c.value?.kind !== 'seasonal' && c.value?.hasFile)
+const primaryLabel = computed(() => {
+  if (!c.value) return ''
+  if (canPlay.value) return progress.value ? 'Reanudar' : 'Ver episodio'
+  if (c.value.kind === 'new') return `Buscar Ep ${c.value.ep?.num}`
+  return 'Buscar torrents'
+})
+const primaryIcon = computed(() => (canPlay.value ? 'play' : 'search'))
+
 function primary() {
   if (!c.value) return
-  if (c.value.kind === 'seasonal') store.openTorrents(c.value.anime)
-  else store.play(c.value.anime, c.value.ep)
+  if (canPlay.value) store.play(c.value.anime, c.value.ep)
+  else store.openTorrents(c.value.anime, c.value.kind === 'new' ? c.value.ep?.num : null)
 }
 function secondary() {
   if (!c.value) return
@@ -110,11 +122,10 @@ function secondary() {
 
           <div class="hero__btns">
             <button class="hbtn hbtn--play" @click="primary">
-              <Icon :name="c.kind === 'seasonal' ? 'search' : 'play'" :size="17" />
-              {{ c.kind === 'seasonal' ? 'Buscar torrents' : (progress ? 'Reanudar' : 'Ver episodio') }}
+              <Icon :name="primaryIcon" :size="17" /> {{ primaryLabel }}
             </button>
             <button class="hbtn" @click="secondary">
-              <Icon :name="c.kind === 'seasonal' ? 'spark' : 'spark'" :size="14" />
+              <Icon name="spark" :size="14" />
               {{ c.kind === 'seasonal' ? '+ Mi Anime' : 'Información' }}
             </button>
           </div>

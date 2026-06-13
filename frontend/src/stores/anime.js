@@ -25,6 +25,7 @@ export const useAnimeStore = defineStore('anime', {
     epInfo: {},                // `${malId}_${ep}` -> {title, synopsis, ...} | null(loading)
     epInfoOpen: null,          // currently expanded ep-info key
     nextAiring: {},            // al_id -> {episode, airing_at}
+    airing: {},                // al_id -> {status, next_episode, next_airing_at, last_episode, last_aired_at} — fresh airing schedule
 
     // discovery in detail (keyed by al_id)
     recs: {}, recsState: {},
@@ -114,11 +115,32 @@ export const useAnimeStore = defineStore('anime', {
     },
 
     // Hero banner content, in priority order:
-    //   1) library anime with a newly available, unwatched episode (newest first)
-    //   2) "continue watching" (most recently watched) if nothing new
-    //   3) seasonal popular as a fallback when the library is empty
+    //   1) library anime currently airing whose newest episode JUST aired (carousel,
+    //      most recently aired first) — "Capítulo nuevo N de anime X"
+    //   2) library anime with a freshly downloaded unwatched episode
+    //   3) "continue watching" (most recently watched)
+    //   4) seasonal popular when the library is empty
     heroItems() {
-      // 1 — fresh, unwatched, downloaded episodes
+      const now = Date.now() / 1000
+      const RECENT = 12 * 86400   // an episode aired within ~12 days counts as "new"
+
+      // 1 — newly aired episodes of library (seasonal/airing) anime
+      const aired = []
+      for (const a of this.library) {
+        const inf = this.airing[a.al_id]
+        if (!inf || !inf.last_episode || !inf.last_aired_at) continue
+        if (now - inf.last_aired_at > RECENT) continue
+        // play it directly if that episode is already downloaded & unwatched
+        const dl = (a.episodes || []).find(e => e.num === inf.last_episode
+          && (e.in_local || (e.in_qbt && e.progress >= 100)) && !e.watched)
+        aired.push({
+          anime: a, ep: dl || { num: inf.last_episode }, kind: 'new',
+          ts: inf.last_aired_at, aired_at: inf.last_aired_at, hasFile: !!dl,
+        })
+      }
+      if (aired.length) return aired.sort((x, y) => y.ts - x.ts).slice(0, 8)
+
+      // 2 — fresh, unwatched, downloaded episodes (previous behaviour)
       const fresh = []
       for (const a of this.library) {
         const eps = (a.episodes || []).filter(e =>
@@ -126,15 +148,15 @@ export const useAnimeStore = defineStore('anime', {
           (e.in_local || (e.in_qbt && e.progress >= 100)) && !e.watched)
         if (!eps.length) continue
         const ep = eps.reduce((b, e) => (e.added_on || 0) > (b.added_on || 0) ? e : b)
-        fresh.push({ anime: a, ep, kind: 'new', ts: ep.added_on || 0 })
+        fresh.push({ anime: a, ep, kind: 'downloaded', ts: ep.added_on || 0, hasFile: true })
       }
       if (fresh.length) return fresh.sort((x, y) => y.ts - x.ts).slice(0, 8)
 
-      // 2 — continue watching
+      // 3 — continue watching
       const cw = this.continueWatching
-      if (cw.length) return cw.slice(0, 8).map(c => ({ anime: c.anime, ep: c.ep, kind: 'continue', ts: c.anime.last_watched_at || 0 }))
+      if (cw.length) return cw.slice(0, 8).map(c => ({ anime: c.anime, ep: c.ep, kind: 'continue', ts: c.anime.last_watched_at || 0, hasFile: true }))
 
-      // 3 — seasonal popular (not already in library)
+      // 4 — seasonal popular (not already in library)
       if (this.seasonal.length) {
         return this.seasonal
           .filter(a => !this.library.find(lib => lib.al_id === a.al_id || lib.mal_id === a.mal_id))
@@ -143,7 +165,7 @@ export const useAnimeStore = defineStore('anime', {
           .map(a => ({
             anime: { ...a, id: a.al_id || a.id, episodes: [], last_watched_at: 0, status: a.status || 'RELEASING' },
             ep: { num: this.nextAiring[a.al_id]?.episode || a.next_episode || a.episodes || '?' },
-            kind: 'seasonal', ts: 0,
+            kind: 'seasonal', ts: 0, hasFile: false,
           }))
       }
       return []
@@ -204,6 +226,10 @@ export const useAnimeStore = defineStore('anime', {
         onSSE('position', (ev) => this._onPosition(ev))
         onSSE('download_complete', () => this.loadLibrary(true))
       }
+    },
+
+    async loadAiring() {
+      try { this.airing = await api.get('/api/anime/airing') || {} } catch (_) {}
     },
 
     async loadLibrary(silent = false) {

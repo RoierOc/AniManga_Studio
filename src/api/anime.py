@@ -177,6 +177,60 @@ def _tmdb_backdrop(title_en, title_romaji, year):
     return None
 
 
+_airing_cache = {'ts': 0, 'data': {}}
+_AIRING_TTL = 1800  # 30 min — airing data only changes when an episode actually airs
+
+
+def _fetch_airing(al_ids):
+    """For the given AniList ids return {al_id: {status, next_episode, next_airing_at,
+    last_episode, last_aired_at}} via one batched, paginated query. The last aired
+    episode comes from the real airing schedule (exact time), not an estimate."""
+    now = time.time()
+    if now - _airing_cache['ts'] < _AIRING_TTL and _airing_cache['data']:
+        return _airing_cache['data']
+    ids = [int(x) for x in al_ids if x]
+    out = {}
+    if not ids:
+        return out
+    # Only currently-airing anime expose nextAiringEpisode. The latest aired episode
+    # is (next - 1), which aired ~one interval (a week) before the next one — a good
+    # estimate for "aired recently" without the schedule connection (no sort there).
+    q = '''query($ids:[Int],$p:Int){Page(page:$p,perPage:50){
+        pageInfo{hasNextPage}
+        media(id_in:$ids,type:ANIME){
+            id status
+            nextAiringEpisode{episode airingAt}
+        }
+    }}'''
+    page = 1
+    while True:
+        r = _anilist_post(q, {'ids': ids, 'p': page})
+        if r is None:
+            break
+        pg = (r.json().get('data') or {}).get('Page') or {}
+        for m in (pg.get('media') or []):
+            nae = m.get('nextAiringEpisode') or {}
+            next_ep = nae.get('episode')
+            next_at = nae.get('airingAt')
+            last_ep = (next_ep - 1) if (next_ep and next_ep > 1) else None
+            last_at = (next_at - 604800) if (next_at and last_ep) else None
+            out[m['id']] = {
+                'status':         m.get('status'),
+                'next_episode':   next_ep,
+                'next_airing_at': next_at,
+                'last_episode':   last_ep,
+                'last_aired_at':  last_at,
+            }
+        if not (pg.get('pageInfo') or {}).get('hasNextPage'):
+            break
+        page += 1
+        time.sleep(1.0)
+    if out:
+        _airing_cache['data'] = out
+        _airing_cache['ts'] = now
+    return out
+
+
 def _backfill_anime_metadata():
     """Background enrichment of library entries: AniList metadata (episodes, format,
     genres, season, hi-res cover, wide bannerImage) plus a TMDB backdrop when one
@@ -1264,6 +1318,18 @@ def qbt_action():
 
 
 # ── Anime library ──────────────────────────────────────────────────────────────
+
+@anime_bp.route('/airing')
+def anime_airing_get():
+    """Fresh airing info (last/next aired episode) for the library's AniList ids.
+    Powers the 'new episode just aired' hero. Cached ~30 min."""
+    lib = _lib_read()
+    al_ids = [v.get('al_id') for v in lib.values() if v.get('al_id')]
+    try:
+        return jsonify(_fetch_airing(al_ids))
+    except Exception:
+        return jsonify({})
+
 
 @anime_bp.route('/library')
 def anime_library_get():
