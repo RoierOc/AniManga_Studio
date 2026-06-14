@@ -554,6 +554,38 @@ def _is_wsl() -> bool:
 
 _CMD_EXE = '/mnt/c/Windows/System32/cmd.exe'
 
+# Windows dirs needed on PATH so bare `powershell.exe` / `cmd.exe` resolve.
+_WIN_PATH_DIRS = [
+    '/mnt/c/Windows/System32',
+    '/mnt/c/Windows/System32/WindowsPowerShell/v1.0',
+    '/mnt/c/Windows',
+]
+
+
+def _repair_win_env() -> None:
+    """A server auto-started in the background (detached from the login shell) loses
+    WSL_INTEROP and the appended Windows PATH, which makes launching mpv.exe/powershell.exe
+    fail ('No such file or directory' / interop unavailable). Re-point WSL_INTEROP at any
+    live interop socket and make sure the Windows dirs are on PATH. Cheap + idempotent, so
+    it's safe to call right before each launch."""
+    if not _is_wsl():
+        return
+    # WSL removes /run/WSL/<pid>_interop when its session ends, so existence ≈ alive.
+    cur = os.environ.get('WSL_INTEROP', '')
+    if not cur or not os.path.exists(cur):
+        try:
+            socks = sorted(glob.glob('/run/WSL/*_interop'),
+                           key=lambda p: os.stat(p).st_mtime, reverse=True)
+            if socks:
+                os.environ['WSL_INTEROP'] = socks[0]
+        except OSError:
+            pass
+    parts = os.environ.get('PATH', '').split(':')
+    missing = [p for p in _WIN_PATH_DIRS if p not in parts]
+    if missing:
+        os.environ['PATH'] = ':'.join(parts + missing)
+
+
 # Known Windows locations for mpv.exe (checked in order when not in PATH)
 _MPV_CANDIDATE_PATHS = [
     '/mnt/c/Program Files (x86)/mpv/mpv.exe',
@@ -649,6 +681,7 @@ def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> t
         return args
 
     if _is_wsl():
+        _repair_win_env()  # self-heal WSL_INTEROP + Windows PATH for detached servers
         # Create watch-later dir on Windows side so MPV can write to it
         wl_win, wl_dir = _make_wl_dir_wsl()
         try:
