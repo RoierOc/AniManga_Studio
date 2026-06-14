@@ -4,6 +4,16 @@ set -uo pipefail   # -e removed so crash-restart loop works
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="$SCRIPT_DIR/src"
 
+# ── Single-instance guard ─────────────────────────────────────────────────────
+# Si abres varias terminales WSL a la vez, cada una podría lanzar esta pila antes
+# de que Flask ocupe el 5101 → dos Suwayomi compitiendo → BD bloqueada. flock
+# garantiza que sólo una instancia de start_server.sh corra a la vez.
+exec 9>/tmp/manga_server.lock
+if ! flock -n 9; then
+    echo "[start] Otra instancia ya está corriendo; no se lanza una segunda." >&2
+    exit 0
+fi
+
 PYTHON_BIN=""
 if [[ -x "$SCRIPT_DIR/.venv/bin/python" ]]; then
     PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
