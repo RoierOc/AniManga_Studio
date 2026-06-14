@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { useUiStore } from '@/stores/ui'
 import { formatBytes } from '@/lib/format'
@@ -29,6 +29,15 @@ function toggle(ep) {
   expanded.value = s
 }
 const isOpen = (ep) => expanded.value.has(ep)
+
+// Seed the expanded state when results change: few groups (e.g. opened from a
+// specific episode) start expanded for convenience, but the user can still collapse
+// them — the toggle is no longer overridden by the template.
+watch(() => store.groupedEpisodes, (groups) => {
+  expanded.value = groups.length && groups.length <= 3
+    ? new Set(groups.map(g => g.episode))
+    : new Set()
+}, { immediate: true })
 const epLabel = (n) => n === 0 ? 'Batch / Completo' : n === -1 ? 'Sin clasificar' : `Episodio ${n}`
 const keyOf = (t) => t.info_hash || t.torrent_url
 </script>
@@ -97,7 +106,7 @@ const keyOf = (t) => t.info_hash || t.torrent_url
           <span class="egrp__label">{{ epLabel(g.episode) }}</span>
           <span class="egrp__count">{{ g.torrents.length }}</span>
         </button>
-        <div v-show="isOpen(g.episode) || store.groupedEpisodes.length <= 3" class="egrp__list">
+        <div v-show="isOpen(g.episode)" class="egrp__list">
           <div v-for="t in g.torrents" :key="keyOf(t)" class="tr">
             <div class="tr__info">
               <div class="tr__name">
