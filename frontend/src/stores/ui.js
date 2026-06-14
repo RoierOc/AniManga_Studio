@@ -131,11 +131,17 @@ export const useUiStore = defineStore('ui', {
       try { localStorage.setItem(SESSION_KEY, JSON.stringify(this.snapshot())) } catch {}
     },
 
-    toast(message, type = 'info', ms = 3600) {
+    // action (optional): { label, fn } → renders a button (e.g. "Deshacer").
+    toast(message, type = 'info', ms = 3600, action = null) {
       const id = ++this._toastSeq
-      this.toasts.push({ id, message, type })
+      this.toasts.push({ id, message, type, action })
       if (ms) setTimeout(() => this.dismissToast(id), ms)
       return id
+    },
+    runToastAction(id) {
+      const t = this.toasts.find(x => x.id === id)
+      this.dismissToast(id)
+      if (t?.action?.fn) t.action.fn()
     },
     dismissToast(id) {
       this.toasts = this.toasts.filter(t => t.id !== id)

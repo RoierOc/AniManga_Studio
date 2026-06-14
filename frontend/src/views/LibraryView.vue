@@ -24,6 +24,7 @@ const FILTERS = computed(() => [
 
 const filtered = computed(() => {
   let list = items.value
+  if (manga.pendingDelete.length) list = list.filter(m => !manga.pendingDelete.includes(m.id))
   if (filter.value === 'upscaled') list = list.filter(m => (m.upscaled || 0) > 0)
   if (filter.value === 'downloaded') list = list.filter(m => !(m.upscaled || 0))
   if (filter.value === 'updates') list = list.filter(m => manga.updatesByTitle[m.name])

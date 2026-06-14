@@ -54,6 +54,7 @@ export const useMangaStore = defineStore('manga', {
     cancelledIds: [],         // task ids cancelled locally — hidden everywhere until the backend catches up
     dismissedExports: [],     // export task ids dismissed from the queue
     libraryDirty: 0,          // bumped after a manga is deleted so LibraryView reloads
+    pendingDelete: [],        // manga ids hidden during the undo window before deletion
 
     // live task status (from SSE aggregated payload)
     downloads: {},
@@ -431,22 +432,31 @@ export const useMangaStore = defineStore('manga', {
 
     // Delete a whole manga from the library: downloaded + upscaled files, and the
     // MangaDex local-library entry if it's tracked there (mirrors the legacy flow).
-    async deleteManga() {
+    deleteManga() {
       if (!this.current) return
       const title = this.current.id
       const name = this.current.name || title
-      if (!confirm(`¿Borrar "${name}" de tu biblioteca?\nSe eliminarán los archivos descargados y escalados.`)) return
+      const mdId = this.mdId
       const ui = useUiStore()
-      let ok = false
-      try { await api.del('/api/download/delete_manga', { body: { title } }); ok = true } catch (_) {}
-      if (this.mdId) { try { await api.del(`/api/mangadex/local_library/remove/${encodeURIComponent(this.mdId)}`); ok = true } catch (_) {} }
-      if (ok) {
-        ui.toast(`"${name}" eliminado de la biblioteca`, 'ok')
+      // Optimistic: close the modal and hide it from the grid, with a 6s undo window
+      // before the (irreversible) file deletion actually runs — no confirm dialog needed.
+      this.close(); ui.replaceNav()
+      if (!this.pendingDelete.includes(title)) this.pendingDelete = [...this.pendingDelete, title]
+      this.libraryDirty++
+      let undone = false
+      ui.toast(`"${name}" eliminado`, 'info', 6000, {
+        label: 'Deshacer',
+        fn: () => { undone = true; this.pendingDelete = this.pendingDelete.filter(t => t !== title); this.libraryDirty++ },
+      })
+      setTimeout(async () => {
+        if (undone) return
+        let ok = false
+        try { await api.del('/api/download/delete_manga', { body: { title } }); ok = true } catch (_) {}
+        if (mdId) { try { await api.del(`/api/mangadex/local_library/remove/${encodeURIComponent(mdId)}`); ok = true } catch (_) {} }
+        this.pendingDelete = this.pendingDelete.filter(t => t !== title)
+        if (!ok) ui.toast('No se pudo eliminar el manga', 'error')
         this.libraryDirty++
-        this.close()
-      } else {
-        ui.toast('No se pudo eliminar el manga', 'error')
-      }
+      }, 6000)
     },
 
     /* ── Task queue actions ─────────────────────────────────────────────── */
