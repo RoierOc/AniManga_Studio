@@ -27,8 +27,9 @@ const KIND = {
             <div class="qt__top">
               <span class="qt__kind" :style="{ color: KIND[t.kind].color }"><Icon :name="KIND[t.kind].icon" :size="12" /> {{ KIND[t.kind].label }}</span>
               <span class="qt__label">{{ t.label }}</span>
-              <a v-if="t.file" class="qt__act" :href="store.exportFileUrl(t.id)" download :title="'Descargar archivo'"><Icon name="download" :size="13" /></a>
-              <button v-else-if="t.kind !== 'export'" class="qt__act qt__act--x" @click="store.cancelTask(t)" title="Cancelar"><Icon name="close" :size="13" /></button>
+              <a v-if="t.file" class="qt__act" :href="store.exportFileUrl(t.id)" download title="Descargar archivo"><Icon name="download" :size="13" /></a>
+              <button v-if="t.kind === 'export'" class="qt__act qt__act--x" @click="store.dismissExport(t.id)" title="Descartar"><Icon name="close" :size="13" /></button>
+              <button v-else class="qt__act qt__act--x" @click="store.cancelTask(t)" title="Cancelar"><Icon name="close" :size="13" /></button>
             </div>
             <div class="qt__bar" :class="{ 'is-done': t.done }">
               <span :style="{ width: (t.done ? 100 : t.pct) + '%', background: KIND[t.kind].color }" />

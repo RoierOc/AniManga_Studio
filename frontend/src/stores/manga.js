@@ -51,6 +51,7 @@ export const useMangaStore = defineStore('manga', {
     dlTasks: {},              // { chapterKey: taskId } — maps chapter to SSE download task ID
     upTasks: {},              // { chapterKey: taskId } — maps chapter to SSE upscale task ID
     cancelledIds: [],         // task ids cancelled locally — hidden everywhere until the backend catches up
+    dismissedExports: [],     // export task ids dismissed from the queue
     libraryDirty: 0,          // bumped after a manga is deleted so LibraryView reloads
 
     // live task status (from SSE aggregated payload)
@@ -186,6 +187,7 @@ export const useMangaStore = defineStore('manga', {
         out.push({ id, kind: 'upscale', label: `4K · ${v.title || ''} cap. ${v.chapter ?? ''}`, status: v.status, pct: pct(v.progress ?? v.current, v.total) })
       }
       for (const [id, v] of Object.entries(s.exports)) {
+        if (s.dismissedExports.includes(id)) continue
         const done = v.status === 'complete'
         if (['error', 'cancelled'].includes(v.status)) continue
         out.push({ id, kind: 'export', label: v.volume_name || 'Tomo', status: v.status, pct: pct(v.progress, v.total), done, file: done })
@@ -212,6 +214,10 @@ export const useMangaStore = defineStore('manga', {
             const v = this.downloads[id] || this.upscale[id]
             return v && ['starting', 'started', 'upscaling', 'downloading'].includes(v.status)
           })
+        }
+        // Drop dismissed export ids once the backend no longer reports them.
+        if (this.dismissedExports.length) {
+          this.dismissedExports = this.dismissedExports.filter(id => id in this.exports)
         }
         if (this.current) {
           const upDone = Object.entries(this.upscale).some(([k, v]) =>
@@ -451,6 +457,11 @@ export const useMangaStore = defineStore('manga', {
       else if (task.kind === 'download') setTimeout(() => this._refreshChapters(), 1500)
     },
     exportFileUrl(id) { return `/api/export/file/${id}` },
+    // Remove a finished export from the queue (and delete its temp file on the backend).
+    async dismissExport(id) {
+      if (!this.dismissedExports.includes(id)) this.dismissedExports = [...this.dismissedExports, id]
+      try { await api.del(`/api/export/task/${encodeURIComponent(id)}`) } catch (_) {}
+    },
 
     /* ── Tomo export + destinations ─────────────────────────────────────── */
     async loadDestinations() {

@@ -51,7 +51,9 @@ def stream_status():
         headers={
             'Cache-Control': 'no-cache',
             'X-Accel-Buffering': 'no',
-            'Connection': 'keep-alive',
+            # NOTE: do NOT set 'Connection' — it's a hop-by-hop header forbidden by
+            # PEP 3333; Waitress raises AssertionError and the whole stream 500s,
+            # which made the frontend reconnect every 3s and flooded the logs.
         },
     )
 

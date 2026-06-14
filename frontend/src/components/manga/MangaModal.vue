@@ -294,6 +294,7 @@ async function doExport(toDrive = false) {
                     <button class="ib ib--danger" title="Cancelar" @click="store.cancelUpscale(c.chapter)"><Icon name="close" :size="13" /></button>
                   </div>
                   <template v-else>
+                    <button class="ib" :class="{ 'ib--read': store.isChapterRead(c.chapter) }" :title="store.isChapterRead(c.chapter) ? 'Marcar no leído' : 'Marcar leído'" @click="store.toggleChapterRead(c.chapter)"><Icon name="check" :size="14" /></button>
                     <button class="ib" title="Comparar versiones (scanlations)" :class="{ 'ib--accent': store.scanCmp.open && store.scanCmp.chapter === c.chapter }" @click="store.openComparePanel(c.chapter)"><Icon name="globe" :size="14" /></button>
                     <button class="ib" title="Leer original" @click="store.read(c.chapter, 'original')"><Icon name="library" :size="14" /></button>
                     <button v-if="upState(c.chapter) === 'partial'" class="ib ib--warn" title="Reparar upscale" @click="store.repairChapter(c.chapter)"><Icon name="spark" :size="14" /></button>
@@ -495,6 +496,7 @@ async function doExport(toDrive = false) {
 .ib--accent:hover { color: var(--cyan); border-color: var(--cyan-glow); }
 .ib--warn:hover { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 40%, transparent); }
 .ib--danger:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
+.ib--read { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 35%, transparent); background: color-mix(in srgb, var(--jade) 10%, transparent); }
 .chap__dlbtn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); background: transparent; transition: all var(--t-fast); }
 .chap__dlbtn:hover:not(:disabled) { background: var(--azure-haze); color: #fff; }
 .chap__dlbtn:disabled { opacity: .5; cursor: not-allowed; }

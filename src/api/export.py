@@ -424,3 +424,16 @@ def export_file(task_id):
     # Mark consumed so it gets cleaned up on next request
     _set_export(task_id, {'status': 'downloaded'})
     return resp
+
+
+@export_bp.route("/task/<task_id>", methods=["DELETE"])
+def export_dismiss(task_id):
+    """Dismiss a finished export task from the queue and delete its temp file."""
+    with _export_lock:
+        task = _export_tasks.pop(task_id, None)
+    if task and task.get('tmp_path'):
+        try:
+            Path(task['tmp_path']).unlink(missing_ok=True)
+        except Exception:
+            pass
+    return jsonify({'ok': True})
