@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMangaStore } from '@/stores/manga'
 import { pageUrl } from '@/lib/manga'
 import Icon from '@/components/ui/Icon.vue'
@@ -10,6 +10,33 @@ const open = computed(() => !!store.reader)
 const isManga = computed(() => store.reader?.kind !== 'cbz')
 const isUpscaled = computed(() => store.reader?.source === 'upscaled')
 const isRTL = computed(() => store.dir === 'rtl')
+
+// Page counter label — a range when showing a two-page spread.
+const counterLabel = computed(() => {
+  const total = store.pages.length
+  const pair = store.spreadPair
+  if (pair.length === 2) return `${pair[0] + 1}–${pair[1] + 1} / ${total}`
+  return `${store.page + 1} / ${total}`
+})
+
+// ── neighbour preloading (zero flicker on page turn) ──
+// We only track requested URLs (cheap strings); the Image objects are dropped to GC and
+// the browser keeps the decoded bitmap in its HTTP cache, so turning a page is instant.
+let preloaded = new Set()
+function preloadNeighbors() {
+  if (!store.pages.length) return
+  const step = store.spreadActive ? 2 : 1
+  for (const i of [store.page + step, store.page + step + 1, store.page - step]) {
+    if (i < 0 || i >= store.pages.length) continue
+    const u = pageUrl(store.pages[i])
+    if (preloaded.has(u)) continue
+    preloaded.add(u)
+    const img = new Image(); img.src = u
+  }
+}
+// New chapter/file → reset the cache-key set, then warm the neighbours.
+watch(() => store.pages, () => { preloaded = new Set(); preloadNeighbors() })
+watch(() => store.page, () => preloadNeighbors())
 
 const wrap = ref(null)
 let barsTimer = null
@@ -105,6 +132,7 @@ function onKey(e) {
     case ' ': e.preventDefault(); store.nextPage(); break
     case 'f': store.cycleFit(); break
     case 'w': store.setMode(store.mode === 'paged' ? 'webtoon' : 'paged'); break
+    case 's': if (store.mode === 'paged') store.toggleSpread(); break
     case 'd': if (isManga.value) store.toggleDir(); break
     case 'c': if (isManga.value) store.toggleCompare(); break
     case ']': if (isManga.value) store.goNextChapter(); break
@@ -132,6 +160,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
               <span class="rd__txt">{{ store.fit === 'width' ? '↔' : store.fit === 'height' ? '↕' : '1:1' }}</span>
             </button>
             <button v-if="isManga && store.mode === 'paged'" class="rd__btn" :title="store.dir.toUpperCase()" @click="store.toggleDir()"><span class="rd__txt">{{ store.dir.toUpperCase() }}</span></button>
+            <button v-if="store.mode === 'paged'" class="rd__btn" :class="{ 'is-on': store.spread }" title="Doble página" @click="store.toggleSpread()"><span class="rd__txt">▌▐</span></button>
             <button class="rd__btn" :class="{ 'is-on': store.mode === 'webtoon' }" title="Paginado / Webtoon" @click="store.setMode(store.mode === 'paged' ? 'webtoon' : 'paged')"><Icon :name="store.mode === 'paged' ? 'library' : 'film'" :size="16" /></button>
             <button class="rd__btn rd__zoom" title="Restablecer zoom" @click="store.resetZoom()">{{ Math.round(store.zoom * 100) }}%</button>
             <button v-if="store.canCompare" class="rd__btn" :class="{ 'is-on': store.compareMode }" title="Comparar original / 4K (C)" @click="store.toggleCompare()"><Icon name="spark" :size="15" /></button>
@@ -146,7 +175,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
         <!-- Paged -->
         <div v-else-if="store.mode === 'paged'" class="rd__paged"
              :class="{ 'is-grab': store.zoom > 1.01, 'is-cmp': store.compareMode }"
-             @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="endDrag" @wheel="onWheel" @click="onClick">
+             @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="endDrag" @wheel="onWheel">
           <!-- chapter ghost zones -->
           <button v-if="isManga && store.canPrevChapter" class="rd__ghost rd__ghost--prev" @click.stop="store.goPrevChapter()"><span>‹ Cap. {{ store.chapterListAsc[store.chapterIndex - 1]?.chapter }}</span></button>
           <button v-if="isManga && store.canNextChapter" class="rd__ghost rd__ghost--next" @click.stop="store.goNextChapter()"><span>Cap. {{ store.chapterListAsc[store.chapterIndex + 1]?.chapter }} ›</span></button>
@@ -167,11 +196,18 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
             <span class="rd__clabel rd__clabel--l">{{ store.scanCompareMode ? 'PRINCIPAL' : 'ORIGINAL' }}</span>
             <span class="rd__clabel rd__clabel--r">{{ store.scanCompareMode ? 'VARIANTE' : '4K' }}</span>
           </div>
+          <!-- two-page spread -->
+          <div v-else-if="store.spreadActive && store.spreadPair.length === 2" :key="'sp' + store.page"
+               class="rd__spread rd__fade" :class="[`fit-${store.fit}`, { 'is-rtl': isRTL }]" :style="{ transform }"
+               @click.stop.prevent="pageClick">
+            <img :src="pageUrl(store.pages[store.spreadPair[0]])" class="rd__simg" draggable="false" :alt="`Página ${store.spreadPair[0] + 1}`" />
+            <img :src="pageUrl(store.pages[store.spreadPair[1]])" class="rd__simg" draggable="false" :alt="`Página ${store.spreadPair[1] + 1}`" />
+          </div>
           <!-- single page -->
-          <img v-else :src="pageUrl(store.pages[store.page])" class="rd__img" :class="`fit-${store.fit}`" :style="{ transform }" draggable="false" :alt="`Página ${store.page + 1}`"
+          <img v-else :key="'pg' + store.page" :src="pageUrl(store.pages[store.page])" class="rd__img rd__fade" :class="`fit-${store.fit}`" :style="{ transform }" draggable="false" :alt="`Página ${store.page + 1}`"
                @click.stop.prevent="pageClick" />
 
-          <div class="rd__counter" :class="{ 'is-hidden': store.barsHidden }">{{ store.page + 1 }} / {{ store.pages.length }}</div>
+          <div class="rd__counter" :class="{ 'is-hidden': store.barsHidden }">{{ counterLabel }}</div>
         </div>
 
         <!-- Webtoon -->
@@ -230,6 +266,20 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__img.fit-width { width: 100%; max-width: 1000px; height: auto; }
 .rd__img.fit-height { height: 100vh; width: auto; }
 .rd__img.fit-original { width: auto; height: auto; max-width: none; }
+
+/* two-page spread: both pages share one container; RTL flips reading order */
+.rd__spread { display: flex; align-items: flex-start; will-change: transform; }
+.rd__spread.is-rtl { flex-direction: row-reverse; }
+.rd__spread.fit-width { width: 100%; max-width: 1800px; }
+.rd__spread.fit-width .rd__simg { width: 50%; height: auto; }
+.rd__spread.fit-height { height: 100vh; }
+.rd__spread.fit-height .rd__simg { height: 100vh; width: auto; }
+.rd__spread.fit-original .rd__simg { width: auto; height: auto; }
+.rd__simg { display: block; user-select: none; }
+
+/* soft fade-in on page turn (preloaded image is already cached → no white flash) */
+.rd__fade { animation: pageFade .18s var(--ease-silk); }
+@keyframes pageFade { from { opacity: .4 } to { opacity: 1 } }
 
 .rd__ghost { position: absolute; top: 0; bottom: 0; width: 80px; z-index: 4; display: flex; align-items: center; opacity: 0; transition: opacity var(--t-fast); border: none; background: linear-gradient(90deg, rgba(77,141,255,.18), transparent); }
 .rd__ghost--prev { left: 0; justify-content: flex-start; padding-left: var(--s-3); }

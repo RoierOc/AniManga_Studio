@@ -4,6 +4,7 @@ import { useAnimeStore } from '@/stores/anime'
 import { relativeTime } from '@/lib/format'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 
 const store = useAnimeStore()
 onMounted(() => { if (!store.historyLoaded) store.loadHistory() })
@@ -27,9 +28,7 @@ function open(item) {
     </header>
 
     <div v-if="!store.historyLoaded" class="center"><Spinner /></div>
-    <div v-else-if="!store.history.length" class="empty">
-      <Icon name="heart" :size="34" /><p>Aún no has visto nada.</p>
-    </div>
+    <EmptyState v-else-if="!store.history.length" icon="heart" title="Aún no has visto nada." />
 
     <div v-else class="hist__list">
       <button v-for="(h, i) in store.history" :key="i" class="hrow" @click="open(h)">

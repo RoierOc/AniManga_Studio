@@ -33,7 +33,8 @@ export const VIEWS = [
   },
 ]
 
-const VALID = new Set(VIEWS.flatMap(g => g.items.map(i => i.id)))
+// 'settings' is a top-level view reachable from the TopBar gear (not a sidebar item).
+const VALID = new Set([...VIEWS.flatMap(g => g.items.map(i => i.id)), 'settings'])
 
 export const useUiStore = defineStore('ui', {
   state: () => {

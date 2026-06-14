@@ -3,6 +3,7 @@ import { onMounted } from 'vue'
 import { useCbzStore } from '@/stores/cbz'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 
 const store = useCbzStore()
 onMounted(() => { if (!store.loaded) store.load() })
@@ -18,10 +19,8 @@ onMounted(() => { if (!store.loaded) store.load() })
     <div v-if="store.loading" class="grid">
       <div v-for="n in 8" :key="n" class="skeleton" />
     </div>
-    <div v-else-if="store.error || !store.items.length" class="empty">
-      <Icon name="folder" :size="34" />
-      <p>{{ store.error || 'No hay archivos CBZ/CBR en tu carpeta de Mangas.' }}</p>
-    </div>
+    <EmptyState v-else-if="store.error || !store.items.length" icon="folder"
+                :title="store.error || 'No hay archivos CBZ/CBR en tu carpeta de Mangas.'" />
     <div v-else class="grid">
       <article v-for="m in store.items" :key="m.title" class="lc" tabindex="0" @click="store.open(m)" @keydown.enter="store.open(m)">
         <div class="lc__poster">

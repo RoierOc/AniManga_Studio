@@ -4,6 +4,7 @@ import { useMangadexStore } from '@/stores/mangadex'
 import MdCard from '@/components/manga/MdCard.vue'
 import MdDetailModal from '@/components/manga/MdDetailModal.vue'
 import Icon from '@/components/ui/Icon.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 
 const store = useMangadexStore()
 
@@ -77,7 +78,7 @@ onMounted(() => {
     <!-- AniList Top -->
     <template v-if="store.tab === 'anilist'">
       <div v-if="store.alLoading && !store.alTop.length" class="grid"><div v-for="n in 12" :key="n" class="skeleton" /></div>
-      <div v-else-if="!store.alTop.length" class="empty"><Icon name="spark" :size="34" /><p>Sin resultados.</p></div>
+      <EmptyState v-else-if="!store.alTop.length" icon="spark" title="Sin resultados." />
       <template v-else>
         <div class="grid">
           <MdCard v-for="m in store.alTop" :key="m.al_id" :manga="{ ...m, contentRating: 'safe' }" :score="m.score" @open="store.openAnilistResult($event)" />
@@ -93,7 +94,7 @@ onMounted(() => {
       <div v-if="store.loading && !store.list.length" class="grid">
         <div v-for="n in 12" :key="n" class="skeleton" />
       </div>
-      <div v-else-if="!store.list.length" class="empty"><Icon name="search" :size="34" /><p>{{ store.tab === 'search' ? 'Sin resultados.' : 'Nada que mostrar.' }}</p></div>
+      <EmptyState v-else-if="!store.list.length" icon="search" :title="store.tab === 'search' ? 'Sin resultados.' : 'Nada que mostrar.'" />
       <template v-else>
         <div class="grid">
           <MdCard v-for="m in store.list" :key="m.id" :manga="m" :score="store.score(m)" @open="store.openDetail($event)" />

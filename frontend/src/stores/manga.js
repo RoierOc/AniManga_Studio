@@ -70,6 +70,7 @@ export const useMangaStore = defineStore('manga', {
     mode: localStorage.getItem('reader-mode') || 'paged',   // paged | webtoon
     fit: localStorage.getItem('reader-fit') || 'width',     // width | height | original
     dir: localStorage.getItem('reader-dir') || 'rtl',       // rtl | ltr
+    spread: localStorage.getItem('reader-spread') === '1',  // two-page spread (paged manga only)
     zoom: 1.0,
     panX: 0,
     panY: 0,
@@ -157,6 +158,16 @@ export const useMangaStore = defineStore('manga', {
     chapterIndex() { return this.chapterListAsc.findIndex(c => String(c.chapter) === String(this.reader?.chapter)) },
     canPrevChapter() { return this.chapterIndex > 0 },
     canNextChapter() { return this.chapterIndex >= 0 && this.chapterIndex < this.chapterListAsc.length - 1 },
+
+    // two-page spread is only meaningful for paged reading without compare/zoom overlap
+    spreadActive: (s) => s.spread && s.mode === 'paged' && !s.compareMode,
+    // the page(s) currently shown — one index, or a [left,right] pair in spread mode.
+    // The pair is rendered right-to-left when dir === 'rtl' (manga order).
+    spreadPair() {
+      if (!this.spreadActive) return [this.page]
+      const hasNext = this.page + 1 < this.pages.length
+      return hasNext ? [this.page, this.page + 1] : [this.page]
+    },
 
     // compare (original vs upscaled) — only paged manga, chapter has an upscale
     canCompare: (s) => s.reader?.kind === 'manga' && s.mode === 'paged' &&
@@ -772,12 +783,19 @@ export const useMangaStore = defineStore('manga', {
       this._saveProgress()
       if (i >= this.pages.length - 1) this.markRead(this.reader?.chapter)
     },
-    nextPage() { this.setPage(this.page + 1) },
-    prevPage() { this.setPage(this.page - 1) },
+    nextPage() { const step = this.spreadActive ? 2 : 1; this.setPage(Math.min(this.page + step, this.pages.length - 1)) },
+    prevPage() { const step = this.spreadActive ? 2 : 1; this.setPage(Math.max(this.page - step, 0)) },
 
     setMode(m) { this.mode = m; localStorage.setItem('reader-mode', m); this._resetView() },
     cycleFit() { const M = ['width', 'height', 'original']; this.fit = M[(M.indexOf(this.fit) + 1) % 3]; localStorage.setItem('reader-fit', this.fit) },
     toggleDir() { this.dir = this.dir === 'rtl' ? 'ltr' : 'rtl'; localStorage.setItem('reader-dir', this.dir) },
+    // Spread on: snap to an even page so pairs stay aligned (0-1, 2-3, …).
+    toggleSpread() {
+      this.spread = !this.spread
+      localStorage.setItem('reader-spread', this.spread ? '1' : '0')
+      if (this.spread && this.page % 2 === 1) this.page = this.page - 1
+      this.resetZoom()
+    },
 
     zoomBy(delta) {
       this.zoom = Math.max(0.5, Math.min(3.0, this.zoom + delta))

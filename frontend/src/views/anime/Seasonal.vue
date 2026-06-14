@@ -4,6 +4,7 @@ import { useAnimeStore } from '@/stores/anime'
 import { SEASON_ES } from '@/lib/anime'
 import DiscoverCard from '@/components/anime/DiscoverCard.vue'
 import Icon from '@/components/ui/Icon.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 
 const store = useAnimeStore()
 
@@ -65,7 +66,7 @@ onMounted(() => { if (!store.seasonal.length) store.loadSeasonal() })
     <div v-if="store.seasonalLoading" class="grid">
       <div v-for="n in 12" :key="n" class="skeleton" />
     </div>
-    <div v-else-if="!filtered.length" class="empty"><Icon name="spark" :size="34" /><p>Sin resultados para esta temporada.</p></div>
+    <EmptyState v-else-if="!filtered.length" icon="spark" title="Sin resultados para esta temporada." />
     <div v-else class="grid">
       <DiscoverCard v-for="a in filtered" :key="a.al_id" :anime="a" />
     </div>

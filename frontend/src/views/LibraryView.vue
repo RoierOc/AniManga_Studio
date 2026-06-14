@@ -6,6 +6,7 @@ import { useMangaStore } from '@/stores/manga'
 import MangaCard from '@/components/manga/MangaCard.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Icon from '@/components/ui/Icon.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 
 const ui = useUiStore()
 const manga = useMangaStore()
@@ -149,16 +150,16 @@ watch(() => manga.libraryDirty, () => load())
       <div v-for="n in 12" :key="n" class="skeleton" />
     </div>
 
-    <div v-else-if="error" class="empty">
-      <Icon name="globe" :size="34" />
-      <p>El backend no responde.</p>
-      <button class="btn" @click="load"><Icon name="spark" :size="15" /> Reintentar</button>
-    </div>
+    <EmptyState v-else-if="error" icon="globe" title="El backend no responde."
+                hint="Comprueba que el servidor esté en marcha e inténtalo de nuevo.">
+      <template #action>
+        <button class="btn" @click="load"><Icon name="spark" :size="15" /> Reintentar</button>
+      </template>
+    </EmptyState>
 
-    <div v-else-if="!filtered.length" class="empty">
-      <Icon name="library" :size="34" />
-      <p>{{ items.length ? 'Sin resultados para ese filtro.' : 'Tu biblioteca está vacía.' }}</p>
-    </div>
+    <EmptyState v-else-if="!filtered.length" icon="library"
+                :title="items.length ? 'Sin resultados para ese filtro.' : 'Tu biblioteca está vacía.'"
+                :hint="items.length ? '' : 'Descarga capítulos desde MangaDex o tus fuentes para empezar.'" />
 
     <div v-else class="grid">
       <MangaCard v-for="m in filtered" :key="m.id" :manga="m" :updates="manga.updatesByTitle[m.name]?.new_count || 0" @click="manga.open(m)" />

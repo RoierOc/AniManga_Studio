@@ -7,6 +7,7 @@ import Icon from '@/components/ui/Icon.vue'
 const ui = useUiStore()
 const anime = useAnimeStore()
 const current = computed(() => {
+  if (ui.currentView === 'settings') return { label: 'Ajustes', icon: 'settings' }
   const items = VIEWS.flatMap(g => g.items)
   if (ui.currentView === 'anime') return items.find(i => i.id === 'anime' && i.sub === anime.sub) || items.find(i => i.id === 'anime')
   return items.find(i => i.id === ui.currentView)
@@ -23,6 +24,15 @@ const current = computed(() => {
       <Icon v-if="current" :name="current.icon" :size="18" class="topbar__title-icon" />
       <h2>{{ current?.label }}</h2>
     </div>
+
+    <button
+      class="topbar__gear"
+      :class="{ 'is-active': ui.currentView === 'settings' }"
+      title="Ajustes"
+      @click="ui.goto('settings')"
+    >
+      <Icon name="settings" :size="18" />
+    </button>
   </header>
 </template>
 
@@ -45,6 +55,15 @@ const current = computed(() => {
 .topbar__title { display: flex; align-items: center; gap: var(--s-3); }
 .topbar__title-icon { color: var(--azure); }
 .topbar__title h2 { font-size: var(--fs-lg); font-weight: 600; }
+
+.topbar__gear {
+  margin-left: auto; color: var(--ink-faint);
+  width: 38px; height: 38px; display: grid; place-items: center;
+  border-radius: var(--r-sm); border: 1px solid transparent;
+  transition: all var(--t-fast);
+}
+.topbar__gear:hover { color: var(--ink); border-color: var(--line); }
+.topbar__gear.is-active { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 
 @media (max-width: 860px) {
   .topbar { padding: 0 var(--s-4); }

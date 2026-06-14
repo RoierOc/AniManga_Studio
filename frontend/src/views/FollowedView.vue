@@ -3,7 +3,7 @@ import { onMounted } from 'vue'
 import { useMangadexStore } from '@/stores/mangadex'
 import MdCard from '@/components/manga/MdCard.vue'
 import MdDetailModal from '@/components/manga/MdDetailModal.vue'
-import Icon from '@/components/ui/Icon.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 
 const store = useMangadexStore()
 onMounted(() => { if (!store.followedLoaded) store.loadFollowed() })
@@ -19,11 +19,12 @@ onMounted(() => { if (!store.followedLoaded) store.loadFollowed() })
     <div v-if="store.loading && !store.followed.length" class="grid">
       <div v-for="n in 12" :key="n" class="skeleton" />
     </div>
-    <div v-else-if="!store.followed.length" class="empty">
-      <Icon name="heart" :size="34" />
-      <p>{{ store.authed ? 'No sigues ningún manga aún.' : 'Inicia sesión en MangaDex para ver tus seguidos.' }}</p>
-      <button v-if="!store.authed" class="loginbtn" @click="store.login()">Iniciar sesión en MangaDex</button>
-    </div>
+    <EmptyState v-else-if="!store.followed.length" icon="heart"
+                :title="store.authed ? 'No sigues ningún manga aún.' : 'Inicia sesión en MangaDex para ver tus seguidos.'">
+      <template v-if="!store.authed" #action>
+        <button class="loginbtn" @click="store.login()">Iniciar sesión en MangaDex</button>
+      </template>
+    </EmptyState>
     <div v-else class="grid">
       <MdCard v-for="m in store.followed" :key="m.id" :manga="m" :score="store.score(m)" @open="store.openDetail($event)" />
     </div>

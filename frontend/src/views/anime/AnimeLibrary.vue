@@ -5,6 +5,7 @@ import { ANIME_STATUS, STATUS_ORDER } from '@/lib/anime'
 import AnimeCard from '@/components/anime/AnimeCard.vue'
 import HeroBanner from '@/components/anime/HeroBanner.vue'
 import Icon from '@/components/ui/Icon.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 
 const store = useAnimeStore()
 
@@ -117,10 +118,9 @@ const counts = computed(() => {
     <div v-if="store.loading" class="grid">
       <div v-for="n in 10" :key="n" class="skeleton" />
     </div>
-    <div v-else-if="!filtered.length" class="empty">
-      <Icon name="film" :size="34" />
-      <p>{{ store.library.length ? 'Sin resultados.' : 'Aún no has añadido anime.' }}</p>
-    </div>
+    <EmptyState v-else-if="!filtered.length" icon="film"
+                :title="store.library.length ? 'Sin resultados.' : 'Aún no has añadido anime.'"
+                :hint="store.library.length ? '' : 'Busca una serie y añádela para seguir sus episodios aquí.'" />
     <div v-else class="grid">
       <AnimeCard v-for="a in filtered" :key="a.id" :anime="a" @open="store.openDetail($event)" />
     </div>
