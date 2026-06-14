@@ -670,9 +670,12 @@ def _skip_args(dest_dir_linux: str, script_path_for_mpv: str) -> list:
         shutil.copy2(str(_SKIP_LUA), str(_Path(dest_dir_linux) / 'skip-intro.lua'))
     except Exception:
         return []
+    # Use -append (not --script-opts=) so these merge with osc-hidetimeout from _wl_args
+    # instead of replacing the whole dict regardless of argument order.
     return [f'--script={script_path_for_mpv}',
-            f'--script-opts=skip-intro-skip={_SKIP_SECS},skip-intro-window={_SKIP_WINDOW},'
-            f'skip-intro-idle={_OSC_HIDE_MS / 1000:.3f}']
+            f'--script-opts-append=skip-intro-skip={_SKIP_SECS}',
+            f'--script-opts-append=skip-intro-window={_SKIP_WINDOW}',
+            f'--script-opts-append=skip-intro-idle={_OSC_HIDE_MS / 1000:.3f}']
 
 
 def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> tuple:
@@ -685,7 +688,9 @@ def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> t
         args = [f'--watch-later-dir={wl_win_path}', '--save-position-on-quit',
                 '--ontop',  # always-on-top so MPV appears above browser/other windows
                 f'--slang={_SUB_LANGS}',          # auto-pick the Spanish subtitle track
-                f'--osc-hidetimeout={_OSC_HIDE_MS}']  # OSC bar fades in sync with Saltar OP
+                # OSC bar fades in sync with the Saltar OP button. osc-hidetimeout is an OSC
+                # *script* option (no top-level --osc-hidetimeout flag exists), so append it.
+                f'--script-opts-append=osc-hidetimeout={_OSC_HIDE_MS}']
         if start_pos > 30:
             args.append(f'--start={start_pos:.1f}')
         return args
