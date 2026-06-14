@@ -250,8 +250,8 @@ export const useMangaStore = defineStore('manga', {
       }, 1000)
     },
 
-    async open(manga) {
-      this.current = { id: manga.id || manga.name, name: manga.name, cover: manga.cover, source_meta: manga.source_meta }
+    async open(manga, opts = {}) {
+      this.current = { id: manga.id || manga.name, name: manga.name, cover: manga.cover, source_meta: manga.source_meta, mdOnly: !!manga.mdOnly }
       this.chapters = []
       this.sourceChapters = []
       this.mdChapters = []
@@ -259,6 +259,9 @@ export const useMangaStore = defineStore('manga', {
       this.mdLang = ''
       this.upscaled = {}
       this.modalLoading = true
+      // Push a history entry so browser back closes the modal and forward reopens it.
+      // Skip when we're re-opening *because of* a back/forward (fromHistory).
+      if (!opts.fromHistory) useUiStore().pushNav()
       try {
         // Load local chapters if downloaded (skip for MD-only entries)
         if (!manga.mdOnly) {

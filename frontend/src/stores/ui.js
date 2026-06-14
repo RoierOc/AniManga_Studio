@@ -1,9 +1,10 @@
 import { defineStore } from 'pinia'
 import { useAnimeStore } from './anime'
+import { useMangaStore } from './manga'
 
 const SESSION_KEY = 'animanga:session:v2'
-let _navStack = []
 let _navInit = false
+let _applying = false   // true while applying a popstate, so we don't push new history
 
 function loadSession() {
   try { return JSON.parse(localStorage.getItem(SESSION_KEY) || '{}') } catch { return {} }
@@ -47,54 +48,89 @@ export const useUiStore = defineStore('ui', {
     }
   },
   actions: {
+    // Serializable snapshot of where the user is — drives both browser history
+    // (back/forward) and the F5 session restore.
+    snapshot() {
+      let sub = '', animeDetail = null, manga = null
+      try { const a = useAnimeStore(); sub = a.sub; animeDetail = a.detailId || null } catch {}
+      try {
+        const m = useMangaStore()
+        if (m.current) manga = {
+          id: m.current.id, name: m.current.name, cover: m.current.cover,
+          source_meta: m.current.source_meta, mdId: m.mdId, mdOnly: !!m.current.mdOnly,
+        }
+      } catch {}
+      return { view: this.currentView, sub, animeDetail, manga, sidebarCollapsed: this.sidebarCollapsed }
+    },
+
+    _initNav() {
+      if (_navInit) return
+      _navInit = true
+      try { history.replaceState(this.snapshot(), '') } catch {}
+      window.addEventListener('popstate', (e) => this._apply(e.state || {}))
+    },
+
+    // Apply a history snapshot (a back/forward landing) to the app. Reopens or closes
+    // the anime detail and manga modal to match — so back/forward returns you exactly
+    // where you were. Never pushes new history (guarded by _applying).
+    _apply(st) {
+      _applying = true
+      try {
+        this.currentView = VALID.has(st.view) ? st.view : 'library'
+        try {
+          const a = useAnimeStore()
+          if (st.sub) a.sub = st.sub
+          a.detailId = st.animeDetail || null
+          if (a.torrentAnime) a.torrentAnime = null   // transient search view — close on any nav
+          if (a.detailId) { const d = a.detail; if (d?.al_id) { a.loadTags(d); a.loadRecs(d) } }
+        } catch {}
+        try {
+          const m = useMangaStore()
+          if (st.manga) { if (!m.current || m.current.id !== st.manga.id) m.open(st.manga, { fromHistory: true }) }
+          else if (m.current) m.current = null
+        } catch {}
+      } finally {
+        _applying = false
+        this.persist()
+      }
+    },
+
+    // Push the current location as a new browser-history entry.
+    pushNav() {
+      this._initNav()
+      if (_applying) return
+      try { history.pushState(this.snapshot(), '') } catch {}
+      this.persist()
+    },
+    // Replace the current entry in place (state changed but it's not a new "page").
+    replaceNav() {
+      this._initNav()
+      if (_applying) return
+      try { history.replaceState(this.snapshot(), '') } catch {}
+      this.persist()
+    },
+    // Go back — used by close/Volver buttons so Forward can reopen what was closed.
+    back() { try { window.history.back() } catch {} },
+
     goto(view) {
       if (VALID.has(view)) this.currentView = view
       this.sidebarMobileOpen = false
-      this.pushNav(view)
-      this.persist()
+      // switching to a top-level view closes any open detail/modal
+      try { const a = useAnimeStore(); a.detailId = null; a.torrentAnime = null } catch {}
+      try { const m = useMangaStore(); m.current = null } catch {}
+      this.pushNav()
     },
-    pushNav(view, sub = '', animeDetail = null) {
-      if (!_navInit) {
-        _navInit = true
-        history.replaceState({ pos: 0 }, '')
-        window.addEventListener('popstate', (e) => {
-          // Prefer a registered restore (e.g. close an open detail) over a raw view switch.
-          if (_navStack.length > 0) {
-            const prev = _navStack.pop()
-            if (prev.restore) { prev.restore(); this.persist(); return }
-          }
-          // Fallback: land on the view (+ anime sub) we're navigating back to.
-          // Guard against stale/invalid views so we never strand on a placeholder.
-          const st = e.state || {}
-          this.currentView = VALID.has(st.view) ? st.view : 'library'
-          if (this.currentView === 'anime' && st.sub) {
-            try { useAnimeStore().sub = st.sub } catch {}
-          }
-          this.persist()
-        })
-      }
-      const v = VALID.has(view) ? view : this.currentView
-      _navStack.push({ view: v, sub, animeDetail, restore: null })
-      history.pushState({ pos: _navStack.length, view: v, sub }, '')
-      this.persist()
-    },
-    _setNavRestore(fn) {
-      if (_navStack.length > 0) _navStack[_navStack.length - 1].restore = fn
-    },
+
     toggleSidebar() {
       this.sidebarCollapsed = !this.sidebarCollapsed
-      this.persist()
+      this.replaceNav()
     },
+
     // Persist the real current location (survives F5, like a normal web app).
     persist() {
-      try {
-        let sub = ''
-        try { sub = useAnimeStore().sub } catch {}
-        localStorage.setItem(SESSION_KEY, JSON.stringify({
-          view: this.currentView, sub, sidebarCollapsed: this.sidebarCollapsed,
-        }))
-      } catch {}
+      try { localStorage.setItem(SESSION_KEY, JSON.stringify(this.snapshot())) } catch {}
     },
+
     toast(message, type = 'info', ms = 3600) {
       const id = ++this._toastSeq
       this.toasts.push({ id, message, type })

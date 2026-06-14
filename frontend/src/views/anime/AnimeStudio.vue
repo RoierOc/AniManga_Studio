@@ -35,7 +35,7 @@ function selectTab(id) {
   store.closeTorrents()
   store.sub = id
   store.persist()
-  useUiStore().pushNav('anime', id)
+  useUiStore().pushNav()
 }
 </script>
 

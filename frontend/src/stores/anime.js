@@ -209,7 +209,7 @@ export const useAnimeStore = defineStore('anime', {
           return b.seeders - a.seeders
         })
       }
-      return Object.entries(map)
+      let groups = Object.entries(map)
         .map(([k, torrents]) => ({ episode: Number(k), torrents }))
         .sort((a, b) => {
           if (a.episode === 0) return -1
@@ -218,6 +218,11 @@ export const useAnimeStore = defineStore('anime', {
           if (b.episode === -1) return -1
           return a.episode - b.episode
         })
+      // "Registrar como episodio N": show only that episode (+ batches), like the legacy.
+      if (this.targetEp !== null) {
+        groups = groups.filter(g => g.episode === 0 || g.episode === this.targetEp)
+      }
+      return groups
     },
   },
 
@@ -292,18 +297,12 @@ export const useAnimeStore = defineStore('anime', {
       this.epInfoOpen = null
       this.linkTorrent = { show: false, list: [], loading: false, subpath: '' }
       if (anime.al_id) { this.loadTags(anime); this.loadRecs(anime) }
-      // Browser back closes the detail and returns to the current sub-tab.
-      // NOTE: the view must be the top-level 'anime' id, never the sub-tab —
-      // passing the sub here corrupts history.state.view and strands the back
-      // button on a non-existent view (the old "EN MIGRACIÓN" placeholder bug).
-      const ui = useUiStore()
-      ui.pushNav('anime', this.sub, anime.id)
-      // Guard: only act if the detail is still open, so a later back press after
-      // a tab switch doesn't fire a stale restore.
-      ui._setNavRestore(() => { if (this.detailId) this.detailId = null })
+      // Push a history entry encoding this detail → browser back closes it and
+      // forward reopens it (the snapshot model in ui.js).
+      useUiStore().pushNav()
     },
     // Pure reset for programmatic callers (tab switches, openRec). The "Volver"
-    // button instead uses history.back() to consume the pushed history entry.
+    // button uses ui.back() so forward can reopen the detail.
     closeDetail() {
       this.detailId = null
     },
@@ -641,19 +640,16 @@ export const useAnimeStore = defineStore('anime', {
     },
     async openTorrents(anime, targetEpisode = null) {
       this.hidePreview()
-      // Remember where we came from so the back button returns there, then drill
-      // into the torrent panel. Clear the detail directly (no extra history entry).
-      const prevSub = this.sub
+      // Drill into the torrent panel under the 'search' sub-tab. A history entry is
+      // pushed so back returns to where we came from (the panel is transient — any
+      // back/forward closes it, see ui._apply).
       this.detailId = null
       this.sub = 'search'
-      const ui = useUiStore()
-      ui.pushNav('anime', prevSub, null)
-      // Guard: only act if the torrent panel is still open (idempotent — a stale
-      // back press after a tab switch becomes a harmless no-op).
-      ui._setNavRestore(() => { if (this.torrentAnime) { this.torrentAnime = null; this.sub = prevSub } })
       this.torrentAnime = anime
+      useUiStore().pushNav()
       this.torrents = []
-      this.flt = { lang: 'all', hideDead: true, quality: '', group: '', ep: targetEpisode ? 'episodes' : 'all' }
+      // ep:'all' even with a target — the targetEp group filter keeps the episode + batches.
+      this.flt = { lang: 'all', hideDead: true, quality: '', group: '', ep: 'all' }
       const fmt = anime.format || ''
       this.targetEp = (fmt === 'MOVIE' || fmt === 'MUSIC') ? null : (targetEpisode && targetEpisode > 0 ? targetEpisode : null)
       const variants = [...new Set([anime.title_romaji, anime.title_english, anime.title].map(t => (t || '').trim()).filter(Boolean))]

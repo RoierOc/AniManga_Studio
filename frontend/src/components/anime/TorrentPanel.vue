@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
+import { useUiStore } from '@/stores/ui'
 import { formatBytes } from '@/lib/format'
 import { animeFormatLabel } from '@/lib/anime'
 import Icon from '@/components/ui/Icon.vue'
@@ -12,10 +13,7 @@ const expanded = ref(new Set())
 
 // openTorrents() always pushes one history entry, so back consumes it and runs
 // the guarded restore (closes the panel + restores the previous sub-tab).
-function goBack() {
-  if (window.history.state && window.history.state.pos > 0) window.history.back()
-  else store.closeTorrents()
-}
+function goBack() { useUiStore().back() }
 
 const LANGS = computed(() => [
   { id: 'all', label: 'Todos', n: store.langCounts.all },

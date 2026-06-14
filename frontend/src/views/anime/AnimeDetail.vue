@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
+import { useUiStore } from '@/stores/ui'
 import { ANIME_STATUS, animeFormatLabel, batchInfo, fmtCountdown } from '@/lib/anime'
 import EpisodeCard from '@/components/anime/EpisodeCard.vue'
 import Icon from '@/components/ui/Icon.vue'
@@ -11,10 +12,7 @@ const anime = computed(() => store.detail)
 
 // openDetail() always pushes one history entry, so back consumes it and runs the
 // guarded restore. Fall back to a direct close if there's no app history.
-function goBack() {
-  if (window.history.state && window.history.state.pos > 0) window.history.back()
-  else store.closeDetail()
-}
+function goBack() { useUiStore().back() }
 
 const batch = computed(() => batchInfo(anime.value?.episodes || []))
 const realEps = computed(() =>

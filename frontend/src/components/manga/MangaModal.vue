@@ -2,10 +2,15 @@
 import { computed, ref, watch } from 'vue'
 import { useMangaStore } from '@/stores/manga'
 import { formatChapter } from '@/lib/manga'
+import { useUiStore } from '@/stores/ui'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useMangaStore()
+const ui = useUiStore()
+// Close via history.back() so Forward reopens the manga (snapshot nav). Fall back to a
+// direct close if there's somehow no app history to pop.
+function closeModal() { if (store.current) ui.back(); else store.close() }
 const m = computed(() => store.current)
 const upState = (ch) => store.upscaled[ch]          // true | 'partial' | undefined
 
@@ -83,9 +88,9 @@ async function doExport(toDrive = false) {
 <template>
   <Teleport to="body">
     <Transition name="modal">
-      <div v-if="m" class="ov" @click.self="store.close()">
+      <div v-if="m" class="ov" @click.self="closeModal">
         <div class="modal">
-          <button class="modal__x" @click="store.close()"><Icon name="close" :size="18" /></button>
+          <button class="modal__x" @click="closeModal"><Icon name="close" :size="18" /></button>
 
           <header class="modal__head">
             <img v-if="m.cover" :src="m.cover" class="modal__cover" :alt="m.name" />
