@@ -63,7 +63,7 @@ export const useUiStore = defineStore('ui', {
       return { view: this.currentView, sub, animeDetail, manga, sidebarCollapsed: this.sidebarCollapsed }
     },
 
-    _initNav() {
+    initNav() {
       if (_navInit) return
       _navInit = true
       try { history.replaceState(this.snapshot(), '') } catch {}
@@ -97,14 +97,14 @@ export const useUiStore = defineStore('ui', {
 
     // Push the current location as a new browser-history entry.
     pushNav() {
-      this._initNav()
+      this.initNav()
       if (_applying) return
       try { history.pushState(this.snapshot(), '') } catch {}
       this.persist()
     },
     // Replace the current entry in place (state changed but it's not a new "page").
     replaceNav() {
-      this._initNav()
+      this.initNav()
       if (_applying) return
       try { history.replaceState(this.snapshot(), '') } catch {}
       this.persist()

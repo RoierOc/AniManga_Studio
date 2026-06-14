@@ -26,7 +26,12 @@ function onGlobalKey(e) {
   if (e.key === '?') { e.preventDefault(); ui.showShortcuts = !ui.showShortcuts }
   else if (e.key === 'Escape' && ui.showShortcuts) ui.showShortcuts = false
 }
-onMounted(() => { manga.init(); window.addEventListener('keydown', onGlobalKey) })
+onMounted(() => {
+  ui.initNav()   // capture the landing view as the first history entry (before any nav),
+                 // so browser back/forward traverses the whole app, not just details.
+  manga.init()
+  window.addEventListener('keydown', onGlobalKey)
+})
 onUnmounted(() => window.removeEventListener('keydown', onGlobalKey))
 
 // Every sidebar view has a real component below; the PlaceholderView is only a
