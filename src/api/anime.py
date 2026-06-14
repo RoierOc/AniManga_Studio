@@ -873,6 +873,12 @@ _qbt     = _http.Session()
 _qbt_url = ''
 _qbt_ok  = False
 
+# Shared session for Nyaa/AnimeTosho so the parallel title-variant searches reuse
+# pooled keep-alive connections instead of paying a fresh TLS handshake each time.
+_nyaa_http = _http.Session()
+_nyaa_http.headers.update({'User-Agent': 'Mozilla/5.0'})
+_nyaa_http.mount('https://', _http.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=8))
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -993,7 +999,7 @@ def _nyaa_search(query: str, category: str = '1_2', filter_code: str = '0') -> l
             return res
     try:
         url = f'{_NYAA}/?{urlencode({"page":"rss","q":query,"c":category,"f":filter_code})}'
-        r = _http.get(url, timeout=12, headers={'User-Agent': 'Mozilla/5.0'})
+        r = _nyaa_http.get(url, timeout=12)
         r.raise_for_status()
         root = ET.fromstring(r.content)
     except Exception:
@@ -1157,11 +1163,12 @@ def get_torrents():
     category = request.args.get('category', '1_2')
     if not q:
         return jsonify([])
-    # Fetch both all (f=0) and trusted-only (f=2); merge to maximise episode coverage
-    all_res     = _nyaa_search(q, category, '0')
-    trusted_res = _nyaa_search(q, category, '2')
+    # A single fetch (f=0 = all) already carries the per-item `trusted` flag, and the
+    # trusted-only filter (f=2) is a strict subset of it — so the old second request
+    # was pure redundant latency. Fetch once and keep trusted entries first (stable).
+    res = _nyaa_search(q, category, '0')
     seen, merged = set(), []
-    for t in trusted_res + all_res:          # trusted first keeps their metadata
+    for t in sorted(res, key=lambda x: not x['trusted']):
         key = t['info_hash'] or t['title']
         if key not in seen:
             seen.add(key)
