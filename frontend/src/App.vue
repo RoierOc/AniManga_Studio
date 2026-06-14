@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted } from 'vue'
 import { useUiStore, VIEWS } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
 import Sidebar from '@/components/layout/Sidebar.vue'
@@ -9,13 +9,17 @@ import TaskQueue from '@/components/ui/TaskQueue.vue'
 import ShortcutsModal from '@/components/ui/ShortcutsModal.vue'
 import MangaModal from '@/components/manga/MangaModal.vue'
 import Reader from '@/components/manga/Reader.vue'
-import LibraryView from '@/views/LibraryView.vue'
-import MangaDexView from '@/views/MangaDexView.vue'
-import FollowedView from '@/views/FollowedView.vue'
-import SourcesView from '@/views/SourcesView.vue'
-import LocalView from '@/views/LocalView.vue'
-import AnimeStudio from '@/views/anime/AnimeStudio.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
+
+// Views are code-split into their own chunks (loaded on demand) to shrink the initial
+// bundle — the Anime Studio especially pulls in a lot. LibraryView stays eager since it
+// is the most common landing view.
+import LibraryView from '@/views/LibraryView.vue'
+const MangaDexView = defineAsyncComponent(() => import('@/views/MangaDexView.vue'))
+const FollowedView = defineAsyncComponent(() => import('@/views/FollowedView.vue'))
+const SourcesView  = defineAsyncComponent(() => import('@/views/SourcesView.vue'))
+const LocalView    = defineAsyncComponent(() => import('@/views/LocalView.vue'))
+const AnimeStudio  = defineAsyncComponent(() => import('@/views/anime/AnimeStudio.vue'))
 
 const ui = useUiStore()
 const manga = useMangaStore()

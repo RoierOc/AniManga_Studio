@@ -6,6 +6,7 @@ import { taskId, canonicalTitle } from '@/lib/manga'
 
 let statusBound = false
 let previewTimer = null
+let upDoneSeen = new Set()   // upscale ids already refreshed-for (bounded, pruned each SSE tick)
 
 // Preferred MangaDex chapter language (Spanish-first, then English), or the first
 // available — so a freshly opened manga shows one clean language, not all at once.
@@ -219,35 +220,35 @@ export const useMangaStore = defineStore('manga', {
         if (this.dismissedExports.length) {
           this.dismissedExports = this.dismissedExports.filter(id => id in this.exports)
         }
-        if (this.current) {
-          const upDone = Object.entries(this.upscale).some(([k, v]) =>
-            k.startsWith(taskId(this.current.id, '', 'upscale').slice(0, -3)) && v.status === 'done')
-          if (upDone) this._refreshUpscaled()
-        }
-      })
-      // Direct poll for download & upscale progress — bypass SSE getter issue
-      setInterval(async () => {
+        // Clean up finished chapter tasks straight from the SSE snapshot — this replaces
+        // the old 1-second polling loop (one extra request per active task per second),
+        // since the stream already carries every download/upscale status every 500 ms.
+        const TERMINAL = ['complete', 'done', 'cancelled', 'error']
+        let refreshCh = false, refreshUp = false
         for (const [ch, tid] of Object.entries(this.dlTasks)) {
-          try {
-            const s = await api.get(`/api/status/download/${encodeURIComponent(tid)}`)
-            if (!s) continue
-            if (['complete', 'done', 'cancelled', 'error'].includes(s.status)) {
-              delete this.dlTasks[ch]; this._refreshChapters()
-            }
-            this.downloads = { ...this.downloads, [tid]: s }
-          } catch (_) {}
+          const v = this.downloads[tid]
+          if (v && TERMINAL.includes(v.status)) { delete this.dlTasks[ch]; refreshCh = true }
         }
         for (const [ch, tid] of Object.entries(this.upTasks)) {
-          try {
-            const s = await api.get(`/api/status/upscale/${encodeURIComponent(tid)}`)
-            if (!s) continue
-            if (['done', 'complete', 'cancelled', 'error'].includes(s.status)) {
-              delete this.upTasks[ch]; this._refreshUpscaled()
-            }
-            this.upscale = { ...this.upscale, [tid]: s }
-          } catch (_) {}
+          const v = this.upscale[tid]
+          if (v && TERMINAL.includes(v.status)) { delete this.upTasks[ch]; refreshUp = true }
         }
-      }, 1000)
+        // Catch upscales for the open manga not tracked per-chapter (e.g. "escalar todo"),
+        // refreshing only ONCE per newly-completed task (not every 500ms tick).
+        if (this.current) {
+          const prefix = taskId(this.current.id, '', 'upscale').slice(0, -3)
+          for (const [k, v] of Object.entries(this.upscale)) {
+            if (k.startsWith(prefix) && (v.status === 'done' || v.status === 'complete') && !upDoneSeen.has(k)) {
+              upDoneSeen.add(k); refreshUp = true
+            }
+          }
+          if (upDoneSeen.size) upDoneSeen = new Set([...upDoneSeen].filter(k => {
+            const v = this.upscale[k]; return v && (v.status === 'done' || v.status === 'complete')
+          }))
+        }
+        if (refreshCh) this._refreshChapters()
+        if (refreshUp) this._refreshUpscaled()
+      })
     },
 
     async open(manga, opts = {}) {

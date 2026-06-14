@@ -32,6 +32,7 @@ _NS      = '{https://nyaa.si/xmlns/nyaa}'
 _search_cache:   dict = {}
 _nyaa_cache:     dict = {}
 _seasonal_cache: dict = {}
+_qbt_files_cache: dict = {}   # info_hash → {ep_num: stem}; immutable per torrent, pruned to live hashes
 _SEASONAL_TTL = 600  # 10 min
 
 _THUMBS_DIR = _Path.home() / '.cache' / 'manga-upscaler' / 'thumbs'
@@ -1426,9 +1427,15 @@ def anime_library_get():
     }
 
     # files_map: info_hash → {episode_num: stem_filename}
-    # Fetching /torrents/files gives us the real per-episode filenames
+    # A torrent's file list is immutable once its metadata is known, so cache it per hash
+    # (keyed by info_hash) and only hit qBittorrent for hashes we haven't parsed yet.
+    # This avoids one /torrents/files request per torrent on every library refresh.
     files_map: dict = {}
     for ih in unique_hashes:
+        cached = _qbt_files_cache.get(ih)
+        if cached is not None:
+            files_map[ih] = cached
+            continue
         try:
             raw_files = _q('get', '/torrents/files', params={'hash': ih}).json()
             ep_files: dict = {}
@@ -1445,8 +1452,17 @@ def anime_library_get():
             if not ep_files and len(raw_files) == 1:
                 ep_files[-1] = _Path(raw_files[0].get('name', '')).stem
             files_map[ih] = ep_files
+            # Only cache once we actually have files (a magnet still fetching metadata
+            # returns none — leave it uncached so we retry next time).
+            if ep_files:
+                _qbt_files_cache[ih] = ep_files
         except Exception:
             files_map[ih] = {}
+    # Bound memory: forget cached hashes that are no longer in qBittorrent.
+    if _qbt_files_cache:
+        live = set(hash_map.keys())
+        for h in [h for h in _qbt_files_cache if h not in live]:
+            _qbt_files_cache.pop(h, None)
 
     result = []
     for anime_id, anime in lib.items():

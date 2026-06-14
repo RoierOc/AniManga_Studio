@@ -11,6 +11,34 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 BASE_DIR = Path(current_dir)
 sys.path.insert(0, current_dir)
 
+# ── Capped, rotating log ──────────────────────────────────────────────────────
+# Route all output (print() + tracebacks + flask/waitress logging) through a size-
+# rotated file so the log can never grow unbounded again (a runaway error loop once
+# flooded it to ~500k lines). 4 MB × 3 files ≈ 12 MB max.
+try:
+    import logging as _logging
+    from logging.handlers import RotatingFileHandler as _RFH
+    _LOG_PATH = os.environ.get('SERVER_LOG', '/tmp/flask.log')
+    _lh = _RFH(_LOG_PATH, maxBytes=4_000_000, backupCount=2, encoding='utf-8', delay=True)
+    _lh.setFormatter(_logging.Formatter('%(asctime)s %(levelname).1s %(message)s', '%H:%M:%S'))
+    _logging.basicConfig(level=_logging.INFO, handlers=[_lh])
+
+    class _StreamToLog:
+        """Make print()/stderr writes go through the rotating logger."""
+        def __init__(self, level): self._level = level; self._buf = ''
+        def write(self, msg):
+            self._buf += msg
+            while '\n' in self._buf:
+                line, self._buf = self._buf.split('\n', 1)
+                if line.strip():
+                    _logging.log(self._level, line)
+        def flush(self): pass
+        def isatty(self): return False
+    sys.stdout = _StreamToLog(_logging.INFO)
+    sys.stderr = _StreamToLog(_logging.ERROR)
+except Exception:
+    pass
+
 from api.runtime import MANGA_DIR, UPSCALED_DIR
 
 os.makedirs(str(MANGA_DIR), exist_ok=True)
