@@ -1478,7 +1478,8 @@ def anime_library_get():
                 }
                 for ep in local_eps
             ]
-            series_total = anime.get('total_episodes') or 0
+            series_total = anime.get('total_episodes')
+            series_total = series_total if isinstance(series_total, int) else 0
 
             # Add placeholder entries for episodes not yet downloaded
             if series_total > 0:
@@ -1522,7 +1523,8 @@ def anime_library_get():
             })
             continue
 
-        total = anime.get('total_episodes') or 0
+        total = anime.get('total_episodes')
+        total = total if isinstance(total, int) else 0   # guard against bad data (e.g. an episodes list)
         ep_map = anime.get('episodes', {})
         episodes_out = []
         for ep_str, ep_data in ep_map.items():
@@ -1653,6 +1655,8 @@ def anime_library_add():
         return jsonify({'error': 'need al_id, mal_id, or title'}), 400
 
     total_eps = data.get('total_episodes')
+    if not isinstance(total_eps, int):
+        total_eps = None   # never store a non-number (e.g. an episodes array) — it breaks the library load
     fmt       = data.get('format', '')
 
     # If episode count is missing but we have an AniList id, fetch it now

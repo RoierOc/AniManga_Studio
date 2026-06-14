@@ -607,7 +607,7 @@ export const useAnimeStore = defineStore('anime', {
           al_id: anime.al_id, mal_id: anime.mal_id,
           title: anime.title, title_romaji: anime.title_romaji || '',
           cover: anime.cover || '', banner: anime.banner || '',
-          total_episodes: anime.episodes || null,
+          total_episodes: typeof anime.episodes === 'number' ? anime.episodes : (anime.total_episodes || null),
           format: anime.format || '', track_only: true,
         })
         if (d.ok) { useUiStore().toast(`"${anime.title}" añadido a Mi Anime`, 'ok'); await this.loadLibrary(true) }
@@ -707,7 +707,7 @@ export const useAnimeStore = defineStore('anime', {
           if (a) {
             api.post('/api/anime/library/add', {
               al_id: a.al_id, mal_id: a.mal_id, title: a.title, title_romaji: a.title_romaji || '',
-              cover: a.cover || '', total_episodes: a.episodes || null, format: a.format || '',
+              cover: a.cover || '', total_episodes: typeof a.episodes === 'number' ? a.episodes : (a.total_episodes || null), format: a.format || '',
               episode: torrent.episode === 0 ? 0 : torrent.episode,
               torrent_title: torrent.title, info_hash: torrent.info_hash || '',
             }).then(() => this.loadLibrary(true)).catch(() => {})
