@@ -1376,7 +1376,12 @@ def qbt_action():
             _q('post', '/torrents/delete',
                data={'hashes': hash_, 'deleteFiles': str(data.get('delete_files', False)).lower()})
         elif action in ('pause', 'resume'):
-            _q('post', f'/torrents/{action}', data={'hashes': hash_})
+            # qBittorrent v5 renamed pause/resume → stop/start. Try the classic
+            # endpoint first and fall back to the v5 alias on 404.
+            v5 = {'pause': 'stop', 'resume': 'start'}[action]
+            r = _q('post', f'/torrents/{action}', data={'hashes': hash_})
+            if getattr(r, 'status_code', 200) == 404:
+                _q('post', f'/torrents/{v5}', data={'hashes': hash_})
         elif action == 'recheck':
             _q('post', '/torrents/recheck', data={'hashes': hash_})
         return jsonify({'ok': True})

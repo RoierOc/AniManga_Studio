@@ -113,6 +113,9 @@ const keyOf = (t) => t.info_hash || t.torrent_url
                 <span class="muted">▼ {{ t.leechers }}</span>
               </div>
             </div>
+            <a v-if="t.view_url" :href="t.view_url" target="_blank" rel="noopener" class="tr__nyaa" title="Ver en Nyaa" @click.stop>
+              <Icon name="external" :size="14" /> Nyaa
+            </a>
             <button class="tr__add" :class="{ 'is-added': store.isAdded(keyOf(t)) }"
                     :disabled="store.isAdding(keyOf(t)) || store.isAdded(keyOf(t))" @click="store.addToQbt(t)">
               <Spinner v-if="store.isAdding(keyOf(t))" :size="13" />
@@ -187,6 +190,8 @@ const keyOf = (t) => t.info_hash || t.torrent_url
 .tr__add { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-size: var(--fs-xs); font-weight: 600; transition: background var(--t-fast); }
 .tr__add:hover { background: var(--azure-bright); }
 .tr__add.is-added { background: transparent; color: var(--jade); border: 1px solid color-mix(in srgb, var(--jade) 35%, transparent); }
+.tr__nyaa { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); }
+.tr__nyaa:hover { color: var(--azure-bright); border-color: var(--azure); }
 
 @media (max-width: 640px) { .tp { padding: 0 var(--s-4) var(--s-8); } .tp__head { flex-direction: column; } }
 </style>

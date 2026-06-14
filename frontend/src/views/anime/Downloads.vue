@@ -22,6 +22,8 @@ onMounted(async () => {
 onUnmounted(() => { if (poll) clearInterval(poll) })
 
 const isDone = (t) => t.progress >= 100
+// qBittorrent reports paused as 'pausedDL/UP' (v4) or 'stoppedDL/UP' (v5).
+const isPaused = (t) => /^(paused|stopped)/.test(t.state || '')
 </script>
 
 <template>
@@ -88,8 +90,10 @@ const isDone = (t) => t.progress >= 100
             </div>
           </div>
           <div class="trow__actions">
-            <button v-if="!isDone(t)" class="ti" title="Pausar" @click="store.qbtAction('pause', t.hash)"><Icon name="close" :size="14" /></button>
-            <button v-else class="ti" title="Reanudar" @click="store.qbtAction('resume', t.hash)"><Icon name="play" :size="14" /></button>
+            <button class="ti" :class="{ 'is-on': isPaused(t) }" :title="isPaused(t) ? 'Reanudar' : 'Pausar'"
+                    @click="store.qbtAction(isPaused(t) ? 'resume' : 'pause', t.hash)">
+              <Icon :name="isPaused(t) ? 'play' : 'pause'" :size="14" />
+            </button>
             <button class="ti" title="Verificar" @click="store.qbtAction('recheck', t.hash)"><Icon name="spark" :size="14" /></button>
             <button class="ti ti--danger" title="Eliminar (con archivos)" @click="store.qbtAction('delete', t.hash, true)"><Icon name="close" :size="14" /></button>
           </div>
@@ -158,6 +162,7 @@ const isDone = (t) => t.progress >= 100
 .trow__actions { display: flex; gap: var(--s-1); }
 .ti { width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--r-sm); border: 1px solid var(--line); color: var(--ink-faint); transition: all var(--t-fast); }
 .ti:hover { color: var(--ink); border-color: var(--line-strong); background: var(--surface-2); }
+.ti.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 .ti--danger:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
 
 @media (max-width: 640px) { .dl { padding: 0 var(--s-4) var(--s-8); } }

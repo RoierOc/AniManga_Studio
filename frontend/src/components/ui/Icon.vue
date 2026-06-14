@@ -15,6 +15,8 @@ const PATHS = {
   close:   '<path d="m6 6 12 12M18 6 6 18"/>',
   check:   '<path d="m5 12 4.5 4.5L19 7"/>',
   settings:'<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M4.2 7l2.6 1.5M17.2 15.5l2.6 1.5M4.2 17l2.6-1.5M17.2 8.5l2.6-1.5"/>',
+  pause:   '<path d="M9 5v14M15 5v14"/>',
+  external:'<path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M19 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>',
 }
 defineProps({ name: { type: String, required: true }, size: { type: [Number, String], default: 20 } })
 </script>
