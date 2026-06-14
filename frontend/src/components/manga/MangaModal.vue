@@ -8,9 +8,11 @@ import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useMangaStore()
 const ui = useUiStore()
-// Close via history.back() so Forward reopens the manga (snapshot nav). Fall back to a
-// direct close if there's somehow no app history to pop.
-function closeModal() { if (store.current) ui.back(); else store.close() }
+// The X / overlay just closes the modal and stays on the current view — it must NOT
+// navigate browser history (that was jumping to the previous page, sometimes Mi Anime).
+// replaceNav updates the current history entry to "closed"; the browser back/forward
+// buttons still reopen/close via the snapshot model.
+function closeModal() { store.close(); ui.replaceNav() }
 const m = computed(() => store.current)
 const upState = (ch) => store.upscaled[ch]          // true | 'partial' | undefined
 

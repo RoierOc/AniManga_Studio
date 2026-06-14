@@ -12,7 +12,8 @@ const anime = computed(() => store.detail)
 
 // openDetail() always pushes one history entry, so back consumes it and runs the
 // guarded restore. Fall back to a direct close if there's no app history.
-function goBack() { useUiStore().back() }
+// Close the detail and stay on the anime view (no history jump); back/forward still work.
+function goBack() { store.closeDetail(); useUiStore().replaceNav() }
 
 const batch = computed(() => batchInfo(anime.value?.episodes || []))
 const realEps = computed(() =>
