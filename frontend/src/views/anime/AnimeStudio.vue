@@ -10,7 +10,6 @@ import Seasonal from './Seasonal.vue'
 import Search from './Search.vue'
 import AutoplayModal from '@/components/anime/AutoplayModal.vue'
 import SubTrackModal from '@/components/anime/SubTrackModal.vue'
-import AnimePreview from '@/components/anime/AnimePreview.vue'
 import ScanPathsModal from '@/components/anime/ScanPathsModal.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 import Icon from '@/components/ui/Icon.vue'
@@ -65,7 +64,6 @@ function selectTab(id) {
 
     <AutoplayModal />
     <SubTrackModal />
-    <AnimePreview />
     <ScanPathsModal />
   </div>
 </template>

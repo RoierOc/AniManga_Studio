@@ -1,13 +1,14 @@
 -- skip-intro.lua — floating "Saltar OP" button + key for the Manga/Anime app.
--- Jumps a fixed amount forward (default 90s = 1:30), independent of AniSkip detection.
+-- Jumps a fixed amount forward (default 88s = 1:28), independent of AniSkip detection.
 -- The button behaves like mpv's on-screen controls: it only appears when you MOVE the
 -- cursor (during the first `window` seconds) and auto-hides after `idle` seconds of no
--- movement — so it never sits on top of the video. A key works any time.
---   --script-opts=skip-intro-skip=90,skip-intro-window=240
+-- movement — so it never sits on top of the video. `idle` is set to match mpv's OSC
+-- hide timeout so the button and the play/seek bar fade out together. A key works any time.
+--   --script-opts=skip-intro-skip=88,skip-intro-window=240,skip-intro-idle=1.0
 local mp = require 'mp'
 local assdraw = require 'mp.assdraw'
 
-local opts = { skip = 90, window = 240, idle = 3, key = 'Tab' }
+local opts = { skip = 88, window = 240, idle = 1.0, key = 'Tab' }
 require('mp.options').read_options(opts, 'skip-intro')
 
 local overlay = mp.create_osd_overlay('ass-events')

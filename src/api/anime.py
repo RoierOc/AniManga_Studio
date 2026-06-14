@@ -648,14 +648,21 @@ def _make_wl_dir_wsl() -> tuple:
 
 
 _SKIP_LUA = _Path(__file__).resolve().parents[2] / 'mpv' / 'skip-intro.lua'
-_SKIP_SECS = int(os.environ.get('ANIME_SKIP_SECS', '90'))      # 1:30 default
+_SKIP_SECS = int(os.environ.get('ANIME_SKIP_SECS', '88'))       # 1:28 default
 _SKIP_WINDOW = int(os.environ.get('ANIME_SKIP_WINDOW', '240'))  # show button for first N s
+# Auto-hide delay for the OSC bar (play/seek/etc.) in ms. The "Saltar OP" button uses the
+# same value so both fade out together — no lingering button after the controls vanish.
+_OSC_HIDE_MS = int(os.environ.get('ANIME_OSC_HIDE_MS', '1000'))
+# Preferred subtitle languages, Latin-American Spanish first, then generic Spanish. mpv
+# matches these against each track's language tag and picks the first that exists.
+_SUB_LANGS = 'es-419,es-LA,lat,spa,es,esp,spanish,castellano'
 
 
 def _skip_args(dest_dir_linux: str, script_path_for_mpv: str) -> list:
     """Copy skip-intro.lua next to the watch-later dir and return the mpv args that load
     it (floating 'Saltar OP' button + key). script_path_for_mpv is the path string mpv
-    will read (a Windows path under WSL, a linux path otherwise)."""
+    will read (a Windows path under WSL, a linux path otherwise). The button's idle-hide
+    is tied to the OSC hide delay so they disappear in sync."""
     if not _SKIP_LUA.exists():
         return []
     try:
@@ -664,7 +671,8 @@ def _skip_args(dest_dir_linux: str, script_path_for_mpv: str) -> list:
     except Exception:
         return []
     return [f'--script={script_path_for_mpv}',
-            f'--script-opts=skip-intro-skip={_SKIP_SECS},skip-intro-window={_SKIP_WINDOW}']
+            f'--script-opts=skip-intro-skip={_SKIP_SECS},skip-intro-window={_SKIP_WINDOW},'
+            f'skip-intro-idle={_OSC_HIDE_MS / 1000:.3f}']
 
 
 def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> tuple:
@@ -675,7 +683,9 @@ def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> t
 
     def _wl_args(wl_win_path):
         args = [f'--watch-later-dir={wl_win_path}', '--save-position-on-quit',
-                '--ontop']  # always-on-top so MPV appears above browser/other windows
+                '--ontop',  # always-on-top so MPV appears above browser/other windows
+                f'--slang={_SUB_LANGS}',          # auto-pick the Spanish subtitle track
+                f'--osc-hidetimeout={_OSC_HIDE_MS}']  # OSC bar fades in sync with Saltar OP
         if start_pos > 30:
             args.append(f'--start={start_pos:.1f}')
         return args

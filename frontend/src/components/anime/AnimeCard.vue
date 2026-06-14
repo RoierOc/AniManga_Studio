@@ -1,12 +1,10 @@
 <script setup>
 import { computed } from 'vue'
 import { ANIME_STATUS, animeFormatLabel } from '@/lib/anime'
-import { useAnimeStore } from '@/stores/anime'
 import Icon from '@/components/ui/Icon.vue'
 
 const props = defineProps({ anime: { type: Object, required: true } })
 defineEmits(['open'])
-const store = useAnimeStore()
 
 const total = computed(() => props.anime.total_episodes || 0)
 const done = computed(() => props.anime.downloaded_count || 0)
@@ -27,8 +25,7 @@ const dots = computed(() =>
 </script>
 
 <template>
-  <article class="acard" tabindex="0" @click="$emit('open', anime)" @keydown.enter="$emit('open', anime)"
-           @mouseenter="store.showPreview(anime, $event)" @mouseleave="store.hidePreview()">
+  <article class="acard" tabindex="0" @click="$emit('open', anime)" @keydown.enter="$emit('open', anime)">
     <div class="acard__poster">
       <img v-if="anime.cover" :src="anime.cover" :alt="anime.title" loading="lazy" class="acard__img"
            @load="$event.target.classList.add('is-loaded')" />

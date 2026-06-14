@@ -66,10 +66,6 @@ const counts = computed(() => {
       </div>
       <div class="hero__actions" style="--i:1">
         <button class="scanbtn" @click="store.openScan()" title="Carpetas de anime local"><Icon name="folder" :size="15" /> Carpetas</button>
-        <label class="searchbox">
-          <Icon name="search" :size="15" />
-          <input v-model="store.libSearch" type="search" placeholder="Buscar en tu anime…" />
-        </label>
       </div>
     </header>
 
@@ -109,9 +105,15 @@ const counts = computed(() => {
           {{ ANIME_STATUS[k].label }} <span class="pill__n">{{ counts[k] }}</span>
         </button>
       </div>
-      <div class="sorts" style="--i:2">
-        <button v-for="s in SORTS" :key="s.id" class="sort" :class="{ 'is-active': store.libSort === s.id }"
-                @click="store.setLibSort(s.id)">{{ s.label }}</button>
+      <div class="toolbar__right" style="--i:2">
+        <div class="sorts">
+          <button v-for="s in SORTS" :key="s.id" class="sort" :class="{ 'is-active': store.libSort === s.id }"
+                  @click="store.setLibSort(s.id)">{{ s.label }}</button>
+        </div>
+        <label class="searchbox">
+          <Icon name="search" :size="15" />
+          <input v-model="store.libSearch" type="search" placeholder="Buscar en tu anime…" />
+        </label>
       </div>
     </div>
 
@@ -171,6 +173,8 @@ const counts = computed(() => {
 .pill.is-active { background: var(--azure-haze); border-color: var(--azure); color: var(--azure-bright); }
 .pill__n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
 
+.toolbar__right { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.toolbar__right .searchbox { width: min(15rem, 44vw); }
 .sorts { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
 .sort { padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--ink-faint); transition: all var(--t-fast); }
 .sort:hover { color: var(--ink); }
