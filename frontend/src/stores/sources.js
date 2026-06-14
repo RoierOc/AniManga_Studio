@@ -39,11 +39,13 @@ export const useSourcesStore = defineStore('sources', {
   },
 
   actions: {
-    async checkHealth() {
+    async checkHealth(retries = 6) {
       try { this.online = !!(await api.get('/api/sources/health'))?.online }
       catch (_) { this.online = false }
       finally { this.checked = true }
-      if (this.online && !this.sources.length) this.loadSources()
+      if (this.online) { if (!this.sources.length) this.loadSources(); return }
+      // Suwayomi (Java) takes ~15-30s to boot — retry quietly so Fuentes loads itself.
+      if (retries > 0) setTimeout(() => this.checkHealth(retries - 1), 5000)
     },
     async loadSources() {
       try { this.sources = await api.get('/api/sources/list') || [] } catch (_) {}
