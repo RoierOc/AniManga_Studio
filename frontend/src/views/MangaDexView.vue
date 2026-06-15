@@ -23,7 +23,8 @@ const AL_SORTS = [
   { id: 'POPULARITY_DESC', label: 'Popularidad' },
   { id: 'TRENDING_DESC', label: 'Tendencia' },
 ]
-const canMore = computed(() => store.tab !== 'search' && store.tab !== 'anilist' && store.popular.length < store.total)
+const SPECIAL_TABS = ['anilist', 'mylist']
+const canMore = computed(() => !SPECIAL_TABS.includes(store.tab) && store.tab !== 'search' && store.popular.length < store.total)
 
 function goAnilist() {
   store.tab = 'anilist'
@@ -31,6 +32,11 @@ function goAnilist() {
   if (!store.alTop.length) store.loadAnilistTop(1)
 }
 function setAlSort(id) { store.alSort = id; store.loadAnilistTop(1) }
+
+function goFollowed() {
+  store.tab = 'mylist'
+  if (!store.followedLoaded) store.loadFollowed()
+}
 
 onMounted(() => {
   store.checkAuth()
@@ -56,18 +62,19 @@ onMounted(() => {
       <div class="tabs">
         <button v-for="t in TABS" :key="t.id" class="tab" :class="{ 'is-active': store.tab === t.id }" @click="store.setTab(t.id)">{{ t.label }}</button>
         <button class="tab tab--al" :class="{ 'is-active': store.tab === 'anilist' }" @click="goAnilist">★ AniList Top</button>
+        <button class="tab tab--heart" :class="{ 'is-active': store.tab === 'mylist' }" @click="goFollowed">♥ Seguidos</button>
         <button v-if="store.tab === 'search'" class="tab is-active">Resultados</button>
       </div>
-      <div v-if="store.tab !== 'anilist'" class="md__filters">
+      <div v-if="!SPECIAL_TABS.includes(store.tab)" class="md__filters">
         <button v-for="r in RATINGS" :key="r.id" class="rpill" :class="{ 'is-active': store.ratings.includes(r.id) }" @click="store.toggleRating(r.id)">{{ r.label }}</button>
         <button class="rpill" :class="{ 'is-active': store.showTagFilter }" @click="store.showTagFilter = !store.showTagFilter"><Icon name="spark" :size="13" /> Géneros</button>
       </div>
-      <div v-else class="md__filters">
+      <div v-else-if="store.tab === 'anilist'" class="md__filters">
         <button v-for="s in AL_SORTS" :key="s.id" class="rpill" :class="{ 'is-active': store.alSort === s.id }" @click="setAlSort(s.id)">{{ s.label }}</button>
       </div>
     </div>
 
-    <div v-if="store.tab !== 'anilist' && store.showTagFilter && store.allTags.length" class="tags">
+    <div v-if="!SPECIAL_TABS.includes(store.tab) && store.showTagFilter && store.allTags.length" class="tags">
       <button v-for="t in store.allTags" :key="t.id" class="tagchip" :class="{ 'is-active': store.selectedTags.includes(t.id) }" @click="store.toggleTag(t.id)">{{ t.name }}</button>
     </div>
     <div v-if="store.tab === 'anilist' && store.alGenres.length" class="tags">
@@ -75,8 +82,24 @@ onMounted(() => {
       <button v-for="g in store.alGenres" :key="g.type + g.name" class="tagchip" :class="{ 'is-active': store.alFilter === g.name }" @click="store.setAlFilter(g)">{{ g.name }}</button>
     </div>
 
+    <!-- Seguidos (tu lista en MangaDex) -->
+    <template v-if="store.tab === 'mylist'">
+      <div v-if="store.loading && !store.followed.length" class="grid">
+        <div v-for="n in 12" :key="n" class="skeleton" />
+      </div>
+      <EmptyState v-else-if="!store.followed.length" icon="heart"
+                  :title="store.authed ? 'No sigues ningún manga aún.' : 'Inicia sesión en MangaDex para ver tus seguidos.'">
+        <template v-if="!store.authed" #action>
+          <button class="loginbtn" @click="store.login()">Iniciar sesión en MangaDex</button>
+        </template>
+      </EmptyState>
+      <div v-else class="grid">
+        <MdCard v-for="m in store.followed" :key="m.id" :manga="m" :score="store.score(m)" @open="store.openDetail($event)" />
+      </div>
+    </template>
+
     <!-- AniList Top -->
-    <template v-if="store.tab === 'anilist'">
+    <template v-else-if="store.tab === 'anilist'">
       <div v-if="store.alLoading && !store.alTop.length" class="grid"><div v-for="n in 12" :key="n" class="skeleton" /></div>
       <EmptyState v-else-if="!store.alTop.length" icon="spark" title="Sin resultados." />
       <template v-else>
@@ -125,6 +148,8 @@ onMounted(() => {
 .tab { padding: 7px 14px; border-radius: var(--r-sm); font-size: var(--fs-sm); font-weight: 500; color: var(--ink-faint); transition: all var(--t-fast); }
 .tab:hover { color: var(--ink); }
 .tab.is-active { background: var(--azure-haze); color: var(--azure-bright); }
+.loginbtn { margin-top: var(--s-2); padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); transition: background var(--t-fast); }
+.loginbtn:hover { background: var(--azure-bright); }
 .md__filters { display: flex; gap: var(--s-2); flex-wrap: wrap; }
 .rpill { display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .rpill:hover { color: var(--ink); border-color: var(--line-strong); }

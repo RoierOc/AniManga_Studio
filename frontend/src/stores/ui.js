@@ -17,7 +17,6 @@ export const VIEWS = [
     items: [
       { id: 'library',  label: 'Biblioteca', icon: 'library' },
       { id: 'mangadex', label: 'MangaDex',   icon: 'search' },
-      { id: 'followed', label: 'Seguidos',   icon: 'heart' },
       { id: 'sources',  label: 'Fuentes',    icon: 'globe' },
       { id: 'local',    label: 'Local',      icon: 'folder' },
     ],

@@ -17,7 +17,6 @@ import PlaceholderView from '@/views/PlaceholderView.vue'
 // is the most common landing view.
 import LibraryView from '@/views/LibraryView.vue'
 const MangaDexView = defineAsyncComponent(() => import('@/views/MangaDexView.vue'))
-const FollowedView = defineAsyncComponent(() => import('@/views/FollowedView.vue'))
 const SourcesView  = defineAsyncComponent(() => import('@/views/SourcesView.vue'))
 const LocalView    = defineAsyncComponent(() => import('@/views/LocalView.vue'))
 const AnimeStudio  = defineAsyncComponent(() => import('@/views/anime/AnimeStudio.vue'))
@@ -44,7 +43,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKey))
 // defensive fallback and should never render in normal use.
 const meta = computed(() => VIEWS.flatMap(g => g.items).find(i => i.id === ui.currentView))
 
-const VIEW_COMPONENTS = { library: LibraryView, mangadex: MangaDexView, followed: FollowedView, sources: SourcesView, local: LocalView, anime: AnimeStudio, settings: SettingsView }
+const VIEW_COMPONENTS = { library: LibraryView, mangadex: MangaDexView, sources: SourcesView, local: LocalView, anime: AnimeStudio, settings: SettingsView }
 const activeComponent = computed(() => VIEW_COMPONENTS[ui.currentView] || null)
 
 // Error boundary: a render error in any view/modal shows a recoverable panel instead of
