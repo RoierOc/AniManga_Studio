@@ -36,6 +36,7 @@ suwayomi/data/
 
 # Environment secrets
 .env
+google_credentials.json
 
 # MPV screenshot artifacts
 src/mpv-shot*.jpg
