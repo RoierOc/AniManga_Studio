@@ -1,5 +1,5 @@
 <script setup>
-import { computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { useUiStore } from '@/stores/ui'
 import { ANIME_STATUS, animeFormatLabel, batchInfo, fmtCountdown } from '@/lib/anime'
@@ -9,6 +9,24 @@ import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useAnimeStore()
 const anime = computed(() => store.detail)
+
+// Crunchyroll-style hero: TMDB backdrop → AniList banner → blurred cover as last resort.
+// If a tier fails to load (broken URL, blocked domain) heroIdx advances to the next one
+// instead of leaving the hero blank.
+const heroIdx = ref(0)
+const heroTiers = computed(() => {
+  const a = anime.value
+  return a ? [a.banner, a.cover_xl, a.cover].filter(Boolean) : []
+})
+const heroImg = computed(() => heroTiers.value[heroIdx.value] || '')
+const hasBanner = computed(() => heroIdx.value <= 1 && !!(anime.value?.banner || anime.value?.cover_xl))
+function onHeroError() { if (heroIdx.value < heroTiers.value.length - 1) heroIdx.value++ }
+
+// Falls back to the text title when no logo is cached, or the cached logo URL fails to load.
+const logoFailed = ref(false)
+const hasLogo = computed(() => !!anime.value?.logo && !logoFailed.value)
+const posterFailed = ref(false)
+watch(() => anime.value?.id, () => { heroIdx.value = 0; logoFailed.value = false; posterFailed.value = false })
 
 // openDetail() always pushes one history entry, so back consumes it and runs the
 // guarded restore. Fall back to a direct close if there's no app history.
@@ -49,50 +67,59 @@ const malUrl = computed(() => store.malUrls[alId.value])
 
 <template>
   <div v-if="anime" class="detail">
-    <!-- aura backdrop from cover -->
-    <div class="detail__aura" :style="anime.cover ? `background-image:url('${anime.cover}')` : ''" />
-
     <button class="detail__back" @click="goBack">
       <Icon name="chevron" :size="16" :style="{ transform: 'rotate(180deg)' }" /> Volver
     </button>
 
-    <header class="detail__head stagger">
-      <img v-if="anime.cover" :src="anime.cover" class="detail__cover" :alt="anime.title" style="--i:0" />
-      <div class="detail__meta" style="--i:1">
-        <span class="detail__fmt">{{ animeFormatLabel(anime.format) }}</span>
-        <h1 class="detail__title">{{ anime.title }}</h1>
+    <!-- Crunchyroll-style hero: wide HD art + logo, episodes follow below -->
+    <header class="dhero" :class="{ 'is-cover': !hasBanner }">
+      <div class="dhero__bg">
+        <div class="dhero__img" :style="heroImg ? { backgroundImage: `url('${heroImg}')` } : {}" />
+        <!-- invisible probe: detects a broken/blocked URL and advances to the next tier -->
+        <img v-if="heroImg" :key="heroImg" :src="heroImg" alt="" class="dhero__probe" @error="onHeroError" />
+        <div class="dhero__shade" />
+      </div>
 
-        <div class="detail__stats">
-          <span class="detail__count"><strong>{{ done }}</strong> / {{ total || '?' }} episodios</span>
-          <div class="detail__bar"><span :style="{ width: pct + '%' }" /></div>
-        </div>
+      <div class="dhero__inner stagger">
+        <img v-if="anime.cover && !posterFailed" class="dhero__poster" :src="anime.cover" :alt="anime.title" style="--i:0" @error="posterFailed = true" />
 
-        <div v-if="countdown" class="detail__airing">
-          <span class="detail__airing-dot" />
-          Ep {{ countdown.episode }}
-          <template v-if="countdown.d > 0">en {{ countdown.d }}d {{ countdown.h }}h</template>
-          <template v-else-if="countdown.h > 0">en {{ countdown.h }}h {{ countdown.m }}m</template>
-          <template v-else>en {{ countdown.m }} min</template>
-        </div>
+        <div class="dhero__col" style="--i:1">
+          <span class="dhero__fmt">{{ animeFormatLabel(anime.format) }}</span>
+          <img v-if="hasLogo" class="dhero__logo" :src="anime.logo" :alt="anime.title" @error="logoFailed = true" />
+          <h1 v-else class="dhero__title">{{ anime.title }}</h1>
 
-        <div class="detail__row">
-          <select class="detail__status" :value="anime.status || ''"
-                  :style="{ color: ANIME_STATUS[anime.status]?.color || 'var(--ink-faint)' }"
-                  @change="store.setStatus(anime, $event.target.value)">
-            <option value="">Sin estado</option>
-            <option v-for="(v, k) in ANIME_STATUS" :key="k" :value="k">{{ v.label }}</option>
-          </select>
-          <a v-if="anime.al_id" :href="`https://anilist.co/anime/${anime.al_id}`" target="_blank" rel="noopener" class="detail__link">AniList</a>
-          <a v-if="anime.mal_id" :href="`https://myanimelist.net/anime/${anime.mal_id}`" target="_blank" rel="noopener" class="detail__link">MAL</a>
-          <a v-if="malUrl" :href="malUrl + '/userrec'" target="_blank" rel="noopener" class="detail__link" title="Recomendaciones de la comunidad MAL">Comunidad</a>
-        </div>
+          <div class="dhero__stats">
+            <span class="dhero__count"><strong>{{ done }}</strong> / {{ total || '?' }} episodios</span>
+            <div class="dhero__bar"><span :style="{ width: pct + '%' }" /></div>
+          </div>
 
-        <div class="detail__mgmt">
-          <button v-if="anime.al_id" class="mbtn mbtn--accent" @click="store.openTorrents(anime)" title="Buscar torrents">+ Torrents</button>
-          <button class="mbtn" @click="store.openRename(anime)" title="Renombrar episodios">Renombrar</button>
-          <button class="mbtn" @click="store.openLinkTorrent()" title="Enlazar torrent de qBittorrent">Enlazar</button>
-          <button class="mbtn" @click="store.clearEpisodes(anime)" title="Borrar episodios">Borrar eps</button>
-          <button class="mbtn mbtn--danger" @click="store.removeFromLibrary(anime.id)" title="Eliminar serie">Eliminar</button>
+          <div v-if="countdown" class="dhero__airing">
+            <span class="dhero__airing-dot" />
+            Ep {{ countdown.episode }}
+            <template v-if="countdown.d > 0">en {{ countdown.d }}d {{ countdown.h }}h</template>
+            <template v-else-if="countdown.h > 0">en {{ countdown.h }}h {{ countdown.m }}m</template>
+            <template v-else>en {{ countdown.m }} min</template>
+          </div>
+
+          <div class="dhero__row">
+            <select class="dhero__status" :value="anime.status || ''"
+                    :style="{ color: ANIME_STATUS[anime.status]?.color || 'var(--ink-faint)' }"
+                    @change="store.setStatus(anime, $event.target.value)">
+              <option value="">Sin estado</option>
+              <option v-for="(v, k) in ANIME_STATUS" :key="k" :value="k">{{ v.label }}</option>
+            </select>
+            <a v-if="anime.al_id" :href="`https://anilist.co/anime/${anime.al_id}`" target="_blank" rel="noopener" class="dhero__link">AniList</a>
+            <a v-if="anime.mal_id" :href="`https://myanimelist.net/anime/${anime.mal_id}`" target="_blank" rel="noopener" class="dhero__link">MAL</a>
+            <a v-if="malUrl" :href="malUrl + '/userrec'" target="_blank" rel="noopener" class="dhero__link" title="Recomendaciones de la comunidad MAL">Comunidad</a>
+          </div>
+
+          <div class="dhero__mgmt">
+            <button v-if="anime.al_id" class="mbtn mbtn--accent" @click="store.openTorrents(anime)" title="Buscar torrents">+ Torrents</button>
+            <button class="mbtn" @click="store.openCoverPicker(anime)" title="Cambiar portada">Cambiar portada</button>
+            <button class="mbtn" @click="store.openLinkTorrent()" title="Enlazar torrent de qBittorrent">Enlazar</button>
+            <button class="mbtn" @click="store.clearEpisodes(anime)" title="Borrar episodios">Borrar eps</button>
+            <button class="mbtn mbtn--danger" @click="store.removeFromLibrary(anime.id)" title="Eliminar serie">Eliminar</button>
+          </div>
         </div>
       </div>
     </header>
@@ -206,22 +233,22 @@ const malUrl = computed(() => store.malUrls[alId.value])
       </div>
     </Teleport>
 
-    <!-- Rename preview modal -->
+    <!-- Cover picker modal -->
     <Teleport to="body">
-      <div v-if="store.rename" class="ov" @click.self="store.rename = null">
-        <div class="bmodal bmodal--rename">
-          <button class="bmodal__x" @click="store.rename = null"><Icon name="close" :size="18" /></button>
-          <header class="bmodal__head"><h2>Renombrar episodios</h2></header>
-          <div class="renlist">
-            <div v-for="(r, i) in store.rename.items" :key="i" class="renrow" :class="{ 'is-changed': r.changed }">
-              <span class="renrow__old">{{ r.old_name }}</span>
-              <Icon name="chevron" :size="13" />
-              <span class="renrow__new">{{ r.new_name }}</span>
-            </div>
-          </div>
-          <div class="renfoot">
-            <button class="mbtn" @click="store.rename = null">Cancelar</button>
-            <button class="mbtn mbtn--accent" :disabled="store.renameBusy" @click="store.applyRename()">{{ store.renameBusy ? 'Aplicando…' : 'Aplicar' }}</button>
+      <div v-if="store.coverPicker" class="ov" @click.self="store.coverPicker = null">
+        <div class="bmodal bmodal--covers">
+          <button class="bmodal__x" @click="store.coverPicker = null"><Icon name="close" :size="18" /></button>
+          <header class="bmodal__head"><h2>Cambiar portada</h2></header>
+          <div v-if="store.coverPickerLoading" class="center"><Spinner /></div>
+          <div v-else-if="!store.coverPicker.options.length" class="covers__empty">No se encontraron otras portadas</div>
+          <div v-else class="covergrid">
+            <button v-for="(o, i) in store.coverPicker.options" :key="i" class="coveropt"
+                    :class="{ 'is-current': o.url === store.coverPicker.current }"
+                    :disabled="store.coverSaving" @click="store.pickCover(o)">
+              <img :src="o.url" :alt="o.label" loading="lazy" />
+              <span class="coveropt__label">{{ o.label }}</span>
+              <span v-if="o.url === store.coverPicker.current" class="coveropt__current"><Icon name="check" :size="12" /></span>
+            </button>
           </div>
         </div>
       </div>
@@ -231,51 +258,64 @@ const malUrl = computed(() => store.malUrls[alId.value])
 
 <style scoped>
 .detail { position: relative; padding: var(--s-4) var(--s-6) var(--s-8); max-width: var(--content-max); margin: 0 auto; }
-.detail__aura {
-  position: absolute; top: 0; left: 0; right: 0; height: 460px; z-index: -1;
-  background-size: cover; background-position: center 20%;
-  filter: blur(46px) saturate(1.25); opacity: .42;
-  /* radial fade on bottom + sides → blends into the page with no hard edge */
-  -webkit-mask-image: radial-gradient(125% 88% at 50% 2%, #000 26%, transparent 74%);
-  mask-image: radial-gradient(125% 88% at 50% 2%, #000 26%, transparent 74%);
-}
 
 .detail__back { display: inline-flex; align-items: center; gap: var(--s-1); margin: var(--s-2) 0 var(--s-5);
   padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); color: var(--ink-soft);
   border: 1px solid var(--line); background: var(--glass); backdrop-filter: blur(8px); font-size: var(--fs-sm); transition: all var(--t-fast); }
 .detail__back:hover { color: var(--ink); border-color: var(--line-strong); }
 
-.detail__head { display: flex; gap: var(--s-5); margin-bottom: var(--s-7); }
-/* natural aspect (height auto) + align-self:flex-start → cover shown whole, not
-   side-cropped by object-fit:cover nor stretched by the flex row. */
-.detail__cover { width: 188px; height: auto; align-self: flex-start; border-radius: var(--r-md); box-shadow: var(--shadow-lg); border: 1px solid var(--line-2); flex-shrink: 0; }
-.detail__meta { display: flex; flex-direction: column; gap: var(--s-3); padding-top: var(--s-3); min-width: 0; }
-.detail__fmt { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); }
-.detail__title { font-size: var(--fs-3xl); }
-.detail__stats { display: flex; flex-direction: column; gap: var(--s-2); max-width: 360px; }
-.detail__count { font-size: var(--fs-sm); color: var(--ink-soft); }
-.detail__count strong { color: var(--ink); font-family: var(--font-display); }
-.detail__bar { height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
-.detail__bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--azure-deep), var(--azure)); }
+/* Hero header — Crunchyroll-style wide HD art + logo, same recipe as HeroBanner.vue */
+.dhero { position: relative; margin: 0 0 var(--s-7); height: clamp(500px, 58vw, 680px);
+  border-radius: var(--r-xl); overflow: hidden; background: var(--surface); }
+.dhero__bg { position: absolute; inset: 0; }
+.dhero__img { position: absolute; inset: 0; background-size: cover; background-position: center 18%; }
+/* No wide banner cached yet → fall back to the (vertical) cover, blurred to fill the frame. */
+.dhero.is-cover .dhero__img { filter: blur(28px) saturate(1.15) brightness(.85); transform: scale(1.18); }
+.dhero__probe { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.dhero__shade { position: absolute; inset: 0;
+  background:
+    linear-gradient(90deg, rgba(7,10,18,.92) 0%, rgba(7,10,18,.62) 38%, rgba(7,10,18,.15) 70%, transparent 100%),
+    linear-gradient(0deg, rgba(7,10,18,.95) 0%, rgba(7,10,18,.30) 32%, transparent 60%); }
 
-.detail__airing { display: inline-flex; align-items: center; gap: var(--s-2); width: fit-content;
+.dhero__inner { position: relative; z-index: 1; height: 100%; display: flex; align-items: flex-end;
+  gap: var(--s-5); max-width: 900px; padding: var(--s-6) var(--s-7); }
+/* natural aspect (height auto) + flex-shrink:0 → poster shown whole, not cropped or squeezed. */
+.dhero__poster { width: 168px; height: auto; border-radius: var(--r-md); box-shadow: var(--shadow-lg); border: 1px solid rgba(255,255,255,.16); flex-shrink: 0; }
+.dhero__col { display: flex; flex-direction: column; gap: var(--s-3); min-width: 0; }
+.dhero__fmt { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--cyan); }
+.dhero__title { font-family: var(--font-display); font-weight: 700; color: #fff; font-size: clamp(2rem, 4vw, 3.4rem);
+  line-height: 1.06; text-shadow: 0 2px 24px rgba(0,0,0,.6);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.dhero__logo { max-width: min(520px, 80%); max-height: clamp(100px, 14vw, 180px); width: auto; height: auto;
+  object-fit: contain; object-position: left bottom; filter: drop-shadow(0 4px 20px rgba(0,0,0,.65)); }
+
+.dhero__stats { display: flex; flex-direction: column; gap: var(--s-2); max-width: 360px; }
+.dhero__count { font-size: var(--fs-sm); color: var(--ice); text-shadow: 0 1px 8px rgba(0,0,0,.7); }
+.dhero__count strong { color: #fff; font-family: var(--font-display); }
+.dhero__bar { height: 4px; border-radius: var(--r-pill); background: rgba(255,255,255,.22); overflow: hidden; }
+.dhero__bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--azure-deep), var(--azure)); }
+
+.dhero__airing { display: inline-flex; align-items: center; gap: var(--s-2); width: fit-content;
   font-size: var(--fs-xs); color: var(--ice); padding: 4px 12px; border-radius: var(--r-pill);
-  background: var(--azure-haze); border: 1px solid var(--line-2); }
-.detail__airing-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); box-shadow: var(--glow-cyan); animation: pulse-live 2s var(--ease-drift) infinite; }
+  background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.16); backdrop-filter: blur(6px); }
+.dhero__airing-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); box-shadow: var(--glow-cyan); animation: pulse-live 2s var(--ease-drift) infinite; }
 
-.detail__row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; margin-top: var(--s-1); }
-.detail__status { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); font-size: var(--fs-sm); font-weight: 500; cursor: pointer; }
-.detail__link { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line); color: var(--ink-soft); font-size: var(--fs-sm); transition: all var(--t-fast); }
-.detail__link:hover { color: var(--azure-bright); border-color: var(--azure); }
+.dhero__row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.dhero__status { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.16); backdrop-filter: blur(8px); font-size: var(--fs-sm); font-weight: 500; cursor: pointer; }
+.dhero__link { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: rgba(255,255,255,.12);
+  border: 1px solid rgba(255,255,255,.16); backdrop-filter: blur(8px); color: var(--ink); font-size: var(--fs-sm); transition: all var(--t-fast); }
+.dhero__link:hover { color: #fff; border-color: var(--azure); background: rgba(255,255,255,.2); }
 
 .epgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: var(--s-4); }
 .epgrid__sep { display: flex; align-items: center; gap: var(--s-2); margin: var(--s-7) 0 var(--s-4); color: var(--ink-soft); font-family: var(--font-display); font-weight: 600; }
 .epgrid__sep :deep(svg) { color: var(--gold); }
 
 /* management */
-.detail__mgmt { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-top: var(--s-2); }
-.mbtn { padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); }
-.mbtn:hover { color: var(--ink); border-color: var(--line-strong); }
+.dhero__mgmt { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.mbtn { padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink);
+  background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.16); backdrop-filter: blur(8px); transition: all var(--t-fast); }
+.mbtn:hover { color: #fff; border-color: rgba(255,255,255,.32); background: rgba(255,255,255,.18); }
 .mbtn--danger:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
 .mbtn--accent { background: var(--azure); color: #fff; border-color: transparent; }
 .mbtn--accent:hover { background: var(--azure-bright); color: #fff; }
@@ -325,23 +365,31 @@ const malUrl = computed(() => store.malUrls[alId.value])
 .bmodal__desc { color: var(--ink-soft); font-size: var(--fs-sm); margin-top: var(--s-2); }
 .center { display: grid; place-items: center; padding: var(--s-7); }
 
-/* context menu + rename */
+/* context menu */
 .ctx-backdrop { position: fixed; inset: 0; z-index: var(--z-modal); }
 .ctx { position: fixed; display: flex; flex-direction: column; min-width: 200px; padding: var(--s-1); border-radius: var(--r-md); background: var(--glass-strong); backdrop-filter: blur(16px); border: 1px solid var(--line-2); box-shadow: var(--shadow-lg); }
 .ctx button { text-align: left; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink-soft); }
 .ctx button:hover { background: var(--surface-2); color: var(--ink); }
-.bmodal--rename { width: min(38.75rem, 100%); }
-.renlist { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-.renrow { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2); border-radius: var(--r-xs); font-size: var(--fs-xs); opacity: .55; }
-.renrow.is-changed { opacity: 1; }
-.renrow__old { color: var(--ink-faint); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.renrow__new { color: var(--azure-bright); flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.renfoot { display: flex; justify-content: flex-end; gap: var(--s-2); margin-top: var(--s-4); }
+
+/* cover picker */
+.bmodal--covers { width: min(56.25rem, 100%); }
+.covers__empty { color: var(--ink-faint); font-size: var(--fs-sm); text-align: center; padding: var(--s-7); }
+.covergrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.75rem, 1fr)); gap: var(--s-4); }
+.coveropt { position: relative; display: flex; flex-direction: column; gap: var(--s-2); border-radius: var(--r-md); overflow: hidden;
+  border: 2px solid var(--line); background: var(--surface-2); transition: all var(--t-fast); text-align: left; }
+.coveropt:hover { border-color: var(--azure-glow); transform: translateY(-3px); }
+.coveropt.is-current { border-color: var(--azure); }
+.coveropt:disabled { opacity: .6; pointer-events: none; }
+.coveropt img { width: 100%; aspect-ratio: 2/3; object-fit: cover; background: var(--base); }
+.coveropt__label { padding: 0 var(--s-2) var(--s-2); font-size: var(--fs-2xs); color: var(--ink-faint); }
+.coveropt__current { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; background: var(--azure); color: #fff; }
 
 @media (max-width: 640px) {
   .detail { padding: var(--s-3) var(--s-4) var(--s-8); }
-  .detail__head { flex-direction: column; }
-  .detail__cover { width: 130px; }
+  .dhero { height: clamp(380px, 72vw, 480px); border-radius: var(--r-lg); }
+  .dhero__inner { padding: var(--s-5) var(--s-4); }
+  .dhero__poster { display: none; }
+  .dhero__logo { max-width: 70%; max-height: 90px; }
   .epgrid { grid-template-columns: repeat(auto-fill, minmax(11.25rem, 1fr)); gap: var(--s-3); }
 }
 </style>

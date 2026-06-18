@@ -132,51 +132,252 @@ def _anilist_post(query, variables, tries=4):
     return r
 
 
+def _clean_synopsis(text, limit=320):
+    """AniList descriptions come with <br>/<i> markup and source notes; strip tags,
+    drop the trailing '(Source: …)' credit and collapse whitespace into one paragraph."""
+    if not text:
+        return ''
+    t = re.sub(r'<br\s*/?>', ' ', text)
+    t = re.sub(r'<[^>]+>', '', t)
+    t = re.sub(r'\(Source:.*?\)', '', t, flags=re.I | re.S)
+    t = re.sub(r'\s+', ' ', t).strip()
+    if len(t) > limit:
+        t = t[:limit].rsplit(' ', 1)[0].rstrip(' .,;:') + '…'
+    return t
+
+
 def _anilist_enrich(al_id):
     """Full metadata for a library entry: episodes, format, titles, genres, season,
-    the high-res cover (extraLarge) and the wide hero bannerImage."""
+    the high-res cover (extraLarge), the wide hero bannerImage and a short synopsis."""
     q = '''query($id:Int){Media(id:$id,type:ANIME){
         episodes format status season seasonYear
         title{romaji english}
         coverImage{extraLarge large}
         bannerImage genres
+        description(asHtml:false)
     }}'''
     r = _anilist_post(q, {'id': int(al_id)})
     return (r.json().get('data') or {}).get('Media') or {} if r is not None else {}
 
 
-def _tmdb_backdrop(title_en, title_romaji, year):
-    """Best wide, text-free backdrop from TMDB for a TV/anime title, or None.
-    Conservative match (normalized-title overlap + year ±1) so we never show wrong art."""
+def _tmdb_images(tmdb_id, media_type='tv'):
+    """For a known TMDB tv/movie id pick the best text-free wide backdrop, the
+    best English logo (transparent PNG title treatment, Crunchyroll-style), and
+    the best poster (TMDB posters are typically official key art scanned/exported
+    at much higher resolution than AniList's coverImage, which tops out around
+    460x650 even at 'extraLarge'). Returns {backdrop, logo, poster} (any may be
+    None — not every show has poster art uploaded to TMDB)."""
+    out = {'backdrop': None, 'logo': None, 'poster': None}
+    try:
+        imgs = _http.get(
+            f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/images",
+            params={'api_key': _TMDB_KEY, 'include_image_language': 'en,null'}, timeout=8).json()
+        backdrops = imgs.get('backdrops') or []
+        textless = [b for b in backdrops if b.get('iso_639_1') is None]
+        pool = textless or backdrops
+        if pool:
+            best = max(pool, key=lambda b: (b.get('vote_average') or 0, b.get('width') or 0))
+            out['backdrop'] = f"https://image.tmdb.org/t/p/w1280{best['file_path']}"
+        logos = imgs.get('logos') or []
+        # Prefer English, then PNG (transparent) over SVG, then most-voted.
+        eng = [l for l in logos if l.get('iso_639_1') == 'en'] or logos
+        if eng:
+            blogo = max(eng, key=lambda l: ((l.get('file_path') or '').lower().endswith('.png'),
+                                            l.get('vote_average') or 0))
+            out['logo'] = f"https://image.tmdb.org/t/p/w500{blogo['file_path']}"
+        posters = imgs.get('posters') or []
+        eng_p = [p for p in posters if p.get('iso_639_1') in (None, 'en')] or posters
+        if eng_p:
+            bp = max(eng_p, key=lambda p: (p.get('vote_average') or 0, p.get('width') or 0))
+            out['poster'] = f"https://image.tmdb.org/t/p/w780{bp['file_path']}"
+    except Exception:
+        pass
+    return out
+
+
+# AniList/MAL titles often carry a trailing "2nd Season" / "Cour 3" / "Part 2" /
+# bare-digit marker that TMDB doesn't use — it groups every season of a show under
+# one base entry. TMDB's own fuzzy search is inconsistent about ignoring these
+# suffixes (some match fine, some return zero results), so we strip them ourselves
+# and retry with the bare show name.
+_SEASON_SUFFIX_RE = re.compile(
+    r'\s*[:\-–]?\s*(?:'
+    r'\d+(?:st|nd|rd|th)\s+season\b.*$'
+    r'|season\s*\d+$'
+    r'|\d+(?:st|nd|rd|th)\s+cour\b.*$'
+    r'|cour\s*\d+$'
+    r'|\d+(?:st|nd|rd|th)\s+stage\b.*$'
+    r'|part\s*\d+$'
+    r'|\d+$'
+    r')',
+    re.IGNORECASE,
+)
+
+# Matches an explicit "2nd Season" / "Season 3" marker (the only sequel-suffix
+# forms that map onto a TMDB "season number" — "Cour"/"Part"/"Stage" splits and
+# bare trailing digits don't reliably correspond to a TMDB season index, so we
+# leave those on the show-level poster rather than guess wrong).
+_SEASON_NUM_RE = re.compile(r'(\d+)(?:st|nd|rd|th)\s+season\b|season\s*(\d+)\b', re.IGNORECASE)
+
+
+def _extract_season_number(title_en, title_romaji):
+    """Used only as a secondary signal (see `_tmdb_art`) — when TMDB's own
+    air-year season matching (`_tmdb_season_by_year`) comes up empty, an
+    explicit "2nd Season"/"Season 3" marker in the title still tells us this
+    is *definitely* a sequel, so we know not to trust the show's default
+    poster rather than silently keeping a likely-wrong one."""
+    for t in (title_en, title_romaji):
+        if not t:
+            continue
+        m = _SEASON_NUM_RE.search(t)
+        if m:
+            return int(m.group(1) or m.group(2))
+    return None
+
+
+def _tmdb_season_by_year(tmdb_id, year):
+    """Pick whichever TMDB season of a multi-season show aired closest to
+    AniList's season_year, and return (season_number, its own poster). This
+    is far more general than parsing a "2nd Season"/"Part 2" marker out of
+    the title — it works for sequels with a completely different name too
+    (e.g. "Attack on Titan: The Final Season" has no digit/season-number
+    text at all), as long as we know roughly when it aired. Returns
+    (None, None) when no season's air year is within 1 year of ours — better
+    to fall back to AniList's own cover than guess the wrong season."""
+    if not year:
+        return None, None
+    try:
+        r = _http.get(f"https://api.themoviedb.org/3/tv/{tmdb_id}",
+                      params={'api_key': _TMDB_KEY}, timeout=8).json()
+        seasons = [s for s in (r.get('seasons') or [])
+                   if (s.get('season_number') or 0) >= 1 and s.get('air_date')]
+        if not seasons:
+            return None, None
+        best = min(seasons, key=lambda s: abs(int(s['air_date'][:4]) - int(year)))
+        if abs(int(best['air_date'][:4]) - int(year)) > 1:
+            return None, None
+        poster = f"https://image.tmdb.org/t/p/w780{best['poster_path']}" if best.get('poster_path') else None
+        return best.get('season_number'), poster
+    except Exception:
+        return None, None
+
+
+def _candidate_titles(title_en, title_romaji):
+    """Ordered, de-duplicated list of (title, is_raw) variants to try against TMDB:
+    the raw titles first, then each with a trailing season/cour/part/digit marker
+    stripped, then each truncated at the first ': ' (subtitle separator) — covers
+    sequels named either way ("X 2nd Season", "X: Subtitle"). `is_raw` marks the
+    unmodified title — TMDB only stores one wide backdrop per *show*, usually art
+    from whichever season it was catalogued with, so a match that required
+    stripping a sequel marker means that backdrop is very likely the wrong
+    season's; only a raw-title match is trusted for the backdrop."""
+    out, seen = [], set()
+    for raw in (title_en, title_romaji):
+        if not raw:
+            continue
+        variants = [(raw, True)]
+        stripped = _SEASON_SUFFIX_RE.sub('', raw).strip(' -:')
+        if stripped and stripped.lower() != raw.lower():
+            variants.append((stripped, False))
+        if ': ' in raw:
+            head = raw.split(': ', 1)[0].strip()
+            if head:
+                variants.append((head, False))
+        for t, is_raw in variants:
+            if t.lower() not in seen:
+                seen.add(t.lower()); out.append((t, is_raw))
+    return out
+
+
+def _tmdb_search_one(media_type, name, year):
+    """One TMDB search/<tv|movie> call. Returns (id, exact) for the first result
+    whose normalized title overlaps the query and whose air/release year isn't
+    *later* than ours (a sequel always airs on/after its original, so this rejects
+    an unrelated show that happens to share a name but came out afterwards).
+    `exact` means the query matched the candidate's title verbatim (not just an
+    overlap) — used upstream to tell a season-1/standalone match from a sequel
+    whose query merely *contains* the base show's name."""
+    title_field = 'name' if media_type == 'tv' else 'title'
+    date_field = 'first_air_date' if media_type == 'tv' else 'release_date'
+    orig_field = 'original_name' if media_type == 'tv' else 'original_title'
+    try:
+        r = _http.get(f'https://api.themoviedb.org/3/search/{media_type}',
+                      params={'api_key': _TMDB_KEY, 'query': name, 'include_adult': 'false'}, timeout=8)
+        target = _norm_title(name)
+        for res in ((r.json() or {}).get('results') or [])[:5]:
+            cand = _norm_title(res.get(title_field))
+            cand_o = _norm_title(res.get(orig_field))
+            ry = (res.get(date_field) or '')[:4]
+            year_ok = (not year) or (not ry) or int(year) >= int(ry) - 1
+            match = bool(target) and (target in cand or cand in target or target in cand_o or cand_o in target)
+            if year_ok and match:
+                return res['id'], (target == cand or target == cand_o)
+    except Exception:
+        pass
+    return None, False
+
+
+def _tmdb_art(title_en, title_romaji, year, known_id=None, known_type='tv', fmt=None):
+    """TMDB hero art for an anime: {tmdb_id, tmdb_type, backdrop, logo,
+    is_base_title}, or None when no confident match. When known_id is given we skip
+    the search and go straight to that title's images (used to backfill logos for
+    already-matched entries). Search order is TV-first by default (the vast
+    majority of anime), but `fmt` (AniList's own format: MOVIE/OVA/ONA/SPECIAL/TV)
+    flips it to movie-first for non-TV formats — without this, a movie whose title
+    contains its parent show's name (e.g. "Dragon Maid: A lonely dragon wants to be
+    loved") gets fuzzy-matched to the TV show during the 'tv' pass before 'movie'
+    is ever tried, permanently locking the wrong tmdb_id/tmdb_type. Within each
+    media type, an *exact* match on an unmodified title is preferred (and marked
+    `is_base_title`) over a looser/stripped-suffix match — TMDB keeps only one
+    backdrop per show, generally art from the season it was catalogued with, so
+    only a season-1/standalone match is trusted for it."""
     if not _TMDB_KEY:
         return None
-    for name in [t for t in (title_en, title_romaji) if t]:
-        try:
-            params = {'api_key': _TMDB_KEY, 'query': name, 'include_adult': 'false'}
-            if year:
-                params['first_air_date_year'] = year
-            r = _http.get('https://api.themoviedb.org/3/search/tv', params=params, timeout=8)
-            target = _norm_title(name)
-            for res in ((r.json() or {}).get('results') or [])[:5]:
-                cand = _norm_title(res.get('name'))
-                cand_o = _norm_title(res.get('original_name'))
-                ry = (res.get('first_air_date') or '')[:4]
-                year_ok = (not year) or (not ry) or abs(int(ry) - int(year)) <= 1
-                match = bool(target) and (target in cand or cand in target or target in cand_o or cand_o in target)
-                if not (year_ok and match):
-                    continue
-                imgs = _http.get(
-                    f"https://api.themoviedb.org/3/tv/{res['id']}/images",
-                    params={'api_key': _TMDB_KEY, 'include_image_language': 'null,en'}, timeout=8).json()
-                backdrops = imgs.get('backdrops') or []
-                textless = [b for b in backdrops if b.get('iso_639_1') is None]
-                pool = textless or backdrops
-                if pool:
-                    best = max(pool, key=lambda b: (b.get('vote_average') or 0, b.get('width') or 0))
-                    return {'tmdb_id': res['id'], 'url': f"https://image.tmdb.org/t/p/w1280{best['file_path']}"}
-            time.sleep(0.2)
-        except Exception:
-            pass
+    # Title-text season markers ("2nd Season", "Part 2"...) only catch sequels
+    # that are *named* that way — plenty aren't ("Attack on Titan: The Final
+    # Season", or any sequel with a wholly different subtitle). `year` (from
+    # AniList's season_year, always present) is a far more general signal:
+    # match it against TMDB's own per-season air_date instead of the title.
+    text_season_num = _extract_season_number(title_en, title_romaji)
+
+    def _with_season_poster(result):
+        # Multi-season anime share one TMDB show id with one show-level poster
+        # (and many anime aren't split into per-season entries on TMDB at all —
+        # every episode across every season gets lumped under one "Season 1").
+        # Always try to pin down *this* season's own poster by air year; only
+        # fall back to dropping the poster entirely (caller then uses AniList's
+        # own season-correct cover) when the title text confirms this is
+        # clearly a sequel and the year match still came up empty.
+        if result.get('tmdb_type') != 'tv':
+            return result
+        _, poster = _tmdb_season_by_year(result['tmdb_id'], year)
+        if poster:
+            result['poster'] = poster
+        elif text_season_num and text_season_num >= 2:
+            result['poster'] = None
+        return result
+
+    if known_id:
+        return _with_season_poster({'tmdb_id': known_id, 'tmdb_type': known_type, **_tmdb_images(known_id, known_type)})
+    names = _candidate_titles(title_en, title_romaji)
+    media_order = ('movie', 'tv') if (fmt or '').upper() in ('MOVIE', 'OVA', 'ONA', 'SPECIAL') else ('tv', 'movie')
+    for media_type in media_order:
+        fallback = None
+        for name, is_raw in names:
+            tid, exact = _tmdb_search_one(media_type, name, year)
+            time.sleep(0.15)
+            if not tid:
+                continue
+            if is_raw and exact:
+                art = _tmdb_images(tid, media_type)
+                if art['backdrop'] or art['logo']:
+                    return _with_season_poster({'tmdb_id': tid, 'tmdb_type': media_type, 'is_base_title': True, **art})
+            elif fallback is None:
+                fallback = tid
+        if fallback:
+            art = _tmdb_images(fallback, media_type)
+            if art['backdrop'] or art['logo']:
+                return _with_season_poster({'tmdb_id': fallback, 'tmdb_type': media_type, 'is_base_title': False, **art})
     return None
 
 
@@ -261,7 +462,7 @@ def _backfill_anime_metadata():
             continue
 
         # AniList enrichment when any key field is missing
-        if not (v.get('banner') and v.get('genres') and v.get('total_episodes') and v.get('cover_xl')):
+        if not (v.get('banner') and v.get('genres') and v.get('total_episodes') and v.get('cover_xl') and v.get('synopsis')):
             try:
                 m = _anilist_enrich(al_id)
                 processed += 1
@@ -277,6 +478,8 @@ def _backfill_anime_metadata():
                     if m.get('genres') and not v.get('genres'): v['genres'] = (m['genres'] or [])[:5]; changed = True
                     if m.get('season') and not v.get('season'): v['season'] = m['season']; changed = True
                     if m.get('seasonYear') and not v.get('season_year'): v['season_year'] = m['seasonYear']; changed = True
+                    if m.get('description') and not v.get('synopsis'):
+                        v['synopsis'] = _clean_synopsis(m['description']); changed = True
                     # AniList banner is the default; never overwrite a TMDB one
                     if m.get('bannerImage') and v.get('banner_source') != 'tmdb' and v.get('banner') != m['bannerImage']:
                         v['banner'] = m['bannerImage']; v['banner_source'] = 'anilist'; changed = True
@@ -284,12 +487,60 @@ def _backfill_anime_metadata():
             except Exception:
                 pass
 
-        # TMDB backdrop — attempt once per entry (higher quality than AniList)
-        if _TMDB_KEY and not v.get('_tmdb_tried'):
-            v['_tmdb_tried'] = True; changed = True
-            hit = _tmdb_backdrop(v.get('title_english') or v.get('title'), v.get('title_romaji'), v.get('season_year'))
-            if hit:
-                v['banner'] = hit['url']; v['banner_source'] = 'tmdb'; v['tmdb_id'] = hit['tmdb_id']; changed = True
+        # TMDB art — wide backdrop + logo PNG (Crunchyroll-style). First pass searches
+        # by title; a second pass backfills the logo for entries matched before logos
+        # were fetched (tmdb_id known, logo still missing).
+        if _TMDB_KEY:
+            first_try = not v.get('_tmdb_tried')
+            relogo = (not first_try) and v.get('tmdb_id') and not v.get('logo') and not v.get('_logo_tried')
+            # Backfill a higher-res poster for entries matched before poster-fetching
+            # existed, same pattern as relogo above — gated by its own _cover_tried
+            # flag so a show with no TMDB poster art isn't re-checked every backfill run.
+            recover = (not first_try) and v.get('tmdb_id') and v.get('cover_source') != 'tmdb' \
+                and not v.get('_cover_tried') and not v.get('cover_locked')
+            # Multi-season anime share one TMDB show id, so cover_source=='tmdb'
+            # from an earlier pass may just be a different season's poster reused
+            # for this entry. Re-check once per TV entry (not gated on the title
+            # containing a literal "2nd Season" marker — _tmdb_art now matches by
+            # AniList's season_year against TMDB's per-season air_date, which
+            # also catches sequels named completely differently, e.g. "...: The
+            # Final Season") — gated by its own flag so it only runs once.
+            # cover_locked means the user manually picked a cover via the cover-options
+            # picker — never let an automatic re-check overwrite that choice.
+            reseason = (not first_try) and v.get('tmdb_id') and v.get('tmdb_type', 'tv') == 'tv' \
+                and not v.get('_season_tried') and not v.get('cover_locked')
+            if first_try or relogo or recover or reseason:
+                art = _tmdb_art(v.get('title_english') or v.get('title'), v.get('title_romaji'),
+                                v.get('season_year'), known_id=v.get('tmdb_id') if (relogo or recover or reseason) else None,
+                                known_type=v.get('tmdb_type', 'tv'), fmt=v.get('format'))
+                if first_try: v['_tmdb_tried'] = True
+                if relogo:    v['_logo_tried'] = True
+                if recover or reseason: v['_cover_tried'] = True
+                if reseason:  v['_season_tried'] = True
+                changed = True
+                if art:
+                    if art.get('tmdb_id'): v['tmdb_id'] = art['tmdb_id']
+                    if art.get('tmdb_type'): v['tmdb_type'] = art['tmdb_type']
+                    if art.get('logo'): v['logo'] = art['logo']
+                    # AniList's coverImage tops out around 460x650 even at 'extraLarge';
+                    # TMDB posters are usually official key art at much higher resolution
+                    # (Crunchyroll-style), so prefer it for the card cover when found.
+                    if art.get('poster'):
+                        v['cover'] = art['poster']; v['cover_source'] = 'tmdb'
+                    elif reseason and v.get('cover_xl'):
+                        # The reseason recheck dropped an unconfirmed poster (TMDB
+                        # often doesn't split anime into per-season entries at all,
+                        # so there was nothing to confirm this entry's exact season
+                        # against) — AniList's own cover is at least guaranteed to
+                        # be the right season, even though it's lower-res.
+                        v['cover'] = v['cover_xl']; v['cover_source'] = 'anilist'
+                    # TMDB keeps one backdrop per *show*, usually art from whichever season
+                    # it was catalogued with. Only adopt it when the match was on the raw
+                    # title (season 1 / a non-serialized film) — a match that needed the
+                    # sequel-suffix stripped means that backdrop is very likely the wrong
+                    # season; keep AniList's own (season-specific) banner for those instead.
+                    if first_try and art.get('backdrop') and art.get('is_base_title'):
+                        v['banner'] = art['backdrop']; v['banner_source'] = 'tmdb'
 
         # Persist periodically so partial progress survives interruptions/restarts.
         if changed and processed and processed % 8 == 0:
@@ -1585,6 +1836,8 @@ def anime_library_get():
                 'cover_xl': anime.get('cover_xl', ''),
                 'banner': anime.get('banner', ''),
                 'banner_source': anime.get('banner_source', ''),
+                'logo': anime.get('logo', ''),
+                'synopsis': anime.get('synopsis', ''),
                 'genres': anime.get('genres', []),
                 'season': anime.get('season', ''),
                 'season_year': anime.get('season_year'),
@@ -1704,6 +1957,8 @@ def anime_library_get():
             'cover_xl': anime.get('cover_xl', ''),
             'banner': anime.get('banner', ''),
             'banner_source': anime.get('banner_source', ''),
+            'logo': anime.get('logo', ''),
+            'synopsis': anime.get('synopsis', ''),
             'genres': anime.get('genres', []),
             'season': anime.get('season', ''),
             'season_year': anime.get('season_year'),
@@ -1883,6 +2138,86 @@ def anime_set_status(anime_id):
     lib[anime_id]['status'] = status
     _lib_write(lib)
     return jsonify({'ok': True})
+
+
+def _cover_candidates(v: dict) -> list:
+    """Every cover image we can find for this entry across sources, for the
+    manual 'change cover' picker. AniList's own cover is always offered as a
+    safe baseline; TMDB contributes every poster uploaded for the matched
+    id (not just the auto-picked one) plus each season's own poster when the
+    show is split into seasons on TMDB; MyAnimeList via Jikan adds one more
+    independent option. Deduped by URL, each tagged with its source/label."""
+    out, seen = [], set()
+
+    def add(url, source, label):
+        if url and url not in seen:
+            seen.add(url)
+            out.append({'url': url, 'source': source, 'label': label})
+
+    add(v.get('cover_xl'), 'anilist', 'AniList')
+
+    tmdb_id, tmdb_type = v.get('tmdb_id'), v.get('tmdb_type', 'tv')
+    if tmdb_id and _TMDB_KEY:
+        try:
+            imgs = _http.get(f"https://api.themoviedb.org/3/{tmdb_type}/{tmdb_id}/images",
+                              params={'api_key': _TMDB_KEY, 'include_image_language': 'en,null'}, timeout=8).json()
+            posters = sorted(imgs.get('posters') or [], key=lambda p: -(p.get('vote_average') or 0))
+            for p in posters[:12]:
+                add(f"https://image.tmdb.org/t/p/w780{p['file_path']}", 'tmdb', 'TMDB')
+        except Exception:
+            pass
+        if tmdb_type == 'tv':
+            try:
+                r = _http.get(f"https://api.themoviedb.org/3/tv/{tmdb_id}",
+                              params={'api_key': _TMDB_KEY}, timeout=8).json()
+                for s in r.get('seasons') or []:
+                    if s.get('poster_path'):
+                        label = f"TMDB · {s.get('name') or ('Temporada ' + str(s.get('season_number')))}"
+                        add(f"https://image.tmdb.org/t/p/w780{s['poster_path']}", 'tmdb', label)
+            except Exception:
+                pass
+
+    if v.get('mal_id'):
+        try:
+            r = _http.get(f"{_JIKAN}/anime/{v['mal_id']}", timeout=8).json()
+            img = ((r.get('data') or {}).get('images') or {}).get('jpg') or {}
+            add(img.get('large_image_url'), 'mal', 'MyAnimeList')
+        except Exception:
+            pass
+
+    return out
+
+
+@anime_bp.route('/library/<anime_id>/cover_options', methods=['GET'])
+def anime_cover_options(anime_id):
+    """Candidate covers from every source we know for this entry, for the
+    manual cover picker (replaces the old per-episode rename button)."""
+    lib = _lib_read()
+    v = lib.get(anime_id)
+    if not v:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify({'options': _cover_candidates(v), 'current': v.get('cover')})
+
+
+@anime_bp.route('/library/<anime_id>/cover', methods=['POST'])
+def anime_set_cover(anime_id):
+    """Manually pin a cover. Body: {cover: url, source?: str}. Marks
+    cover_locked so the periodic TMDB/AniList backfill never overwrites a
+    choice the user made on purpose."""
+    data = request.get_json(silent=True) or {}
+    url = (data.get('cover') or '').strip()
+    if not url:
+        return jsonify({'error': 'cover required'}), 400
+
+    lib = _lib_read()
+    if anime_id not in lib:
+        return jsonify({'error': 'not found'}), 404
+
+    lib[anime_id]['cover'] = url
+    lib[anime_id]['cover_source'] = (data.get('source') or 'manual').strip()
+    lib[anime_id]['cover_locked'] = True
+    _lib_write(lib)
+    return jsonify({'ok': True, 'cover': url})
 
 
 @anime_bp.route('/library/<anime_id>/clear_episodes', methods=['POST'])
@@ -2069,8 +2404,22 @@ def anime_scan_suggest():
         search_name = _clean_folder_name(folder_name)
         q = '''query($s:String){Page(perPage:5){media(search:$s,type:ANIME,sort:SEARCH_MATCH){
             id title{romaji english}coverImage{large}}}}'''
-        r = _http.post(_ANILIST, json={'query': q, 'variables': {'s': search_name}}, timeout=8)
-        items = ((r.json().get('data') or {}).get('Page') or {}).get('media') or []
+
+        def _search(name):
+            r = _http.post(_ANILIST, json={'query': q, 'variables': {'s': name}}, timeout=8)
+            return ((r.json().get('data') or {}).get('Page') or {}).get('media') or []
+
+        # Search with the RAW folder name first — AniList titles routinely spell
+        # out "2nd Season"/"Part 2" themselves, so keeping that marker lets
+        # AniList's own SEARCH_MATCH find the season-specific entry directly
+        # (e.g. "Medalist 2nd Season" -> only the season-2 id). Stripping it
+        # first (as _clean_folder_name does, for fansub-noisy names AniList
+        # can't parse raw) turns the query generic and can rank the *base*
+        # show's season-1 entry above the season the folder is actually for —
+        # which silently linked a season-2 download to the season-1 entry.
+        items = _search(folder_name)
+        if not items and search_name != folder_name:
+            items = _search(search_name)
         if not items:
             return jsonify(None)
 
@@ -2082,10 +2431,12 @@ def anime_scan_suggest():
             candidates = [t.get('romaji', ''), t.get('english', '') or '']
             for c in candidates:
                 nc = _normalize(c)
-                if nc in (norm_folder, norm_clean):
-                    return 3  # exact match
+                if nc == norm_folder:
+                    return 4  # exact match against the full, season-preserving name
             for c in candidates:
                 nc = _normalize(c)
+                if nc == norm_clean:
+                    return 3  # exact match only once the season marker is stripped
                 if nc and (nc in norm_clean or norm_clean in nc):
                     return 2  # substring match
             return 1  # best AniList relevance, no title match

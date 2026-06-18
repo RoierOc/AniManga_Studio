@@ -49,8 +49,9 @@ export const useAnimeStore = defineStore('anime', {
     // management
     linkTorrent: { show: false, list: [], loading: false, subpath: '' },
     epOverrideMenu: null,      // { anime, ep, x, y }
-    rename: null,              // { id, items } | null
-    renameBusy: false,
+    coverPicker: null,         // { id, options, current } | null
+    coverPickerLoading: false,
+    coverSaving: false,
 
     autoplay: null,            // { anime, ep } | null
     autoplaySeconds: 0,
@@ -395,16 +396,26 @@ export const useAnimeStore = defineStore('anime', {
       try { await api.post(`/api/anime/library/${m.anime.id}/ep_override`, { filename: m.ep.filename, type }); await this.loadLibrary(true) }
       catch (_) { useUiStore().toast('No se pudo cambiar el tipo', 'error') }
     },
-    async openRename(anime) {
-      try { const d = await api.get(`/api/anime/rename_preview/${anime.id}`); this.rename = { id: anime.id, items: d.renames || [] } }
-      catch (_) { useUiStore().toast('No se pudo previsualizar', 'error') }
+    async openCoverPicker(anime) {
+      this.coverPicker = { id: anime.id, options: [], current: anime.cover || '' }
+      this.coverPickerLoading = true
+      try {
+        const d = await api.get(`/api/anime/library/${anime.id}/cover_options`)
+        if (this.coverPicker?.id === anime.id) this.coverPicker.options = d.options || []
+      } catch (_) { useUiStore().toast('No se pudieron cargar las portadas', 'error') }
+      finally { this.coverPickerLoading = false }
     },
-    async applyRename() {
-      if (!this.rename) return
-      this.renameBusy = true
-      try { await api.post(`/api/anime/rename_apply/${this.rename.id}`, { renames: this.rename.items }); this.rename = null; await this.loadLibrary(true); useUiStore().toast('Episodios renombrados', 'ok') }
-      catch (_) { useUiStore().toast('Error al renombrar', 'error') }
-      finally { this.renameBusy = false }
+    async pickCover(opt) {
+      if (!this.coverPicker) return
+      const id = this.coverPicker.id
+      this.coverSaving = true
+      try {
+        await api.post(`/api/anime/library/${id}/cover`, { cover: opt.url, source: opt.source })
+        this.coverPicker = null
+        await this.loadLibrary(true)
+        useUiStore().toast('Portada actualizada', 'ok')
+      } catch (_) { useUiStore().toast('No se pudo cambiar la portada', 'error') }
+      finally { this.coverSaving = false }
     },
 
     async play(anime, ep, subFile = '', startPos = 0) {

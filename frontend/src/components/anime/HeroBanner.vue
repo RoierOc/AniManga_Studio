@@ -11,11 +11,24 @@ const items = computed(() => store.heroItems)
 const c = computed(() => items.value[active.value] || null)
 
 // Wide hero art: prefer the cached banner (TMDB backdrop → AniList banner), then a
-// blurred cover as a last resort so it still reads as a cinematic hero.
-const bannerUrl = computed(() => c.value?.anime?.banner || '')
-const coverUrl = computed(() => c.value?.anime?.cover_xl || c.value?.anime?.cover || '')
-const hasBanner = computed(() => !!bannerUrl.value)
-const bgUrl = computed(() => bannerUrl.value || coverUrl.value)
+// blurred cover as a last resort so it still reads as a cinematic hero. If a tier
+// fails to load (broken URL, blocked domain) bgIdx advances to the next one instead
+// of leaving the hero blank.
+const bgIdx = ref(0)
+const bgTiers = computed(() => {
+  const a = c.value?.anime
+  return a ? [a.banner, a.cover_xl, a.cover].filter(Boolean) : []
+})
+const bgUrl = computed(() => bgTiers.value[bgIdx.value] || '')
+const hasBanner = computed(() => bgIdx.value === 0 && !!c.value?.anime?.banner)
+function onBgError() { if (bgIdx.value < bgTiers.value.length - 1) bgIdx.value++ }
+
+// Crunchyroll-style logo title-treatment (TMDB PNG). Falls back to the text title
+// when none is cached, or when the cached logo URL fails to load.
+const logoFailed = ref(false)
+const logoUrl = computed(() => c.value?.anime?.logo || '')
+const hasLogo = computed(() => !!logoUrl.value && !logoFailed.value)
+watch(() => c.value?.anime?.id, () => { bgIdx.value = 0; logoFailed.value = false })
 
 const EYEBROW = { new: 'NUEVO EPISODIO', downloaded: 'LISTO PARA VER', continue: 'SIGUE VIENDO', seasonal: 'TEMPORADA' }
 const eyebrow = computed(() => EYEBROW[c.value?.kind] || '')
@@ -55,8 +68,10 @@ function goTo(i) { active.value = ((i % items.value.length) + items.value.length
 
 // Preload neighbouring banners so carousel transitions never flash.
 function preload(i) {
-  const it = items.value[i]; const u = it?.anime?.banner || it?.anime?.cover_xl || it?.anime?.cover
+  const it = items.value[i]
+  const u = it?.anime?.banner || it?.anime?.cover_xl || it?.anime?.cover
   if (u) { const img = new Image(); img.src = u }
+  if (it?.anime?.logo) { const lg = new Image(); lg.src = it.anime.logo }
 }
 watch([items, active], () => {
   if (active.value >= items.value.length) active.value = 0   // clamp without jumping to 0 on silent reloads
@@ -92,7 +107,11 @@ function secondary() {
     <!-- Background art -->
     <div class="hero__bg">
       <Transition name="hero-bg" mode="out-in">
-        <div v-if="c" :key="c.anime.id + bgUrl" class="hero__img" :style="{ backgroundImage: `url('${bgUrl}')` }" />
+        <div v-if="c" :key="c.anime.id + bgUrl" class="hero__img">
+          <div class="hero__kb" :style="{ backgroundImage: `url('${bgUrl}')` }" />
+          <!-- invisible probe: detects a broken/blocked URL and advances to the next tier -->
+          <img v-if="bgUrl" :src="bgUrl" alt="" class="hero__probe" @error="onBgError" />
+        </div>
       </Transition>
       <div class="hero__shade" />
     </div>
@@ -102,7 +121,8 @@ function secondary() {
       <Transition name="hero-content" mode="out-in" :duration="380">
         <div v-if="c" :key="c.anime.id" class="hero__body">
           <p class="hero__eyebrow"><span class="hero__tick" /> {{ eyebrow }}</p>
-          <h1 class="hero__title">{{ c.anime.title }}</h1>
+          <img v-if="hasLogo" class="hero__logo" :src="logoUrl" :alt="c.anime.title" @error="logoFailed = true" />
+          <h1 v-else class="hero__title">{{ c.anime.title }}</h1>
 
           <div class="hero__meta">
             <span class="hero__ep">{{ epLabel }}</span>
@@ -149,18 +169,31 @@ function secondary() {
 <style scoped>
 .hero {
   position: relative; margin: 0 0 var(--s-7);
-  height: clamp(320px, 42vw, 460px);
+  height: clamp(500px, 58vw, 680px);
   border-radius: var(--r-xl); overflow: hidden;
   background: var(--surface);
 }
 
 /* Background art */
 .hero__bg { position: absolute; inset: 0; }
-.hero__img {
+.hero__img { position: absolute; inset: 0; }
+/* The Ken Burns animation lives on this inner layer, never on the <Transition> target
+   (.hero__img). An infinite animation on the transition element makes Vue wait for its
+   animationend — which never fires — so the opacity fade-in stays stuck at 0 and the
+   banner never appears. Keeping it on a separate child lets the fade run normally. */
+.hero__kb {
   position: absolute; inset: 0; background-size: cover; background-position: center 22%;
+  animation: kenburns 26s ease-in-out infinite alternate;
+  will-change: transform;
 }
 /* When only a vertical cover is available, blur+scale it so it fills the wide frame. */
-.hero.is-cover .hero__img { filter: blur(28px) saturate(1.15) brightness(.85); transform: scale(1.18); }
+.hero.is-cover .hero__kb { filter: blur(28px) saturate(1.15) brightness(.85); transform: scale(1.18); animation: none; }
+@keyframes kenburns {
+  from { transform: scale(1.04) translate3d(0, 0, 0); }
+  to   { transform: scale(1.13) translate3d(-1.5%, -1.5%, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .hero__kb { animation: none; } }
+.hero__probe { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .hero__shade {
   position: absolute; inset: 0;
   background:
@@ -184,10 +217,18 @@ function secondary() {
 .hero__tick { width: 16px; height: 1px; background: var(--cyan); box-shadow: 0 0 8px var(--cyan-glow); }
 .hero__title {
   font-family: var(--font-display); font-weight: 700; color: #fff;
-  font-size: clamp(1.7rem, 3.4vw, 3rem); line-height: 1.06;
+  font-size: clamp(2.64rem, 5.3vw, 4.8rem); line-height: 1.04;
   text-shadow: 0 2px 24px rgba(0,0,0,.6);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
+/* TMDB logo title-treatment — sized like a big hero wordmark (Crunchyroll-style), shadow lifts it off the art. */
+.hero__logo {
+  max-width: min(560px, 82%); max-height: clamp(110px, 15vw, 200px);
+  width: auto; height: auto; object-fit: contain; object-position: left bottom;
+  filter: drop-shadow(0 4px 20px rgba(0,0,0,.65));
+  animation: logorise .6s var(--ease-silk) both;
+}
+@keyframes logorise { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
 .hero__meta {
   display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2);
   margin-top: var(--s-3); font-size: var(--fs-sm); color: var(--ice);
@@ -249,8 +290,9 @@ function secondary() {
 .hero-content-leave-to { opacity: 0; transform: translateY(-8px); }
 
 @media (max-width: 640px) {
-  .hero { height: clamp(280px, 56vw, 360px); border-radius: var(--r-lg); }
+  .hero { height: clamp(380px, 72vw, 480px); border-radius: var(--r-lg); }
   .hero__inner { padding: var(--s-5) var(--s-4); }
   .hero__arr { display: none; }
+  .hero__logo { max-width: 64%; max-height: 96px; }
 }
 </style>
