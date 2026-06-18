@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { animeEpLabel, isEpisodePlayable } from '@/lib/anime'
+import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 
 const props = defineProps({
@@ -38,7 +39,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
        @mouseenter.once="store.loadSkip(anime, ep)">
 
     <div class="ep__thumb" @click="onPlay">
-      <div class="ep__bg" :style="anime.cover ? `background-image:url('${anime.cover}')` : ''" />
+      <div class="ep__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover)}')` : ''" />
       <img v-if="playable || ep.has_thumb" class="ep__img" :src="`/api/anime/thumb/${anime.id}/${ep.num}${ep.ep_type === 'special' ? '?special=1' : ''}`"
            loading="lazy" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
 

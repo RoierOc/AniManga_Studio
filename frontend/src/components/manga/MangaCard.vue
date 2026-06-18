@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { MANGA_STATUS } from '@/lib/manga'
+import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 
 const props = defineProps({ manga: { type: Object, required: true }, updates: { type: Number, default: 0 } })
@@ -15,7 +16,7 @@ const initials = computed(() =>
 <template>
   <article class="card" tabindex="0">
     <div class="card__poster">
-      <img v-if="hasCover" :src="manga.cover" :alt="manga.name" loading="lazy" class="card__img"
+      <img v-if="hasCover" :src="imgProxy(manga.cover)" :alt="manga.name" loading="lazy" class="card__img"
            @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" />
       <div v-else class="card__fallback"><span>{{ initials }}</span></div>
 

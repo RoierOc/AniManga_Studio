@@ -2,6 +2,7 @@
 import { onMounted } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { relativeTime } from '@/lib/format'
+import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -33,7 +34,7 @@ function open(item) {
     <div v-else class="hist__list">
       <button v-for="(h, i) in store.history" :key="i" class="hrow" @click="open(h)">
         <div class="hrow__cover">
-          <img v-if="h.cover" :src="h.cover" :alt="h.title" loading="lazy" />
+          <img v-if="h.cover" :src="imgProxy(h.cover)" :alt="h.title" loading="lazy" />
           <span class="hrow__ep">{{ String(h.episode).padStart(2, '0') }}</span>
         </div>
         <div class="hrow__meta">

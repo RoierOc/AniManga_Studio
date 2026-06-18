@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { ANIME_STATUS, animeFormatLabel } from '@/lib/anime'
+import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 
 const props = defineProps({ anime: { type: Object, required: true } })
@@ -27,7 +28,7 @@ const dots = computed(() =>
 <template>
   <article class="acard" tabindex="0" @click="$emit('open', anime)" @keydown.enter="$emit('open', anime)">
     <div class="acard__poster">
-      <img v-if="anime.cover" :src="anime.cover" :alt="anime.title" loading="lazy" class="acard__img"
+      <img v-if="anime.cover" :src="imgProxy(anime.cover)" :alt="anime.title" loading="lazy" class="acard__img"
            @load="$event.target.classList.add('is-loaded')" />
       <div class="acard__scrim" />
       <span class="acard__shine" />

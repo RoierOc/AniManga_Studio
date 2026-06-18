@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { ANIME_STATUS, STATUS_ORDER } from '@/lib/anime'
+import { imgProxy } from '@/lib/img'
 import AnimeCard from '@/components/anime/AnimeCard.vue'
 import HeroBanner from '@/components/anime/HeroBanner.vue'
 import Icon from '@/components/ui/Icon.vue'
@@ -81,7 +82,7 @@ const counts = computed(() => {
                  :src="`/api/anime/thumb/${cw.anime.id}/${cw.ep.num}`"
                  :alt="'Ep ' + cw.ep.num" loading="lazy"
                  @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" class="cwc__img" />
-            <img v-else-if="cw.anime.cover" :src="cw.anime.cover" :alt="cw.anime.title" loading="lazy" />
+            <img v-else-if="cw.anime.cover" :src="imgProxy(cw.anime.cover)" :alt="cw.anime.title" loading="lazy" />
             <div v-else class="cwc__ph">{{ (cw.anime.title || '?')[0].toUpperCase() }}</div>
             <div class="cwc__scrim" />
             <div class="cwc__play"><Icon name="play" :size="28" /></div>

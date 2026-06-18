@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { animeEpLabel } from '@/lib/anime'
+import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 
 const store = useAnimeStore()
@@ -20,7 +21,7 @@ function playNow() {
     <Transition name="ap">
       <div v-if="store.autoplay" class="ap" @click.self="store.dismissAutoplay()">
         <div class="ap__card">
-          <img v-if="store.autoplay.anime.cover" :src="store.autoplay.anime.cover" class="ap__cover" alt="" />
+          <img v-if="store.autoplay.anime.cover" :src="imgProxy(store.autoplay.anime.cover)" class="ap__cover" alt="" />
           <div class="ap__body">
             <p class="ap__eyebrow"><span class="ap__tick" /> A CONTINUACIÓN</p>
             <h3 class="ap__title">{{ animeEpLabel(store.autoplay.anime, store.autoplay.ep) }}</h3>

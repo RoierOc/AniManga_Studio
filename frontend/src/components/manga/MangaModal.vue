@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useMangaStore } from '@/stores/manga'
 import { formatChapter, MANGA_STATUS } from '@/lib/manga'
+import { imgProxy } from '@/lib/img'
 import { useUiStore } from '@/stores/ui'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -95,7 +96,7 @@ async function doExport(toDrive = false) {
           <button class="modal__x" @click="closeModal"><Icon name="close" :size="18" /></button>
 
           <header class="modal__head">
-            <img v-if="m.cover" :src="m.cover" class="modal__cover" :alt="m.name" />
+            <img v-if="m.cover" :src="imgProxy(m.cover)" class="modal__cover" :alt="m.name" />
             <div v-else class="modal__cover modal__cover--ph"><Icon name="library" :size="30" /></div>
             <div class="modal__info">
               <h2 class="modal__title">{{ m.name }}</h2>

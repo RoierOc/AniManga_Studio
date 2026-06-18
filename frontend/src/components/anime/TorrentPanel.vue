@@ -4,6 +4,7 @@ import { useAnimeStore } from '@/stores/anime'
 import { useUiStore } from '@/stores/ui'
 import { formatBytes } from '@/lib/format'
 import { animeFormatLabel } from '@/lib/anime'
+import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
@@ -49,7 +50,7 @@ const keyOf = (t) => t.info_hash || t.torrent_url
     </button>
 
     <header class="tp__head">
-      <img v-if="a.cover" :src="a.cover" class="tp__cover" :alt="a.title" />
+      <img v-if="a.cover" :src="imgProxy(a.cover)" class="tp__cover" :alt="a.title" />
       <div class="tp__meta">
         <span class="tp__fmt">{{ animeFormatLabel(a.format) }}</span>
         <h1 class="tp__title">{{ a.title }}</h1>

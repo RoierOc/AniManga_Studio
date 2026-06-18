@@ -49,7 +49,7 @@ export const useAnimeStore = defineStore('anime', {
     // management
     linkTorrent: { show: false, list: [], loading: false, subpath: '' },
     epOverrideMenu: null,      // { anime, ep, x, y }
-    coverPicker: null,         // { id, options, current } | null
+    coverPicker: null,         // { id, tab, tabs: { cover, banner_detail, banner } } | null — each tab is { options, current, loaded }
     coverPickerLoading: false,
     coverSaving: false,
 
@@ -397,24 +397,53 @@ export const useAnimeStore = defineStore('anime', {
       catch (_) { useUiStore().toast('No se pudo cambiar el tipo', 'error') }
     },
     async openCoverPicker(anime) {
-      this.coverPicker = { id: anime.id, options: [], current: anime.cover || '' }
+      this.coverPicker = {
+        id: anime.id,
+        tab: 'cover',
+        tabs: {
+          cover:         { options: [], current: anime.cover || '', loaded: false },
+          banner_detail: { options: [], current: anime.banner_detail || anime.banner || '', loaded: false },
+          banner:        { options: [], current: anime.banner || '', loaded: false },
+        },
+      }
+      await this.loadPickerTab('cover')
+    },
+    async switchPickerTab(tab) {
+      if (!this.coverPicker) return
+      this.coverPicker.tab = tab
+      await this.loadPickerTab(tab)
+    },
+    async loadPickerTab(tab) {
+      const p = this.coverPicker
+      if (!p || p.tabs[tab].loaded) return
       this.coverPickerLoading = true
       try {
-        const d = await api.get(`/api/anime/library/${anime.id}/cover_options`)
-        if (this.coverPicker?.id === anime.id) this.coverPicker.options = d.options || []
-      } catch (_) { useUiStore().toast('No se pudieron cargar las portadas', 'error') }
+        const url = tab === 'cover'
+          ? `/api/anime/library/${p.id}/cover_options`
+          : `/api/anime/library/${p.id}/backdrop_options?target=${tab}`
+        const d = await api.get(url)
+        if (this.coverPicker?.id === p.id) {
+          this.coverPicker.tabs[tab].options = d.options || []
+          if (d.current) this.coverPicker.tabs[tab].current = d.current
+          this.coverPicker.tabs[tab].loaded = true
+        }
+      } catch (_) { useUiStore().toast('No se pudieron cargar las imágenes', 'error') }
       finally { this.coverPickerLoading = false }
     },
     async pickCover(opt) {
       if (!this.coverPicker) return
-      const id = this.coverPicker.id
+      const { id, tab } = this.coverPicker
       this.coverSaving = true
       try {
-        await api.post(`/api/anime/library/${id}/cover`, { cover: opt.url, source: opt.source })
+        if (tab === 'cover') {
+          await api.post(`/api/anime/library/${id}/cover`, { cover: opt.url, source: opt.source })
+        } else {
+          await api.post(`/api/anime/library/${id}/backdrop`, { backdrop: opt.url, source: opt.source, target: tab })
+        }
         this.coverPicker = null
         await this.loadLibrary(true)
-        useUiStore().toast('Portada actualizada', 'ok')
-      } catch (_) { useUiStore().toast('No se pudo cambiar la portada', 'error') }
+        useUiStore().toast(tab === 'cover' ? 'Portada actualizada' : 'Fondo actualizado', 'ok')
+      } catch (_) { useUiStore().toast('No se pudo guardar el cambio', 'error') }
       finally { this.coverSaving = false }
     },
 

@@ -480,8 +480,10 @@ def _backfill_anime_metadata():
                     if m.get('seasonYear') and not v.get('season_year'): v['season_year'] = m['seasonYear']; changed = True
                     if m.get('description') and not v.get('synopsis'):
                         v['synopsis'] = _clean_synopsis(m['description']); changed = True
-                    # AniList banner is the default; never overwrite a TMDB one
-                    if m.get('bannerImage') and v.get('banner_source') != 'tmdb' and v.get('banner') != m['bannerImage']:
+                    # AniList banner is the default; never overwrite a TMDB one,
+                    # nor a banner the user manually pinned via the picker.
+                    if m.get('bannerImage') and v.get('banner_source') != 'tmdb' and v.get('banner') != m['bannerImage'] \
+                            and not v.get('banner_locked'):
                         v['banner'] = m['bannerImage']; v['banner_source'] = 'anilist'; changed = True
                 time.sleep(1.5)  # AniList degraded rate limit is ~30 req/min
             except Exception:
@@ -539,7 +541,7 @@ def _backfill_anime_metadata():
                     # title (season 1 / a non-serialized film) — a match that needed the
                     # sequel-suffix stripped means that backdrop is very likely the wrong
                     # season; keep AniList's own (season-specific) banner for those instead.
-                    if first_try and art.get('backdrop') and art.get('is_base_title'):
+                    if first_try and art.get('backdrop') and art.get('is_base_title') and not v.get('banner_locked'):
                         v['banner'] = art['backdrop']; v['banner_source'] = 'tmdb'
 
         # Persist periodically so partial progress survives interruptions/restarts.
@@ -1836,6 +1838,7 @@ def anime_library_get():
                 'cover_xl': anime.get('cover_xl', ''),
                 'banner': anime.get('banner', ''),
                 'banner_source': anime.get('banner_source', ''),
+                'banner_detail': anime.get('banner_detail', ''),
                 'logo': anime.get('logo', ''),
                 'synopsis': anime.get('synopsis', ''),
                 'genres': anime.get('genres', []),
@@ -1957,6 +1960,7 @@ def anime_library_get():
             'cover_xl': anime.get('cover_xl', ''),
             'banner': anime.get('banner', ''),
             'banner_source': anime.get('banner_source', ''),
+            'banner_detail': anime.get('banner_detail', ''),
             'logo': anime.get('logo', ''),
             'synopsis': anime.get('synopsis', ''),
             'genres': anime.get('genres', []),
@@ -2218,6 +2222,89 @@ def anime_set_cover(anime_id):
     lib[anime_id]['cover_locked'] = True
     _lib_write(lib)
     return jsonify({'ok': True, 'cover': url})
+
+
+_BACKDROP_TARGETS = {'banner', 'banner_detail'}
+
+
+def _backdrop_candidates(v: dict) -> list:
+    """Wide (horizontal) hero-art candidates for the manual background picker —
+    a separate pool from _cover_candidates because posters are vertical and
+    don't fit a wide hero frame well. AniList's bannerImage is re-fetched fresh
+    here (not read from v['banner'], which may already have been overwritten by
+    a TMDB backdrop) as the safe baseline; TMDB contributes every backdrop
+    uploaded for the matched id, not just the one _tmdb_art auto-picked.
+    Deduped by URL, each tagged with its source/label."""
+    out, seen = [], set()
+
+    def add(url, source, label):
+        if url and url not in seen:
+            seen.add(url)
+            out.append({'url': url, 'source': source, 'label': label})
+
+    al_id = v.get('al_id')
+    if al_id:
+        try:
+            r = _anilist_post('query($id:Int){Media(id:$id,type:ANIME){bannerImage}}', {'id': int(al_id)})
+            banner = ((r.json().get('data') or {}).get('Media') or {}).get('bannerImage') if r is not None else None
+            add(banner, 'anilist', 'AniList')
+        except Exception:
+            pass
+
+    tmdb_id, tmdb_type = v.get('tmdb_id'), v.get('tmdb_type', 'tv')
+    if tmdb_id and _TMDB_KEY:
+        try:
+            imgs = _http.get(f"https://api.themoviedb.org/3/{tmdb_type}/{tmdb_id}/images",
+                              params={'api_key': _TMDB_KEY, 'include_image_language': 'en,null'}, timeout=8).json()
+            backdrops = sorted(imgs.get('backdrops') or [], key=lambda b: -(b.get('vote_average') or 0))
+            for b in backdrops[:12]:
+                add(f"https://image.tmdb.org/t/p/w1280{b['file_path']}", 'tmdb', 'TMDB')
+        except Exception:
+            pass
+
+    return out
+
+
+@anime_bp.route('/library/<anime_id>/backdrop_options', methods=['GET'])
+def anime_backdrop_options(anime_id):
+    """Candidate wide background images (TMDB backdrops + AniList banner) for
+    the manual background picker. ?target=banner (Home hero, default) or
+    banner_detail (this series' own detail-page header) — they can be set
+    independently so the two contexts don't have to share one image."""
+    target = request.args.get('target', 'banner')
+    if target not in _BACKDROP_TARGETS:
+        return jsonify({'error': 'invalid target'}), 400
+    lib = _lib_read()
+    v = lib.get(anime_id)
+    if not v:
+        return jsonify({'error': 'not found'}), 404
+    current = v.get(target) or (v.get('banner') if target == 'banner_detail' else '')
+    return jsonify({'options': _backdrop_candidates(v), 'current': current})
+
+
+@anime_bp.route('/library/<anime_id>/backdrop', methods=['POST'])
+def anime_set_backdrop(anime_id):
+    """Manually pin a wide background. Body: {backdrop: url, source?: str,
+    target?: 'banner'|'banner_detail'}. Marks <target>_locked so the periodic
+    TMDB/AniList backfill never overwrites a choice the user made on purpose
+    (only applies to 'banner' — banner_detail is never touched by backfill)."""
+    data = request.get_json(silent=True) or {}
+    url = (data.get('backdrop') or '').strip()
+    target = data.get('target') or 'banner'
+    if not url:
+        return jsonify({'error': 'backdrop required'}), 400
+    if target not in _BACKDROP_TARGETS:
+        return jsonify({'error': 'invalid target'}), 400
+
+    lib = _lib_read()
+    if anime_id not in lib:
+        return jsonify({'error': 'not found'}), 404
+
+    lib[anime_id][target] = url
+    lib[anime_id][f'{target}_source'] = (data.get('source') or 'manual').strip()
+    lib[anime_id][f'{target}_locked'] = True
+    _lib_write(lib)
+    return jsonify({'ok': True, 'backdrop': url, 'target': target})
 
 
 @anime_bp.route('/library/<anime_id>/clear_episodes', methods=['POST'])

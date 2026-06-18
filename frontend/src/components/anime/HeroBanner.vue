@@ -3,6 +3,7 @@ import { ref, computed, onUnmounted, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { animeFormatLabel, SEASON_ES } from '@/lib/anime'
 import { relativeTime } from '@/lib/format'
+import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 
 const store = useAnimeStore()
@@ -17,7 +18,7 @@ const c = computed(() => items.value[active.value] || null)
 const bgIdx = ref(0)
 const bgTiers = computed(() => {
   const a = c.value?.anime
-  return a ? [a.banner, a.cover_xl, a.cover].filter(Boolean) : []
+  return a ? [a.banner, a.cover_xl, a.cover].filter(Boolean).map(imgProxy) : []
 })
 const bgUrl = computed(() => bgTiers.value[bgIdx.value] || '')
 const hasBanner = computed(() => bgIdx.value === 0 && !!c.value?.anime?.banner)

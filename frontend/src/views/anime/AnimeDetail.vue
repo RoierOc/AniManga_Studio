@@ -3,6 +3,7 @@ import { ref, computed, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { useUiStore } from '@/stores/ui'
 import { ANIME_STATUS, animeFormatLabel, batchInfo, fmtCountdown } from '@/lib/anime'
+import { imgProxy } from '@/lib/img'
 import EpisodeCard from '@/components/anime/EpisodeCard.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -11,15 +12,17 @@ const store = useAnimeStore()
 const anime = computed(() => store.detail)
 
 // Crunchyroll-style hero: TMDB backdrop → AniList banner → blurred cover as last resort.
-// If a tier fails to load (broken URL, blocked domain) heroIdx advances to the next one
-// instead of leaving the hero blank.
+// banner_detail (set via the picker's "Fondo de esta página" tab) overrides the
+// Home-hero banner just for this page, falling back to it when unset so existing
+// entries keep working unchanged. If a tier fails to load (broken URL, blocked
+// domain) heroIdx advances to the next one instead of leaving the hero blank.
 const heroIdx = ref(0)
 const heroTiers = computed(() => {
   const a = anime.value
-  return a ? [a.banner, a.cover_xl, a.cover].filter(Boolean) : []
+  return a ? [a.banner_detail || a.banner, a.cover_xl, a.cover].filter(Boolean).map(imgProxy) : []
 })
 const heroImg = computed(() => heroTiers.value[heroIdx.value] || '')
-const hasBanner = computed(() => heroIdx.value <= 1 && !!(anime.value?.banner || anime.value?.cover_xl))
+const hasBanner = computed(() => heroIdx.value <= 1 && !!((anime.value?.banner_detail || anime.value?.banner) || anime.value?.cover_xl))
 function onHeroError() { if (heroIdx.value < heroTiers.value.length - 1) heroIdx.value++ }
 
 // Falls back to the text title when no logo is cached, or the cached logo URL fails to load.
@@ -63,6 +66,13 @@ const recs = computed(() => store.recs[alId.value] || [])
 const tags = computed(() => store.tags[alId.value] || [])
 const stacks = computed(() => store.stacks[alId.value] || [])
 const malUrl = computed(() => store.malUrls[alId.value])
+
+const PICKER_TABS = [
+  { key: 'cover', label: 'Portada' },
+  { key: 'banner_detail', label: 'Fondo de esta página' },
+  { key: 'banner', label: 'Fondo en Inicio' },
+]
+const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 </script>
 
 <template>
@@ -81,11 +91,11 @@ const malUrl = computed(() => store.malUrls[alId.value])
       </div>
 
       <div class="dhero__inner stagger">
-        <img v-if="anime.cover && !posterFailed" class="dhero__poster" :src="anime.cover" :alt="anime.title" style="--i:0" @error="posterFailed = true" />
+        <img v-if="anime.cover && !posterFailed" class="dhero__poster" :src="imgProxy(anime.cover)" :alt="anime.title" style="--i:0" @error="posterFailed = true" />
 
         <div class="dhero__col" style="--i:1">
           <span class="dhero__fmt">{{ animeFormatLabel(anime.format) }}</span>
-          <img v-if="hasLogo" class="dhero__logo" :src="anime.logo" :alt="anime.title" @error="logoFailed = true" />
+          <img v-if="hasLogo" class="dhero__logo" :src="imgProxy(anime.logo)" :alt="anime.title" @error="logoFailed = true" />
           <h1 v-else class="dhero__title">{{ anime.title }}</h1>
 
           <div class="dhero__stats">
@@ -115,7 +125,7 @@ const malUrl = computed(() => store.malUrls[alId.value])
 
           <div class="dhero__mgmt">
             <button v-if="anime.al_id" class="mbtn mbtn--accent" @click="store.openTorrents(anime)" title="Buscar torrents">+ Torrents</button>
-            <button class="mbtn" @click="store.openCoverPicker(anime)" title="Cambiar portada">Cambiar portada</button>
+            <button class="mbtn" @click="store.openCoverPicker(anime)" title="Cambiar portada o fondo">Cambiar portada</button>
             <button class="mbtn" @click="store.openLinkTorrent()" title="Enlazar torrent de qBittorrent">Enlazar</button>
             <button class="mbtn" @click="store.clearEpisodes(anime)" title="Borrar episodios">Borrar eps</button>
             <button class="mbtn mbtn--danger" @click="store.removeFromLibrary(anime.id)" title="Eliminar serie">Eliminar</button>
@@ -176,7 +186,7 @@ const malUrl = computed(() => store.malUrls[alId.value])
       <div class="recgrid">
         <article v-for="r in recs" :key="r.al_id" class="rec" @click="store.openRec(r)">
           <div class="rec__poster">
-            <img v-if="r.cover" :src="r.cover" :alt="r.title" loading="lazy" />
+            <img v-if="r.cover" :src="imgProxy(r.cover)" :alt="r.title" loading="lazy" />
             <div class="rec__scrim" />
             <span v-if="r.score" class="rec__score">★ {{ (r.score / 10).toFixed(1) }}</span>
             <span v-if="store.isInLibrary(r)" class="rec__in"><Icon name="check" :size="10" /></span>
@@ -233,21 +243,25 @@ const malUrl = computed(() => store.malUrls[alId.value])
       </div>
     </Teleport>
 
-    <!-- Cover picker modal -->
+    <!-- Cover / background picker modal -->
     <Teleport to="body">
       <div v-if="store.coverPicker" class="ov" @click.self="store.coverPicker = null">
         <div class="bmodal bmodal--covers">
           <button class="bmodal__x" @click="store.coverPicker = null"><Icon name="close" :size="18" /></button>
-          <header class="bmodal__head"><h2>Cambiar portada</h2></header>
+          <header class="bmodal__head"><h2>Cambiar imagen</h2></header>
+          <div class="pickertabs">
+            <button v-for="t in PICKER_TABS" :key="t.key" class="pickertab" :class="{ 'is-on': store.coverPicker.tab === t.key }"
+                    @click="store.switchPickerTab(t.key)">{{ t.label }}</button>
+          </div>
           <div v-if="store.coverPickerLoading" class="center"><Spinner /></div>
-          <div v-else-if="!store.coverPicker.options.length" class="covers__empty">No se encontraron otras portadas</div>
-          <div v-else class="covergrid">
-            <button v-for="(o, i) in store.coverPicker.options" :key="i" class="coveropt"
-                    :class="{ 'is-current': o.url === store.coverPicker.current }"
+          <div v-else-if="!activeTab.options.length" class="covers__empty">No se encontraron imágenes</div>
+          <div v-else class="covergrid" :class="{ 'covergrid--wide': store.coverPicker.tab !== 'cover' }">
+            <button v-for="(o, i) in activeTab.options" :key="i" class="coveropt"
+                    :class="{ 'is-current': o.url === activeTab.current }"
                     :disabled="store.coverSaving" @click="store.pickCover(o)">
               <img :src="o.url" :alt="o.label" loading="lazy" />
               <span class="coveropt__label">{{ o.label }}</span>
-              <span v-if="o.url === store.coverPicker.current" class="coveropt__current"><Icon name="check" :size="12" /></span>
+              <span v-if="o.url === activeTab.current" class="coveropt__current"><Icon name="check" :size="12" /></span>
             </button>
           </div>
         </div>
@@ -371,16 +385,23 @@ const malUrl = computed(() => store.malUrls[alId.value])
 .ctx button { text-align: left; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink-soft); }
 .ctx button:hover { background: var(--surface-2); color: var(--ink); }
 
-/* cover picker */
+/* cover / background picker */
 .bmodal--covers { width: min(56.25rem, 100%); }
+.pickertabs { display: flex; gap: var(--s-2); margin-bottom: var(--s-4); flex-wrap: wrap; }
+.pickertab { padding: var(--s-2) var(--s-4); border-radius: var(--r-pill); font-size: var(--fs-sm); color: var(--ink-soft);
+  border: 1px solid var(--line); background: var(--surface-2); transition: all var(--t-fast); }
+.pickertab:hover { color: var(--ink); border-color: var(--line-strong); }
+.pickertab.is-on { color: #fff; background: var(--azure); border-color: transparent; }
 .covers__empty { color: var(--ink-faint); font-size: var(--fs-sm); text-align: center; padding: var(--s-7); }
 .covergrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.75rem, 1fr)); gap: var(--s-4); }
+.covergrid--wide { grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); }
 .coveropt { position: relative; display: flex; flex-direction: column; gap: var(--s-2); border-radius: var(--r-md); overflow: hidden;
   border: 2px solid var(--line); background: var(--surface-2); transition: all var(--t-fast); text-align: left; }
 .coveropt:hover { border-color: var(--azure-glow); transform: translateY(-3px); }
 .coveropt.is-current { border-color: var(--azure); }
 .coveropt:disabled { opacity: .6; pointer-events: none; }
 .coveropt img { width: 100%; aspect-ratio: 2/3; object-fit: cover; background: var(--base); }
+.covergrid--wide .coveropt img { aspect-ratio: 16/9; }
 .coveropt__label { padding: 0 var(--s-2) var(--s-2); font-size: var(--fs-2xs); color: var(--ink-faint); }
 .coveropt__current { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; background: var(--azure); color: #fff; }
 
