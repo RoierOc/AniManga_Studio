@@ -21,6 +21,16 @@ export function chapterSortKey(ch) {
   return isNaN(n) ? Infinity : n
 }
 
+// Reading-status enum, mirrors lib/anime.js's ANIME_STATUS.
+export const MANGA_STATUS = {
+  reading:      { label: 'Leyendo',    color: 'var(--jade)' },
+  completed:    { label: 'Completado', color: 'var(--azure-bright)' },
+  plan_to_read: { label: 'Por leer',   color: 'var(--violet)' },
+  on_hold:      { label: 'En pausa',   color: 'var(--gold)' },
+  dropped:      { label: 'Abandonado', color: 'var(--coral)' },
+}
+export const MANGA_STATUS_ORDER = ['reading', 'plan_to_read', 'on_hold', 'completed', 'dropped']
+
 // Page URL served by Flask (/uploads prefers upscaled, falls back to original).
 // Absolute paths (CBZ pages, remote URLs) pass through unchanged.
 export const pageUrl = (p) => (/^(https?:)?\/\//.test(p) || p.startsWith('/')) ? p : `/uploads/${p}`

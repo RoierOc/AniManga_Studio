@@ -163,17 +163,19 @@ def serve_sw():
 def serve_static(filename):
     return send_from_directory(app.static_folder, filename)
 
+_PAGE_MAX_AGE = 7 * 24 * 3600  # chapter pages are immutable once downloaded/upscaled
+
 @app.route('/uploads/original/<path:filename>')
 def serve_upload_original(filename):
     """Always serve from MANGA_DIR (used by compare mode to show unscaled page)."""
     path = Path(MANGA_DIR) / filename
     if path.exists():
-        return send_from_directory(str(path.parent), path.name)
+        return send_from_directory(str(path.parent), path.name, max_age=_PAGE_MAX_AGE)
     # Upscaled pages are always .jpg; originals may be .png or .webp — try alternatives
     for ext in ('.png', '.webp', '.jpg', '.jpeg'):
         alt = path.with_suffix(ext)
         if alt != path and alt.exists():
-            return send_from_directory(str(alt.parent), alt.name)
+            return send_from_directory(str(alt.parent), alt.name, max_age=_PAGE_MAX_AGE)
     return 'Not found', 404
 
 @app.route('/uploads/upscaled/<path:filename>')
@@ -181,14 +183,14 @@ def serve_upload_upscaled(filename):
     """Always serve from UPSCALED_DIR (used by compare mode to show upscaled page)."""
     path = Path(UPSCALED_DIR) / filename
     if path.exists():
-        return send_from_directory(str(path.parent), path.name)
+        return send_from_directory(str(path.parent), path.name, max_age=_PAGE_MAX_AGE)
     # The requested extension may differ from the file on disk (upscaled output is
     # usually .jpg, but originals/pages can be .png/.webp) — try alternatives so the
     # compare slider always resolves the right upscaled page.
     for ext in ('.jpg', '.png', '.webp', '.jpeg'):
         alt = path.with_suffix(ext)
         if alt != path and alt.exists():
-            return send_from_directory(str(alt.parent), alt.name)
+            return send_from_directory(str(alt.parent), alt.name, max_age=_PAGE_MAX_AGE)
     return 'Not found', 404
 
 @app.route('/uploads/<path:filename>')
@@ -197,7 +199,7 @@ def serve_upload(filename):
     for d in [UPSCALED_DIR, MANGA_DIR]:
         path = Path(d) / filename
         if path.exists():
-            return send_from_directory(str(path.parent), path.name)
+            return send_from_directory(str(path.parent), path.name, max_age=_PAGE_MAX_AGE)
 
     parts = filename.split('/')
     if len(parts) >= 2:
@@ -208,7 +210,7 @@ def serve_upload(filename):
             if search_path.is_dir():
                 full_path = search_path / filename_only
                 if full_path.exists():
-                    return send_from_directory(str(search_path), filename_only)
+                    return send_from_directory(str(search_path), filename_only, max_age=_PAGE_MAX_AGE)
 
     return 'Not found', 404
 

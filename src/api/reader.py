@@ -5,7 +5,9 @@ Reader API - Read manga chapters
 
 from flask import Blueprint, jsonify, request, send_from_directory
 from pathlib import Path
+import json
 import random
+import time
 from decimal import Decimal, InvalidOperation
 
 from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter
@@ -23,6 +25,61 @@ def _chapter_prefix(chapter):
         return f"ch{chapter_norm}_"
 
 reader_bp = Blueprint('reader', __name__)
+
+# ── Reading history ──────────────────────────────────────────────────────
+
+def _history_path():
+    return Path(MANGA_DIR) / 'reading_history.json'
+
+def _history_read():
+    try:
+        if _history_path().exists():
+            return json.loads(_history_path().read_text(encoding='utf-8'))
+    except Exception:
+        pass
+    return []
+
+def _history_write(history):
+    try:
+        _history_path().write_text(
+            json.dumps(history[:500], ensure_ascii=False, indent=2), encoding='utf-8'
+        )
+    except Exception:
+        pass
+
+@reader_bp.route('/history')
+def get_history():
+    return jsonify(_history_read())
+
+@reader_bp.route('/history/record', methods=['POST'])
+def record_history():
+    """Record a finished chapter (called by the frontend when a chapter is marked
+    read). kind/chapter_ref let the frontend re-resolve online (MangaDex/source)
+    chapters that have no local folder when the user wants to continue reading."""
+    data = request.get_json() or {}
+    title = data.get('title')
+    chapter = data.get('chapter')
+    if not title or chapter is None:
+        return jsonify({'error': 'title and chapter required'}), 400
+
+    history = _history_read()
+    history = [h for h in history if not (h.get('title') == title and str(h.get('chapter')) == str(chapter))]
+    history.insert(0, {
+        'title': title,
+        'chapter': chapter,
+        'cover': data.get('cover', ''),
+        'source': data.get('source', 'local'),
+        'kind': data.get('kind', 'local'),
+        'chapter_ref': data.get('chapter_ref'),
+        'read_at': int(time.time()),
+    })
+    _history_write(history)
+    return jsonify({'success': True})
+
+@reader_bp.route('/history/clear', methods=['POST'])
+def clear_history():
+    _history_write([])
+    return jsonify({'success': True})
 
 @reader_bp.route('/read_chapter', methods=['POST'])
 def read_chapter():

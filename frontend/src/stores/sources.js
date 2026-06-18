@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { useUiStore } from './ui'
+import { useMangaStore } from './manga'
 
 export const useSourcesStore = defineStore('sources', {
   state: () => ({
@@ -26,6 +27,7 @@ export const useSourcesStore = defineStore('sources', {
     chapters: [],
     detailLoading: false,
     downloading: {},
+    reading: {},
 
     // Track which manga (by sourceId + mangaId) are already in the library
     libraryIds: [],
@@ -208,6 +210,11 @@ export const useSourcesStore = defineStore('sources', {
         })
         const key = `${d.sourceId}_${d.id}`
         if (!this.libraryIds.includes(key)) this.libraryIds.push(key)
+        // Also register a status-bearing tracked entry, so it shows up with a
+        // reading status in Biblioteca even without anything downloaded yet.
+        api.post('/api/mangadex/local_library/add', {
+          manga: { id: `src_${key}`, kind: 'source', title: d.title, cover: d.thumbnailUrl || null, source_id: d.sourceId, manga_id: d.id },
+        }).catch(() => {})
         ui.toast('Añadido a biblioteca', 'ok')
       } catch (e) {
         ui.toast('No se pudo añadir', 'error')
@@ -215,6 +222,18 @@ export const useSourcesStore = defineStore('sources', {
     },
 
     closeDetail() { this.detail = null },
+
+    async readChapter(ch) {
+      const ui = useUiStore()
+      this.reading[ch.id] = true
+      try {
+        const pg = await api.get(`/api/sources/chapter/${ch.id}/pages`)
+        const pageUrls = pg.pages || []
+        if (!pageUrls.length) { ui.toast('Capítulo sin páginas', 'error'); return }
+        useMangaStore().openOnlineReader(this.detail.title, ch.chapterNumber || ch.name, pageUrls, this.detail.sourceName, { kind: 'source', chapterRef: ch.id }, this.detail.thumbnailUrl || '')
+      } catch (_) { ui.toast('No se pudo abrir el capítulo', 'error') }
+      finally { delete this.reading[ch.id] }
+    },
 
     async downloadChapter(ch) {
       const ui = useUiStore()

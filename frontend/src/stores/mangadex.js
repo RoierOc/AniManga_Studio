@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { useUiStore } from './ui'
+import { useMangaStore } from './manga'
 
 const ALL_RATINGS = ['safe', 'suggestive', 'erotica']
 
@@ -25,6 +26,7 @@ export const useMangadexStore = defineStore('mangadex', {
     chapters: [],
     detailLoading: false,
     detailLang: '',             // language filter in detail
+    reading: {},                // chapter id -> true while "Leer" is resolving pages
 
     followed: [],               // mangadex /library
     followedLoaded: false,
@@ -153,6 +155,18 @@ export const useMangadexStore = defineStore('mangadex', {
         })
         useUiStore().toast(`Descargando cap. ${ch.chapter}`, 'info')
       } catch (_) { useUiStore().toast('No se pudo iniciar la descarga', 'error') }
+    },
+
+    async readChapter(ch) {
+      const ui = useUiStore()
+      this.reading[ch.id] = true
+      try {
+        const pg = await api.get(`/api/mangadex/chapter/${ch.id}/pages`)
+        const pageUrls = pg.pages || []
+        if (!pageUrls.length) { ui.toast('Capítulo sin páginas', 'error'); return }
+        useMangaStore().openOnlineReader(this.detail.title, ch.chapter, pageUrls, 'MangaDex', { kind: 'mangadex', chapterRef: ch.id }, this.detail.cover || '')
+      } catch (_) { ui.toast('No se pudo abrir el capítulo', 'error') }
+      finally { delete this.reading[ch.id] }
     },
 
     async addLocal(m) {

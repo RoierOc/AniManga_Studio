@@ -3,7 +3,9 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
+import { MANGA_STATUS, MANGA_STATUS_ORDER } from '@/lib/manga'
 import MangaCard from '@/components/manga/MangaCard.vue'
+import HistoryPanel from '@/components/manga/HistoryPanel.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -15,6 +17,8 @@ const loading = ref(true)
 const error = ref(false)
 const search = ref('')
 const filter = ref('all')
+const statusFilter = ref('all')
+const showHistory = ref(false)
 
 const FILTERS = computed(() => [
   { id: 'all', label: 'Todo' },
@@ -23,12 +27,19 @@ const FILTERS = computed(() => [
   { id: 'updates', label: 'Novedades', count: manga.updates.length },
 ])
 
+const statusCounts = computed(() => {
+  const c = { all: items.value.length }
+  for (const k of MANGA_STATUS_ORDER) c[k] = items.value.filter(m => m.status === k).length
+  return c
+})
+
 const filtered = computed(() => {
   let list = items.value
   if (manga.pendingDelete.length) list = list.filter(m => !manga.pendingDelete.includes(m.id))
   if (filter.value === 'upscaled') list = list.filter(m => (m.upscaled || 0) > 0)
   if (filter.value === 'downloaded') list = list.filter(m => !(m.upscaled || 0))
   if (filter.value === 'updates') list = list.filter(m => manga.updatesByTitle[m.name])
+  if (statusFilter.value !== 'all') list = list.filter(m => m.status === statusFilter.value)
   const q = search.value.trim().toLowerCase()
   if (q) list = list.filter(m => (m.name || '').toLowerCase().includes(q))
   return list
@@ -49,26 +60,49 @@ async function load() {
       api.get('/api/library'),
       api.get('/api/mangadex/local_library').catch(() => []),
     ])
-    // Build a name→md lookup from local_library.json
-    const mdByName = {}
-    for (const m of (mdLib || [])) {
-      const key = (m.title || m.name || '').toLowerCase().trim()
-      if (key) mdByName[key] = m
+    // Generic tracked-manga lookups (local_library.json): by id (MangaDex uuid, src_*
+    // composite, or sanitized local title) and by title (legacy fallback match).
+    const trackedById = {}
+    const trackedByName = {}
+    for (const t of (mdLib || [])) {
+      trackedById[t.id] = t
+      const key = (t.title || '').toLowerCase().trim()
+      if (key) trackedByName[key] = t
     }
-    // Merge local manga with MD entries
+    const matchedIds = new Set()
+    // Merge local (disk-scanned) manga with their tracked status, if any
     const seen = new Set()
     const merged = []
     for (const m of (local || [])) {
       seen.add((m.name || '').toLowerCase().trim())
-      const mdKey = (m.name || '').toLowerCase().trim()
-      merged.push({ ...m, mdId: mdByName[mdKey]?.id })
+      const sm = m.source_meta
+      let tracked = (sm?.sourceId && sm?.mangaId) ? trackedById[`src_${sm.sourceId}_${sm.mangaId}`] : null
+      if (!tracked) tracked = trackedById[m.id]
+      if (!tracked) tracked = trackedByName[(m.name || '').toLowerCase().trim()]
+      if (tracked) matchedIds.add(tracked.id)
+      const kind = tracked?.kind || 'mangadex'
+      merged.push({
+        ...m,
+        mdId: tracked && kind === 'mangadex' ? tracked.id : null,
+        trackedId: tracked?.id || null,
+        status: tracked?.status || '',
+      })
     }
-    // Add MD-only entries (saved but not downloaded)
-    for (const m of (mdLib || [])) {
-      const key = (m.title || '').toLowerCase().trim()
-      if (key && !seen.has(key)) {
-        merged.push({ id: m.title, name: m.title, chapter_count: 0, upscaled: 0, cover: m.cover || null, mdId: m.id, mdOnly: true })
-      }
+    // Add tracked-only entries (added to "Mi Biblioteca" but nothing downloaded yet)
+    for (const t of (mdLib || [])) {
+      const key = (t.title || '').toLowerCase().trim()
+      if (!key || seen.has(key) || matchedIds.has(t.id)) continue
+      seen.add(key)
+      const kind = t.kind || 'mangadex'
+      const sourceMeta = kind === 'source' && t.source_id && t.manga_id
+        ? { sourceId: t.source_id, mangaId: t.manga_id, sourceName: t.source_name || '', sourceLang: t.source_lang || '' }
+        : null
+      merged.push({
+        id: t.title, name: t.title, chapter_count: 0, upscaled: 0, cover: t.cover || null,
+        mdId: kind === 'mangadex' ? t.id : null,
+        trackedId: t.id, trackedOnly: true, status: t.status || '',
+        source_meta: sourceMeta,
+      })
     }
     items.value = merged
   } catch (e) {
@@ -129,8 +163,20 @@ watch(() => manga.libraryDirty, () => load())
                 @click="filter = f.id" v-show="f.id !== 'updates' || f.count">
           {{ f.label }}<span v-if="f.count" class="pill__n">{{ f.count }}</span>
         </button>
+        <span class="filters__sep" />
+        <button class="pill" :class="{ 'is-active': statusFilter === 'all' }" @click="statusFilter = 'all'">
+          Todo estado
+        </button>
+        <button v-for="k in MANGA_STATUS_ORDER" :key="k" v-show="statusCounts[k]" class="pill"
+                :class="{ 'is-active': statusFilter === k }" @click="statusFilter = k"
+                :style="statusFilter === k ? { color: MANGA_STATUS[k].color, borderColor: MANGA_STATUS[k].color } : {}">
+          {{ MANGA_STATUS[k].label }} <span class="pill__n">{{ statusCounts[k] }}</span>
+        </button>
       </div>
       <div class="tb-right" style="--i:2">
+        <button class="covbtn" @click="showHistory = true" title="Historial de lectura">
+          <Icon name="clock" :size="14" /> Historial
+        </button>
         <button class="covbtn" :disabled="findingCovers" @click="findCovers" title="Buscar portadas faltantes en MangaDex">
           <span v-if="findingCovers" class="covspin" /><Icon v-else name="spark" :size="14" /> Portadas
         </button>
@@ -164,6 +210,8 @@ watch(() => manga.libraryDirty, () => load())
     <div v-else class="grid">
       <MangaCard v-for="m in filtered" :key="m.id" :manga="m" :updates="manga.updatesByTitle[m.name]?.new_count || 0" @click="manga.open(m)" />
     </div>
+
+    <HistoryPanel :open="showHistory" @close="showHistory = false" />
   </div>
 </template>
 
@@ -197,7 +245,8 @@ watch(() => manga.libraryDirty, () => load())
   flex-wrap: wrap; gap: var(--s-3);
   margin-bottom: var(--s-6);
 }
-.filters { display: flex; gap: var(--s-2); }
+.filters { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center; }
+.filters__sep { width: 1px; height: 1.2rem; background: var(--line); margin: 0 var(--s-1); }
 .pill {
   padding: var(--s-2) var(--s-4);
   border-radius: var(--r-pill);

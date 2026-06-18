@@ -36,6 +36,11 @@ def get_sse_events_since(seq: int) -> list:
         return [e for e in _sse_deque if e["seq"] > seq]
 
 
+def get_current_seq() -> int:
+    with _sse_lock:
+        return _sse_seq
+
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _PROJECT_BASE = Path("/Manga_Upscaler_project")
 DEFAULT_MANGA_DIR = _PROJECT_BASE / "MangaLibrary"

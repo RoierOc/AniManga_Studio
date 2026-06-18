@@ -26,7 +26,12 @@ let preloaded = new Set()
 function preloadNeighbors() {
   if (!store.pages.length) return
   const step = store.spreadActive ? 2 : 1
-  for (const i of [store.page + step, store.page + step + 1, store.page - step]) {
+  // Remote (online/MangaDex/source) pages have higher per-request latency than
+  // local /uploads — read further ahead so the network has a head start.
+  const ahead = store.reader?.source === 'online' ? 3 : 2
+  const offsets = [store.page - step]
+  for (let n = 1; n <= ahead; n++) offsets.push(store.page + step * n)
+  for (const i of offsets) {
     if (i < 0 || i >= store.pages.length) continue
     const u = pageUrl(store.pages[i])
     if (preloaded.has(u)) continue
@@ -200,11 +205,11 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
           <div v-else-if="store.spreadActive && store.spreadPair.length === 2" :key="'sp' + store.page"
                class="rd__spread rd__fade" :class="[`fit-${store.fit}`, { 'is-rtl': isRTL }]" :style="{ transform }"
                @click.stop.prevent="pageClick">
-            <img :src="pageUrl(store.pages[store.spreadPair[0]])" class="rd__simg" draggable="false" :alt="`Página ${store.spreadPair[0] + 1}`" />
-            <img :src="pageUrl(store.pages[store.spreadPair[1]])" class="rd__simg" draggable="false" :alt="`Página ${store.spreadPair[1] + 1}`" />
+            <img :src="pageUrl(store.pages[store.spreadPair[0]])" class="rd__simg" draggable="false" decoding="async" fetchpriority="high" :alt="`Página ${store.spreadPair[0] + 1}`" />
+            <img :src="pageUrl(store.pages[store.spreadPair[1]])" class="rd__simg" draggable="false" decoding="async" fetchpriority="high" :alt="`Página ${store.spreadPair[1] + 1}`" />
           </div>
           <!-- single page -->
-          <img v-else :key="'pg' + store.page" :src="pageUrl(store.pages[store.page])" class="rd__img rd__fade" :class="`fit-${store.fit}`" :style="{ transform }" draggable="false" :alt="`Página ${store.page + 1}`"
+          <img v-else :key="'pg' + store.page" :src="pageUrl(store.pages[store.page])" class="rd__img rd__fade" :class="`fit-${store.fit}`" :style="{ transform }" draggable="false" decoding="async" fetchpriority="high" :alt="`Página ${store.page + 1}`"
                @click.stop.prevent="pageClick" />
 
           <div class="rd__counter" :class="{ 'is-hidden': store.barsHidden }">{{ counterLabel }}</div>
@@ -212,7 +217,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 
         <!-- Webtoon -->
         <div v-else class="rd__webtoon" @scroll="onScroll">
-          <img v-for="(p, i) in store.pages" :key="i" :src="pageUrl(p)" loading="lazy" class="rd__wimg" :style="{ maxWidth: store.fit === 'width' ? '900px' : 'none', transform: `scale(${store.zoom})` }" :alt="`Página ${i + 1}`" />
+          <img v-for="(p, i) in store.pages" :key="i" :src="pageUrl(p)" loading="lazy" decoding="async" class="rd__wimg" :style="{ maxWidth: store.fit === 'width' ? '900px' : 'none', transform: `scale(${store.zoom})` }" :alt="`Página ${i + 1}`" />
         </div>
 
         <!-- Bottom bar (paged) -->

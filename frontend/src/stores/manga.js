@@ -67,6 +67,7 @@ export const useMangaStore = defineStore('manga', {
     pages: [],
     page: 0,
     readerLoading: false,
+    onlineLoadingId: null,    // chapter id currently resolving pages for "Leer" (online), for button spinners
     mode: localStorage.getItem('reader-mode') || 'paged',   // paged | webtoon
     fit: localStorage.getItem('reader-fit') || 'width',     // width | height | original
     dir: localStorage.getItem('reader-dir') || 'rtl',       // rtl | ltr
@@ -86,6 +87,10 @@ export const useMangaStore = defineStore('manga', {
     // chapter updates (followed manga with new chapters on MangaDex)
     updates: [],                // [{manga_id, title, cover, new_count, new_chapters}]
     updatesLoaded: false,
+
+    // reading history (server-persisted, recorded when a chapter is marked read)
+    history: [],
+    historyLoaded: false,
 
     // chapter health + color pages + offline covers
     health: {},                 // chapterNorm -> { status, missing_upscaled, missing_pages }
@@ -264,7 +269,11 @@ export const useMangaStore = defineStore('manga', {
     },
 
     async open(manga, opts = {}) {
-      this.current = { id: manga.id || manga.name, name: manga.name, cover: manga.cover, source_meta: manga.source_meta, mdOnly: !!manga.mdOnly }
+      this.current = {
+        id: manga.id || manga.name, name: manga.name, cover: manga.cover, source_meta: manga.source_meta,
+        mdOnly: !!manga.mdOnly, trackedOnly: !!manga.trackedOnly,
+        trackedId: manga.trackedId || manga.mdId || null, status: manga.status || '',
+      }
       this.chapters = []
       this.sourceChapters = []
       this.mdChapters = []
@@ -276,27 +285,27 @@ export const useMangaStore = defineStore('manga', {
       // Skip when we're re-opening *because of* a back/forward (fromHistory).
       if (!opts.fromHistory) useUiStore().pushNav()
       try {
-        // Load local chapters if downloaded (skip for MD-only entries)
-        if (!manga.mdOnly) {
+        // Load local chapters if downloaded (skip for tracked-but-not-downloaded entries)
+        if (!manga.mdOnly && !manga.trackedOnly) {
           const d = await api.get(`/api/library/${encodeURIComponent(this.current.id)}`)
           this.chapters = d.chapters || []
           this.upscaled = d.upscaled || {}
           if (d.source_meta) this.current.source_meta = d.source_meta
-          // If source_meta exists, load source chapters
-          const sm = this.current.source_meta
-          if (sm?.sourceId && sm?.mangaId) {
-            this.sourceLoading = true
-            api.get(`/api/sources/manga/${sm.mangaId}/chapters`)
-              .then(chs => {
-                this.sourceChapters = (chs || []).map(ch => ({
-                  ...ch,
-                  chapterNorm: String(ch.chapterNumber ?? '').replace(/\.0$/, ''),
-                  name: ch.name || `Cap. ${ch.chapterNumber ?? '?'}`,
-                }))
-              })
-              .catch(() => {})
-              .finally(() => { this.sourceLoading = false })
-          }
+        }
+        // If source_meta exists (downloaded, or tracked from Fuentes pre-download), load source chapters
+        const sm = this.current.source_meta
+        if (sm?.sourceId && sm?.mangaId) {
+          this.sourceLoading = true
+          api.get(`/api/sources/manga/${sm.mangaId}/chapters`)
+            .then(chs => {
+              this.sourceChapters = (chs || []).map(ch => ({
+                ...ch,
+                chapterNorm: String(ch.chapterNumber ?? '').replace(/\.0$/, ''),
+                name: ch.name || `Cap. ${ch.chapterNumber ?? '?'}`,
+              }))
+            })
+            .catch(() => {})
+            .finally(() => { this.sourceLoading = false })
         }
         // If mdId exists, load MangaDex chapters
         if (this.mdId) {
@@ -356,6 +365,23 @@ export const useMangaStore = defineStore('manga', {
       } catch (_) { ui.toast('No se pudo iniciar la descarga', 'error'); delete this.dlTasks[chKey] }
     },
 
+    // manga.trackedId is the local_library.json key (MangaDex uuid / src_* composite /
+    // sanitized title), set when the open()'d entry already came from a tracked match.
+    // A purely-local folder with no tracked entry yet gets one created on first use.
+    async setStatus(manga, status) {
+      const prev = manga.status
+      manga.status = status
+      try {
+        let key = manga.trackedId
+        if (!key) {
+          key = manga.id
+          await api.post('/api/mangadex/local_library/add', { manga: { id: key, title: manga.name || manga.title, cover: manga.cover, kind: 'local' } })
+          manga.trackedId = key
+        }
+        await api.post('/api/mangadex/local_library/status', { manga_id: key, status })
+        this.libraryDirty++
+      } catch (_) { manga.status = prev; useUiStore().toast('No se pudo cambiar el estado', 'error') }
+    },
     async _refreshUpscaled() {
       try {
         const d = await api.get(`/api/library/${encodeURIComponent(this.current.id)}`)
@@ -752,18 +778,22 @@ export const useMangaStore = defineStore('manga', {
       finally { this.readerLoading = false }
     },
 
-    async read(chapter, source = 'auto') {
+    // titleOverride/coverOverride let continueHistory() jump straight into the
+    // reader for a local chapter without first opening the manga modal (which
+    // would otherwise need to reload chapters/cover just to populate `current`).
+    async read(chapter, source = 'auto', titleOverride = null, coverOverride = null) {
+      const title = titleOverride || this.current.id
       this.readerLoading = true
       this._resetView()
-      this.reader = { title: this.current.id, chapter, source, kind: 'manga' }
+      this.reader = { title, chapter, source, kind: 'manga', cover: coverOverride || this.current?.cover || '' }
       this.pages = []
       this.page = 0
       try {
-        const d = await api.post('/api/reader/read_chapter', { title: this.current.id, chapter, source })
+        const d = await api.post('/api/reader/read_chapter', { title, chapter, source })
         this.pages = d.pages || []
         if (this.reader) this.reader.source = d.source
         // restore last-read page for this chapter
-        const pr = this.progress[this.current.id]
+        const pr = this.progress[title]
         if (pr && String(pr.lastChapter) === String(chapter) && pr.lastPage > 0 && pr.lastPage < this.pages.length)
           this.page = pr.lastPage
       } catch (_) { useUiStore().toast('No se pudo abrir el capítulo', 'error'); this.reader = null }
@@ -774,6 +804,39 @@ export const useMangaStore = defineStore('manga', {
       this.reader = { title, chapter: label, source: '', kind: 'cbz' }
       this.pages = pages
       this.page = 0
+    },
+    // Open a chapter read straight from remote page URLs (no disk round-trip).
+    // kind:'manga' (not 'cbz') so spread/webtoon mode, progress tracking and
+    // markRead keep working exactly like a locally-read chapter. `meta` records
+    // {kind, chapterRef} so a finished online chapter can be re-resolved later
+    // from the reading-history panel (the at-home page URLs themselves are single-use).
+    openOnlineReader(title, chapter, pages, label = '', meta = null, cover = '') {
+      this._resetView()
+      this.reader = { title, chapter, source: 'online', kind: 'manga', sourceLabel: label, onlineMeta: meta, cover: cover || this.current?.cover || '' }
+      this.pages = pages
+      this.page = 0
+      const pr = this.progress[title]
+      if (pr && String(pr.lastChapter) === String(chapter) && pr.lastPage > 0 && pr.lastPage < this.pages.length)
+        this.page = pr.lastPage
+    },
+    // Read a not-yet-downloaded chapter (MangaModal) directly from its source, online.
+    async readOnline(ch) {
+      const ui = useUiStore()
+      this.onlineLoadingId = ch._sourceId || ch._mdChapterId
+      try {
+        let pages = []
+        if (ch._sourceId) {
+          const pg = await api.get(`/api/sources/chapter/${ch._sourceId}/pages`)
+          pages = pg.pages || []
+        } else if (ch._mdChapterId) {
+          const pg = await api.get(`/api/mangadex/chapter/${ch._mdChapterId}/pages`)
+          pages = pg.pages || []
+        }
+        if (!pages.length) { ui.toast('Capítulo sin páginas', 'error'); return }
+        const meta = ch._sourceId ? { kind: 'source', chapterRef: ch._sourceId } : { kind: 'mangadex', chapterRef: ch._mdChapterId }
+        this.openOnlineReader(this.current.id, ch.chapter, pages, '', meta, this.current?.cover || '')
+      } catch (_) { ui.toast('No se pudo abrir el capítulo', 'error') }
+      finally { this.onlineLoadingId = null }
     },
     closeReader() { this.reader = null; this.pages = []; this._resetView() },
 
@@ -831,6 +894,7 @@ export const useMangaStore = defineStore('manga', {
       const e = this.progress[k] || (this.progress[k] = { read: {} })
       ;(e.read ||= {})[String(chapter)] = true
       this._persistProgress()
+      this._recordHistory(chapter)
     },
     isChapterRead(chapter) { return !!this.progress[this.current?.id]?.read?.[String(chapter)] },
     toggleChapterRead(chapter) {
@@ -839,6 +903,51 @@ export const useMangaStore = defineStore('manga', {
       e.read ||= {}
       if (e.read[String(chapter)]) delete e.read[String(chapter)]; else e.read[String(chapter)] = true
       this._persistProgress()
+    },
+
+    /* ── Reading history ──────────────────────────────────────────────── */
+    async _recordHistory(chapter) {
+      const r = this.reader
+      if (!r) return
+      const meta = r.onlineMeta
+      try {
+        await api.post('/api/reader/history/record', {
+          title: r.title, chapter,
+          cover: r.cover || this.current?.cover || '',
+          source: r.source || 'local',
+          kind: meta?.kind || 'local',
+          chapter_ref: meta?.chapterRef ?? null,
+        })
+        this.historyLoaded = false
+      } catch (_) {}
+    },
+    async loadHistory() {
+      try { this.history = await api.get('/api/reader/history') || [] }
+      catch (_) { this.history = [] }
+      finally { this.historyLoaded = true }
+    },
+    async clearHistory() {
+      try { await api.post('/api/reader/history/clear', {}); this.history = [] }
+      catch (_) { useUiStore().toast('No se pudo limpiar el historial', 'error') }
+    },
+    // Continue reading from a history entry: 'local' reopens via the normal disk
+    // path, 'mangadex'/'source' re-resolves fresh page URLs (the originals are
+    // single-use) and opens the reader directly without needing the manga modal.
+    async continueHistory(entry) {
+      const ui = useUiStore()
+      try {
+        if (entry.kind === 'local') {
+          await this.read(entry.chapter, 'auto', entry.title, entry.cover)
+        } else {
+          const route = entry.kind === 'source'
+            ? `/api/sources/chapter/${entry.chapter_ref}/pages`
+            : `/api/mangadex/chapter/${entry.chapter_ref}/pages`
+          const pg = await api.get(route)
+          const pages = pg.pages || []
+          if (!pages.length) { ui.toast('Capítulo sin páginas', 'error'); return }
+          this.openOnlineReader(entry.title, entry.chapter, pages, '', { kind: entry.kind, chapterRef: entry.chapter_ref }, entry.cover)
+        }
+      } catch (_) { ui.toast('No se pudo continuar la lectura', 'error') }
     },
   },
 })

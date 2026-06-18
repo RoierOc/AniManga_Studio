@@ -7,13 +7,21 @@
    - Each entry in `events[]` (watched/position/download_complete/…) → onSSE(type) subscribers. */
 
 let source = null
+// Highest event seq seen so far. null = no event seen yet (first-ever connect
+// this page load) — in that case we deliberately do NOT send `since`, so the
+// backend skips its 500-event backlog instead of replaying old events (e.g. a
+// stale 'watched' from a previous episode, which would re-open the autoplay
+// countdown after the user already dismissed it). On a *reconnect* we always
+// have a lastSeq, so we resume from exactly there — no gaps, no replays.
+let lastSeq = null
 const evListeners = new Map()   // event type -> Set<fn>
 const statusListeners = new Set()
 
 function ensure() {
   if (source) return
   try {
-    source = new EventSource('/api/status/stream')
+    const url = lastSeq != null ? `/api/status/stream?since=${lastSeq}` : '/api/status/stream'
+    source = new EventSource(url)
     source.onmessage = (e) => {
       let data
       try { data = JSON.parse(e.data) } catch { return }
@@ -25,6 +33,7 @@ function ensure() {
       // Event bus
       if (Array.isArray(data.events)) {
         for (const ev of data.events) {
+          if (ev.seq > lastSeq) lastSeq = ev.seq
           const set = evListeners.get(ev.type)
           if (set) set.forEach(fn => { try { fn(ev) } catch (_) {} })
         }

@@ -6,7 +6,7 @@ Status API - Get download/upscale status + SSE stream.
 import json
 import time
 
-from flask import Blueprint, Response, jsonify, stream_with_context
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 status_bp = Blueprint('status', __name__)
 
@@ -28,11 +28,19 @@ def _all_status():
 
 @status_bp.route('/stream')
 def stream_status():
-    """Server-Sent Events stream — pushes aggregated status + event bus every 500 ms."""
-    from api.runtime import get_sse_events_since
+    """Server-Sent Events stream — pushes aggregated status + event bus every 500 ms.
+
+    `?since=<seq>` lets a reconnecting client resume exactly where it left off
+    instead of replaying the whole 500-event ring buffer. A *fresh* connection
+    (no `since`) starts from the current seq — it must NOT replay old events
+    like a stale 'watched' from a previous episode, which would re-open the
+    autoplay countdown after the user already dismissed it."""
+    from api.runtime import get_sse_events_since, get_current_seq
+
+    since = request.args.get('since', type=int)
 
     def generate():
-        last_seq = 0
+        last_seq = since if since is not None else get_current_seq()
         while True:
             try:
                 payload = _all_status()

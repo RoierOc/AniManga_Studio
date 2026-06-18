@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useMangaStore } from '@/stores/manga'
-import { formatChapter } from '@/lib/manga'
+import { formatChapter, MANGA_STATUS } from '@/lib/manga'
 import { useUiStore } from '@/stores/ui'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -106,6 +106,12 @@ async function doExport(toDrive = false) {
               <a v-if="store.mdId" :href="'https://mangadex.org/title/' + store.mdId" target="_blank" rel="noopener" class="mdlink" title="Ver en MangaDex">
                 <Icon name="globe" :size="13" /> MangaDex
               </a>
+              <select class="modal__status" :value="m.status || ''"
+                      :style="{ color: MANGA_STATUS[m.status]?.color || 'var(--ink-faint)' }"
+                      @change="store.setStatus(m, $event.target.value)">
+                <option value="">Sin estado</option>
+                <option v-for="(v, k) in MANGA_STATUS" :key="k" :value="k">{{ v.label }}</option>
+              </select>
               <div class="modal__legend">
                 <span><span class="lg lg--4k" /> 4K</span>
                 <span><span class="lg lg--part" /> parcial</span>
@@ -285,10 +291,16 @@ async function doExport(toDrive = false) {
                         <span class="chap__dlprog-n" v-if="store.downloadByChapter[c.chapter].total">{{ store.downloadByChapter[c.chapter].pct }}%</span>
                       </div>
                     </template>
-                    <button v-else class="chap__dlbtn"
-                      @click="c._sourceId ? store.downloadSourceChapter(c) : store.downloadMdChapter(c)">
-                      <Icon name="download" :size="14" /> Descargar
-                    </button>
+                    <template v-else>
+                      <button class="chap__dlbtn chap__dlbtn--ghost"
+                        :disabled="store.onlineLoadingId === (c._sourceId || c._mdChapterId)" @click="store.readOnline(c)">
+                        <Spinner v-if="store.onlineLoadingId === (c._sourceId || c._mdChapterId)" :size="13" /><Icon v-else name="library" :size="14" /> Leer
+                      </button>
+                      <button class="chap__dlbtn"
+                        @click="c._sourceId ? store.downloadSourceChapter(c) : store.downloadMdChapter(c)">
+                        <Icon name="download" :size="14" /> Descargar
+                      </button>
+                    </template>
                   </template>
                   <!-- running upscale -->
                   <template v-else>
@@ -352,6 +364,9 @@ async function doExport(toDrive = false) {
 .modal__sub { color: var(--ink-faint); font-size: var(--fs-sm); margin-top: var(--s-1); }
 .mdlink { display: inline-flex; align-items: center; gap: 5px; margin-top: var(--s-2); font-size: var(--fs-xs); font-weight: 500; color: var(--violet); text-decoration: none; padding: 4px 10px; border-radius: var(--r-sm); border: 1px solid color-mix(in srgb, var(--violet) 25%, transparent); transition: all var(--t-fast); }
 .mdlink:hover { background: color-mix(in srgb, var(--violet) 10%, transparent); border-color: var(--violet); }
+.modal__status { margin-top: var(--s-2); margin-left: var(--s-2); padding: 4px 10px; border-radius: var(--r-sm);
+  background: var(--surface); border: 1px solid var(--line-2); font-size: var(--fs-xs); font-weight: 600; cursor: pointer; }
+.modal__status:focus { outline: none; border-color: var(--azure); }
 .modal__legend { display: flex; gap: var(--s-3); margin-top: var(--s-3); font-size: var(--fs-2xs); color: var(--ink-faint); }
 .modal__legend span { display: inline-flex; align-items: center; gap: 5px; }
 .lg { width: 8px; height: 8px; border-radius: 2px; }
@@ -507,6 +522,8 @@ async function doExport(toDrive = false) {
 .chap__dlbtn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); background: transparent; transition: all var(--t-fast); }
 .chap__dlbtn:hover:not(:disabled) { background: var(--azure-haze); color: #fff; }
 .chap__dlbtn:disabled { opacity: .5; cursor: not-allowed; }
+.chap__dlbtn--ghost { color: var(--ink-soft); border-color: var(--line-2); }
+.chap__dlbtn--ghost:hover:not(:disabled) { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 .chap__srcmeta { font-size: var(--fs-2xs); color: var(--ink-ghost); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chap__dlprog { display: inline-flex; align-items: center; gap: var(--s-2); padding: 4px 10px; border-radius: var(--r-sm); background: var(--azure-haze); border: 1px solid var(--azure); }
 .chap__dlprog-n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--azure-bright); min-width: 28px; }

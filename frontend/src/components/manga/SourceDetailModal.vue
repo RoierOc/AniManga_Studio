@@ -51,7 +51,12 @@ const genres = computed(() => {
                   <span class="chap__sub">{{ ch.scanlator || '' }}<template v-if="ch.pageCount && ch.pageCount > 0"> · {{ ch.pageCount }} pág.</template></span>
                 </div>
                 <div v-if="store.downloading[ch.id]" class="chap__prog"><Spinner :size="13" /></div>
-                <button v-else class="chap__dl" @click="store.downloadChapter(ch)"><Icon name="download" :size="14" /> Descargar</button>
+                <template v-else>
+                  <button class="chap__dl chap__dl--ghost" :disabled="store.reading[ch.id]" @click="store.readChapter(ch)">
+                    <Spinner v-if="store.reading[ch.id]" :size="13" /><Icon v-else name="library" :size="14" /> Leer
+                  </button>
+                  <button class="chap__dl" @click="store.downloadChapter(ch)"><Icon name="download" :size="14" /> Descargar</button>
+                </template>
               </li>
             </ul>
           </div>
@@ -95,6 +100,8 @@ const genres = computed(() => {
 .chap__sub { font-size: var(--fs-2xs); color: var(--ink-faint); }
 .chap__dl { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); flex-shrink: 0; }
 .chap__dl:hover { color: #fff; background: var(--azure); border-color: transparent; }
+.chap__dl--ghost { color: var(--azure-bright); border-color: var(--azure); background: transparent; }
+.chap__dl--ghost:hover { background: var(--azure-haze); color: var(--azure-bright); }
 .chap__prog { flex-shrink: 0; }
 .modal-enter-active, .modal-leave-active { transition: opacity var(--t-base); }
 .modal-enter-active .modal { transition: transform var(--t-base) var(--ease-snap); }

@@ -101,6 +101,7 @@ export const useUiStore = defineStore('ui', {
       if (_applying) return
       try { history.pushState(this.snapshot(), '') } catch {}
       this.persist()
+      window.scrollTo({ top: 0 })
     },
     // Replace the current entry in place (state changed but it's not a new "page").
     replaceNav() {

@@ -627,6 +627,9 @@ def toggle_favorite(manga_id):
     save_local_library(lib)
     return jsonify({"success": True, "library": lib})
 
+MANGA_STATUS_ALLOWED = {'reading', 'completed', 'plan_to_read', 'on_hold', 'dropped', ''}
+
+
 @auth_bp.route('/local_library/status', methods=['POST'])
 def update_reading_status():
     """Update manga reading status"""
@@ -634,11 +637,14 @@ def update_reading_status():
     manga_id = data.get("manga_id")
     status = data.get("status")
     last_chapter = data.get("last_chapter")
-    
+
+    if status is not None and status not in MANGA_STATUS_ALLOWED:
+        return jsonify({"error": "Invalid status"}), 400
+
     lib = load_local_library()
     for m in lib:
         if m.get("id") == manga_id:
-            if status:
+            if status is not None:
                 m["status"] = status
             if last_chapter:
                 m["last_chapter"] = last_chapter
@@ -646,6 +652,24 @@ def update_reading_status():
             break
     save_local_library(lib)
     return jsonify({"success": True, "library": lib})
+
+
+@auth_bp.route('/chapter/<chapter_id>/pages')
+def chapter_pages(chapter_id):
+    """Resolve a MangaDex chapter's page image URLs for direct reading (no download).
+    Always fetches at-home/server fresh — the baseUrl is single-use, never cached."""
+    try:
+        r = _SESSION.get(f"https://api.mangadex.org/at-home/server/{chapter_id}", timeout=15)
+        data = r.json()
+        if data.get("result") != "ok":
+            return jsonify({"error": "Capítulo no disponible"}), 404
+        base = data["baseUrl"]
+        hash_val = data["chapter"]["hash"]
+        pages = data["chapter"].get("data", [])
+        urls = [f"{base}/data/{hash_val}/{p}" for p in pages]
+        return jsonify({"pages": urls, "count": len(urls)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @auth_bp.route('/local_library/update', methods=['POST'])
 def update_manga_data():
