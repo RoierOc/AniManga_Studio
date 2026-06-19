@@ -25,8 +25,10 @@ env/
 # Backup files
 *.bak
 
-# Suwayomi runtime data (extensions, database, downloads)
-suwayomi/data/
+# Suwayomi runtime data (extensions, database, downloads) — no trailing slash
+# so this also matches when it's a symlink to a dir (machine-local convenience),
+# not just a real directory.
+suwayomi/data
 suwayomi/*.jar
 
 # User data (downloaded/upscaled manga) — defaults under the repo, see runtime.py
