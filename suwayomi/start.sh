@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Start Suwayomi-Server in headless mode alongside the Flask app
 
-JAR="/Manga_Upscaler_project/suwayomi/Suwayomi-Server.jar"
-CONF="/Manga_Upscaler_project/workspace/manga-upscaler/suwayomi/server.conf"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+JAR="${SUWAYOMI_JAR:-$SCRIPT_DIR/Suwayomi-Server.jar}"
+CONF="$SCRIPT_DIR/server.conf"
+DATA_DIR="${SUWAYOMI_DATA_DIR:-$SCRIPT_DIR/data}"
 LOG="/tmp/suwayomi.log"
 PID_FILE="/tmp/suwayomi.pid"
 
@@ -28,16 +30,32 @@ fi
 # PID file obsoleto (proceso muerto) → limpiarlo para no confundir.
 rm -f "$PID_FILE"
 
-mkdir -p /Manga_Upscaler_project/suwayomi/data
+mkdir -p "$DATA_DIR"
 
-java -Xmx512m \
-  -Dsuwayomi.tachidesk.config.server.rootDir="/Manga_Upscaler_project/suwayomi/data" \
-  -Dsuwayomi.tachidesk.config.server.ip="0.0.0.0" \
-  -Dsuwayomi.tachidesk.config.server.port="4567" \
-  -Dsuwayomi.tachidesk.config.server.systemTrayEnabled="false" \
-  -Dsuwayomi.tachidesk.config.server.initialOpenInBrowserEnabled="false" \
-  -jar "$JAR" \
-  > "$LOG" 2>&1 &
+JAVA_ARGS=(-Xmx512m
+  -Dsuwayomi.tachidesk.config.server.rootDir="$DATA_DIR"
+  -Dsuwayomi.tachidesk.config.server.ip="0.0.0.0"
+  -Dsuwayomi.tachidesk.config.server.port="4567"
+  -Dsuwayomi.tachidesk.config.server.systemTrayEnabled="false"
+  -Dsuwayomi.tachidesk.config.server.initialOpenInBrowserEnabled="false"
+  -jar "$JAR")
+
+# Suwayomi 2.x bundles an embedded Chromium (KCEF WebView, used to solve
+# Cloudflare-protected sources) that initializes eagerly on startup and needs
+# a real X display on Linux — without one it hangs forever ("Missing X server
+# or $DISPLAY") and the HTTP server never binds :4567. xvfb-run gives it a
+# fake headless display. Only needed on Linux/WSL with no real $DISPLAY;
+# macOS and any environment with a real X session run java directly.
+if [[ "$(uname -s)" == "Linux" && -z "${DISPLAY:-}" ]]; then
+  if command -v xvfb-run >/dev/null 2>&1; then
+    xvfb-run -a java "${JAVA_ARGS[@]}" > "$LOG" 2>&1 &
+  else
+    echo "AVISO: xvfb-run no instalado — Suwayomi puede colgarse al iniciar KCEF sin \$DISPLAY (instala xvfb)." >&2
+    java "${JAVA_ARGS[@]}" > "$LOG" 2>&1 &
+  fi
+else
+  java "${JAVA_ARGS[@]}" > "$LOG" 2>&1 &
+fi
 
 echo $! > "$PID_FILE"
 echo "Suwayomi started — PID $(cat "$PID_FILE") | logs: $LOG"

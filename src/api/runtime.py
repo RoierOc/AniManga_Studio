@@ -42,51 +42,22 @@ def get_current_seq() -> int:
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_PROJECT_BASE = Path("/Manga_Upscaler_project")
-DEFAULT_MANGA_DIR = _PROJECT_BASE / "MangaLibrary"
-DEFAULT_UPSCALED_DIR = _PROJECT_BASE / "MangaLibrary_Upscaled"
 
-MANGA_DIR = Path(os.environ.get("MANGA_DIR", str(DEFAULT_MANGA_DIR))).expanduser()
-UPSCALED_DIR = Path(os.environ.get("UPSCALED_DIR", str(DEFAULT_UPSCALED_DIR))).expanduser()
+# All user data (downloaded/upscaled manga) defaults under the repo itself so a
+# fresh clone works with zero configuration. Override via env vars to point
+# at any other location (e.g. a bigger disk) exactly like before.
+# `or` (not a plain dict .get default) so a blank value in .env.example-derived
+# .env files — MANGA_DIR= with nothing after it — falls through to the default
+# instead of resolving to Path("") (cwd).
+DATA_ROOT = Path(os.environ.get("DATA_ROOT") or str(PROJECT_ROOT / "data")).expanduser()
+MANGA_DIR = Path(os.environ.get("MANGA_DIR") or str(DATA_ROOT / "MangaLibrary")).expanduser()
+UPSCALED_DIR = Path(os.environ.get("UPSCALED_DIR") or str(DATA_ROOT / "MangaLibrary_Upscaled")).expanduser()
 
-DEFAULT_MODELS_DIR = PROJECT_ROOT.parent / "MangaJaNai" / "models"
-MODEL_PATH_2X = Path(
-    os.environ.get(
-        "MODEL_PATH_2X",
-        str(DEFAULT_MODELS_DIR / "2x_IllustrationJaNai_V2standard_FDAT_M_unshuffle_40k.safetensors"),
-    )
-).expanduser()
-MODEL_PATH_4X = Path(
-    os.environ.get(
-        "MODEL_PATH_4X",
-        str(DEFAULT_MODELS_DIR / "4x_IllustrationJaNai_V2standard_FDAT_M_52k.safetensors"),
-    )
-).expanduser()
-MODEL_PATH_EULA_4X = Path(
-    os.environ.get(
-        "MODEL_PATH_EULA_4X",
-        "/Manga_Upscaler_project/MODELS/4x-eula-digimanga-bw-v2-nc1.pth",
-    )
-).expanduser()
-
-MODEL_PATH_DWTP_4X = Path(
-    os.environ.get(
-        "MODEL_PATH_DWTP_4X",
-        "/Manga_Upscaler_project/MODELS/4x-DWTP-ds-esrgan-5.pth",
-    )
-).expanduser()
-
-_MANGAJANAI_DIR = Path("/Manga_Upscaler_project/MODEL_TEST/models")
-MODEL_PATH_MANGAJANAI_1200 = Path(
-    os.environ.get("MODEL_PATH_MANGAJANAI_1200",
-                   str(_MANGAJANAI_DIR / "4x_MangaJaNai_1200p_V1_ESRGAN_70k.pth"))
-)
-MODEL_PATH_MANGAJANAI_1400 = Path(
-    os.environ.get("MODEL_PATH_MANGAJANAI_1400",
-                   str(_MANGAJANAI_DIR / "4x_MangaJaNai_1400p_V1_ESRGAN_105k.pth"))
-)
-# Height threshold: pages shorter than this use 1200p model, taller use 1400p
-MANGAJANAI_HEIGHT_THRESHOLD = int(os.environ.get("MANGAJANAI_HEIGHT_THRESHOLD", "1290"))
+# Upscale model weights live here by default (gitignored — see docs/MODELS.md
+# for download links and the registry.json format that makes them pluggable).
+# Per-model height thresholds for adaptive registries live in registry.json
+# itself (each sub-model's "height_max"), not here.
+MODELS_DIR = Path(os.environ.get("MODELS_DIR") or str(PROJECT_ROOT / "models")).expanduser()
 
 PYTHON_EXECUTABLE = os.environ.get("PYTHON_EXECUTABLE", sys.executable)
 

@@ -39,6 +39,47 @@ def _ext_for(content_type, url):
     return '.jpg' if ext == '.jpe' else ext
 
 
+def _fetch_and_cache(url):
+    """Download `url` into the disk cache if it isn't there yet. Returns the
+    cached file path, or None on failure. Shared by the /api/img route (cold
+    request from the browser) and warm() (proactive fill from the metadata
+    backfill thread, so the detail page's first paint never has to wait on a
+    live TMDB-art -> CDN round trip)."""
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    key = hashlib.sha256(url.encode()).hexdigest()
+    existing = next(_CACHE_DIR.glob(f'{key}.*'), None)
+    if existing and existing.stat().st_size > 0:
+        return existing
+
+    try:
+        r = requests.get(url, timeout=_TIMEOUT, stream=True)
+        r.raise_for_status()
+    except Exception:
+        return None
+
+    dest = _CACHE_DIR / f'{key}{_ext_for(r.headers.get("Content-Type"), url)}'
+    tmp = dest.with_suffix(dest.suffix + '.part')
+    with open(tmp, 'wb') as f:
+        for chunk in r.iter_content(65536):
+            f.write(chunk)
+    tmp.replace(dest)
+    return dest
+
+
+def warm(url):
+    """Best-effort proactive cache fill, called from anime.py's metadata
+    backfill once a banner/logo/cover URL is resolved. Silently no-ops for
+    falsy URLs or hosts outside the allowlist — never warms an arbitrary URL."""
+    if not url:
+        return
+    try:
+        if urlparse(url).netloc.lower() not in _ALLOWED_HOSTS:
+            return
+        _fetch_and_cache(url)
+    except Exception:
+        pass
+
+
 @imgproxy_bp.route('')
 def proxy():
     url = request.args.get('u', '')
@@ -48,23 +89,8 @@ def proxy():
     if parsed.netloc.lower() not in _ALLOWED_HOSTS:
         return ('', 404)
 
-    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    key = hashlib.sha256(url.encode()).hexdigest()
-    existing = next(_CACHE_DIR.glob(f'{key}.*'), None)
-    if existing and existing.stat().st_size > 0:
-        return send_file(str(existing), max_age=_MAX_AGE, conditional=True)
-
-    try:
-        r = requests.get(url, timeout=_TIMEOUT, stream=True)
-        r.raise_for_status()
-    except Exception:
-        # Don't break the <img> over a cache miss — fall back to the original CDN.
+    dest = _fetch_and_cache(url)
+    if dest is None:
+        # Don't break the <img> over a fetch failure — fall back to the original CDN.
         return redirect(url, code=302)
-
-    dest = _CACHE_DIR / f'{key}{_ext_for(r.headers.get("Content-Type"), url)}'
-    tmp = dest.with_suffix(dest.suffix + '.part')
-    with open(tmp, 'wb') as f:
-        for chunk in r.iter_content(65536):
-            f.write(chunk)
-    tmp.replace(dest)
     return send_file(str(dest), max_age=_MAX_AGE, conditional=True)

@@ -1,0 +1,27 @@
+# Core web server
+Flask==3.1.3
+Flask-Compress==1.24
+waitress==3.0.2
+
+# AI upscaling — see docs/MODELS.md for weights ("pon tu modelo")
+# torch/torchvision: install from PyTorch's CUDA index, NOT plain PyPI —
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+# (pick the cuXXX matching your installed CUDA toolkit; see docs/INSTALL.md)
+torch==2.11.0
+torchvision==0.26.0
+spandrel==0.4.2
+numpy==2.4.3
+pillow==12.1.1
+mozjpeg-lossless-optimization==1.3.2
+
+# HTTP / scraping
+requests==2.33.1
+playwright==1.58.0
+
+# Subtitle sync/translation (Anime Studio)
+ffsubsync==0.4.32
+
+# Google Drive export + Gemini subtitle translation fallback
+google-auth-oauthlib==1.3.1
+google-api-python-client==2.194.0
+google-genai==2.4.0

@@ -27,6 +27,10 @@ env/
 
 # Suwayomi runtime data (extensions, database, downloads)
 suwayomi/data/
+suwayomi/*.jar
+
+# User data (downloaded/upscaled manga) — defaults under the repo, see runtime.py
+data/
 
 # Large binary files not belonging to the app
 *.onnx
@@ -41,6 +45,10 @@ google_credentials.json
 # MPV screenshot artifacts
 src/mpv-shot*.jpg
 mpv-shot*.jpg
+
+# Telemetry / dev-only artifacts
+gpu_log.jsonl
+.mcp.json
 
 # Local configuration and public repository metadata.
 /.*/

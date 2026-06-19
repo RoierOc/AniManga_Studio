@@ -8,12 +8,24 @@ CBR/RAR: bsdtar subprocess
 from flask import Blueprint, jsonify, request, Response
 from pathlib import Path
 from urllib.parse import quote
+import os
 import zipfile
 import subprocess
 
+from api.platform import first_windows_user_dir
+
 cbz_bp = Blueprint("cbz", __name__)
 
-DOCS_MANGA_DIR = Path("/mnt/c/Users/Example/Documents/Mangas")
+
+def _default_docs_manga_dir() -> Path:
+    """Documents/Mangas under the first real Windows user (WSL), else ~/Documents/Mangas."""
+    user = first_windows_user_dir()
+    if user:
+        return user / "Documents" / "Mangas"
+    return Path.home() / "Documents" / "Mangas"
+
+
+DOCS_MANGA_DIR = Path(os.environ.get("CBZ_LIBRARY_DIR", str(_default_docs_manga_dir())))
 
 _ARCHIVE_EXTS = {'.cbz', '.cbr', '.zip', '.rar'}
 _IMAGE_EXTS   = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif'}

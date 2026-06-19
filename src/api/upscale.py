@@ -17,10 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from api.runtime import (
     MANGA_DIR,
     UPSCALED_DIR,
-    MODEL_PATH_EULA_4X,
-    MODEL_PATH_MANGAJANAI_1200,
-    MODEL_PATH_MANGAJANAI_1400,
-    MANGAJANAI_HEIGHT_THRESHOLD,
+    MODELS_DIR,
     build_task_id,
     normalize_chapter,
 )
@@ -53,27 +50,49 @@ def _persist_upscale_status():
 
 
 upscale_status: dict = _load_upscale_status()
-UPSCALE_SCALE = 4
 
-# ── Model registry ────────────────────────────────────────────────────────────
-# Each entry: label, list of (sub_key, path) pairs.
-# Adaptive models have multiple entries; a page's height selects the sub_key.
-MODEL_REGISTRY = {
+# ── Model registry ("bring your own model") ────────────────────────────────────
+# Data-driven: read from MODELS_DIR/registry.json so adding a new spandrel-
+# compatible model is "drop the file in models/ + add a JSON entry", no code
+# changes. Each entry: label, list of {sub_key, file, height_max?} dicts.
+# Adaptive models have multiple entries; a page's height selects the sub_key
+# (see _get_sub_key). `file` resolves relative to MODELS_DIR unless absolute.
+_FALLBACK_REGISTRY = {
     'eula': {
         'label': 'eula-digimanga (B&W)',
-        'models': [('eula', MODEL_PATH_EULA_4X)],
+        'models': [{'sub_key': 'eula', 'file': '4x-eula-digimanga-bw-v2-nc1.pth'}],
         'adaptive': False,
     },
-    'mangajanai': {
-        'label': 'MangaJaNai V1 (B&W adaptativo)',
-        'models': [
-            ('mj_1200', MODEL_PATH_MANGAJANAI_1200),
-            ('mj_1400', MODEL_PATH_MANGAJANAI_1400),
-        ],
-        'adaptive': True,  # sub_key chosen per page by height
-    },
 }
-_active_model_key = ['eula']   # mutable — changed via /api/upscale/set_model
+
+
+def _load_model_registry() -> dict:
+    registry_path = MODELS_DIR / 'registry.json'
+    try:
+        raw = json.loads(registry_path.read_text(encoding='utf-8'))
+    except Exception:
+        print(f"upscale: {registry_path} no encontrado o inválido — usando registro por defecto. "
+              f"Ver docs/MODELS.md.", flush=True)
+        raw = _FALLBACK_REGISTRY
+
+    registry = {}
+    for key, cfg in raw.items():
+        models = []
+        for m in cfg.get('models', []):
+            path = Path(m['file'])
+            if not path.is_absolute():
+                path = MODELS_DIR / m['file']
+            models.append({**m, 'file': str(path)})
+        registry[key] = {
+            'label': cfg.get('label', key),
+            'models': models,
+            'adaptive': cfg.get('adaptive', False),
+        }
+    return registry
+
+
+MODEL_REGISTRY = _load_model_registry()
+_active_model_key = ['eula' if 'eula' in MODEL_REGISTRY else next(iter(MODEL_REGISTRY), 'eula')]
 
 COLOR_DIFF_THRESHOLD = int(os.environ.get("COLOR_DIFF_THRESHOLD", "15"))
 COLOR_PIXEL_FRACTION = float(os.environ.get("COLOR_PIXEL_FRACTION", "0.10"))
@@ -152,6 +171,7 @@ _gpu_worker_lock = threading.Lock()
 _gpu_worker_ready = threading.Event()
 _gpu_worker_error: list = [None]
 _gpu_in_channels: list = [1]   # updated by worker on startup
+_gpu_scale: list = [4]         # updated by worker on startup from the model's own spandrel descriptor
 
 
 def _gpu_worker_loop():
@@ -184,18 +204,25 @@ def _gpu_worker_loop():
         cfg = MODEL_REGISTRY[active_key]
         loaded_models = {}
         primary_in_channels = 1
+        primary_scale = 4
 
-        for sub_key, path in cfg['models']:
+        for entry in cfg['models']:
+            sub_key, path = entry['sub_key'], entry['file']
             if not Path(path).exists():
-                raise FileNotFoundError(f"Modelo no encontrado: {path}")
+                raise FileNotFoundError(
+                    f"Modelo no encontrado: {path} — colócalo ahí o ajusta "
+                    f"models/registry.json (ver docs/MODELS.md)"
+                )
             print(f"GPU worker: cargando {Path(path).name}...", flush=True)
             desc = ModelLoader().load_from_file(str(path))
             m = desc.model.cuda().eval().half().to(memory_format=torch.channels_last)
             m.forward = torch.compile(m.forward, mode='default', fullgraph=False)
             loaded_models[sub_key] = m
             primary_in_channels = getattr(desc, 'input_channels', 1)
+            primary_scale = getattr(desc, 'scale', 4)
 
         _gpu_in_channels[0] = primary_in_channels
+        _gpu_scale[0] = primary_scale
 
         # Warmup — varios pasos para que torch.compile termine de compilar kernels
         first_model = next(iter(loaded_models.values()))
@@ -331,23 +358,34 @@ def _submit_tile(tile_tensor, sub_key='eula'):
 
 
 def _get_sub_key(img_height: int) -> str:
-    """Return the correct sub_key for the active model given a page height."""
+    """Return the correct sub_key for the active model given a page height.
+    Adaptive models pick among their sub-models by `height_max` (ascending);
+    the one entry without a height_max is the catch-all for anything taller —
+    this works for any registry.json adaptive set, not just MangaJaNai's."""
     key = _active_model_key[0]
-    cfg = MODEL_REGISTRY.get(key, MODEL_REGISTRY['eula'])
-    if not cfg['adaptive']:
-        return cfg['models'][0][0]
-    # adaptive: pick sub_key by height threshold
-    return 'mj_1200' if img_height < MANGAJANAI_HEIGHT_THRESHOLD else 'mj_1400'
+    cfg = MODEL_REGISTRY.get(key, next(iter(MODEL_REGISTRY.values())))
+    models = cfg['models']
+    if not cfg.get('adaptive') or len(models) == 1:
+        return models[0]['sub_key']
+    bounded = sorted((m for m in models if m.get('height_max')), key=lambda m: m['height_max'])
+    for m in bounded:
+        if img_height < m['height_max']:
+            return m['sub_key']
+    catch_all = next((m for m in models if not m.get('height_max')), None)
+    return (catch_all or models[-1])['sub_key']
 
 
 # ── Tiled upscale ────────────────────────────────────────────────────────────
 
-def _upscale_tiled(img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=UPSCALE_SCALE, sub_key='eula'):
+def _upscale_tiled(img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVERLAP, scale=None, sub_key='eula'):
     """Upscale img_pil via the shared GPU worker queue.
     Phase 1: submit ALL tiles at once (non-blocking) so the worker can fill full batches.
     Phase 2: collect results and reconstruct the image."""
     import torch
     from PIL import Image
+
+    if scale is None:
+        scale = _gpu_scale[0]   # whatever scale the currently-loaded model actually reports
 
     if in_channels == 1:
         img_np = np.asarray(img_pil.convert('L'), dtype=np.float32) / 255.0
@@ -616,7 +654,7 @@ def set_model():
         return jsonify({'status': 'error', 'message': f'Modelo desconocido: {key}'}), 400
 
     cfg = MODEL_REGISTRY[key]
-    missing = [str(p) for _, p in cfg['models'] if not Path(p).exists()]
+    missing = [m['file'] for m in cfg['models'] if not Path(m['file']).exists()]
     if missing:
         return jsonify({'status': 'error', 'message': 'Archivos de modelo no encontrados', 'missing': missing}), 404
 
@@ -678,7 +716,7 @@ def upscale_chapter():
             return jsonify({'status': 'error', 'message': 'title required'}), 400
 
         cfg = MODEL_REGISTRY.get(_active_model_key[0], MODEL_REGISTRY['eula'])
-        missing = [str(p) for _, p in cfg['models'] if not Path(p).exists()]
+        missing = [m['file'] for m in cfg['models'] if not Path(m['file']).exists()]
         if missing:
             return jsonify({
                 'status': 'error',
@@ -747,7 +785,7 @@ def upscale_chapter():
             'title': actual_folder,
             'chapter': chapter_norm,
             'model': MODEL_REGISTRY[_active_model_key[0]]['label'],
-            'scale': UPSCALE_SCALE // 2 if fast_mode else UPSCALE_SCALE,
+            'scale': _gpu_scale[0] // 2 if fast_mode else _gpu_scale[0],
             'skipped_existing': skipped_already,
             'fast': fast_mode,
         })
@@ -820,7 +858,7 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
         skipped_color = 0
         total = len(images)
         save_futures = []
-        effective_scale = UPSCALE_SCALE // 2 if fast else UPSCALE_SCALE
+        effective_scale = _gpu_scale[0] // 2 if fast else _gpu_scale[0]
         _page_times = []
 
         for img_path in images:
@@ -897,7 +935,7 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                 'percent': 100,
                 'skipped_color': skipped_color,
                 'model': MODEL_REGISTRY[_active_model_key[0]]['label'],
-                'scale': UPSCALE_SCALE,
+                'scale': _gpu_scale[0],
             })
         else:
             set_upscale_status(upscale_id, {
@@ -933,7 +971,7 @@ def run_upscale_all(input_folder, output_folder, images, upscale_id):
                     'progress': processed,
                     'total': len(images),
                     'model': MODEL_REGISTRY[_active_model_key[0]]['label'],
-                    'scale': UPSCALE_SCALE,
+                    'scale': _gpu_scale[0],
                 })
 
                 img = Image.open(img_path)
@@ -962,7 +1000,7 @@ def run_upscale_all(input_folder, output_folder, images, upscale_id):
             'progress': processed,
             'total': len(images),
             'model': MODEL_REGISTRY[_active_model_key[0]]['label'],
-            'scale': UPSCALE_SCALE,
+            'scale': _gpu_scale[0],
         })
 
     except Exception as e:

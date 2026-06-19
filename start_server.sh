@@ -23,8 +23,8 @@ else
     PYTHON_BIN="python"
 fi
 
-export MANGA_DIR="/Manga_Upscaler_project/MangaLibrary"
-export UPSCALED_DIR="/Manga_Upscaler_project/MangaLibrary_Upscaled"
+# MANGA_DIR/UPSCALED_DIR/MODELS_DIR default to data/ and models/ under the repo
+# (see src/api/runtime.py) — override in .env if your data lives elsewhere.
 
 # Load secrets from .env (if it exists) without polluting the shell
 if [[ -f "$SCRIPT_DIR/.env" ]]; then
@@ -33,6 +33,22 @@ if [[ -f "$SCRIPT_DIR/.env" ]]; then
     source "$SCRIPT_DIR/.env"
     set +a
 fi
+
+# ── Preflight: warn (don't fail) about missing external tools ────────────────
+# Each one only breaks a specific feature, not the whole app — see docs/INSTALL.md.
+_missing=()
+for bin in ffmpeg ffprobe mkvmerge java; do
+    command -v "$bin" >/dev/null 2>&1 || _missing+=("$bin")
+done
+if [[ ! -x "$SCRIPT_DIR/.venv/bin/python" && ! -x "$SCRIPT_DIR/.venv/Scripts/python.exe" ]]; then
+    _missing+=(".venv (python -m venv .venv && pip install -r requirements.txt)")
+fi
+command -v pnpm >/dev/null 2>&1 || [[ -f "$SCRIPT_DIR/frontend/dist/index.html" ]] || _missing+=("pnpm (or a pre-built frontend/dist/)")
+if [[ ${#_missing[@]} -gt 0 ]]; then
+    echo "[start] Aviso: faltan herramientas — algunas funciones no andarán hasta instalarlas (ver docs/INSTALL.md):" >&2
+    printf '  - %s\n' "${_missing[@]}" >&2
+fi
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ── WSL2 network setup ────────────────────────────────────────────────────────
 if grep -qi "microsoft" /proc/version 2>/dev/null; then
@@ -61,14 +77,32 @@ fi
 echo "[start] Iniciando Suwayomi..." >&2
 bash "$SCRIPT_DIR/suwayomi/start.sh" >&2
 
-# ── qBittorrent (app Windows) ─────────────────────────────────────────────────
-if grep -qi "microsoft" /proc/version 2>/dev/null; then
-    if curl -sf --connect-timeout 2 http://localhost:8080/api/v2/app/version >/dev/null 2>&1; then
-        echo "[start] qBittorrent ya está corriendo" >&2
+# ── qBittorrent ────────────────────────────────────────────────────────────
+# Health-check is OS-agnostic (WebAPI). Auto-launch when absent is just a
+# convenience and branches by OS; QBT_LAUNCH_CMD (.env) skips all detection
+# for anyone running a different torrent client or setup.
+if curl -sf --connect-timeout 2 http://localhost:8080/api/v2/app/version >/dev/null 2>&1; then
+    echo "[start] qBittorrent ya está corriendo" >&2
+elif [[ -n "${QBT_LAUNCH_CMD:-}" ]]; then
+    echo "[start] Lanzando qBittorrent (QBT_LAUNCH_CMD)..." >&2
+    eval "$QBT_LAUNCH_CMD" 2>/dev/null || echo "[start] QBT_LAUNCH_CMD falló" >&2
+elif grep -qi "microsoft" /proc/version 2>/dev/null; then
+    echo "[start] Lanzando qBittorrent (Windows/WSL)..." >&2
+    QBT_WIN_PATH="${QBT_WIN_PATH:-C:\\Program Files\\qBittorrent\\qbittorrent.exe}"
+    powershell.exe -Command "Start-Process '$QBT_WIN_PATH'" 2>/dev/null \
+        || echo "[start] No se pudo lanzar qBittorrent (¿ya está abierto? ¿la ruta cambió? ajustá QBT_WIN_PATH en .env)" >&2
+elif [[ "$(uname -s)" == "Darwin" ]]; then
+    echo "[start] Lanzando qBittorrent (macOS)..." >&2
+    open -a qbittorrent 2>/dev/null || open -a "qBittorrent" 2>/dev/null \
+        || echo "[start] No se pudo lanzar qBittorrent — instalalo (brew install --cask qbittorrent) o abrilo manualmente" >&2
+else
+    echo "[start] Lanzando qBittorrent (Linux)..." >&2
+    if command -v qbittorrent-nox >/dev/null 2>&1; then
+        nohup qbittorrent-nox >/tmp/qbt.log 2>&1 &
+    elif command -v qbittorrent >/dev/null 2>&1; then
+        nohup qbittorrent >/tmp/qbt.log 2>&1 &
     else
-        echo "[start] Lanzando qBittorrent..." >&2
-        powershell.exe -Command "Start-Process 'C:\Program Files\qBittorrent\qbittorrent.exe'" 2>/dev/null \
-            || echo "[start] No se pudo lanzar qBittorrent (puede que ya esté abierto o la ruta cambió)" >&2
+        echo "[start] qBittorrent no encontrado — instalalo (apt/pacman/dnf install qbittorrent-nox) o abrilo manualmente" >&2
     fi
 fi
 # ─────────────────────────────────────────────────────────────────────────────

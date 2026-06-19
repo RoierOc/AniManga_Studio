@@ -22,6 +22,9 @@ from urllib.parse import urlencode, quote
 import requests as _http
 from flask import Blueprint, jsonify, request, send_file
 
+from api.imgproxy import warm as _warm_img
+from api.platform import is_wsl as _is_wsl, is_macos as _is_macos
+
 anime_bp = Blueprint('anime', __name__)
 
 _ANILIST = 'https://graphql.anilist.co'
@@ -544,6 +547,12 @@ def _backfill_anime_metadata():
                     if first_try and art.get('backdrop') and art.get('is_base_title') and not v.get('banner_locked'):
                         v['banner'] = art['backdrop']; v['banner_source'] = 'tmdb'
 
+        # Warm the disk image cache for whatever just got resolved, so the detail
+        # page's hero/poster/logo are already on disk by the time the user opens
+        # it instead of paying the TMDB/AniList CDN round trip on first paint.
+        for _u in (v.get('banner'), v.get('banner_detail'), v.get('logo'), v.get('cover')):
+            _warm_img(_u)
+
         # Persist periodically so partial progress survives interruptions/restarts.
         if changed and processed and processed % 8 == 0:
             _lib_write(lib)
@@ -658,6 +667,16 @@ def _video_duration(path: str) -> float:
 # Keyed by folder path; re-scans only when folder mtime or overrides change.
 _scan_cache: dict = {}
 
+# Most local anime folders live on /mnt/* (WSL2 DrvFS bridge to a Windows drive),
+# where even a cheap stat()/iterdir() costs ~15-30ms — fine once, but
+# /api/anime/library re-checks every local_path on every request (and the
+# frontend polls it), so with ~45 folders that alone was ~0.7-1.3s per call.
+# This TTL skips the freshness recheck entirely for recently-seen folders and
+# just returns the last scan, trading a few seconds of staleness for making
+# repeat page loads instant.
+_FOLDER_MTIME_TTL = 10.0
+_folder_checked_at: dict = {}
+
 
 def _folder_mtime(p: _Path) -> float:
     """Get max mtime of a folder and all immediate subdirs — detects new files."""
@@ -684,14 +703,23 @@ def _scan_local_episodes(folder_path: str, overrides: dict = None) -> list:
     wsl_path = folder_path
     if _is_wsl() and re.match(r'^[A-Za-z]:[/\\]', folder_path):
         wsl_path = _win_to_wsl(folder_path)
+
+    overrides = overrides or {}
+    overrides_key = str(sorted(overrides.items()))
+
+    # Skip the filesystem entirely if we checked this folder recently — avoids
+    # paying DrvFS stat latency again on every poll/page-load within the TTL.
+    now = time.time()
+    cached = _scan_cache.get(wsl_path)
+    if cached and cached[1] == overrides_key and now - _folder_checked_at.get(wsl_path, 0) < _FOLDER_MTIME_TTL:
+        return cached[2]
+
     p = _Path(wsl_path)
     if not p.exists():
         return []
 
-    overrides = overrides or {}
-    overrides_key = str(sorted(overrides.items()))
     fmtime = _folder_mtime(p)
-    cached = _scan_cache.get(wsl_path)
+    _folder_checked_at[wsl_path] = now
     if cached and cached[0] == fmtime and cached[1] == overrides_key:
         return cached[2]
 
@@ -795,14 +823,6 @@ def _clean_ep_title(stem: str) -> str:
     # Remove (...) quality/resolution metadata
     s = re.sub(r'\s*\([^)]*(?:\d{3,4}p|BD|Hi10|Blu)[^)]*\)', '', s, flags=re.I)
     return s.strip(' -_.')
-
-
-def _is_wsl() -> bool:
-    try:
-        ver = _Path('/proc/version').read_text().lower()
-        return 'microsoft' in ver
-    except Exception:
-        return False
 
 
 _CMD_EXE = '/mnt/c/Windows/System32/cmd.exe'
@@ -1029,7 +1049,8 @@ def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> t
             except Exception:
                 pass
         try:
-            subprocess.Popen(['xdg-open', file_path],
+            opener = 'open' if _is_macos() else 'xdg-open'
+            subprocess.Popen([opener, file_path],
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return (True, None, wl_dir)
         except Exception:
@@ -1776,7 +1797,6 @@ def anime_library_get():
         live = set(hash_map.keys())
         for h in [h for h in _qbt_files_cache if h not in live]:
             _qbt_files_cache.pop(h, None)
-
     result = []
     for anime_id, anime in lib.items():
         watched_map   = anime.get('watched', {})
@@ -2221,6 +2241,7 @@ def anime_set_cover(anime_id):
     lib[anime_id]['cover_source'] = (data.get('source') or 'manual').strip()
     lib[anime_id]['cover_locked'] = True
     _lib_write(lib)
+    threading.Thread(target=_warm_img, args=(url,), daemon=True).start()
     return jsonify({'ok': True, 'cover': url})
 
 
@@ -2304,6 +2325,7 @@ def anime_set_backdrop(anime_id):
     lib[anime_id][f'{target}_source'] = (data.get('source') or 'manual').strip()
     lib[anime_id][f'{target}_locked'] = True
     _lib_write(lib)
+    threading.Thread(target=_warm_img, args=(url,), daemon=True).start()
     return jsonify({'ok': True, 'backdrop': url, 'target': target})
 
 

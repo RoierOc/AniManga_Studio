@@ -1,0 +1,16 @@
+{
+  "eula": {
+    "label": "eula-digimanga (B&N)",
+    "models": [
+      {"sub_key": "eula", "file": "4x-eula-digimanga-bw-v2-nc1.pth"}
+    ]
+  },
+  "mangajanai": {
+    "label": "MangaJaNai V1 (B&N adaptativo)",
+    "models": [
+      {"sub_key": "mj_1200", "file": "4x_MangaJaNai_1200p_V1_ESRGAN_70k.pth", "height_max": 1290},
+      {"sub_key": "mj_1400", "file": "4x_MangaJaNai_1400p_V1_ESRGAN_105k.pth"}
+    ],
+    "adaptive": true
+  }
+}

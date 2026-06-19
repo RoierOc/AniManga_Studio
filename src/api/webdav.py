@@ -17,6 +17,8 @@ from pathlib import Path
 
 from flask import Blueprint, after_this_request, jsonify, request, send_file
 
+from api.platform import is_wsl as _is_wsl2, first_windows_user_dir
+
 _SETTINGS_FILE = Path(__file__).resolve().parents[2] / "library_settings.json"
 
 def _load_settings() -> dict:
@@ -28,21 +30,13 @@ def _load_settings() -> dict:
 def _save_settings(d: dict):
     _SETTINGS_FILE.write_text(json.dumps(d, indent=2))
 
-def _is_wsl2() -> bool:
-    try:
-        return "microsoft" in Path("/proc/version").read_text().lower()
-    except Exception:
-        return False
-
 def _default_export_dir() -> Path:
     """Default: Documents/Mangas on Windows, ~/MangaExports elsewhere."""
-    if _is_wsl2() and Path("/mnt/c/Users").exists():
-        for user in sorted(Path("/mnt/c/Users").iterdir()):
-            if user.name in ("All Users", "Default", "Default User", "Public", "TEMP") or user.name.startswith("TEMP."):
-                continue
-            target = user / "Documents" / "Mangas"
-            target.mkdir(parents=True, exist_ok=True)
-            return target
+    user = first_windows_user_dir()
+    if user:
+        target = user / "Documents" / "Mangas"
+        target.mkdir(parents=True, exist_ok=True)
+        return target
     p = Path.home() / "MangaExports"
     p.mkdir(parents=True, exist_ok=True)
     return p

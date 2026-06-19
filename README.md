@@ -1,96 +1,80 @@
-# MangaJaNai — Manga Manager & AI Upscaler
+# AniManga Studio
 
-Web app for searching, downloading, AI-upscaling and exporting manga.
-Flask backend · Vue 3 frontend · PyTorch GPU upscaler · Suwayomi multi-source.
+Self-hosted manga manager, AI upscaler and anime studio. Search, download and
+read manga from MangaDex or hundreds of other sources (via Suwayomi), upscale
+pages with any GPU model you plug in, export to CBZ, and watch tracked anime
+with auto-downloaded torrents and synced/translated subtitles — all local,
+all yours.
 
----
+Flask backend · Vue 3 (Vite) frontend · PyTorch GPU upscaler · Suwayomi multi-source.
+
+## Features
+
+- **Manga library**: download, organize and read chapters from MangaDex (OAuth)
+  and any Suwayomi/Tachiyomi-compatible source.
+- **AI upscaling, "bring your own model"**: drop any [spandrel](https://github.com/chaiNNer-org/spandrel)-compatible
+  `.pth`/`.safetensors` weight file into `models/`, register it in
+  `models/registry.json`, and it shows up in the UI — any architecture
+  (ESRGAN, RRDBNet, SwinIR, HAT, DAT...), any scale, no code changes. See
+  [docs/MODELS.md](docs/MODELS.md).
+- **CBZ/CBR export** with a Tomo Builder (combine chapters into volumes).
+- **Anime Studio**: AniList tracking, Nyaa search, qBittorrent auto-download,
+  MPV playback with skip-intro, subtitle search/sync/translation
+  (Ollama-local or Gemini) and injection.
+- **Mobile export** via WebDAV.
 
 ## Quick start
 
 ```bash
-# 1. Start Flask app (port 5001)
+git clone <this-repo>
+cd manga-upscaler
+python3 -m venv .venv && source .venv/bin/activate
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
+pip install -r requirements.txt
+cp .env.example .env   # fill in what you need — everything is optional
 ./start_server.sh
-
-# 2. Start Suwayomi multi-source server (port 4567) — optional
-./suwayomi/start.sh
 ```
 
-Open **http://localhost:5001**
+Open **http://localhost:5101**.
 
----
+This is the short version — see **[docs/INSTALL.md](docs/INSTALL.md)** for the
+full step-by-step (system packages per OS, Suwayomi, frontend build, secrets,
+Windows-without-WSL).
 
 ## Requirements
 
-| Component | Version |
+| Component | Notes |
 |---|---|
-| Python | 3.14+ (pyenv) |
-| CUDA | 12.x |
-| Java | 21+ (for Suwayomi) |
-| GPU VRAM | ≥ 6 GB recommended |
+| Python 3.10+ | backend |
+| GPU NVIDIA + CUDA | **required** for upscaling — no CPU/AMD/Apple Silicon fallback |
+| Node + pnpm | builds the frontend (optional — falls back to a bundled legacy UI) |
+| Java 21+ | only if you want Suwayomi (multi-source search) |
+| ffmpeg, mkvmerge, mpv, qBittorrent | only for Anime Studio features |
 
----
+Runs on Linux, macOS, and Windows (natively or via WSL2).
 
 ## Project structure
 
 ```
 manga-upscaler/
-├── src/
-│   ├── app.py               # Flask entry point
-│   └── api/
-│       ├── runtime.py       # Shared paths & helpers
-│       ├── library.py       # Local manga library
-│       ├── mangadex.py      # MangaDex OAuth + search
-│       ├── download.py      # Chapter download (async)
-│       ├── upscale.py       # AI upscale orchestration
-│       ├── upscale_worker.py# GPU worker process
-│       ├── reader.py        # In-app reader pages
-│       ├── status.py        # Task status aggregator
-│       ├── export.py        # CBZ/CBR export (Tomo Builder)
-│       └── sources.py       # Suwayomi proxy (multi-source)
-├── static/
-│   ├── css/styles.css
-│   └── js/
-│       ├── app.js           # Vue 3 SPA
-│       └── vue.js
-├── templates/index.html
-├── suwayomi/
-│   ├── server.conf          # Suwayomi headless config
-│   ├── start.sh             # Start Suwayomi
-│   └── stop.sh              # Stop Suwayomi
-├── docs/                    # Planning & analysis docs
-├── archive/                 # Old prototypes (not active)
-├── start_server.sh          # Start Flask (Linux/WSL)
-├── start_server.ps1         # Start Flask (PowerShell)
-└── documentación técnica                # AI assistant context
+├── src/                  # Flask backend (blueprints in src/api/)
+├── frontend/             # Vite + Vue 3 SPA (active UI) → frontend/dist/
+├── static/ + templates/  # legacy UI, served as fallback at /legacy
+├── models/               # your model weights (gitignored) + registry.json
+├── data/                 # downloaded/upscaled manga (gitignored, default location)
+├── suwayomi/             # Suwayomi-Server runtime (multi-source, optional)
+├── docs/                 # INSTALL.md, MODELS.md, and dev/ (internal history)
+├── requirements.txt
+├── start_server.sh       # Linux/WSL/macOS entry point
+└── start_server.ps1      # native Windows entry point
 ```
 
----
+## Configuration
 
-## Data directories (outside repo)
+Everything lives in `.env` (copy from `.env.example`) — MangaDex OAuth, TMDB,
+Gemini, subtitle sources, model/data directories, qBittorrent auto-launch
+override. Full reference in [docs/INSTALL.md](docs/INSTALL.md).
 
-| Path | Contents |
-|---|---|
-| `~/MangaLibrary/` | Downloaded chapters |
-| `~/MangaLibrary_Upscaled/` | AI-upscaled chapters |
-| `/Manga_Upscaler_project/MODELS/` | AI model weights (.pth) |
-| `/Manga_Upscaler_project/suwayomi/` | Suwayomi JAR + data |
+## License
 
----
-
-## Active AI model
-
-**4x-eula-digimanga-bw-v2-nc1** — RRDBNet, 16.7M params, grayscale (1ch), 4x scale.
-Optimized for B&W digital manga. Tile size: 384px.
-
----
-
-## Environment variables
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `MANGA_DIR` | `~/MangaLibrary` | Downloaded manga root |
-| `UPSCALED_DIR` | `~/MangaLibrary_Upscaled` | Upscaled output root |
-| `MODEL_PATH_EULA_4X` | `/Manga_Upscaler_project/MODELS/4x-eula-...pth` | Active upscale model |
-| `UPSCALE_TILE_SIZE` | `384` | GPU tile size (px) |
-| `COLOR_PIXEL_FRACTION` | `0.10` | Color page skip threshold |
-| `SECRET_KEY` | hardcoded | Flask session secret |
+MIT — see [LICENSE](LICENSE).
