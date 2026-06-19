@@ -52,6 +52,9 @@ mpv-shot*.jpg
 gpu_log.jsonl
 .mcp.json
 
+# Old prototypes, not part of the active app
+archive/
+
 # Local configuration and public repository metadata.
 /.*/
 !/.github/
