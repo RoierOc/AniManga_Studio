@@ -55,6 +55,9 @@ gpu_log.jsonl
 # Old prototypes, not part of the active app
 archive/
 
+# README screenshot/gif inbox — unprocessed drops, never committed
+docs/img/raw/
+
 # Local configuration and public repository metadata.
 /.*/
 !/.github/
