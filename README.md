@@ -8,6 +8,90 @@ all yours.
 
 Flask backend · Vue 3 (Vite) frontend · PyTorch GPU upscaler · Suwayomi multi-source.
 
+## Tour
+
+A walkthrough of every view in the app. Manga side first, then Anime Studio.
+
+### Biblioteca (Library)
+
+Your local manga collection — covers, read/unread status, and quick filters
+by status. This is the home view.
+
+![Biblioteca](docs/img/library.jpg)
+
+### MangaDex
+
+Search MangaDex directly (OAuth login optional, needed only to follow titles
+or access some scanlation groups), preview chapters, and download them
+straight into your local library.
+
+![MangaDex](docs/img/mangadex.jpg)
+
+### Fuentes (Sources)
+
+Multi-source search powered by [Suwayomi](https://github.com/Suwayomi/Suwayomi-Server) —
+any Mihon/Tachiyomi-compatible extension works here, for titles MangaDex
+doesn't have. Downloads land in the same local library as everything else.
+
+![Fuentes](docs/img/sources.jpg)
+
+### Manga detail & upscale
+
+Opening a manga shows its chapters, read state, and per-chapter actions:
+read, compare scanlation variants, export, delete, or **escalar a 4K**
+(upscale). The badge shows which chapters are already upscaled.
+
+![Detalle de manga](docs/img/manga_modal.jpg)
+
+Upscaling runs on your own GPU with whatever model you register — "bring
+your own model," see [docs/MODELS.md](docs/MODELS.md). Progress shows live
+in the floating task widget while it processes.
+
+### Lector (Reader)
+
+Built-in reader for downloaded chapters, original or upscaled. Keyboard and
+click navigation, page count, and original/4K toggle per chapter.
+
+![Lector](docs/img/reader.jpg)
+
+### Mi Anime (Anime library)
+
+Your tracked anime: a hero banner for the latest episode airing, "seguir
+viendo" (continue watching) with progress, and the full library with
+status filters and sorting.
+
+![Mi Anime](docs/img/anime_library.jpg)
+
+### Detalle de anime & recomendaciones
+
+Episode list, tags, MAL-derived "listas de interés," and AniList-powered
+recommendations with cover art — click through to add related shows
+straight to your library.
+
+![Recomendaciones](docs/img/anime_detail.jpg)
+
+### Buscar Anime (Search)
+
+Search AniList for any show and add it to your library, or jump straight
+into a torrent search for an episode.
+
+![Buscar Anime](docs/img/anime_search.jpg)
+
+### Temporada (Seasonal)
+
+Current-season chart from AniList with genre/format/sort filters — discover
+what's airing without leaving the app.
+
+![Temporada](docs/img/anime_seasonal.jpg)
+
+### Descargas (Downloads)
+
+Nyaa torrent search wired into qBittorrent's WebAPI: pick a release, send it
+to qBittorrent, and it lands in your configured download folder, ready to
+watch in MPV with skip-intro and synced subtitles.
+
+![Descargas](docs/img/anime_downloads.jpg)
+
 ## Features
 
 - **Manga library**: download, organize and read chapters from MangaDex (OAuth)
