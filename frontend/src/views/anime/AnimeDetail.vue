@@ -209,7 +209,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
           <div v-if="store.stackBrowseState === 'loading'" class="center"><Spinner /></div>
           <div v-else class="bgrid">
             <article v-for="a in store.stackBrowseAnime" :key="a.al_id || a.mal_id" class="rec" @click="store.openRec(a); store.closeStackBrowse()">
-              <div class="rec__poster"><img v-if="a.cover" :src="a.cover" :alt="a.title" loading="lazy" /><div class="rec__scrim" /><span v-if="a.score" class="rec__score">★ {{ (a.score/10).toFixed(1) }}</span><div class="rec__ov"><span class="rec__t">{{ a.title }}</span></div></div>
+              <div class="rec__poster"><img v-if="a.cover" :src="imgProxy(a.cover)" :alt="a.title" loading="lazy" /><div class="rec__scrim" /><span v-if="a.score" class="rec__score">★ {{ (a.score/10).toFixed(1) }}</span><div class="rec__ov"><span class="rec__t">{{ a.title }}</span></div></div>
             </article>
           </div>
         </div>
@@ -225,7 +225,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
           <div v-if="store.tagBrowseState === 'loading'" class="center"><Spinner /></div>
           <div v-else class="bgrid">
             <article v-for="a in store.tagBrowseAnime" :key="a.al_id" class="rec" @click="store.openRec(a); store.closeTagBrowse()">
-              <div class="rec__poster"><img v-if="a.cover" :src="a.cover" :alt="a.title" loading="lazy" /><div class="rec__scrim" /><span v-if="a.score" class="rec__score">★ {{ (a.score/10).toFixed(1) }}</span><div class="rec__ov"><span class="rec__t">{{ a.title }}</span></div></div>
+              <div class="rec__poster"><img v-if="a.cover" :src="imgProxy(a.cover)" :alt="a.title" loading="lazy" /><div class="rec__scrim" /><span v-if="a.score" class="rec__score">★ {{ (a.score/10).toFixed(1) }}</span><div class="rec__ov"><span class="rec__t">{{ a.title }}</span></div></div>
             </article>
           </div>
         </div>

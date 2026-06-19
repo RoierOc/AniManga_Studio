@@ -3298,6 +3298,9 @@ def anime_recommendations(al_id):
                 'rating':       node['rating'],
             })
         threading.Thread(target=_al_cache_set, args=('recs', al_id, recs), daemon=True).start()
+        for rec in recs:
+            if rec['cover']:
+                threading.Thread(target=_warm_img, args=(rec['cover'],), daemon=True).start()
         return jsonify(recs)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -3417,6 +3420,9 @@ def browse_by_tag():
             })
         # Most tag-overlap first, then by score
         result.sort(key=lambda x: (-x['shared'], -x['score']))
+        for item in result:
+            if item['cover']:
+                threading.Thread(target=_warm_img, args=(item['cover'],), daemon=True).start()
         return jsonify(result)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
