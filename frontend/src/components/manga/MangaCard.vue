@@ -7,6 +7,7 @@ import Icon from '@/components/ui/Icon.vue'
 const props = defineProps({ manga: { type: Object, required: true }, updates: { type: Number, default: 0 } })
 const hasCover = computed(() => !!props.manga.cover)
 const upscaled = computed(() => (props.manga.upscaled || 0) > 0)
+const translated = computed(() => (props.manga.translated_count || 0) > 0)
 const status = computed(() => MANGA_STATUS[props.manga.status] || null)
 const initials = computed(() =>
   (props.manga.name || '?').replace(/[\[\]_]/g, ' ').trim().slice(0, 2).toUpperCase()
@@ -27,6 +28,9 @@ const initials = computed(() =>
       <div class="card__badges">
         <span v-if="upscaled" class="badge badge--up">
           <Icon name="spark" :size="11" /> 4K · {{ manga.upscaled }}
+        </span>
+        <span v-if="translated" class="badge badge--es" :title="`${manga.translated_count} capítulo(s) traducidos`">
+          ES · {{ manga.translated_count }}
         </span>
       </div>
       <div class="card__topright">
@@ -110,6 +114,7 @@ const initials = computed(() =>
   backdrop-filter: blur(8px);
 }
 .badge--up { background: var(--cyan-glow); color: #d6fffb; border: 1px solid rgba(70, 224, 216, 0.4); box-shadow: var(--glow-cyan); }
+.badge--es { background: color-mix(in srgb, var(--jade) 24%, transparent); color: #c8ffe4; border: 1px solid color-mix(in srgb, var(--jade) 45%, transparent); }
 .card__topright { position: absolute; top: var(--s-2); right: var(--s-2); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .card__new { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 7px; border-radius: var(--r-pill); color: #fff; background: var(--azure); box-shadow: var(--glow-azure); }
 .card__status {

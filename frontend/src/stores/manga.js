@@ -56,6 +56,16 @@ export const useMangaStore = defineStore('manga', {
     libraryDirty: 0,          // bumped after a manga is deleted so LibraryView reloads
     pendingDelete: [],        // manga ids hidden during the undo window before deletion
 
+    // Traducción por trasplante (pestaña "Traducir" del modal), scoped al manga actual
+    tp: {
+      loading: false, phase: '', variants: [], discoverProgress: {},
+      artCands: [], esCands: [], artSel: null, esSel: null,
+      chapters: [], chaptersLoading: false,
+      preview: {},   // chapterNorm -> { open, loading, pages: [] }
+      running: false, runStatus: null, taskId: null,
+      _dpoll: null, _rpoll: null,
+    },
+
     // live task status (from SSE aggregated payload)
     downloads: {},
     upscale: {},
@@ -291,7 +301,9 @@ export const useMangaStore = defineStore('manga', {
           this.chapters = d.chapters || []
           this.upscaled = d.upscaled || {}
           if (d.source_meta) this.current.source_meta = d.source_meta
+          this.current.transplant_meta = d.transplant_meta || null
         }
+        this._resetTp()
         // If source_meta exists (downloaded, or tracked from Fuentes pre-download), load source chapters
         const sm = this.current.source_meta
         if (sm?.sourceId && sm?.mangaId) {
@@ -324,7 +336,155 @@ export const useMangaStore = defineStore('manga', {
       } catch (_) { useUiStore().toast('No se pudieron cargar los capítulos', 'error') }
       finally { this.modalLoading = false }
     },
-    close() { this.current = null },
+    close() { this._stopTpPolls(); this.current = null },
+
+    // ── Traducción por trasplante (pestaña "Traducir") ─────────────────────────
+    _candKey(c) { return c ? `${c.sourceId}_${c.id}` : null },
+    _stopTpPolls() {
+      const t = this.tp
+      if (t._dpoll) { clearInterval(t._dpoll); t._dpoll = null }
+      if (t._rpoll) { clearInterval(t._rpoll); t._rpoll = null }
+    },
+    _resetTp() {
+      this._stopTpPolls()
+      const meta = this.current?.transplant_meta || null
+      this.tp = {
+        loading: false, phase: meta?.art && meta?.es ? 'ready' : '', variants: meta?.variants || [],
+        discoverProgress: {},
+        artCands: [], esCands: [],
+        artSel: meta?.art ? { ...meta.art, id: meta.art.mangaId } : null,
+        esSel: meta?.es ? { ...meta.es, id: meta.es.mangaId } : null,
+        chapters: [], chaptersLoading: false,
+        preview: {},
+        running: false, runStatus: null, taskId: null,
+        _dpoll: null, _rpoll: null,
+      }
+      // si ya hay fuentes elegidas (discover previo cacheado), cargar la lista de capítulos
+      if (meta?.art && meta?.es) this.tpLoadChapters()
+    },
+
+    async tpLoadChapters() {
+      const title = this.current?.id
+      if (!title) return
+      this.tp.chaptersLoading = true
+      try {
+        const d = await api.get(`/api/transplant/chapters/${encodeURIComponent(title)}`)
+        this.tp.chapters = d.chapters || []
+      } catch (_) { this.tp.chapters = [] }
+      finally { this.tp.chaptersLoading = false }
+    },
+
+    async tpDiscover() {
+      const ui = useUiStore()
+      const title = this.current?.id
+      if (!title) return
+      const t = this.tp
+      t.loading = true; t.phase = 'start'; t.discoverProgress = {}
+      try {
+        const res = await api.post('/api/transplant/discover', {
+          title, anilistId: this.current?.al_id || null,
+        })
+        this._pollTpDiscover(res.task_id)
+      } catch (e) {
+        t.loading = false; t.phase = 'error'
+        ui.toast(e?.status === 503 ? 'Suwayomi offline' : 'Falló el descubrimiento', 'error')
+      }
+    },
+    _pollTpDiscover(taskId) {
+      const ui = useUiStore(); const t = this.tp
+      if (t._dpoll) clearInterval(t._dpoll)
+      t._dpoll = setInterval(async () => {
+        try {
+          const st = await api.get(`/api/transplant/status?task_id=${encodeURIComponent(taskId)}`)
+          t.phase = st.phase || t.phase
+          if (st.variants) t.variants = st.variants
+          t.discoverProgress = { searched: st.searched, searchTotal: st.searchTotal, ranked: st.ranked, rankTotal: st.rankTotal }
+          if (st.status === 'done') {
+            clearInterval(t._dpoll); t._dpoll = null; t.loading = false
+            t.artCands = st.art?.candidates || []
+            t.esCands = st.es?.candidates || []
+            t.artSel = st.art?.best || t.artCands[0] || null
+            t.esSel = st.es?.best || t.esCands[0] || null
+            t.phase = 'ready'
+            if (!t.artSel || !t.esSel) ui.toast('No se hallaron ambas fuentes (arte y ES)', 'error')
+            else { await this._tpConfirm(); this.tpLoadChapters() }
+          } else if (st.status === 'error') {
+            clearInterval(t._dpoll); t._dpoll = null; t.loading = false; t.phase = 'error'
+            ui.toast('Falló el descubrimiento', 'error')
+          }
+        } catch (_) {}
+      }, 1200)
+    },
+    // Al cambiar de fuente (override): confirmar y RECARGAR la lista de capítulos
+    // disponibles — la 2ª mejor calidad puede tener distintos capítulos que la mejor.
+    async tpSelectArt(c) { this.tp.artSel = c; this.tp.preview = {}; await this._tpConfirm(); this.tpLoadChapters() },
+    async tpSelectEs(c) { this.tp.esSel = c; await this._tpConfirm(); this.tpLoadChapters() },
+    async _tpConfirm() {
+      const t = this.tp
+      if (!t.artSel || !t.esSel) return
+      const toSrc = (c) => ({ sourceId: c.sourceId, mangaId: c.id ?? c.mangaId, sourceName: c.sourceName, sourceLang: c.sourceLang })
+      try { await api.post('/api/transplant/confirm', { title: this.current.id, art: toSrc(t.artSel), es: toSrc(t.esSel) }) }
+      catch (_) {}
+    },
+
+    async tpRun(chapters) {
+      const ui = useUiStore(); const t = this.tp
+      if (!t.artSel || !t.esSel) { ui.toast('Elige fuente de arte y de español', 'error'); return }
+      await this._tpConfirm()
+      try {
+        const res = await api.post('/api/transplant/run', { title: this.current.id, chapters: chapters || 'all' })
+        t.running = true
+        t.taskId = res.task_id
+        t.runStatus = { phase: 'start', chapterTotal: (res.chapters || []).length }
+        ui.toast(`Traduciendo ${(res.chapters || []).length} capítulo(s)…`, 'info')
+        this._pollTpRun(res.task_id)
+      } catch (e) {
+        ui.toast(e?.body?.includes('no chapters') ? 'No hay capítulos comunes a ambas fuentes' : 'No se pudo iniciar', 'error')
+      }
+    },
+    _pollTpRun(taskId) {
+      const ui = useUiStore(); const t = this.tp
+      if (t._rpoll) clearInterval(t._rpoll)
+      t._rpoll = setInterval(async () => {
+        try {
+          const st = await api.get(`/api/transplant/status?task_id=${encodeURIComponent(taskId)}`)
+          t.runStatus = st
+          if (st.status === 'done' || st.status === 'cancelled') {
+            clearInterval(t._rpoll); t._rpoll = null; t.running = false
+            const n = (st.chapters || []).length
+            if (st.status === 'cancelled') ui.toast('Traducción detenida', 'info')
+            else ui.toast(n ? `Listo: ${n} capítulo(s) en español` : 'Sin capítulos compuestos', n ? 'ok' : 'error')
+            this.tpLoadChapters()
+            this.libraryDirty++
+            // recargar capítulos locales (ahora en ES) si el manga sigue abierto
+            if (this.current?.id) api.get(`/api/library/${encodeURIComponent(this.current.id)}`)
+              .then(d => { this.chapters = d.chapters || []; this.upscaled = d.upscaled || {}; this.current.transplant_meta = d.transplant_meta || null })
+              .catch(() => {})
+          }
+        } catch (_) {}
+      }, 1200)
+    },
+    async tpCancel() {
+      const t = this.tp
+      if (!t.taskId) return
+      try { await api.post('/api/transplant/cancel', { task_id: t.taskId }) } catch (_) {}
+      useUiStore().toast('Deteniendo…', 'info')
+    },
+
+    // Vista previa de páginas de un capítulo (para revisar calidad de la fuente de arte)
+    async tpTogglePreview(chapter) {
+      const t = this.tp
+      const cur = t.preview[chapter]
+      if (cur?.open) { t.preview = { ...t.preview, [chapter]: { ...cur, open: false } }; return }
+      if (cur?.pages?.length) { t.preview = { ...t.preview, [chapter]: { ...cur, open: true } }; return }
+      t.preview = { ...t.preview, [chapter]: { open: true, loading: true, pages: [] } }
+      try {
+        const d = await api.get(`/api/transplant/preview/${encodeURIComponent(this.current.id)}/${encodeURIComponent(chapter)}`)
+        t.preview = { ...t.preview, [chapter]: { open: true, loading: false, pages: d.pages || [] } }
+      } catch (_) {
+        t.preview = { ...t.preview, [chapter]: { open: true, loading: false, pages: [] } }
+      }
+    },
 
     async downloadSourceChapter(ch) {
       const ui = useUiStore()

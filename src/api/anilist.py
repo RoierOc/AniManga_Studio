@@ -124,6 +124,87 @@ def top_manga():
     return jsonify(res)
 
 
+def title_variants(title: str | None = None, al_id: int | None = None) -> list[str]:
+    """Return name variants for a series so multi-source search doesn't miss a
+    release indexed under a different language/alias (e.g. "Amayo no Tsuki" ↔
+    "The Moon on a Rainy Night"). Source: AniList title{romaji,english,native} +
+    synonyms — the richest alias list available without auth. Falls back to just
+    `title` if AniList is unreachable. Dedups case/space-insensitively while
+    preserving the original casing of the first occurrence."""
+    out: list[str] = []
+    seen: set[str] = set()
+
+    def _add(s):
+        s = (s or "").strip()
+        key = ''.join(ch for ch in s.lower() if ch.isalnum())
+        if s and key and key not in seen:
+            seen.add(key); out.append(s)
+
+    _add(title)
+    if al_id:
+        q = 'query ($id: Int) { Media(id: $id, type: MANGA) { title { romaji english native } synonyms } }'
+        d = _ql(q, {'id': int(al_id)})
+        media = (d or {}).get('Media')
+    else:
+        q = 'query ($s: String) { Media(search: $s, type: MANGA) { title { romaji english native } synonyms } }'
+        d = _ql(q, {'s': title})
+        media = (d or {}).get('Media')
+    if media:
+        t = media.get('title') or {}
+        for k in ('romaji', 'english', 'native'):
+            _add(t.get(k))
+        for syn in (media.get('synonyms') or []):
+            _add(syn)
+    return out
+
+
+@anilist_bp.route('/search')
+def search_manga():
+    """Buscador de manga por título (para elegir la serie a traducir). Devuelve
+    al_id + títulos + portada. Sin auth."""
+    q = request.args.get('q', '').strip()
+    if len(q) < 2:
+        return jsonify([])
+    query = '''
+    query ($s: String) {
+      Page(perPage: 15) {
+        media(search: $s, type: MANGA, sort: SEARCH_MATCH) {
+          id idMal
+          title { romaji english native }
+          coverImage { medium large }
+          format status startDate { year }
+        }
+      }
+    }
+    '''
+    d = _ql(query, {'s': q})
+    if '_error' in d:
+        return jsonify([])
+    out = []
+    for m in (d.get('Page') or {}).get('media') or []:
+        t = m.get('title') or {}
+        out.append({
+            'al_id': m['id'],
+            'mal_id': m.get('idMal'),
+            'title': t.get('english') or t.get('romaji') or t.get('native') or '',
+            'title_romaji': t.get('romaji') or '',
+            'title_native': t.get('native') or '',
+            'cover': (m.get('coverImage') or {}).get('large') or (m.get('coverImage') or {}).get('medium'),
+            'format': m.get('format'),
+            'status': m.get('status'),
+            'year': (m.get('startDate') or {}).get('year'),
+        })
+    return jsonify(out)
+
+
+@anilist_bp.route('/variants')
+def variants_route():
+    """Debug/UI endpoint: name variants for a title (or al_id)."""
+    title = request.args.get('title', '').strip()
+    al_id = request.args.get('al_id', '').strip()
+    return jsonify(title_variants(title or None, int(al_id) if al_id.isdigit() else None))
+
+
 @anilist_bp.route('/genres')
 def get_genres():
     """Genres + all non-adult non-spoiler tags from AniList, combined and sorted. Cached 1 h."""

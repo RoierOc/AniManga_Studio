@@ -46,15 +46,19 @@ JAVA_ARGS=(-Xmx512m
 # or $DISPLAY") and the HTTP server never binds :4567. xvfb-run gives it a
 # fake headless display. Only needed on Linux/WSL with no real $DISPLAY;
 # macOS and any environment with a real X session run java directly.
+# `9>&-` cierra el fd del flock de start_server.sh que este proceso hijo hereda.
+# Sin esto, el java de fondo queda como huérfano sosteniendo /tmp/manga_server.lock
+# tras morir start_server.sh → el próximo arranque falla con "Otra instancia ya
+# está corriendo". (Misma cura que las líneas de qBittorrent en start_server.sh.)
 if [[ "$(uname -s)" == "Linux" && -z "${DISPLAY:-}" ]]; then
   if command -v xvfb-run >/dev/null 2>&1; then
-    xvfb-run -a java "${JAVA_ARGS[@]}" > "$LOG" 2>&1 &
+    xvfb-run -a java "${JAVA_ARGS[@]}" > "$LOG" 2>&1 9>&- &
   else
     echo "AVISO: xvfb-run no instalado — Suwayomi puede colgarse al iniciar KCEF sin \$DISPLAY (instala xvfb)." >&2
-    java "${JAVA_ARGS[@]}" > "$LOG" 2>&1 &
+    java "${JAVA_ARGS[@]}" > "$LOG" 2>&1 9>&- &
   fi
 else
-  java "${JAVA_ARGS[@]}" > "$LOG" 2>&1 &
+  java "${JAVA_ARGS[@]}" > "$LOG" 2>&1 9>&- &
 fi
 
 echo $! > "$PID_FILE"

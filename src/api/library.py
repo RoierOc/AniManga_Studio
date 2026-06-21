@@ -81,6 +81,15 @@ def get_library():
             except Exception:
                 pass
 
+        # Estado de traducción por trasplante (badge "ES" en la tarjeta)
+        translated_count = 0
+        tp_path = f / '.transplant_meta.json'
+        if tp_path.exists():
+            try:
+                translated_count = len(json.loads(tp_path.read_text()).get('translated', []))
+            except Exception:
+                pass
+
         # Cover priority: local file → source_meta thumbnail → URL cache
         local_cover = next(
             (p for p in (f / 'cover.jpg', f / 'cover.png', f / 'cover.webp') if p.exists()),
@@ -102,6 +111,7 @@ def get_library():
             'upscaled': len(upscaled),
             'cover': cover,
             'source_meta': source_meta,
+            'translated_count': translated_count,
         })
 
     folders.sort(key=lambda x: x['name'].lower())
@@ -238,12 +248,21 @@ def get_manga(title):
         except Exception:
             pass
 
+    transplant_meta = None
+    tp_path = folder / '.transplant_meta.json'
+    if tp_path.exists():
+        try:
+            transplant_meta = json.loads(tp_path.read_text())
+        except Exception:
+            pass
+
     return jsonify({
         'id': title,
         'name': title,
         'chapters': chapters,
         'upscaled': upscaled,
         'source_meta': source_meta,
+        'transplant_meta': transplant_meta,
     })
 
 def get_chapters_from_folder(folder):

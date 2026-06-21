@@ -1,10 +1,13 @@
 <script setup>
 import { onMounted, ref, watch } from 'vue'
+import { api } from '@/lib/api'
+import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
 import { useAnimeStore } from '@/stores/anime'
 import Icon from '@/components/ui/Icon.vue'
 import FolderPicker from '@/components/anime/FolderPicker.vue'
 
+const ui = useUiStore()
 const manga = useMangaStore()
 const anime = useAnimeStore()
 
@@ -17,6 +20,27 @@ onMounted(() => {
   anime.loadDlSettings()
   anime.checkQbt()
 })
+
+const importInput = ref(null)
+function triggerImport() { importInput.value?.click() }
+
+async function onImportFile(e) {
+  const file = e.target.files?.[0]
+  e.target.value = ''
+  if (!file) return
+  try {
+    const data = JSON.parse(await file.text())
+    const res = await api.post('/api/backup/import', data)
+    ui.toast(
+      `Importado: ${res.manga.added + res.manga.merged} mangas (${res.manga.added} nuevos), ` +
+      `${res.anime.added + res.anime.merged} animes (${res.anime.added} nuevos). Recargá Biblioteca/Mi Anime para verlo.`,
+      'ok', 6000
+    )
+    anime.loadLibrary(true)
+  } catch (err) {
+    ui.toast('Archivo de respaldo inválido', 'error')
+  }
+}
 </script>
 
 <template>
@@ -90,6 +114,22 @@ onMounted(() => {
           <a v-if="manga.webdav.phoneUrl" :href="manga.webdav.phoneUrl" target="_blank" rel="noopener" class="dest__link">Abrir URL móvil ↗</a>
           <span v-else class="dest__muted">No configurado</span>
         </div>
+      </div>
+    </section>
+
+    <!-- Backup de biblioteca -->
+    <section class="card">
+      <div class="card__title"><Icon name="download" :size="16" /> Respaldo de biblioteca</div>
+      <p class="hint">
+        Exportá tu lista de manga y anime (series seguidas, estado y progreso de
+        lectura/visto) para llevarla a otra PC — no incluye los archivos descargados.
+      </p>
+      <div class="row">
+        <a class="btn btn--accent" href="/api/backup/export" download>
+          <Icon name="download" :size="14" /> Exportar listas
+        </a>
+        <button class="btn" @click="triggerImport"><Icon name="folder" :size="14" /> Importar listas</button>
+        <input ref="importInput" type="file" accept="application/json" hidden @change="onImportFile" />
       </div>
     </section>
 

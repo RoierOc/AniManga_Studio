@@ -41,10 +41,31 @@ const renameVal = ref('')
 const coverUrlVal = ref('')
 const tomoCover = ref('')      // b64 cover for the exported tomo
 
+// Traducir (trasplante)
+const tp = computed(() => store.tp)
+const tpSel = ref(new Set())
+const toggleTp = (ch) => { const s = new Set(tpSel.value); s.has(ch) ? s.delete(ch) : s.add(ch); tpSel.value = s }
+const onArt = (e) => store.tpSelectArt(tp.value.artCands.find(c => store._candKey(c) === e.target.value))
+const onEs = (e) => store.tpSelectEs(tp.value.esCands.find(c => store._candKey(c) === e.target.value))
+const tpPhaseLabel = computed(() => {
+  const p = tp.value.discoverProgress || {}
+  switch (tp.value.phase) {
+    case 'start': case 'variants': return 'Buscando variantes del título…'
+    case 'searching': return p.searchTotal ? `Rastreando fuentes… ${p.searched || 0}/${p.searchTotal}` : 'Rastreando fuentes…'
+    case 'ranking': return p.rankTotal ? `Midiendo calidad… ${p.ranked || 0}/${p.rankTotal}` : 'Midiendo calidad…'
+    default: return 'Trabajando…'
+  }
+})
+const tpRunPct = computed(() => {
+  const s = tp.value.runStatus
+  if (!s?.chapterTotal) return 0
+  return Math.round(((s.chapterDone || 0) / s.chapterTotal) * 100)
+})
+
 watch(m, (v) => {
   tab.value = 'chapters'; sel.value = new Set(); volName.value = v?.name || ''
   showManage.value = false; renameVal.value = v?.name || ''; coverUrlVal.value = ''
-  tomoCover.value = ''; rangeFrom.value = ''; rangeTo.value = ''
+  tomoCover.value = ''; rangeFrom.value = ''; rangeTo.value = ''; tpSel.value = new Set()
   if (v) { store.resetMdex(); store.loadHealth(); store.colorPages = []; store.excludedPages = []; store.exportPreview = { pages: 0, est_mb: 0, upscaled_pages: 0, original_pages: 0 } }
   if (v && !Object.keys(store.models).length) store.loadModels()
   if (v) store.loadDestinations()
@@ -165,6 +186,9 @@ async function doExport(toDrive = false) {
 
           <div class="modal__tabs">
             <button class="mtab" :class="{ 'is-active': tab === 'chapters' }" @click="tab = 'chapters'">Capítulos</button>
+            <button class="mtab" :class="{ 'is-active': tab === 'translate' }" @click="tab = 'translate'"><Icon name="globe" :size="13" /> Traducir
+              <span v-if="store.current?.transplant_meta?.translated?.length" class="mtab__badge">ES</span>
+            </button>
             <button class="mtab" :class="{ 'is-active': tab === 'tomo' }" @click="tab = 'tomo'"><Icon name="library" :size="13" /> Exportar Tomo</button>
           </div>
 
@@ -246,6 +270,97 @@ async function doExport(toDrive = false) {
                   </li>
                 </ul>
               </div>
+            </div>
+
+            <!-- TRADUCIR (trasplante) -->
+            <div v-if="tab === 'translate' && !store.modalLoading" class="tl">
+              <p class="tl__lead">Busca la mejor fuente de arte (cualquier idioma) y una en español, y trasplanta el texto ES sobre el arte HD. El resultado reemplaza los capítulos del manga.</p>
+
+              <!-- descubrimiento en curso -->
+              <div v-if="tp.loading" class="tl__disc">
+                <Spinner :size="18" />
+                <span class="muted">{{ tpPhaseLabel }}</span>
+              </div>
+
+              <!-- sin fuentes aún -->
+              <div v-else-if="tp.phase !== 'ready'" class="tl__cta">
+                <button class="hbtn hbtn--accent" @click="store.tpDiscover()"><Icon name="globe" :size="14" /> Buscar mejor fuente</button>
+                <span v-if="tp.phase === 'error'" class="tl__err">No se encontraron fuentes. ¿Suwayomi en línea?</span>
+              </div>
+
+              <!-- fuentes elegidas + capítulos -->
+              <template v-else>
+                <div class="tl__picks">
+                  <div class="tl__pick">
+                    <div class="tl__pickh">Arte <button class="tl__re" @click="store.tpDiscover()" title="Volver a buscar">↻</button></div>
+                    <div v-if="tp.artSel" class="tl__cand">
+                      <span class="tl__src">{{ tp.artSel.sourceName }} · {{ tp.artSel.sourceLang }}</span>
+                      <span v-if="tp.artSel.quality" class="tl__q">{{ tp.artSel.quality.height }}px · score {{ tp.artSel.quality.score }}</span>
+                    </div>
+                    <select v-if="tp.artCands.length" class="tl__sel" :value="store._candKey(tp.artSel)" @change="onArt">
+                      <option v-for="c in tp.artCands" :key="store._candKey(c)" :value="store._candKey(c)">{{ c.sourceName }} ({{ c.sourceLang }}) — {{ c.quality?.height }}px / {{ c.quality?.score }}</option>
+                    </select>
+                  </div>
+                  <div class="tl__pick">
+                    <div class="tl__pickh">Español</div>
+                    <div v-if="tp.esSel" class="tl__cand">
+                      <span class="tl__src">{{ tp.esSel.sourceName }} · {{ tp.esSel.sourceLang }}</span>
+                      <span v-if="tp.esSel.quality" class="tl__q">{{ tp.esSel.quality.height }}px</span>
+                    </div>
+                    <select v-if="tp.esCands.length" class="tl__sel" :value="store._candKey(tp.esSel)" @change="onEs">
+                      <option v-for="c in tp.esCands" :key="store._candKey(c)" :value="store._candKey(c)">{{ c.sourceName }} ({{ c.sourceLang }}) — {{ c.quality?.height }}px</option>
+                    </select>
+                  </div>
+                </div>
+
+                <!-- progreso de ejecución -->
+                <div v-if="tp.running" class="tl__run">
+                  <div class="tl__bar"><div class="tl__fill" :style="{ width: tpRunPct + '%' }" /></div>
+                  <div class="tl__runinfo">
+                    <span class="muted">Cap. {{ tp.runStatus?.chapterDone || 0 }}/{{ tp.runStatus?.chapterTotal || 0 }}
+                      <template v-if="tp.runStatus?.chapter"> · #{{ tp.runStatus.chapter }}</template>
+                      <template v-if="tp.runStatus?.phase === 'compose' && tp.runStatus?.pageTotal"> · pág {{ tp.runStatus.pageDone }}/{{ tp.runStatus.pageTotal }}</template>
+                      <template v-else-if="tp.runStatus?.phase === 'download'"> · descargando</template>
+                      <template v-else-if="tp.runStatus?.phase === 'cancelling'"> · deteniendo…</template>
+                    </span>
+                    <button class="tl__stop" @click="store.tpCancel()"><Icon name="close" :size="13" /> Parar</button>
+                  </div>
+                </div>
+
+                <!-- lista de capítulos -->
+                <div class="tl__chhead">
+                  <span>Capítulos a traducir <span v-if="tp.chapters.length" class="muted">({{ tp.chapters.length }})</span></span>
+                  <div class="tl__acts">
+                    <button class="btn-xs" :disabled="tp.running || !tpSel.size" @click="store.tpRun([...tpSel])">Traducir {{ tpSel.size || '' }} sel.</button>
+                    <button class="btn-xs btn-xs--accent" :disabled="tp.running || !tp.chapters.length" @click="store.tpRun('all')">Traducir todos</button>
+                  </div>
+                </div>
+                <div v-if="tp.chaptersLoading" class="center"><Spinner :size="20" /></div>
+                <ul v-else-if="tp.chapters.length" class="tl__chaps">
+                  <li v-for="c in tp.chapters" :key="c.chapter" class="tl__chapwrap">
+                    <div class="tl__chap" :class="{ 'is-sel': tpSel.has(c.chapter) }">
+                      <span class="tl__box" @click="toggleTp(c.chapter)"><Icon v-if="tpSel.has(c.chapter)" name="check" :size="11" /></span>
+                      <span class="tl__cnum" @click="toggleTp(c.chapter)">Cap. {{ c.chapter }}</span>
+                      <span class="tl__chip" :class="'tl__chip--' + (tp.runStatus?.chapter === c.chapter && tp.running ? 'doing' : c.status)">
+                        {{ tp.runStatus?.chapter === c.chapter && tp.running ? 'traduciendo' : c.status === 'done' ? 'hecho' : c.status === 'failed' ? 'falló' : 'pendiente' }}
+                      </span>
+                      <button class="tl__eye" :class="{ 'is-on': tp.preview[c.chapter]?.open }" @click.stop="store.tpTogglePreview(c.chapter)" title="Vista previa del arte">
+                        <Icon name="search" :size="13" />
+                      </button>
+                    </div>
+                    <div v-if="tp.preview[c.chapter]?.open" class="tl__prev">
+                      <div v-if="tp.preview[c.chapter].loading" class="tl__prevload"><Spinner :size="16" /></div>
+                      <div v-else-if="tp.preview[c.chapter].pages.length" class="tl__strip">
+                        <a v-for="(u, i) in tp.preview[c.chapter].pages" :key="i" :href="u" target="_blank" rel="noopener" class="tl__thumb" :title="`Página ${i + 1}`">
+                          <img :src="u" loading="lazy" referrerpolicy="no-referrer" />
+                        </a>
+                      </div>
+                      <div v-else class="muted tl__prevempty">Sin páginas.</div>
+                    </div>
+                  </li>
+                </ul>
+                <div v-else class="empty">Sin capítulos comunes a ambas fuentes.</div>
+              </template>
             </div>
 
             <template v-if="tab === 'chapters' && !store.modalLoading && (store.chapters.length || store.hasSourceMeta)">
@@ -420,6 +535,57 @@ async function doExport(toDrive = false) {
 .mtab { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-4); border-radius: var(--r-sm) var(--r-sm) 0 0; font-size: var(--fs-sm); font-weight: 500; color: var(--ink-faint); border-bottom: 2px solid transparent; transition: all var(--t-fast); }
 .mtab:hover { color: var(--ink); }
 .mtab.is-active { color: var(--azure-bright); border-bottom-color: var(--azure); }
+.mtab__badge { font-size: 9px; font-weight: 800; letter-spacing: .04em; padding: 1px 5px; border-radius: var(--r-pill); background: var(--jade); color: #04130c; }
+
+/* Pestaña Traducir */
+.tl { padding: var(--s-2) 0 var(--s-4); }
+.tl__lead { font-size: var(--fs-xs); color: var(--ink-soft); line-height: var(--lh-body); margin-bottom: var(--s-3); }
+.tl__disc { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-4); }
+.tl__cta { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) 0; }
+.tl__err { font-size: var(--fs-xs); color: var(--rose, #e8748b); }
+.tl__picks { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3); margin-bottom: var(--s-3); }
+.tl__pick { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--s-3); }
+.tl__pickh { display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: var(--fs-xs); margin-bottom: 6px; }
+.tl__re { color: var(--ink-faint); font-size: var(--fs-sm); padding: 0 4px; }
+.tl__re:hover { color: var(--azure-bright); }
+.tl__cand { display: flex; flex-direction: column; }
+.tl__src { font-size: var(--fs-xs); color: var(--azure-bright); font-weight: 600; }
+.tl__q { font-size: var(--fs-2xs); color: var(--ink-faint); }
+.tl__sel { width: 100%; margin-top: 6px; font-size: var(--fs-2xs); padding: 4px 6px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); }
+.tl__run { margin: var(--s-3) 0; }
+.tl__bar { height: 6px; border-radius: var(--r-pill); background: var(--surface-2); overflow: hidden; }
+.tl__fill { height: 100%; background: var(--azure); transition: width var(--t-base); }
+.tl__runinfo { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
+.tl__stop { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--rose, #e8748b); border: 1px solid color-mix(in srgb, var(--rose, #e8748b) 40%, transparent); }
+.tl__stop:hover { background: color-mix(in srgb, var(--rose, #e8748b) 12%, transparent); }
+.tl__chhead { display: flex; align-items: center; justify-content: space-between; margin: var(--s-3) 0 var(--s-2); font-weight: 600; }
+.tl__acts { display: flex; gap: var(--s-2); }
+.btn-xs--accent { color: #fff; background: var(--azure); border-color: transparent; }
+.btn-xs--accent:hover:not(:disabled) { filter: brightness(1.1); }
+.btn-xs:disabled { opacity: .45; cursor: default; }
+.tl__chaps { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.tl__chap { display: flex; align-items: center; gap: var(--s-2); padding: 6px var(--s-2); border-radius: var(--r-sm); cursor: pointer; transition: background var(--t-fast); }
+.tl__chap:hover { background: var(--surface); }
+.tl__chap.is-sel { background: var(--azure-haze); }
+.tl__box { width: 16px; height: 16px; flex-shrink: 0; display: grid; place-items: center; border-radius: 4px; border: 1px solid var(--line-strong); color: var(--azure-bright); }
+.tl__chap.is-sel .tl__box { border-color: var(--azure); }
+.tl__cnum { flex: 1; font-size: var(--fs-sm); cursor: pointer; }
+.tl__box { cursor: pointer; }
+.tl__eye { display: grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0; border-radius: var(--r-sm); color: var(--ink-faint); border: 1px solid var(--line); }
+.tl__eye:hover { color: var(--azure-bright); border-color: var(--azure); }
+.tl__eye.is-on { color: var(--azure-bright); background: var(--azure-haze); border-color: var(--azure); }
+.tl__prev { padding: var(--s-2) var(--s-2) var(--s-3) 26px; }
+.tl__prevload, .tl__prevempty { padding: var(--s-2); font-size: var(--fs-2xs); }
+.tl__strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; }
+.tl__thumb { flex-shrink: 0; width: 64px; aspect-ratio: 2/3; border-radius: var(--r-sm); overflow: hidden; border: 1px solid var(--line); background: var(--surface-2); }
+.tl__thumb img { width: 100%; height: 100%; object-fit: cover; }
+.tl__thumb:hover { border-color: var(--azure); }
+.tl__chip { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: var(--r-pill); text-transform: uppercase; letter-spacing: .03em; }
+.tl__chip--pending { color: var(--ink-faint); background: var(--surface-2); }
+.tl__chip--done { color: var(--jade); background: color-mix(in srgb, var(--jade) 14%, transparent); }
+.tl__chip--failed { color: var(--rose, #e8748b); background: color-mix(in srgb, var(--rose, #e8748b) 14%, transparent); }
+.tl__chip--doing { color: var(--azure-bright); background: var(--azure-haze); }
+.muted { color: var(--ink-faint); font-weight: 400; }
 
 /* flex-basis auto (not 0): the modal has max-height, not a fixed height, so basis:0
    would collapse this scroll region to 0 and hide the chapters. auto lets it size to

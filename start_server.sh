@@ -4,6 +4,32 @@ set -uo pipefail   # -e removed so crash-restart loop works
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SRC_DIR="$SCRIPT_DIR/src"
 
+# ── Auto-detach ───────────────────────────────────────────────────────────────
+# Relanza el script en segundo plano (nohup) y devuelve la terminal. Así
+# `./start_server.sh` arranca el servidor y te deja seguir usando la consola; el
+# server sobrevive al cierre de la terminal. Para correr en primer plano (ver
+# logs en vivo, p.ej. para depurar) usá:  MANGA_SERVER_FG=1 ./start_server.sh
+if [[ "${MANGA_SERVER_DETACHED:-}" != "1" && "${MANGA_SERVER_FG:-}" != "1" ]]; then
+    # Pre-chequeo: si el lock ya está tomado, el server ya corre — avisá y no
+    # lances un hijo fantasma que moriría enseguida en el guard de abajo. El
+    # flock -n sobre un fd nuevo falla si el server vivo lo tiene en exclusiva.
+    if exec 8>/tmp/manga_server.lock && ! flock -n 8; then
+        echo "[start] El servidor ya está corriendo (lock tomado). No se lanza otro." >&2
+        echo "[start]   web: http://127.0.0.1:5101  |  detener: pkill -f start_server.sh" >&2
+        exec 8>&-
+        exit 0
+    fi
+    exec 8>&-
+    LOG_FILE="/tmp/manga_server.log"
+    MANGA_SERVER_DETACHED=1 nohup "$0" "$@" >"$LOG_FILE" 2>&1 &
+    pid=$!
+    echo "[start] Servidor lanzado en segundo plano (PID $pid)."
+    echo "[start]   logs:    tail -f $LOG_FILE"
+    echo "[start]   detener: kill $pid   (o:  pkill -f start_server.sh)"
+    echo "[start]   web:     http://127.0.0.1:5101"
+    exit 0
+fi
+
 # ── Single-instance guard ─────────────────────────────────────────────────────
 # Si abres varias terminales WSL a la vez, cada una podría lanzar esta pila antes
 # de que Flask ocupe el 5101 → dos Suwayomi compitiendo → BD bloqueada. flock
@@ -98,9 +124,9 @@ elif [[ "$(uname -s)" == "Darwin" ]]; then
 else
     echo "[start] Lanzando qBittorrent (Linux)..." >&2
     if command -v qbittorrent-nox >/dev/null 2>&1; then
-        nohup qbittorrent-nox >/tmp/qbt.log 2>&1 &
+        nohup qbittorrent-nox >/tmp/qbt.log 2>&1 9>&- &
     elif command -v qbittorrent >/dev/null 2>&1; then
-        nohup qbittorrent >/tmp/qbt.log 2>&1 &
+        nohup qbittorrent >/tmp/qbt.log 2>&1 9>&- &
     else
         echo "[start] qBittorrent no encontrado — instalalo (apt/pacman/dnf install qbittorrent-nox) o abrilo manualmente" >&2
     fi
