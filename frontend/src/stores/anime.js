@@ -713,7 +713,9 @@ export const useAnimeStore = defineStore('anime', {
       if (!key || key.startsWith('http') || !this.torrentAnime) return false
       const cur = this.torrentAnime
       const lib = this.library.find(a => (cur.al_id && a.al_id === cur.al_id) || (cur.mal_id && a.mal_id === cur.mal_id))
-      return !!(lib?.episodes || []).find(e => e.info_hash === key)
+      // info_hash is kept on the episode even after qBittorrent removes/deletes the
+      // torrent — only count it as "added" while it's still live there (in_qbt).
+      return !!(lib?.episodes || []).find(e => e.info_hash === key && e.in_qbt)
     },
     async addToQbt(torrent) {
       const ui = useUiStore()
