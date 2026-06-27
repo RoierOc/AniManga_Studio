@@ -19,11 +19,14 @@ from flask import Blueprint, jsonify, request
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
+from urllib.parse import quote
 import json as _json
+import re
 import shutil
 import tempfile
 import threading
 import time
+import uuid
 
 import numpy as np
 import cv2
@@ -55,6 +58,11 @@ _ES_LANGS = {"es", "es-419", "es-es", "es-la", "es-mx"}
 # muestreo de calidad: nº de páginas por capítulo y nº de capítulos a muestrear
 _SAMPLE_PAGES = 3
 _SAMPLE_CHAPTERS = 2   # uno del principio + uno del medio de la serie (evita sesgo del cap 1)
+_SAMPLE_START = 8      # arrancar el muestreo en una página PROFUNDA (~10): las primeras suelen
+                       # ser portada/créditos del scan y no sirven para comparar calidad
+_COLOR_MARGIN = 3      # páginas extra de margen: algunas profundas pueden seguir siendo a color
+_COLOR_DIFF = 15       # umbral de diferencia entre canales (mismo criterio que export/upscale)
+_COLOR_FRAC = 0.10     # fracción de píxeles a color → página a color (portada/créditos)
 _SHARP_REF = 500.0     # varianza Laplaciana de referencia (nitidez "buena")
 _FUZZY_MIN = 0.60      # ratio mínimo título-candidato vs variante
 _RANK_CAP = 15         # máx candidatos a muestrear (acota descargas de calidad)
@@ -256,11 +264,289 @@ def _chapters_map(manga_id: int, timeout: float = None) -> dict:
     return out
 
 
+_LOCAL_CH_RE = re.compile(r'^(ch\d+(?:\.\d+)?)_')
+
+
+def _local_chapter_files(title: str) -> dict:
+    """{chapter_norm: [Path,...]} páginas locales agrupadas por capítulo — para mangas
+    importados (CBZ/CBR) donde el ARTE es el contenido local, no una fuente de Suwayomi."""
+    folder = Path(MANGA_DIR) / title
+    out: dict = {}
+    if not folder.is_dir():
+        return out
+    for f in sorted(folder.iterdir()):
+        if not f.is_file():
+            continue
+        m = _LOCAL_CH_RE.match(f.name)
+        if not m:
+            continue
+        chn = normalize_chapter(m.group(1))
+        out.setdefault(chn, []).append(f)
+    return out
+
+
+def _local_chapters_map(title: str) -> dict:
+    """Mismo shape que `_chapters_map` pero para capítulos locales (arte importado)."""
+    return {chn: {"pageCount": len(files)} for chn, files in _local_chapter_files(title).items()}
+
+
+# ── Tomos importados que abarcan varios capítulos reales ──────────────────────
+# Un CBZ/CBR puede ser un TOMO (varios capítulos). import_cbz.py guarda esas
+# páginas bajo un único prefijo "ch####" y registra el rango real en
+# `.source_meta.json` → pending_volumes. Antes de poder traducir por capítulo
+# real hay que repartir ese prefijo en los `ch####` reales — una vez hecho,
+# el resto del pipeline (lector/upscale/export/transplant) no necesita saber
+# que vino de un tomo: ve capítulos `ch####` normales.
+
+def _source_meta_path(title: str) -> Path:
+    return Path(MANGA_DIR) / title / ".source_meta.json"
+
+
+def _read_source_meta(title: str) -> dict:
+    p = _source_meta_path(title)
+    if p.exists():
+        try:
+            return _json.loads(p.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return {}
+
+
+def _write_source_meta(title: str, meta: dict):
+    p = _source_meta_path(title)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(_json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+
+
+def _pending_volumes(title: str) -> list:
+    return _read_source_meta(title).get("pending_volumes", [])
+
+
+def _write_pending_volumes(title: str, volumes: list):
+    meta = _read_source_meta(title)
+    meta["pending_volumes"] = volumes
+    _write_source_meta(title, meta)
+
+
+def _split_volume(title: str, vol: dict, chapter_pages: list, source_prefix: str = None) -> dict:
+    """Reparte las páginas planas de un tomo (`{source_prefix or vol['prefix']}_NNN.ext`)
+    en capítulos reales: `chapter_pages` es [(chapter_norm, page_count), ...] EN ORDEN
+    (mismo orden que las páginas del tomo). La suma de page_count debe coincidir
+    exactamente con el nº de páginas del tomo — si no, no se toca nada.
+    `source_prefix` permite leer desde un prefijo temporal (ver `_stage_volume`) en
+    vez de `vol['prefix']` directamente — necesario para que el rename hacia el
+    capítulo real no pise el placeholder de OTRO tomo aún pendiente."""
+    folder = Path(MANGA_DIR) / title
+    prefix = source_prefix or vol['prefix']
+    files = sorted(folder.glob(f"{prefix}_*.*"))
+    total_wanted = sum(c for _, c in chapter_pages)
+    if total_wanted != len(files):
+        return {"ok": False, "error": f"page count mismatch: tomo={len(files)} páginas, suma capítulos={total_wanted}"}
+    idx = 0
+    for chn, count in chapter_pages:
+        new_prefix = _chapter_file_prefix(chn)
+        for j in range(count):
+            f = files[idx]; idx += 1
+            f.rename(folder / f"{new_prefix}_{j + 1:03d}{f.suffix}")
+    return {"ok": True}
+
+
+def _stage_volume(title: str, vol: dict) -> str:
+    """Aparta las páginas planas de un tomo pendiente a un prefijo temporal que NO
+    puede coincidir con ningún `ch####` real ni con el placeholder de otro tomo —
+    libera el namespace `{vol['prefix']}_*` ANTES de repartir nada. Sin esto, si el
+    rango real resuelto de un tomo cae sobre el nº de capítulo que otro tomo
+    todavía pendiente usa como placeholder, el rename in-situ lo sobrescribe en
+    silencio (corrupción de páginas detectada en pruebas con tomos encadenados)."""
+    folder = Path(MANGA_DIR) / title
+    files = sorted(folder.glob(f"{vol['prefix']}_*.*"))
+    tmp_prefix = f"__staging{uuid.uuid4().hex[:10]}"
+    for i, f in enumerate(files, 1):
+        f.rename(folder / f"{tmp_prefix}_{i:03d}{f.suffix}")
+    return tmp_prefix
+
+
+def _free_chapter_prefix(title: str) -> str:
+    """Siguiente prefijo ch#### libre en el manga — para reasignar el placeholder
+    de un tomo pendiente si su nº original quedó ocupado por un capítulo real
+    resuelto en esta misma pasada (ver `_unstage_volume`)."""
+    folder = Path(MANGA_DIR) / title
+    best = 0
+    if folder.is_dir():
+        for f in folder.iterdir():
+            m = re.match(r'ch(\d+)', f.stem)
+            if m:
+                best = max(best, int(m.group(1)))
+    return f"ch{best + 1:04d}"
+
+
+def _unstage_volume(title: str, tmp_prefix: str, original_prefix: str) -> str:
+    """Inverso de `_stage_volume`: si el tomo sigue sin resolverse, sus páginas
+    vuelven a su prefijo placeholder — al original si sigue libre, o a uno nuevo
+    si OTRO tomo resuelto en esta misma pasada se quedó justo con ese nº de
+    capítulo real (mismo riesgo de colisión que en el split, visto en pruebas).
+    Devuelve el prefijo final usado, para que el caller actualice los metadatos."""
+    folder = Path(MANGA_DIR) / title
+    target_prefix = original_prefix
+    if list(folder.glob(f"{original_prefix}_*.*")):
+        target_prefix = _free_chapter_prefix(title)
+    files = sorted(folder.glob(f"{tmp_prefix}_*.*"))
+    for i, f in enumerate(files, 1):
+        f.rename(folder / f"{target_prefix}_{i:03d}{f.suffix}")
+    return target_prefix
+
+
+def _next_expected_chapter(title: str, pending: list):
+    """Mayor capítulo real ya colocado (excluyendo los tomos aún pendientes) + 1,
+    o None si no hay ninguno todavía (se busca desde el principio de la serie).
+    Sirve de punto de partida por defecto cuando un tomo no trae una pista
+    explícita de en qué capítulo empieza."""
+    pending_norms = {normalize_chapter(v["prefix"]) for v in pending}
+    real_keys = [k for k in _local_chapter_files(title) if k not in pending_norms]
+    if not real_keys:
+        return None
+    return _chnum(max(real_keys, key=_chnum)) + 1
+
+
+def _find_chapter_window(es_sorted: list, start_idxs: list, pages_wanted: int):
+    """Busca, probando cada índice de inicio candidato en orden, una racha
+    CONTIGUA de capítulos cuya suma de páginas sea EXACTAMENTE `pages_wanted`.
+    Las páginas siempre son > 0, así que para un inicio fijo la suma crece
+    monótonamente — hay como mucho un final posible por inicio. Devuelve la
+    lista de claves de capítulo de la primera racha que cuadra, o None."""
+    for i in start_idxs:
+        total = 0
+        chs = []
+        for j in range(i, len(es_sorted)):
+            chn, pages = es_sorted[j]
+            if pages is None:
+                break
+            total += pages
+            chs.append(chn)
+            if total == pages_wanted:
+                return chs
+            if total > pages_wanted:
+                break
+    return None
+
+
+def _resolve_pending_volumes(title: str, es_manga_id) -> dict:
+    """Intenta repartir TODOS los tomos pendientes de `title` SIN que el usuario
+    declare dónde termina cada uno: busca en la fuente ES ya elegida una racha de
+    capítulos consecutivos (a partir de la pista del tomo, o encadenando desde
+    donde terminó el anterior) cuya suma de páginas cuadre EXACTO con las páginas
+    del tomo. Lo que no cuadra se deja pendiente con una sugerencia (para ajuste
+    manual) en vez de adivinar."""
+    pending = _pending_volumes(title)
+    if not pending:
+        return {"resolved": [], "unresolved": []}
+    es_map = _chapters_map(int(es_manga_id))
+    es_sorted = sorted(((k, v.get("pageCount")) for k, v in es_map.items()), key=lambda kv: _chnum(kv[0]))
+
+    # Aparta TODOS los tomos pendientes antes de repartir ninguno (ver _stage_volume):
+    # el rango real de uno puede coincidir con el placeholder de otro.
+    staged = {vol["prefix"]: _stage_volume(title, vol) for vol in pending}
+
+    cursor = _next_expected_chapter(title, pending)   # se encadena tomo a tomo
+    resolved, remaining, pending_info = [], [], {}
+    for vol in pending:
+        hint = vol.get("chapterStartHint") or cursor
+        if hint is not None:
+            start_idxs = [i for i, (k, _) in enumerate(es_sorted) if _chnum(k) >= _chnum(hint)][:1]
+        else:
+            start_idxs = list(range(len(es_sorted)))
+
+        chs = _find_chapter_window(es_sorted, start_idxs, vol["pages"])
+        if chs is None:
+            from_idx = start_idxs[0] if start_idxs else 0
+            suggestion, total = [], 0
+            for k, p in es_sorted[from_idx:]:
+                suggestion.append({"chapter": k, "pageCount": p})
+                total += p or 0
+                if p is None or total >= vol["pages"]:
+                    break
+            pending_info[vol["prefix"]] = {"reason": "no_exact_match", "esChapters": suggestion}
+            remaining.append(vol)
+            cursor = None   # no sabemos dónde quedó -> no encadenar el siguiente a ciegas
+            continue
+
+        chapter_pages = [(k, dict(es_sorted)[k]) for k in chs]
+        res = _split_volume(title, vol, chapter_pages, source_prefix=staged[vol["prefix"]])
+        if res["ok"]:
+            resolved.append({**vol, "chapters": chs})
+            cursor = _chnum(chs[-1]) + 1
+        else:
+            pending_info[vol["prefix"]] = {
+                "reason": res["error"],
+                "esChapters": [{"chapter": k, "pageCount": dict(es_sorted)[k]} for k in chs],
+            }
+            remaining.append(vol)
+            cursor = None
+
+    # Lo que no se repartió vuelve a un placeholder libre — el original si sigue
+    # libre, o uno nuevo si otro tomo resuelto en esta pasada se quedó con ese nº
+    # (solo se sabe aquí, tras intentar TODOS los splits).
+    unresolved = []
+    for vol in remaining:
+        original_prefix = vol["prefix"]
+        vol["prefix"] = _unstage_volume(title, staged[original_prefix], original_prefix)
+        unresolved.append({**vol, **pending_info[original_prefix]})
+
+    _write_pending_volumes(title, remaining)
+    return {"resolved": resolved, "unresolved": unresolved}
+
+
 def _chapter_page_urls(chapter_id: int, timeout: float = None) -> list:
     q = "mutation($id: Int!){ fetchChapterPages(input:{chapterId:$id}){ pages } }"
     data = _gql_fast(q, {"id": int(chapter_id)}, timeout) if timeout else _gql(q, {"id": int(chapter_id)})
     pages = data["fetchChapterPages"]["pages"]
     return [SUWAYOMI_BASE + p if p.startswith("/") else p for p in pages]
+
+
+def _is_color_bytes(content: bytes) -> bool:
+    """True si la página es a COLOR (portada/créditos del scan, casi siempre a color).
+    Mismo criterio que export/upscale (`is_color_page`): >10% de píxeles con diferencia
+    de canal >15. Se evalúa sobre un thumbnail 256px para que sea barato."""
+    img = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        return False
+    h, w = img.shape[:2]
+    scale = 256.0 / max(h, w, 1)
+    if scale < 1:
+        img = cv2.resize(img, (max(1, int(w * scale)), max(1, int(h * scale))))
+    b, g, r = (img[:, :, 0].astype(np.int16),
+               img[:, :, 1].astype(np.int16),
+               img[:, :, 2].astype(np.int16))
+    max_diff = np.maximum(np.maximum(np.abs(r - g), np.abs(r - b)), np.abs(g - b))
+    return float(np.mean(max_diff > _COLOR_DIFF)) > _COLOR_FRAC
+
+
+def _deep_slice(seq: list, count: int) -> list:
+    """Devuelve hasta `count` elementos arrancando en una página PROFUNDA (~_SAMPLE_START).
+    Las primeras páginas de un scan suelen ser portada/créditos y falsean la comparación
+    de calidad; si el capítulo es corto cae al centro."""
+    if not seq:
+        return []
+    start = _SAMPLE_START if len(seq) > _SAMPLE_START + 1 else len(seq) // 2
+    return seq[start:start + count] or seq[start:] or seq[:count]
+
+
+def _filter_noncolor(urls: list, want: int) -> list:
+    """Descarga las URLs en paralelo y devuelve hasta `want` páginas NO a color, en orden.
+    Sirve para que la comparación A|B caiga en páginas de historia (B/N) y no en
+    portada/créditos (a color), que difieren entre scans y harían la comparación inútil."""
+    if not urls:
+        return []
+    def _grab(u):
+        return (u, _fetch_ref(u))   # http (Suwayomi/MangaDex) o ruta local servida
+    keep = []
+    with ThreadPoolExecutor(max_workers=len(urls) or 1) as pool:
+        for u, content in pool.map(_grab, urls):
+            if content and not _is_color_bytes(content):
+                keep.append(u)
+                if len(keep) >= want:
+                    break
+    return keep
 
 
 def _score_source(manga_id: int) -> dict | None:
@@ -280,7 +566,8 @@ def _score_source(manga_id: int) -> dict | None:
     picks = [with_pages[0]]
     if _SAMPLE_CHAPTERS > 1 and len(with_pages) > 1:
         picks.append(with_pages[len(with_pages) // 2])
-    # juntar URLs de muestra (centro de cada capítulo elegido, evita portada/créditos)
+    # juntar URLs de muestra: páginas PROFUNDAS de cada capítulo (saltando portada/créditos).
+    # El margen extra cubre las que sigan siendo a color y se descartarán al medir.
     sample = []
     for ch in picks:
         try:
@@ -289,8 +576,7 @@ def _score_source(manga_id: int) -> dict | None:
             continue
         if not urls:
             continue
-        mid = len(urls) // 2
-        sample += (urls[mid:mid + _SAMPLE_PAGES] or urls[:_SAMPLE_PAGES])
+        sample += _deep_slice(urls, _SAMPLE_PAGES + _COLOR_MARGIN)
     if not sample:
         return None
     # El muestreo es ligero y se baja TODO EN PARALELO: así una fuente lenta cuelga
@@ -307,6 +593,8 @@ def _score_source(manga_id: int) -> dict | None:
         for content in pool.map(_grab, sample):
             if not content:
                 continue
+            if _is_color_bytes(content):
+                continue   # descartar páginas a color (portada/créditos): falsean el muestreo
             img = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_GRAYSCALE)
             if img is None:
                 continue
@@ -332,12 +620,364 @@ def _score_source(manga_id: int) -> dict | None:
     }
 
 
+def _score_local(title: str) -> dict | None:
+    """Puntúa la versión LOCAL con el MISMO algoritmo que `_score_source`
+    (altura_nativa × factor_nitidez), muestreando páginas del centro de un par de
+    capítulos locales. Permite mostrar la versión actual como línea base ([ACTUAL])
+    en el ranking de versiones — "¿vale la pena cambiar?"."""
+    chfiles = _local_chapter_files(title)
+    if not chfiles:
+        return None
+    ordered = [chfiles[k] for k in sorted(chfiles.keys(), key=_chnum)]
+    with_pages = [f for f in ordered if f] or ordered
+    if not with_pages:
+        return None
+    picks = [with_pages[0]]
+    if _SAMPLE_CHAPTERS > 1 and len(with_pages) > 1:
+        picks.append(with_pages[len(with_pages) // 2])
+    sample = []
+    for files in picks:
+        if not files:
+            continue
+        sample += _deep_slice(files, _SAMPLE_PAGES + _COLOR_MARGIN)
+    if not sample:
+        return None
+    heights, sharps, bytes_per_px = [], [], []
+    for f in sample:
+        try:
+            content = f.read_bytes()
+        except Exception:
+            continue
+        if _is_color_bytes(content):
+            continue   # descartar páginas a color (portada/créditos): falsean el muestreo
+        img = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            continue
+        h, w = img.shape[:2]
+        heights.append(h)
+        sharps.append(float(cv2.Laplacian(img, cv2.CV_64F).var()))
+        bytes_per_px.append(len(content) / max(1, h * w))
+    if not heights:
+        return None
+    height = float(np.median(heights))
+    sharp = float(np.median(sharps))
+    sharp_factor = 0.5 + 0.5 * (sharp / (sharp + _SHARP_REF))
+    score = height * sharp_factor
+    return {
+        "height": round(height),
+        "sharpness": round(sharp, 1),
+        "bytesPerPx": round(float(np.median(bytes_per_px)), 4),
+        "samples": len(heights),
+        "score": round(score, 1),
+    }
+
+
+def _measure_contents(contents) -> dict | None:
+    """Mide altura/nitidez/bytes-px sobre una lista de bytes de página (descarta las que
+    sean a color). Mismo algoritmo que `_score_source`; reusado por MangaDex nativo."""
+    heights, sharps, bpp = [], [], []
+    for content in contents:
+        if not content or _is_color_bytes(content):
+            continue
+        img = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            continue
+        h, w = img.shape[:2]
+        heights.append(h)
+        sharps.append(float(cv2.Laplacian(img, cv2.CV_64F).var()))
+        bpp.append(len(content) / max(1, h * w))
+    if not heights:
+        return None
+    height = float(np.median(heights))
+    sharp = float(np.median(sharps))
+    sharp_factor = 0.5 + 0.5 * (sharp / (sharp + _SHARP_REF))
+    return {"height": round(height), "sharpness": round(sharp, 1),
+            "bytesPerPx": round(float(np.median(bpp)), 4),
+            "samples": len(heights), "score": round(height * sharp_factor, 1)}
+
+
+# ── MangaDex NATIVO como fuente de versiones (su propia API, no vía Suwayomi) ──
+_MD_API = "https://api.mangadex.org"
+_MD_RATINGS = ["safe", "suggestive", "erotica", "pornographic"]
+# Idiomas que pedimos a MangaDex. OJO: su `translatedLanguage[]` exige el patrón
+# ^[a-z]{2}(-[a-z]{2})?$ — códigos como "es-419"/"es-es"/"es-mx" (que usa Suwayomi) dan
+# HTTP 400 y vacían el feed entero. MangaDex usa "es" (castellano) y "es-la" (latino).
+_MD_LANGS_OK = {"en", "ja", "ko", "zh", "zh-hk", "pt-br", "fr", "ru", "es", "es-la"}
+
+
+def _md_get(path, **params):
+    try:
+        r = http_requests.get(f"{_MD_API}{path}", params=params, timeout=15)
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
+
+
+def _md_feed(manga_uuid) -> list:
+    """Capítulos de una obra MangaDex: [{id, number, lang}] (paginado)."""
+    out, offset = [], 0
+    while True:
+        d = _md_get(f"/manga/{manga_uuid}/feed", **{
+            "limit": 500, "offset": offset, "order[chapter]": "asc",
+            "translatedLanguage[]": list(_MD_LANGS_OK), "contentRating[]": _MD_RATINGS})
+        data = (d or {}).get("data", []) if d else []
+        for ch in data:
+            a = ch.get("attributes", {})
+            out.append({"id": ch["id"], "number": a.get("chapter"),
+                        "lang": (a.get("translatedLanguage") or "").lower()})
+        if len(data) < 500:
+            break
+        offset += 500
+    return out
+
+
+def _md_pick_chapter(manga_uuid, lang=None, want_num=None):
+    """Elige un capítulo (preferente del idioma dado, con número, ~el primero)."""
+    feed = _md_feed(manga_uuid)
+    if lang:
+        same = [c for c in feed if c["lang"] == lang.lower()]
+        feed = same or feed
+    if want_num is not None:
+        for c in feed:
+            if c["number"] and _chnum(c["number"]) == _chnum(str(want_num)):
+                return c["id"], c["number"]
+    numbered = [c for c in feed if c["number"]]
+    pick = (numbered or feed or [None])[0]
+    return (pick["id"], pick["number"]) if pick else (None, None)
+
+
+def _md_page_urls(chapter_id) -> list:
+    """URLs de página vía MangaDex@Home (baseUrl de un solo uso, nunca se cachea)."""
+    d = _md_get(f"/at-home/server/{chapter_id}")
+    if not d:
+        return []
+    base = d.get("baseUrl"); ch = d.get("chapter", {})
+    h = ch.get("hash"); pages = ch.get("data", [])
+    return [f"{base}/data/{h}/{p}" for p in pages] if base and h else []
+
+
+def _md_candidate_chapter_urls(manga_uuid, lang, want_num):
+    cid, num = _md_pick_chapter(manga_uuid, lang, want_num)
+    return (num, _md_page_urls(cid)) if cid else (None, [])
+
+
+def _md_search(query) -> list:
+    """Busca en MangaDex y devuelve, por obra, TODOS sus títulos (principal + altTitles en
+    todos los idiomas) para poder casar contra cualquier sinónimo/variante AniList."""
+    d = _md_get("/manga", **{"limit": 10, "title": query, "contentRating[]": _MD_RATINGS})
+    out = []
+    for m in (d or {}).get("data", []) if d else []:
+        attrs = m.get("attributes", {}) or {}
+        t = attrs.get("title") or {}
+        titles = [v for v in t.values() if v]
+        for alt in (attrs.get("altTitles") or []):
+            titles += [v for v in (alt or {}).values() if v]
+        name = t.get("en") or (next(iter(t.values()), "") if t else "")
+        out.append({"id": m["id"], "title": name, "titles": titles})
+    return out
+
+
+def _md_candidates(variants, cur_lang="") -> list:
+    """Candidatos NATIVOS de MangaDex (vía su API). Busca por las variantes AniList (romaji/
+    inglés/nativo/sinónimos), filtra por parecido contra CUALQUIER título de la obra (misma
+    lógica fuzzy+substring que el discover de Suwayomi) y crea un candidato por idioma
+    disponible (acotado), para que MangaDex entre al ranking aunque no esté su extensión en
+    Suwayomi. Cada candidato lleva el id del capítulo representativo (`_mdChapterId`)."""
+    var_keys = [_norm_key(v) for v in variants if v]
+    if not var_keys:
+        return []
+    seen = {}
+    for q in [v for v in (variants or []) if v][:4]:   # romaji + inglés + nativo + 1er sinónimo
+        for m in _md_search(q):
+            if m["id"] in seen:
+                continue
+            best = 0.0
+            for cand_title in (m.get("titles") or [m["title"]]):
+                tkey = _norm_key(cand_title)
+                r = max((SequenceMatcher(None, tkey, vk).ratio() for vk in var_keys), default=0.0)
+                if r < _FUZZY_MIN and any(vk in tkey or tkey in vk for vk in var_keys):
+                    r = _FUZZY_MIN   # substring (un título contiene a la variante) → válido
+                best = max(best, r)
+            if best >= _FUZZY_MIN:
+                seen[m["id"]] = (m, round(best, 3))
+    cands = []
+    for uuid, (m, match) in list(seen.items())[:2]:   # como mucho 2 obras MangaDex
+        langs = {}
+        for c in _md_feed(uuid):
+            if c["lang"] in _MD_LANGS_OK and c["number"]:
+                langs.setdefault(c["lang"], c["id"])   # 1er capítulo numerado de ese idioma
+        # panorama completo: idioma actual PRIMERO + el resto de idiomas disponibles (acotado)
+        cur = (cur_lang or "").lower()
+        wanted = [l for l in langs if l == cur] + [l for l in langs if l != cur]
+        for l in wanted[:4]:
+            # id ÚNICO por idioma (`uuid@@lang`): todas las versiones de idioma de una misma
+            # obra MangaDex comparten uuid; sin esto colisionan en dedup y en las keys del
+            # v-for del frontend (Vue renderizaría solo una). El routing parte por '@@'.
+            cands.append({"sourceId": "__mangadex__", "id": f"{uuid}@@{l}", "sourceName": "MangaDex",
+                          "sourceLang": l, "title": m["title"], "match": match,
+                          "_mdChapterId": langs[l]})
+    return cands
+
+
+def _score_md(manga_uuid, lang=None, chapter_id=None) -> dict | None:
+    """Puntúa una versión de MangaDex (mismo algoritmo: altura × nitidez, sin color)."""
+    try:
+        manga_uuid = str(manga_uuid).split("@@")[0]   # id puede venir como `uuid@@lang`
+        if not chapter_id:
+            chapter_id, _ = _md_pick_chapter(manga_uuid, lang)
+        urls = _md_page_urls(chapter_id) if chapter_id else []
+        if not urls:
+            return None
+        sample = _deep_slice(urls, _SAMPLE_PAGES + _COLOR_MARGIN)
+        def _grab(u):
+            try:
+                r = http_requests.get(u, timeout=_SAMPLE_TIMEOUT)
+                return r.content if (r and r.status_code == 200 and r.content) else None
+            except Exception:
+                return None
+        with ThreadPoolExecutor(max_workers=len(sample) or 1) as pool:
+            contents = list(pool.map(_grab, sample))
+        return _measure_contents(contents)
+    except Exception:
+        return None
+
+
+def _score_candidate(c) -> dict | None:
+    """Enruta el scoring por tipo de fuente (MangaDex nativo vs Suwayomi)."""
+    if str(c.get("sourceId")) == "__mangadex__":
+        return _score_md(c["id"], c.get("sourceLang"), c.get("_mdChapterId"))
+    return _score_source(int(c["id"]))
+
+
+# ── Emparejado de páginas por hash perceptual (comparar la MISMA página entre scans) ──
+# Umbral 0.75: páginas DISTINTAS dan ~0.40-0.65; la MISMA página (aunque cambie resolución,
+# recompresión o el TEXTO del globo por traducción ES↔EN) da ~0.80-0.95. 0.75 separa con
+# margen. La ventana de B es ANCHA porque los conteos de página difieren mucho entre scans
+# (p.ej. 51 vs 59 páginas) → el desfase puede ser de muchas páginas.
+_MATCH_MIN_SIM = 0.75      # similitud mínima (1 - hamming/64) para aceptar "misma página"
+_MATCH_REF_PAGES = 6       # pares objetivo a devolver
+_MATCH_A_WINDOW = 10       # ventana profunda de A de la que salen las referencias
+_MATCH_SEARCH_PAGES = 32   # ventana ANCHA de B: cubre casi todo el capítulo (absorbe el desfase)
+
+
+def _dhash_bytes(content: bytes):
+    """Hash perceptual diferencial de 64 bits (resize 9×8 gris, compara vecinos en fila).
+    Casi invariante a resolución y recompresión JPEG → dos scans de la MISMA página dan
+    hashes muy próximos (distancia de Hamming pequeña)."""
+    img = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return None
+    small = cv2.resize(img, (9, 8), interpolation=cv2.INTER_AREA)
+    diff = small[:, 1:] > small[:, :-1]
+    h = 0
+    for bit in diff.flatten():
+        h = (h << 1) | int(bit)
+    return h
+
+
+def _hamming(a: int, b: int) -> int:
+    return bin(a ^ b).count("1")
+
+
+def _fetch_ref(ref: str):
+    """Bytes de una página: URL http (Suwayomi/MangaDex) o ruta local servida 'titulo/archivo'."""
+    if ref.startswith("http"):
+        try:
+            r = http_requests.get(ref, timeout=_SAMPLE_TIMEOUT)
+            return r.content if (r and r.status_code == 200 and r.content) else None
+        except Exception:
+            return None
+    p = Path(MANGA_DIR) / ref
+    try:
+        return p.read_bytes() if p.exists() else None
+    except Exception:
+        return None
+
+
+def _hash_refs(refs: list) -> list:
+    """Baja/lee cada ref en paralelo, descarta páginas a color y devuelve [(ref, dhash)]."""
+    def _one(ref):
+        content = _fetch_ref(ref)
+        if not content or _is_color_bytes(content):
+            return None
+        h = _dhash_bytes(content)
+        return (ref, h) if h is not None else None
+    out = []
+    with ThreadPoolExecutor(max_workers=len(refs) or 1) as pool:
+        for res in pool.map(_one, refs):
+            if res:
+                out.append(res)
+    return out
+
+
+def _candidate_chapter_urls(cand, title, want_num=None):
+    """(numero, [refs]) de UN capítulo del candidato. Enruta local / MangaDex / Suwayomi.
+    `want_num` intenta alinear ambos lados al MISMO capítulo."""
+    sid = str(cand.get("sourceId") or "")
+    mid = cand.get("mangaId")
+    if str(mid) == "__local__" or sid == "__local__":
+        chfiles = _local_chapter_files(title)
+        if not chfiles:
+            return (None, [])
+        keys = sorted(chfiles.keys(), key=_chnum)
+        key = None
+        if want_num is not None:
+            key = next((k for k in keys if _chnum(k) == _chnum(str(want_num))), None)
+        key = key or next((k for k in keys if chfiles[k]), keys[0])
+        return (key, [f"{title}/{f.name}" for f in chfiles[key]])
+    if sid == "__mangadex__":
+        uuid = str(mid).split("@@")[0]   # id viene como `uuid@@lang`
+        return _md_candidate_chapter_urls(uuid, cand.get("sourceLang"), want_num)
+    cmap = _chapters_map(int(mid), timeout=_SAMPLE_TIMEOUT)
+    if not cmap:
+        return (None, [])
+    ch = cmap.get(normalize_chapter(str(want_num))) if want_num is not None else None
+    if not ch:
+        ordered = sorted(cmap.values(),
+                         key=lambda c: float(c["number"]) if c["number"] is not None else 0)
+        with_pages = [c for c in ordered if (c.get("pageCount") or 1) > 0] or ordered
+        ch = with_pages[0] if with_pages else None
+    if not ch:
+        return (None, [])
+    try:
+        return (ch.get("number"), _chapter_page_urls(ch["id"], timeout=_SAMPLE_TIMEOUT))
+    except Exception:
+        return (ch.get("number"), [])
+
+
+def _match_pairs(urls_a, urls_b, want_pairs):
+    """Empareja páginas equivalentes entre dos capítulos por dHash. Devuelve
+    [{left, right, sim}] en orden de A; greedy (cada página de B se usa una vez) y solo
+    pares con similitud ≥ _MATCH_MIN_SIM, para comparar SIEMPRE la misma imagen."""
+    a_win = _deep_slice(urls_a, _MATCH_A_WINDOW)            # referencia profunda de A
+    b_start = max(0, _SAMPLE_START - 5)                     # arranca antes
+    b_win = urls_b[b_start:b_start + _MATCH_SEARCH_PAGES] or urls_b   # ventana ANCHA de B
+    a_h = _hash_refs(a_win)
+    b_h = _hash_refs(b_win)
+    # Empareja cada página de A con la de B más parecida. MONÓTONO: como las páginas van en
+    # orden, una vez A[i]→B[j], A[i+1] solo busca en B[>j] (evita falsos cruces y respeta el
+    # desfase acumulado). Solo se aceptan pares con similitud ≥ _MATCH_MIN_SIM.
+    pairs, last_j = [], -1
+    for ref_a, ha in a_h:
+        best_j, best_d = None, 999
+        for j in range(last_j + 1, len(b_h)):
+            d = _hamming(ha, b_h[j][1])
+            if d < best_d:
+                best_d, best_j = d, j
+        if best_j is not None and (1 - best_d / 64) >= _MATCH_MIN_SIM:
+            last_j = best_j
+            pairs.append({"left": ref_a, "right": b_h[best_j][0], "sim": round(1 - best_d / 64, 3)})
+            if len(pairs) >= want_pairs:
+                break
+    return pairs
+
+
 def _rank(candidates: list, on_progress=None) -> list:
     """Puntúa cada candidato (muestreo) y devuelve ordenado desc por score."""
     out = []
     done = 0
     with ThreadPoolExecutor(max_workers=10) as pool:
-        futs = {pool.submit(_score_source, int(c["id"])): c for c in candidates}
+        futs = {pool.submit(_score_candidate, c): c for c in candidates}
         for fut in as_completed(futs):
             c = futs[fut]
             done += 1
@@ -352,9 +992,12 @@ def _rank(candidates: list, on_progress=None) -> list:
 
 # ── Endpoint: discover ────────────────────────────────────────────────────────
 
-def _run_discover(task_id: str, title: str, al_id, source_ids):
+def _run_discover(task_id: str, title: str, al_id, source_ids, art_local: bool = False):
     """Descubre + rankea en un hilo; escribe el progreso y el resultado final en el
-    estado (la UI sondea /status). Cachea en `.transplant_meta.json`."""
+    estado (la UI sondea /status). Cachea en `.transplant_meta.json`.
+    `art_local=True` (manga importado por CBZ/CBR): el ARTE es el contenido ya
+    local, así que solo se busca/rankea la fuente ES — no se descubre ni rankea
+    arte remoto."""
     try:
         _set_status(task_id, status="discovering", title=title, phase="variants")
         variants = title_variants(title, int(al_id) if al_id else None)
@@ -364,6 +1007,38 @@ def _run_discover(task_id: str, title: str, al_id, source_ids):
             variants, source_ids=source_ids,
             on_progress=lambda d, t: _set_status(task_id, phase="searching", searched=d, searchTotal=t),
         )
+
+        if art_local:
+            art_best = {"local": True}
+            es_cands = [c for c in candidates if (c.get("sourceLang") or "").lower() in _ES_LANGS]
+            es_ranked = []
+            if es_cands:
+                _set_status(task_id, phase="ranking", rankTotal=len(es_cands), ranked=0)
+                es_ranked = _rank(es_cands, on_progress=lambda d, t: _set_status(task_id, phase="ranking", ranked=d, rankTotal=t))
+            es_best = es_ranked[0] if es_ranked else None
+            meta = _read_meta(title)
+            meta.update({
+                "title": title, "variants": variants,
+                "art": art_best,
+                "es": {"sourceId": es_best["sourceId"], "mangaId": es_best["id"],
+                       "sourceName": es_best["sourceName"], "sourceLang": es_best["sourceLang"]} if es_best else None,
+                "discovered_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            })
+            _write_meta(title, meta)
+            # Tomos pendientes (CBZ que abarcan varios capítulos): ahora que hay
+            # fuente ES, intentar repartirlos en capítulos reales automáticamente.
+            vol_result = {"resolved": [], "unresolved": []}
+            if es_best:
+                try:
+                    vol_result = _resolve_pending_volumes(title, es_best["id"])
+                except Exception:
+                    pass
+            _set_status(task_id, status="done", phase=("ranked" if es_best else "empty"), variants=variants,
+                        art={"candidates": [], "best": art_best},
+                        es={"candidates": es_ranked[:12], "best": es_best},
+                        resolvedVolumes=vol_result["resolved"], unresolvedVolumes=vol_result["unresolved"])
+            return
+
         if not candidates:
             _set_status(task_id, status="done", phase="empty", variants=variants,
                         art={"candidates": [], "best": None}, es={"candidates": [], "best": None})
@@ -417,13 +1092,170 @@ def discover():
     title = (body.get("title") or "").strip()
     al_id = body.get("anilistId")
     source_ids = body.get("sourceIds") or None
+    art_local = bool(body.get("artLocal"))
     if not title:
         return jsonify({"error": "title required"}), 400
 
     task_id = build_task_id(title, "discover", "transplant")
     _set_status(task_id, status="discovering", title=title, phase="start")
-    threading.Thread(target=_run_discover, args=(task_id, title, al_id, source_ids), daemon=True).start()
+    threading.Thread(target=_run_discover, args=(task_id, title, al_id, source_ids, art_local), daemon=True).start()
     return jsonify({"task_id": task_id, "title": title})
+
+
+def _run_versions(task_id: str, title: str, al_id, source_ids, cur_lang: str = ""):
+    """Descubre TODAS las versiones del título en las fuentes, las rankea por calidad
+    de imagen (altura × nitidez) y las agrupa por idioma, para la pestaña 'Versiones'.
+    Incluye el score de la versión LOCAL como línea base. La UI sondea /status.
+    Reutiliza _discover_candidates + _rank sin tocar el flujo de _run_discover."""
+    try:
+        _set_status(task_id, status="discovering", title=title, phase="variants")
+        variants = title_variants(title, int(al_id) if al_id else None)
+        _set_status(task_id, phase="searching", variants=variants, searched=0, searchTotal=0)
+        try:
+            candidates = _discover_candidates(
+                variants, source_ids=source_ids,
+                on_progress=lambda d, t: _set_status(task_id, phase="searching", searched=d, searchTotal=t),
+            )
+        except Exception:
+            candidates = []   # Suwayomi caído: aún podemos ofrecer MangaDex nativo
+        # MangaDex NATIVO (su propia API): se añade al barrido aunque no esté su extensión
+        # instalada en Suwayomi (o aunque Suwayomi esté offline). Fluye por el mismo ranking
+        # (_score_candidate lo enruta a _score_md).
+        try:
+            candidates += _md_candidates(variants, cur_lang)
+        except Exception:
+            pass
+        local = _score_local(title)
+        if not candidates:
+            _set_status(task_id, status="done", phase="empty", variants=variants,
+                        versions=[], byLang={}, local=local, currentLang=cur_lang)
+            return
+        cur = (cur_lang or "").lower()
+        # COSTE: el ranking baja 2-3 páginas por candidato. Acotar a los mejores por
+        # parecido de título (top _RANK_CAP) + TODOS los del idioma actual del usuario
+        # (su caso estrella: varias versiones en su mismo idioma, cuál es la mejor).
+        by_match = sorted(candidates, key=lambda c: c.get("match", 0), reverse=True)
+        to_rank = by_match[:_RANK_CAP]
+        seen = {(c["sourceId"], c["id"]) for c in to_rank}
+        for c in candidates:
+            # incluir SIEMPRE: (a) todas las versiones del idioma actual del usuario (su caso
+            # estrella) y (b) TODAS las de MangaDex nativo (son pocas y el usuario las pidió
+            # explícitamente), aunque queden fuera del top _RANK_CAP por parecido de título.
+            if (c["sourceId"], c["id"]) in seen:
+                continue
+            is_cur = cur and (c.get("sourceLang") or "").lower() == cur
+            is_md = str(c.get("sourceId")) == "__mangadex__"
+            if is_cur or is_md:
+                to_rank.append(c); seen.add((c["sourceId"], c["id"]))
+        _set_status(task_id, phase="ranking", rankTotal=len(to_rank), ranked=0)
+        ranked = _rank(to_rank, on_progress=lambda d, t: _set_status(task_id, phase="ranking", ranked=d, rankTotal=t))
+
+        def _slim(c):
+            return {"sourceId": c["sourceId"], "mangaId": c["id"],
+                    "sourceName": c["sourceName"], "sourceLang": c["sourceLang"],
+                    "match": c.get("match"), "quality": c["quality"]}
+        # `ranked` ya viene desc por score global → cada grupo de idioma hereda el orden
+        by_lang: dict = {}
+        for c in ranked:
+            by_lang.setdefault((c.get("sourceLang") or "?").lower(), []).append(_slim(c))
+        _set_status(task_id, status="done", phase="ranked", variants=variants,
+                    versions=[_slim(c) for c in ranked], byLang=by_lang,
+                    local=local, currentLang=cur_lang)
+    except Exception as e:
+        _set_status(task_id, status="error", phase="error", error=str(e))
+
+
+@transplant_bp.route("/versions", methods=["POST"])
+def versions():
+    """Descubre y rankea TODAS las versiones del título por calidad de imagen,
+    agrupadas por idioma (pestaña 'Versiones'). Devuelve task_id de inmediato; la UI
+    sondea /status?task_id=. Body: {title, anilistId?, sourceIds?[], currentLang?}."""
+    if not _suwayomi_online():
+        return jsonify({"error": "Suwayomi offline"}), 503
+    body = request.get_json(silent=True) or {}
+    title = (body.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    al_id = body.get("anilistId")
+    source_ids = body.get("sourceIds") or None
+    cur_lang = (body.get("currentLang") or "").strip()
+    task_id = build_task_id(title, "versions", "transplant")
+    _set_status(task_id, status="discovering", title=title, phase="start")
+    threading.Thread(target=_run_versions, args=(task_id, title, al_id, source_ids, cur_lang), daemon=True).start()
+    return jsonify({"task_id": task_id, "title": title})
+
+
+def _run_download_version(task_id: str, title: str, manga_id):
+    """Descarga en la biblioteca los capítulos de una versión (fuente Suwayomi) que el
+    usuario AÚN NO tiene localmente. NO sobrescribe lo existente (no destructivo): solo
+    rellena los capítulos que faltan. Progreso vía /status (chapterDone/chapterTotal)."""
+    try:
+        _set_status(task_id, status="downloading", title=title, phase="list", chapterDone=0, chapterTotal=0)
+        cmap = _chapters_map(int(manga_id))
+        if not cmap:
+            _set_status(task_id, status="done", phase="empty", chapterDone=0, chapterTotal=0, downloaded=0)
+            return
+        have = set(_local_chapter_files(title).keys())
+        todo = sorted([(chn, info) for chn, info in cmap.items() if chn not in have],
+                      key=lambda x: _chnum(x[0]))
+        folder = Path(MANGA_DIR) / title
+        total = len(todo)
+        _set_status(task_id, phase="downloading", chapterDone=0, chapterTotal=total)
+        done = 0
+        for chn, info in todo:
+            _set_status(task_id, phase="downloading", chapter=chn, chapterDone=done, chapterTotal=total)
+            try:
+                urls = _chapter_page_urls(info["id"])
+                if urls:
+                    _download_chapter_to(folder, urls, _chapter_file_prefix(chn))
+            except Exception:
+                pass
+            done += 1
+            _set_status(task_id, phase="downloading", chapterDone=done, chapterTotal=total)
+        _set_status(task_id, status="done", phase="done", chapterDone=done, chapterTotal=total, downloaded=done)
+    except Exception as e:
+        _set_status(task_id, status="error", phase="error", error=str(e))
+
+
+@transplant_bp.route("/download_version", methods=["POST"])
+def download_version():
+    """Descarga los capítulos FALTANTES de una versión en la biblioteca (no sobrescribe lo
+    que ya tienes). Devuelve task_id; la UI sondea /status. Body: {title, source:{mangaId}}."""
+    if not _suwayomi_online():
+        return jsonify({"error": "Suwayomi offline"}), 503
+    body = request.get_json(silent=True) or {}
+    title = (body.get("title") or "").strip()
+    manga_id = (body.get("source") or {}).get("mangaId")
+    if not title or not manga_id:
+        return jsonify({"error": "title and source.mangaId required"}), 400
+    task_id = build_task_id(title, "dlversion", "transplant")
+    _set_status(task_id, status="downloading", title=title, phase="start")
+    threading.Thread(target=_run_download_version, args=(task_id, title, manga_id), daemon=True).start()
+    return jsonify({"task_id": task_id, "title": title})
+
+
+@transplant_bp.route("/set_primary", methods=["POST"])
+def set_primary():
+    """Fija la versión RECOMENDADA de un manga (solo etiqueta, NO destructivo): escribe
+    `recommended_source` en `.source_meta.json`. No descarga ni toca archivos/reader/
+    upscale/export. `source=null` la quita. Body: {title, source?}."""
+    body = request.get_json(silent=True) or {}
+    title = (body.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    meta = _read_source_meta(title)
+    src = body.get("source")
+    if src:
+        meta["recommended_source"] = {
+            "sourceId": src.get("sourceId"), "mangaId": src.get("mangaId"),
+            "sourceName": src.get("sourceName"), "sourceLang": src.get("sourceLang"),
+            "quality": src.get("quality"),
+            "set_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+    else:
+        meta.pop("recommended_source", None)
+    _write_source_meta(title, meta)
+    return jsonify({"ok": True, "recommended_source": meta.get("recommended_source")})
 
 
 @transplant_bp.route("/confirm", methods=["POST"])
@@ -448,6 +1280,59 @@ def get_meta(title):
     return jsonify(_read_meta(title.strip()))
 
 
+@transplant_bp.route("/resolve_volumes", methods=["POST"])
+def resolve_volumes():
+    """Reintenta el reparto automático de tomos pendientes (por si el primer
+    intento falló porque la fuente ES aún no tenía todos los capítulos, etc.)."""
+    body = request.get_json(silent=True) or {}
+    title = (body.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    meta = _read_meta(title)
+    es = meta.get("es")
+    if not es:
+        return jsonify({"error": "no hay fuente ES elegida; ejecuta /discover primero"}), 400
+    if not _suwayomi_online():
+        return jsonify({"error": "Suwayomi offline"}), 503
+    return jsonify(_resolve_pending_volumes(title, es["mangaId"]))
+
+
+@transplant_bp.route("/resolve_volume_manual", methods=["POST"])
+def resolve_volume_manual():
+    """Reparto manual de un tomo cuando el automático no cuadra: el usuario da
+    explícitamente cuántas páginas tiene cada capítulo real (en orden).
+    Body: {title, prefix, pageCounts: [{chapter, pages}, ...]}"""
+    body = request.get_json(silent=True) or {}
+    title = (body.get("title") or "").strip()
+    prefix = (body.get("prefix") or "").strip()
+    page_counts = body.get("pageCounts")
+    if not title or not prefix or not isinstance(page_counts, list) or not page_counts:
+        return jsonify({"error": "title, prefix y pageCounts son obligatorios"}), 400
+    pending = _pending_volumes(title)
+    vol = next((v for v in pending if v["prefix"] == prefix), None)
+    if not vol:
+        return jsonify({"error": "tomo no encontrado o ya repartido"}), 404
+    try:
+        chapter_pages = [(normalize_chapter(p["chapter"]), int(p["pages"])) for p in page_counts]
+    except (KeyError, TypeError, ValueError):
+        return jsonify({"error": "pageCounts inválido"}), 400
+
+    # Aparta TODOS los pendientes (no solo este) antes de repartir: el rango que el
+    # usuario declaró a mano puede coincidir con el placeholder de otro tomo aún sin
+    # resolver (mismo riesgo que en _resolve_pending_volumes, ver _stage_volume).
+    staged = {v["prefix"]: _stage_volume(title, v) for v in pending}
+    others = [v for v in pending if v["prefix"] != prefix]
+    res = _split_volume(title, vol, chapter_pages, source_prefix=staged[prefix])
+    for v in others:
+        original_prefix = v["prefix"]
+        v["prefix"] = _unstage_volume(title, staged[original_prefix], original_prefix)
+    if not res["ok"]:
+        _unstage_volume(title, staged[prefix], prefix)
+        return jsonify({"error": res["error"]}), 400
+    _write_pending_volumes(title, others)
+    return jsonify({"ok": True, "chapters": [c for c, _ in chapter_pages]})
+
+
 @transplant_bp.route("/chapters/<path:title>", methods=["GET"])
 def list_chapters(title):
     """Capítulos traducibles (disponibles en AMBAS fuentes elegidas) con su estado
@@ -455,12 +1340,13 @@ def list_chapters(title):
     title = title.strip()
     meta = _read_meta(title)
     art, es = meta.get("art"), meta.get("es")
+    pending = _pending_volumes(title)
     if not art or not es:
-        return jsonify({"chapters": [], "needsDiscover": True})
+        return jsonify({"chapters": [], "needsDiscover": True, "pendingVolumes": pending})
     if not _suwayomi_online():
         return jsonify({"error": "Suwayomi offline"}), 503
     try:
-        art_map = _chapters_map(int(art["mangaId"]), timeout=_SAMPLE_TIMEOUT)
+        art_map = _local_chapters_map(title) if art.get("local") else _chapters_map(int(art["mangaId"]), timeout=_SAMPLE_TIMEOUT)
         es_map = _chapters_map(int(es["mangaId"]), timeout=_SAMPLE_TIMEOUT)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -472,7 +1358,7 @@ def list_chapters(title):
         "status": ("done" if chn in translated else "failed" if chn in failed else "pending"),
     } for chn in common]
     return jsonify({"chapters": chapters, "art": art, "es": es,
-                    "translated": sorted(translated, key=_chnum)})
+                    "translated": sorted(translated, key=_chnum), "pendingVolumes": pending})
 
 
 @transplant_bp.route("/preview/<path:title>/<chapter>", methods=["GET"])
@@ -483,6 +1369,12 @@ def preview_chapter(title, chapter):
     chn = normalize_chapter(chapter)
     which = (request.args.get("which") or "art").lower()
     meta = _read_meta(title)
+    if which == "art" and (meta.get("art") or {}).get("local"):
+        files = _local_chapter_files(title).get(chn, [])
+        if not files:
+            return jsonify({"pages": [], "missing": True})
+        urls = [f"/uploads/{quote(title, safe='')}/{f.name}" for f in files]
+        return jsonify({"pages": urls, "count": len(urls), "source": {"name": "Local", "lang": None}})
     src = meta.get("es" if which == "es" else "art")
     if not src:
         return jsonify({"error": "no source chosen"}), 400
@@ -498,6 +1390,65 @@ def preview_chapter(title, chapter):
         return jsonify({"error": str(ex)}), 500
     return jsonify({"pages": urls, "count": len(urls),
                     "source": {"name": src.get("sourceName"), "lang": src.get("sourceLang")}})
+
+
+@transplant_bp.route("/preview_candidate", methods=["GET"])
+def preview_candidate():
+    """Páginas de muestra de un candidato CUALQUIERA del ranking de versiones (no la
+    selección confirmada): se identifica por `mangaId` de su fuente. `chapter` opcional
+    — si no se da, se muestrea el primer capítulo con páginas. Para que el usuario
+    juzgue la calidad a ojo antes de decidir."""
+    manga_id = request.args.get("mangaId")
+    if not manga_id:
+        return jsonify({"error": "mangaId required"}), 400
+    sid = request.args.get("sourceId") or ""
+    cand = {"mangaId": manga_id, "sourceId": sid, "sourceLang": request.args.get("lang") or ""}
+    # MangaDex/local no necesitan Suwayomi; solo exigimos Suwayomi online para fuentes Suwayomi.
+    if sid != "__mangadex__" and str(manga_id) != "__local__" and not _suwayomi_online():
+        return jsonify({"error": "Suwayomi offline"}), 503
+    try:
+        _, urls = _candidate_chapter_urls(cand, request.args.get("title") or "",
+                                          want_num=request.args.get("chapter"))
+    except Exception as ex:
+        return jsonify({"error": str(ex)}), 500
+    if not urls:
+        return jsonify({"pages": [], "missing": True})
+    # muestra de páginas PROFUNDAS y B/N: saltamos portada/créditos (primeras páginas, casi
+    # siempre a color) y descartamos las que sean a color, para que la comparación A|B caiga
+    # en la MISMA página de historia entre scans distintos.
+    window = _deep_slice(urls, _SAMPLE_PAGES * 2 + _COLOR_MARGIN)
+    sample = (_filter_noncolor(window, _SAMPLE_PAGES * 2)
+              or window[:_SAMPLE_PAGES * 2] or urls[:_SAMPLE_PAGES * 2])
+    return jsonify({"pages": sample, "count": len(sample)})
+
+
+@transplant_bp.route("/compare_pages", methods=["POST"])
+def compare_pages():
+    """Empareja por HASH PERCEPTUAL las páginas equivalentes de DOS versiones y devuelve
+    pares {left,right,sim} para el comparador A|B — así ambos lados muestran la MISMA página
+    de historia (no créditos/portadas distintas, que falseaban la comparación). Combina el
+    muestreo profundo + descarte de color con el emparejado por dHash.
+    Body: {title, a, b, chapter?}; a/b = {sourceId, mangaId, sourceLang} (Suwayomi,
+    MangaDex '__mangadex__', o local '__local__')."""
+    body = request.get_json(silent=True) or {}
+    title = (body.get("title") or "").strip()
+    a = body.get("a") or {}
+    b = body.get("b") or {}
+    if not a.get("mangaId") or not b.get("mangaId"):
+        return jsonify({"error": "a.mangaId and b.mangaId required"}), 400
+    chapter = body.get("chapter")
+    try:
+        num_a, urls_a = _candidate_chapter_urls(a, title, want_num=chapter)
+        # alinear B al MISMO número de capítulo que A
+        num_b, urls_b = _candidate_chapter_urls(b, title, want_num=(num_a if num_a is not None else chapter))
+        if not urls_a or not urls_b:
+            return jsonify({"pairs": [], "matched": 0, "asked": _MATCH_REF_PAGES,
+                            "chapter": num_a, "reason": "sin-paginas"})
+        pairs = _match_pairs(urls_a, urls_b, _MATCH_REF_PAGES)
+    except Exception as ex:
+        return jsonify({"error": str(ex)}), 500
+    return jsonify({"pairs": pairs, "matched": len(pairs),
+                    "asked": _MATCH_REF_PAGES, "chapter": num_a})
 
 
 @transplant_bp.route("/status", methods=["GET"])
@@ -565,7 +1516,9 @@ def _persist_run_meta(title: str, translated: set, failed: set, task_id=None, st
 def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict):
     from transplant_core import transplant_chapter
     _transplant_cancel[task_id] = False
-    art_map = _chapters_map(int(art["mangaId"]))
+    art_local = bool((art or {}).get("local"))
+    local_files = _local_chapter_files(title) if art_local else {}
+    art_map = None if art_local else _chapters_map(int(art["mangaId"]))
     es_map = _chapters_map(int(es["mangaId"]))
     out_dir = Path(MANGA_DIR) / title
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -581,7 +1534,9 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict)
             cancelled = True
             break
         chn = normalize_chapter(ch)
-        a_ch, e_ch = art_map.get(chn), es_map.get(chn)
+        a_local = local_files.get(chn) if art_local else None
+        a_ch = a_local if art_local else art_map.get(chn)
+        e_ch = es_map.get(chn)
         if not a_ch or not e_ch:
             failed.add(chn)
             _set_status(task_id, phase="skip", chapter=chn,
@@ -594,7 +1549,12 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict)
             en_dir = tmp / "en"; es_dir = tmp / "es"; stage = tmp / "out"
             _set_status(task_id, phase="download", chapter=chn, chapterDone=ci, chapterTotal=total)
             with _dl_semaphore:
-                _download_chapter_to(en_dir, _chapter_page_urls(a_ch["id"]), "en")
+                if art_local:
+                    en_dir.mkdir(parents=True, exist_ok=True)
+                    for f in a_local:
+                        shutil.copy2(f, en_dir / f.name)
+                else:
+                    _download_chapter_to(en_dir, _chapter_page_urls(a_ch["id"]), "en")
                 if _cancelled():
                     cancelled = True
                 else:
@@ -666,7 +1626,7 @@ def run():
 
     if chapters == "all":
         # 'all' = capítulos disponibles en AMBAS fuentes
-        art_map = _chapters_map(int(art["mangaId"]))
+        art_map = _local_chapters_map(title) if art.get("local") else _chapters_map(int(art["mangaId"]))
         es_map = _chapters_map(int(es["mangaId"]))
         chapters = sorted(set(art_map) & set(es_map),
                           key=lambda x: float(x) if x.replace('.', '', 1).isdigit() else 0)

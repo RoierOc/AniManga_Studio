@@ -64,6 +64,24 @@ export const useMangaStore = defineStore('manga', {
       preview: {},   // chapterNorm -> { open, loading, pages: [] }
       running: false, runStatus: null, taskId: null,
       _dpoll: null, _rpoll: null,
+      pendingVolumes: [], unresolvedVolumes: [],   // tomos importados sin repartir en capítulos reales
+      volResolving: false,
+    },
+
+    // Versiones (pestaña "Versiones" del modal): ranking de calidad de imagen de TODAS
+    // las versiones del título en las fuentes, agrupadas por idioma. Solo lectura — no
+    // toca archivos ni metadata. Reusa el mismo motor discover/rank que `tp`.
+    ver: {
+      loading: false, phase: '', discoverProgress: {},
+      versions: [],            // [{ sourceId, mangaId, sourceName, sourceLang, match, quality }]
+      byLang: {},              // { lang: [version,...] } cada grupo desc por score
+      local: null,             // { height, sharpness, score, ... } score de la versión local (baseline)
+      currentLang: '',         // idioma de la versión local del usuario
+      langFilter: '',          // '' = todos los idiomas
+      sample: { open: false, key: null, loading: false, pages: [], name: '' },
+      cmpSel: [],              // hasta 2 candidatos elegidos para comparar A|B
+      dl: null,                // { running, done, total, name } descarga de versión en curso
+      _poll: null, _dlpoll: null,
     },
 
     // live task status (from SSE aggregated payload)
@@ -91,6 +109,7 @@ export const useMangaStore = defineStore('manga', {
     // scanlation comparison (different downloaded groups of the same chapter)
     scanCompareMode: false,
     comparePages2: [],
+    compareLabels: null,        // { left, right } — etiquetas A|B en el comparador (versiones)
     scanCmp: { open: false, chapter: null, variants: [], loading: false },
     progress: (() => { try { return JSON.parse(localStorage.getItem('manga-progress-v1') || '{}') } catch { return {} } })(),
 
@@ -122,6 +141,9 @@ export const useMangaStore = defineStore('manga', {
       covers: [], coversLoading: false,
       selectedCover: null, coverLoadingId: null, coverB64: '', coverUrl: '',
     },
+
+    // Selector de portada (cambiar la del manga si está corrupta/baja calidad)
+    coverPicker: { open: false, loading: false, current: null, anilist: [], mangadex: [], applying: null },
 
     // upscale model + mode
     models: {},                 // { key: label }
@@ -163,6 +185,22 @@ export const useMangaStore = defineStore('manga', {
       return result.sort((a, b) => parseFloat(b.chapter) - parseFloat(a.chapter))
     },
     hasSourceMeta: (s) => !!(s.current?.source_meta?.sourceId && s.current?.source_meta?.mangaId) || !!s.mdId,
+    // Fuente activa de capítulos: si hay una versión FIJADA como principal (recommended_source)
+    // se descargan los capítulos de ESA fuente (la mejor según el criterio del usuario); si no,
+    // la fuente de origen del manga. Alimenta la lista y la descarga de la pestaña Capítulos.
+    effectiveSource: (s) => {
+      const sm = s.current?.source_meta
+      const rec = sm?.recommended_source
+      // Solo una fuente Suwayomi puede alimentar la descarga de Capítulos (usa /api/sources/…).
+      // Si se fijó MangaDex/local, el pin sigue valiendo como etiqueta de calidad, pero los
+      // capítulos se listan/descargan desde la fuente de ORIGEN (no romper esa ruta).
+      const isSuwa = (id) => id && id !== '__mangadex__' && id !== '__local__'
+      if (rec?.sourceId && rec?.mangaId && isSuwa(rec.sourceId)) {
+        return { sourceId: rec.sourceId, mangaId: rec.mangaId, sourceName: rec.sourceName || '', sourceLang: rec.sourceLang || '', pinned: true }
+      }
+      if (sm?.sourceId && sm?.mangaId) return { sourceId: sm.sourceId, mangaId: sm.mangaId, sourceName: sm.sourceName || '', sourceLang: sm.sourceLang || '', pinned: false }
+      return null
+    },
     // Whether we have any external chapters to show (source, MD, or local)
     hasAnyChapters: (s) => s.mergedChapters.length > 0,
 
@@ -187,17 +225,19 @@ export const useMangaStore = defineStore('manga', {
     // compare (original vs upscaled) — only paged manga, chapter has an upscale
     canCompare: (s) => s.reader?.kind === 'manga' && s.mode === 'paged' &&
       (s.reader?.source === 'upscaled' || s.upscaled[s.reader?.chapter] === true || s.upscaled[s.reader?.chapter] === 'partial'),
+    // `http(s)` pass-through: las muestras de versiones (pestaña Versiones) son URLs
+    // absolutas de Suwayomi, no rutas locales /uploads — no anteponer prefijo.
     pageOrigUrl: (s) => {
       const p = s.pages[s.page]; if (!p) return ''
-      return p.startsWith('/') ? p : '/uploads/original/' + p
+      return (p.startsWith('/') || p.startsWith('http')) ? p : '/uploads/original/' + p
     },
     pageUpUrl: (s) => {
       if (s.scanCompareMode && s.comparePages2.length) {
         const p2 = s.comparePages2[Math.min(s.page, s.comparePages2.length - 1)]
-        return p2 ? (p2.startsWith('/') ? p2 : '/uploads/original/' + p2) : ''
+        return p2 ? ((p2.startsWith('/') || p2.startsWith('http')) ? p2 : '/uploads/original/' + p2) : ''
       }
       const p = s.pages[s.page]; if (!p) return ''
-      return p.startsWith('/') ? p : '/uploads/upscaled/' + p
+      return (p.startsWith('/') || p.startsWith('http')) ? p : '/uploads/upscaled/' + p
     },
 
     // Unified active task list for the global queue widget.
@@ -304,21 +344,9 @@ export const useMangaStore = defineStore('manga', {
           this.current.transplant_meta = d.transplant_meta || null
         }
         this._resetTp()
-        // If source_meta exists (downloaded, or tracked from Fuentes pre-download), load source chapters
-        const sm = this.current.source_meta
-        if (sm?.sourceId && sm?.mangaId) {
-          this.sourceLoading = true
-          api.get(`/api/sources/manga/${sm.mangaId}/chapters`)
-            .then(chs => {
-              this.sourceChapters = (chs || []).map(ch => ({
-                ...ch,
-                chapterNorm: String(ch.chapterNumber ?? '').replace(/\.0$/, ''),
-                name: ch.name || `Cap. ${ch.chapterNumber ?? '?'}`,
-              }))
-            })
-            .catch(() => {})
-            .finally(() => { this.sourceLoading = false })
-        }
+        // If source_meta exists (downloaded, or tracked from Fuentes pre-download), load source
+        // chapters from the EFFECTIVE source (the pinned version if any, else the origin source).
+        this._loadSourceChapters()
         // If mdId exists, load MangaDex chapters
         if (this.mdId) {
           this.mdChaptersLoading = true
@@ -335,6 +363,26 @@ export const useMangaStore = defineStore('manga', {
         }
       } catch (_) { useUiStore().toast('No se pudieron cargar los capítulos', 'error') }
       finally { this.modalLoading = false }
+    },
+
+    // Carga la lista de capítulos de la fuente ACTIVA (effectiveSource). Se reusa al abrir el
+    // modal y al fijar/quitar una versión principal, para que Capítulos refleje al instante la
+    // fuente desde la que se descargará.
+    _loadSourceChapters() {
+      const src = this.effectiveSource
+      this.sourceChapters = []
+      if (!src) return
+      this.sourceLoading = true
+      api.get(`/api/sources/manga/${src.mangaId}/chapters`)
+        .then(chs => {
+          this.sourceChapters = (chs || []).map(ch => ({
+            ...ch,
+            chapterNorm: String(ch.chapterNumber ?? '').replace(/\.0$/, ''),
+            name: ch.name || `Cap. ${ch.chapterNumber ?? '?'}`,
+          }))
+        })
+        .catch(() => {})
+        .finally(() => { this.sourceLoading = false })
     },
     close() { this._stopTpPolls(); this.current = null },
 
@@ -358,6 +406,8 @@ export const useMangaStore = defineStore('manga', {
         preview: {},
         running: false, runStatus: null, taskId: null,
         _dpoll: null, _rpoll: null,
+        pendingVolumes: [], unresolvedVolumes: [],
+        volResolving: false,
       }
       // si ya hay fuentes elegidas (discover previo cacheado), cargar la lista de capítulos
       if (meta?.art && meta?.es) this.tpLoadChapters()
@@ -370,8 +420,40 @@ export const useMangaStore = defineStore('manga', {
       try {
         const d = await api.get(`/api/transplant/chapters/${encodeURIComponent(title)}`)
         this.tp.chapters = d.chapters || []
+        this.tp.pendingVolumes = d.pendingVolumes || []
       } catch (_) { this.tp.chapters = [] }
       finally { this.tp.chaptersLoading = false }
+    },
+
+    // Reintenta el reparto automático de tomos pendientes (manga importado).
+    async tpResolveVolumes() {
+      const title = this.current?.id
+      if (!title) return
+      this.tp.volResolving = true
+      try {
+        const res = await api.post('/api/transplant/resolve_volumes', { title })
+        this.tp.unresolvedVolumes = res.unresolved || []
+        if (res.resolved?.length) { this.tpLoadChapters(); useUiStore().toast(`${res.resolved.length} tomo(s) repartido(s) en capítulos`, 'ok') }
+      } catch (e) {
+        useUiStore().toast('No se pudo repartir el tomo', 'error')
+      } finally {
+        this.tp.volResolving = false
+      }
+    },
+    // Reparto manual: pageCounts = [{chapter, pages}, ...] en orden.
+    async tpResolveVolumeManual(prefix, pageCounts) {
+      const title = this.current?.id
+      if (!title) return
+      try {
+        await api.post('/api/transplant/resolve_volume_manual', { title, prefix, pageCounts })
+        this.tp.unresolvedVolumes = this.tp.unresolvedVolumes.filter(v => v.prefix !== prefix)
+        this.tpLoadChapters()
+        useUiStore().toast('Tomo repartido en capítulos', 'ok')
+      } catch (e) {
+        let msg = 'No se pudo repartir: revisa que las páginas sumen el total del tomo'
+        try { msg = JSON.parse(e.body)?.error || msg } catch {}
+        useUiStore().toast(msg, 'error')
+      }
     },
 
     async tpDiscover() {
@@ -383,6 +465,7 @@ export const useMangaStore = defineStore('manga', {
       try {
         const res = await api.post('/api/transplant/discover', {
           title, anilistId: this.current?.al_id || null,
+          artLocal: !!this.current?.source_meta?.imported,
         })
         this._pollTpDiscover(res.task_id)
       } catch (e) {
@@ -405,9 +488,14 @@ export const useMangaStore = defineStore('manga', {
             t.esCands = st.es?.candidates || []
             t.artSel = st.art?.best || t.artCands[0] || null
             t.esSel = st.es?.best || t.esCands[0] || null
+            t.unresolvedVolumes = st.unresolvedVolumes || []
             t.phase = 'ready'
             if (!t.artSel || !t.esSel) ui.toast('No se hallaron ambas fuentes (arte y ES)', 'error')
-            else { await this._tpConfirm(); this.tpLoadChapters() }
+            else {
+              await this._tpConfirm(); this.tpLoadChapters()
+              if (st.resolvedVolumes?.length) ui.toast(`${st.resolvedVolumes.length} tomo(s) repartido(s) en capítulos`, 'ok')
+              if (t.unresolvedVolumes.length) ui.toast('Algún tomo no se pudo repartir automáticamente — ajusta manualmente en Traducir', 'warn')
+            }
           } else if (st.status === 'error') {
             clearInterval(t._dpoll); t._dpoll = null; t.loading = false; t.phase = 'error'
             ui.toast('Falló el descubrimiento', 'error')
@@ -486,11 +574,177 @@ export const useMangaStore = defineStore('manga', {
       }
     },
 
-    async downloadSourceChapter(ch) {
+    /* ── Versiones (ranking de calidad, solo lectura) ────────────────────── */
+    async verDiscover() {
+      const ui = useUiStore()
+      const title = this.current?.id
+      if (!title) return
+      const v = this.ver
+      v.loading = true; v.phase = 'start'; v.discoverProgress = {}
+      v.versions = []; v.byLang = {}; v.local = null
+      v.sample = { open: false, key: null, loading: false, pages: [], name: '' }
+      try {
+        const res = await api.post('/api/transplant/versions', {
+          title, anilistId: this.current?.al_id || null,
+          currentLang: this.current?.source_meta?.sourceLang || '',
+        })
+        this._pollVer(res.task_id)
+      } catch (e) {
+        v.loading = false; v.phase = 'error'
+        ui.toast(e?.status === 503 ? 'Suwayomi offline' : 'Falló la búsqueda de versiones', 'error')
+      }
+    },
+    _pollVer(taskId) {
+      const ui = useUiStore(); const v = this.ver
+      if (v._poll) clearInterval(v._poll)
+      v._poll = setInterval(async () => {
+        try {
+          const st = await api.get(`/api/transplant/status?task_id=${encodeURIComponent(taskId)}`)
+          v.phase = st.phase || v.phase
+          v.discoverProgress = { searched: st.searched, searchTotal: st.searchTotal, ranked: st.ranked, rankTotal: st.rankTotal }
+          if (st.status === 'done') {
+            clearInterval(v._poll); v._poll = null; v.loading = false
+            v.versions = st.versions || []
+            v.byLang = st.byLang || {}
+            v.local = st.local || null
+            v.currentLang = st.currentLang || ''
+            // Por defecto mostramos TODAS las fuentes/idiomas (panorama completo); el usuario
+            // filtra por idioma con el desplegable (que lleva el conteo por idioma).
+            v.langFilter = ''
+            v.phase = 'ready'
+            if (!v.versions.length) ui.toast('No se encontraron otras versiones', 'info')
+          } else if (st.status === 'error') {
+            clearInterval(v._poll); v._poll = null; v.loading = false; v.phase = 'error'
+            ui.toast('Falló la búsqueda de versiones', 'error')
+          }
+        } catch (_) {}
+      }, 1200)
+    },
+    verSetLangFilter(l) { this.ver.langFilter = l },
+    verReset() {
+      const v = this.ver
+      if (v._poll) { clearInterval(v._poll); v._poll = null }
+      if (v._dlpoll) { clearInterval(v._dlpoll); v._dlpoll = null }
+      v.loading = false; v.phase = ''; v.discoverProgress = {}
+      v.versions = []; v.byLang = {}; v.local = null; v.currentLang = ''; v.langFilter = ''
+      v.sample = { open: false, key: null, loading: false, pages: [], name: '' }
+      v.cmpSel = []; v.dl = null
+    },
+    // Comparar A|B: selección de hasta 2 candidatos (toggle; el 3º desplaza al más viejo)
+    verToggleCompare(cand) {
+      const v = this.ver
+      const k = (c) => `${c.sourceId}_${c.mangaId}`
+      const idx = v.cmpSel.findIndex(c => k(c) === k(cand))
+      if (idx >= 0) { v.cmpSel = v.cmpSel.filter((_, i) => i !== idx); return }
+      v.cmpSel = [...v.cmpSel, cand].slice(-2)
+    },
+    async verRunCompare() {
+      const ui = useUiStore(); const v = this.ver
+      if (v.cmpSel.length !== 2) return
+      const [a, b] = v.cmpSel
+      this._resetView()
+      this.mode = 'paged'   // el comparador A|B solo se renderiza en modo paginado
+      this.reader = { title: this.current?.id || '', chapter: '', source: 'compare', kind: 'manga', cover: this.current?.cover || '' }
+      this.readerLoading = true; this.pages = []; this.page = 0; this.comparePages2 = []
+      const slim = (c) => ({ sourceId: c.sourceId, mangaId: c.mangaId, sourceLang: c.sourceLang })
+      const label = (c) => c.local ? `Tu versión local · ${c.quality?.height || '?'}px` : `${c.sourceName} · ${c.quality?.height || '?'}px`
+      this.compareLabels = { left: label(a), right: label(b) }
+      try {
+        // El backend empareja por hash perceptual: ambos lados muestran LA MISMA página.
+        const d = await api.post('/api/transplant/compare_pages', { title: this.current.id, a: slim(a), b: slim(b) })
+        const pairs = d.pairs || []
+        if (!pairs.length) {
+          ui.toast('No se hallaron páginas equivalentes para comparar estas versiones', 'error'); this.reader = null; return
+        }
+        this.pages = pairs.map(p => p.left)
+        this.comparePages2 = pairs.map(p => p.right)
+        const avg = Math.round(100 * pairs.reduce((s, p) => s + p.sim, 0) / pairs.length)
+        this.compareLabels = { left: `${label(a)} · ${avg}% coincidencia`, right: label(b) }
+        this.compareMode = true
+        this.scanCompareMode = true
+      } catch (e) {
+        const detail = e?.status === 404 ? ' (reinicia el servidor para cargar la nueva ruta)' : (e?.status ? ` (${e.status})` : '')
+        ui.toast(`No se pudo cargar la comparación${detail}`, 'error'); this.reader = null
+      } finally { this.readerLoading = false }
+    },
+    // Descargar en la biblioteca los capítulos que faltan de una versión (no destructivo).
+    async verDownloadVersion(cand) {
+      const ui = useUiStore(); const v = this.ver
+      v.dl = { running: true, done: 0, total: 0, name: cand.sourceName }
+      try {
+        const res = await api.post('/api/transplant/download_version', {
+          title: this.current.id,
+          source: { mangaId: cand.mangaId, sourceId: cand.sourceId, sourceName: cand.sourceName, sourceLang: cand.sourceLang },
+        })
+        this._pollVerDl(res.task_id)
+      } catch (e) {
+        v.dl = null
+        ui.toast(e?.status === 503 ? 'Suwayomi offline' : 'No se pudo iniciar la descarga', 'error')
+      }
+    },
+    _pollVerDl(taskId) {
+      const ui = useUiStore(); const v = this.ver
+      if (v._dlpoll) clearInterval(v._dlpoll)
+      v._dlpoll = setInterval(async () => {
+        try {
+          const st = await api.get(`/api/transplant/status?task_id=${encodeURIComponent(taskId)}`)
+          if (v.dl) v.dl = { ...v.dl, done: st.chapterDone || 0, total: st.chapterTotal || 0 }
+          if (st.status === 'done') {
+            clearInterval(v._dlpoll); v._dlpoll = null
+            const n = st.downloaded || 0
+            v.dl = null
+            ui.toast(n ? `Descargados ${n} capítulo(s) de esta versión` : 'No faltaban capítulos de esta versión', n ? 'ok' : 'info')
+            this.libraryDirty++
+            if (this.current?.id) api.get(`/api/library/${encodeURIComponent(this.current.id)}`)
+              .then(d => { this.chapters = d.chapters || []; this.upscaled = d.upscaled || {} }).catch(() => {})
+          } else if (st.status === 'error') {
+            clearInterval(v._dlpoll); v._dlpoll = null; v.dl = null
+            ui.toast('Falló la descarga de la versión', 'error')
+          }
+        } catch (_) {}
+      }, 1200)
+    },
+    // Fijar como principal (solo etiqueta, no destructivo)
+    async verSetPrimary(cand) {
       const ui = useUiStore()
       const sm = this.current?.source_meta
+      const isSet = sm?.recommended_source && cand
+        && sm.recommended_source.sourceId === cand.sourceId
+        && String(sm.recommended_source.mangaId) === String(cand.mangaId)
+      const source = isSet ? null : (cand ? {
+        sourceId: cand.sourceId, mangaId: cand.mangaId, sourceName: cand.sourceName,
+        sourceLang: cand.sourceLang, quality: cand.quality,
+      } : null)
+      try {
+        const d = await api.post('/api/transplant/set_primary', { title: this.current.id, source })
+        if (this.current) this.current.source_meta = { ...(this.current.source_meta || {}), recommended_source: d.recommended_source || null }
+        this.libraryDirty++
+        // La fuente activa de capítulos cambió: recargar la lista para que la pestaña Capítulos
+        // descargue ya desde la versión fijada (o vuelva a la de origen al quitarla).
+        this._loadSourceChapters()
+        ui.toast(source ? `Fijada "${cand.sourceName}" — los capítulos se descargarán de esta fuente` : 'Versión principal quitada', 'ok')
+      } catch (_) { ui.toast('No se pudo fijar la versión', 'error') }
+    },
+    async verReadSample(cand) {
+      const v = this.ver
+      const key = `${cand.sourceId}_${cand.mangaId}`
+      if (v.sample.key === key && v.sample.open) { v.sample = { ...v.sample, open: false }; return }
+      v.sample = { open: true, key, loading: true, pages: [], name: cand.sourceName }
+      try {
+        const qs = `mangaId=${encodeURIComponent(cand.mangaId)}&sourceId=${encodeURIComponent(cand.sourceId || '')}&lang=${encodeURIComponent(cand.sourceLang || '')}&title=${encodeURIComponent(this.current?.id || '')}`
+        const d = await api.get(`/api/transplant/preview_candidate?${qs}`)
+        v.sample = { open: true, key, loading: false, pages: d.pages || [], name: cand.sourceName }
+      } catch (_) {
+        v.sample = { open: true, key, loading: false, pages: [], name: cand.sourceName }
+        useUiStore().toast('No se pudo cargar la muestra', 'error')
+      }
+    },
+
+    async downloadSourceChapter(ch) {
+      const ui = useUiStore()
+      const src = this.effectiveSource
       const sid = ch._sourceId || ch.id
-      if (!sm?.sourceId || !sid) return
+      if (!src || !sid) return
       const chKey = String(ch.chapter)
       this.dlTasks[chKey] = taskId(this.current.id, chKey, 'download')
       try {
@@ -501,10 +755,10 @@ export const useMangaStore = defineStore('manga', {
           title: this.current.id,
           chapter: ch.chapterNorm || ch.chapterNumber || ch.chapter,
           pageUrls,
-          sourceId: sm.sourceId,
-          mangaId: sm.mangaId,
-          sourceName: sm.sourceName || '',
-          sourceLang: sm.sourceLang || '',
+          sourceId: src.sourceId,
+          mangaId: src.mangaId,
+          sourceName: src.sourceName,
+          sourceLang: src.sourceLang,
         })
         // Use real task_id if different from estimated
         if (res.task_id) this.dlTasks[chKey] = res.task_id
@@ -561,7 +815,10 @@ export const useMangaStore = defineStore('manga', {
       const chKey = String(chapter)
       this.upTasks[chKey] = taskId(this.current.id, chKey, 'upscale')
       try {
-        const res = await api.post('/api/upscale/upscale_chapter', { title: this.current.id, chapter, eco: opts.eco ?? this.eco, fast: opts.fast ?? false })
+        const res = await api.post('/api/upscale/upscale_chapter', {
+          title: this.current.id, chapter, eco: opts.eco ?? this.eco, fast: opts.fast ?? false,
+          ...(opts.excludePages?.length ? { exclude_pages: opts.excludePages } : {}),
+        })
         // Use the backend's real task id so the progress ring matches SSE keys
         // even if the optimistic id normalization differs.
         if (res?.task_id) this.upTasks[chKey] = res.task_id
@@ -583,12 +840,15 @@ export const useMangaStore = defineStore('manga', {
       } catch (_) { useUiStore().toast('Error al cambiar modelo', 'error') }
     },
     setEco(v) { this.eco = v; localStorage.setItem('upscale-eco', v ? '1' : '0'); api.post('/api/upscale/mode', { eco: v }).catch(() => {}) },
-    async upscaleAll() {
+    async upscaleAll(opts = {}) {
       const chapters = this.chapters.map(c => c.chapter).filter(ch => this.upscaled[ch] !== true)
       if (!chapters.length) { useUiStore().toast('Todos los capítulos ya están en 4K', 'info'); return }
       for (const ch of chapters) this.upTasks[String(ch)] = taskId(this.current.id, String(ch), 'upscale')
       try {
-        await api.post('/api/upscale/upscale_manga', { title: this.current.id, chapters, eco: this.eco })
+        await api.post('/api/upscale/upscale_manga', {
+          title: this.current.id, chapters, eco: opts.eco ?? this.eco,
+          ...(opts.excludePages?.length ? { exclude_pages: opts.excludePages } : {}),
+        })
         useUiStore().toast(`Escalando ${chapters.length} capítulos a 4K`, 'info')
       } catch (_) { useUiStore().toast('No se pudo iniciar', 'error'); this.upTasks = {} }
     },
@@ -722,19 +982,60 @@ export const useMangaStore = defineStore('manga', {
         return true
       } catch (_) { ui.toast('No se pudo actualizar', 'error'); return false }
     },
+
+    // ── Selector de portada (AniList + MangaDex) ──────────────────────────
+    async openCoverPicker() {
+      const cp = this.coverPicker
+      cp.open = true; cp.loading = true; cp.anilist = []; cp.mangadex = []; cp.applying = null
+      try {
+        const qs = `title=${encodeURIComponent(this.current.id)}&mdId=${encodeURIComponent(this.mdId || '')}`
+        const d = await api.get(`/api/library/cover_options?${qs}`)
+        cp.current = d.current; cp.anilist = d.anilist || []; cp.mangadex = d.mangadex || []
+      } catch (_) { useUiStore().toast('No se pudieron cargar portadas', 'error') }
+      finally { cp.loading = false }
+    },
+    closeCoverPicker() { this.coverPicker.open = false },
+    _bustCover() {
+      // apunta la portada mostrada al archivo local recién escrito, con cache-bust
+      const u = `/api/library/cover/${encodeURIComponent(this.current.id)}?t=${Date.now()}`
+      if (this.current) this.current.cover = u
+      this.libraryDirty++
+    },
+    async applyCover(url) {
+      const cp = this.coverPicker
+      cp.applying = url
+      const ok = await this.editMeta({ coverUrl: url })
+      cp.applying = null
+      if (ok) { this._bustCover(); cp.open = false }
+    },
+    applyCoverFile(file) {
+      if (!file) return
+      const r = new FileReader()
+      r.onload = async () => {
+        const ok = await this.editMeta({ coverB64: r.result })
+        if (ok) { this._bustCover(); this.coverPicker.open = false }
+      }
+      r.readAsDataURL(file)
+    },
+
     async loadHealth() {
       try {
         const d = await api.get(`/api/library/chapter_health/${encodeURIComponent(this.current.id)}`)
         const m = {}; for (const h of (Array.isArray(d) ? d : [])) m[h.chapter] = h; this.health = m
       } catch (_) {}
     },
-    async upscaleRange(from, to, fast = false) {
+    async upscaleRange(from, to, fast = false, excludePages = []) {
       const lo = Math.min(parseFloat(from), parseFloat(to)), hi = Math.max(parseFloat(from), parseFloat(to))
       if (isNaN(lo) || isNaN(hi)) return
       const chapters = this.chapters.map(c => c.chapter).filter(ch => { const n = parseFloat(ch); return !isNaN(n) && n >= lo && n <= hi && this.upscaled[ch] !== true })
       if (!chapters.length) { useUiStore().toast('Nada que escalar en ese rango', 'info'); return }
-      try { await api.post('/api/upscale/upscale_manga', { title: this.current.id, chapters, eco: this.eco, fast }); useUiStore().toast(`Escalando ${chapters.length} capítulos`, 'info') }
-      catch (_) { useUiStore().toast('No se pudo iniciar', 'error') }
+      try {
+        await api.post('/api/upscale/upscale_manga', {
+          title: this.current.id, chapters, eco: this.eco, fast,
+          ...(excludePages?.length ? { exclude_pages: excludePages } : {}),
+        })
+        useUiStore().toast(`Escalando ${chapters.length} capítulos`, 'info')
+      } catch (_) { useUiStore().toast('No se pudo iniciar', 'error') }
     },
     async loadColorPages(chapters) {
       this.colorLoading = true; this.excludedPages = []
@@ -902,7 +1203,7 @@ export const useMangaStore = defineStore('manga', {
     resetMdex() { this.mdex = { id: null, mdManga: null, search: '', results: [], searching: false, volumes: [], volumesLoading: false, covers: [], coversLoading: false, selectedCover: null, coverLoadingId: null, coverB64: '', coverUrl: '' } },
 
     /* ── Reader ─────────────────────────────────────────────────────────── */
-    _resetView() { this.zoom = 1.0; this.panX = 0; this.panY = 0; this.compareMode = false; this.barsHidden = false; this.scanCompareMode = false; this.comparePages2 = [] },
+    _resetView() { this.zoom = 1.0; this.panX = 0; this.panY = 0; this.compareMode = false; this.barsHidden = false; this.scanCompareMode = false; this.comparePages2 = []; this.compareLabels = null },
 
     /* ── Compare scanlations (downloaded variants of the same chapter) ───── */
     async openComparePanel(chapter) {

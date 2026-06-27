@@ -749,6 +749,16 @@ def upscale_chapter():
         if not images:
             return jsonify({'status': 'error', 'message': 'No images found', 'task_id': build_task_id(actual_folder, chapter_norm, 'upscale')}), 404
 
+        # Manual page exclusion (e.g. color pages reviewed by the user): copy them
+        # as-is into output_folder so the resume-skip below treats them exactly
+        # like already-upscaled pages — no change to the GPU worker/selection logic.
+        exclude_pages = set(data.get('exclude_pages') or data.get('excludePages') or [])
+        if exclude_pages:
+            import shutil as _shutil
+            for p in images:
+                if p.name in exclude_pages and not (output_folder / p.name).exists():
+                    _shutil.copy2(p, output_folder / p.name)
+
         # Skip pages already upscaled (resume support)
         _IMAGE_EXTS = ('jpg', 'jpeg', 'png', 'webp')
         up_stems = {f.stem for ext in _IMAGE_EXTS for f in output_folder.glob(f'{ch_prefix}*.{ext}')}
@@ -830,6 +840,23 @@ def upscale_manga():
 
     if not images:
         return jsonify({'status': 'error', 'message': 'No images found'}), 404
+
+    # Manual page exclusion (e.g. color pages reviewed by the user): copy them
+    # as-is into output_folder and drop them from the work list — additive only,
+    # the GPU worker never sees these files.
+    exclude_pages = set(data.get('exclude_pages') or data.get('excludePages') or [])
+    if exclude_pages:
+        import shutil as _shutil
+        kept = []
+        for p in images:
+            if p.name in exclude_pages:
+                if not (output_folder / p.name).exists():
+                    _shutil.copy2(p, output_folder / p.name)
+            else:
+                kept.append(p)
+        images = kept
+        if not images:
+            return jsonify({'status': 'error', 'message': 'No images left to upscale after exclusions'}), 404
 
     total = len(images)
     upscale_id = build_task_id(actual_folder, 'all', 'upscale')

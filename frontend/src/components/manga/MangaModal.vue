@@ -23,7 +23,11 @@ const flag = (l) => LANG_FLAG[l] || l
 // bulk upscale range
 const rangeFrom = ref('')
 const rangeTo = ref('')
-function doRange() { if (rangeFrom.value && rangeTo.value) store.upscaleRange(rangeFrom.value, rangeTo.value) }
+function doRange() {
+  if (!rangeFrom.value || !rangeTo.value) return
+  const excludePages = store.current?.source_meta?.imported ? store.excludedPages : []
+  store.upscaleRange(rangeFrom.value, rangeTo.value, false, excludePages)
+}
 // color pages
 function detectColors() { store.loadColorPages([...sel.value]) }
 
@@ -62,10 +66,69 @@ const tpRunPct = computed(() => {
   return Math.round(((s.chapterDone || 0) / s.chapterTotal) * 100)
 })
 
+// Versiones (ranking de calidad)
+const ver = computed(() => store.ver)
+const verLangs = computed(() => Object.keys(store.ver.byLang || {}))
+const verList = computed(() => {
+  const f = store.ver.langFilter
+  return f ? (store.ver.byLang[f] || []) : store.ver.versions
+})
+const verBest = computed(() => verList.value[0] || null)   // mejor de la selección actual (para "recomendada ↑")
+const verSampleKey = (c) => `${c.sourceId}_${c.mangaId}`
+function isCurrentVersion(c) {
+  const sm = store.current?.source_meta
+  return !!(sm && c.sourceId === sm.sourceId && String(c.mangaId) === String(sm.mangaId))
+}
+// La versión local como "candidato" sintético para poder compararla en A|B
+const localCand = computed(() => store.ver.local
+  ? { local: true, sourceId: '__local__', mangaId: '__local__', sourceName: 'Tu versión local', sourceLang: store.current?.source_meta?.sourceLang || '', quality: store.ver.local }
+  : null)
+const recommended = computed(() => store.current?.source_meta?.recommended_source || null)
+function isPrimary(c) {
+  const r = recommended.value
+  return !!(r && r.sourceId === c.sourceId && String(r.mangaId) === String(c.mangaId))
+}
+function isInCompare(c) {
+  return store.ver.cmpSel.some(s => s.sourceId === c.sourceId && String(s.mangaId) === String(c.mangaId))
+}
+const verPhaseLabel = computed(() => {
+  const p = ver.value.discoverProgress || {}
+  switch (ver.value.phase) {
+    case 'start': case 'variants': return 'Buscando variantes del título…'
+    case 'searching': return p.searchTotal ? `Rastreando fuentes… ${p.searched || 0}/${p.searchTotal}` : 'Rastreando fuentes…'
+    case 'ranking': return p.rankTotal ? `Midiendo calidad… ${p.ranked || 0}/${p.rankTotal}` : 'Midiendo calidad…'
+    default: return 'Trabajando…'
+  }
+})
+
+// Reparto manual de un tomo (cuando el reparto automático por nº de páginas ES falla)
+const manualVol = ref(null)
+const manualCounts = ref([])
+function openManualSplit(vol) {
+  manualVol.value = vol
+  manualCounts.value = (vol.esChapters?.length ? vol.esChapters : [{ chapter: vol.chapterStartHint || '1' }])
+    .map(c => ({ chapter: c.chapter, pages: c.pageCount || 0 }))
+}
+function closeManualSplit() { manualVol.value = null; manualCounts.value = [] }
+const manualTotal = computed(() => manualCounts.value.reduce((sum, c) => sum + (Number(c.pages) || 0), 0))
+function addManualRow() {
+  const last = manualCounts.value[manualCounts.value.length - 1]
+  const next = last ? (Number(last.chapter) || 0) + 1 : 1
+  manualCounts.value.push({ chapter: String(next), pages: 0 })
+}
+function removeManualRow(i) { manualCounts.value.splice(i, 1) }
+function submitManualSplit() {
+  if (!manualVol.value) return
+  const pageCounts = manualCounts.value.map(c => ({ chapter: c.chapter, pages: Number(c.pages) || 0 }))
+  store.tpResolveVolumeManual(manualVol.value.prefix, pageCounts)
+  closeManualSplit()
+}
+
 watch(m, (v) => {
   tab.value = 'chapters'; sel.value = new Set(); volName.value = v?.name || ''
   showManage.value = false; renameVal.value = v?.name || ''; coverUrlVal.value = ''
   tomoCover.value = ''; rangeFrom.value = ''; rangeTo.value = ''; tpSel.value = new Set()
+  store.verReset()
   if (v) { store.resetMdex(); store.loadHealth(); store.colorPages = []; store.excludedPages = []; store.exportPreview = { pages: 0, est_mb: 0, upscaled_pages: 0, original_pages: 0 } }
   if (v && !Object.keys(store.models).length) store.loadModels()
   if (v) store.loadDestinations()
@@ -93,9 +156,8 @@ async function saveMeta() {
 }
 function onCoverFile(e) {
   const f = e.target.files?.[0]; if (!f) return
-  const r = new FileReader()
-  r.onload = () => store.editMeta({ coverB64: r.result })
-  r.readAsDataURL(f)
+  store.applyCoverFile(f)   // aplica + refresca la portada mostrada (cache-bust)
+  e.target.value = ''
 }
 
 const toggleSel = (ch) => { const s = new Set(sel.value); s.has(ch) ? s.delete(ch) : s.add(ch); sel.value = s }
@@ -140,7 +202,7 @@ async function doExport(toDrive = false) {
                 <span><span class="lg lg--orig" /> original</span>
               </div>
               <div class="modal__hacts">
-                <button class="hbtn hbtn--accent" @click="store.upscaleAll()"><Icon name="spark" :size="13" /> Escalar todo 4K</button>
+                <button class="hbtn hbtn--accent" @click="store.upscaleAll(m.source_meta?.imported ? { excludePages: store.excludedPages } : {})"><Icon name="spark" :size="13" /> Escalar todo 4K</button>
                 <span class="rangebox">
                   <input v-model="rangeFrom" placeholder="de" inputmode="decimal" />
                   <input v-model="rangeTo" placeholder="a" inputmode="decimal" />
@@ -161,6 +223,38 @@ async function doExport(toDrive = false) {
                   <label class="mf"><span>Renombrar</span><input v-model="renameVal" type="text" /></label>
                   <label class="mf"><span>Portada (URL)</span><input v-model="coverUrlVal" type="text" placeholder="https://…" /></label>
                 </div>
+
+                <!-- Selector visual de portada (AniList + MangaDex) -->
+                <button class="cvp__toggle" @click="store.coverPicker.open ? store.closeCoverPicker() : store.openCoverPicker()">
+                  <Icon name="library" :size="13" /> {{ store.coverPicker.open ? 'Ocultar portadas' : 'Elegir portada (AniList / MangaDex)' }}
+                </button>
+                <div v-if="store.coverPicker.open" class="cvp">
+                  <div v-if="store.coverPicker.loading" class="cvp__load"><span class="xspin" /> Buscando portadas online…</div>
+                  <template v-else>
+                    <div class="cvp__grid">
+                      <div v-if="store.coverPicker.current" class="cvp__item is-current" title="Portada actual">
+                        <img :src="store.coverPicker.current" referrerpolicy="no-referrer" alt="" />
+                        <span class="cvp__tag">Actual</span>
+                      </div>
+                      <button v-for="c in store.coverPicker.anilist" :key="'al' + c.url" class="cvp__item"
+                              :disabled="!!store.coverPicker.applying" @click="store.applyCover(c.url)" title="Usar esta portada">
+                        <img :src="c.thumb" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                        <span class="cvp__tag cvp__tag--al">AniList</span>
+                        <span v-if="store.coverPicker.applying === c.url" class="cvp__busy"><span class="xspin" /></span>
+                      </button>
+                      <button v-for="(c, i) in store.coverPicker.mangadex" :key="'md' + i" class="cvp__item"
+                              :disabled="!!store.coverPicker.applying" @click="store.applyCover(c.url)" title="Usar esta portada">
+                        <img :src="c.thumb" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                        <span v-if="c.volume && c.volume !== '?'" class="cvp__tag">Vol {{ c.volume }}</span>
+                        <span v-if="store.coverPicker.applying === c.url" class="cvp__busy"><span class="xspin" /></span>
+                      </button>
+                    </div>
+                    <p v-if="!store.coverPicker.anilist.length && !store.coverPicker.mangadex.length" class="cvp__empty">
+                      No se encontraron portadas online. Pega una URL arriba o usa "Subir portada".
+                    </p>
+                  </template>
+                </div>
+
                 <div class="manage__actions">
                   <button class="delbtn" @click="store.deleteManga()" title="Eliminar este manga de la biblioteca"><Icon name="close" :size="13" /> Eliminar manga</button>
                   <span class="manage__spacer" />
@@ -186,6 +280,7 @@ async function doExport(toDrive = false) {
 
           <div class="modal__tabs">
             <button class="mtab" :class="{ 'is-active': tab === 'chapters' }" @click="tab = 'chapters'">Capítulos</button>
+            <button class="mtab" :class="{ 'is-active': tab === 'versions' }" @click="tab = 'versions'"><Icon name="spark" :size="13" /> Versiones</button>
             <button class="mtab" :class="{ 'is-active': tab === 'translate' }" @click="tab = 'translate'"><Icon name="globe" :size="13" /> Traducir
               <span v-if="store.current?.transplant_meta?.translated?.length" class="mtab__badge">ES</span>
             </button>
@@ -272,9 +367,161 @@ async function doExport(toDrive = false) {
               </div>
             </div>
 
+            <!-- VERSIONES (ranking de calidad de imagen) -->
+            <div v-if="tab === 'versions' && !store.modalLoading" class="vr">
+              <p class="vr__lead">Busca todas las versiones de este manga en las fuentes y compáralas por calidad de imagen (resolución nativa × nitidez). Tu versión local aparece como referencia.</p>
+
+              <!-- descubrimiento en curso -->
+              <div v-if="ver.loading" class="vr__disc">
+                <Spinner :size="18" />
+                <span class="muted">{{ verPhaseLabel }}</span>
+              </div>
+
+              <!-- aún sin buscar -->
+              <div v-else-if="ver.phase !== 'ready'" class="vr__cta">
+                <button class="hbtn hbtn--accent" @click="store.verDiscover()"><Icon name="spark" :size="14" /> Buscar versiones</button>
+                <span v-if="ver.phase === 'error'" class="tl__err">No se encontraron fuentes. ¿Suwayomi en línea?</span>
+                <span v-else class="vr__hint">Requiere Suwayomi en línea.</span>
+              </div>
+
+              <!-- resultados -->
+              <template v-else>
+                <div class="vr__head">
+                  <div class="vr__filter">
+                    <span class="muted">Idioma</span>
+                    <select class="vr__langsel" :value="ver.langFilter" @change="store.verSetLangFilter($event.target.value)">
+                      <option value="">Todos ({{ ver.versions.length }})</option>
+                      <option v-for="l in verLangs" :key="l" :value="l">{{ flag(l) }} {{ l }} ({{ ver.byLang[l].length }})</option>
+                    </select>
+                  </div>
+                  <button class="btn-xs" @click="store.verDiscover()" title="Volver a buscar">↻ Buscar de nuevo</button>
+                </div>
+
+                <!-- versión principal fijada -->
+                <div v-if="recommended" class="vr__primary">
+                  <Icon name="check" :size="13" /> Principal: <strong>{{ recommended.sourceName }}</strong>
+                  <span v-if="recommended.quality?.height" class="muted">· {{ recommended.quality.height }}px</span>
+                </div>
+
+                <!-- bandeja de comparación A|B -->
+                <div v-if="ver.cmpSel.length" class="vr__tray">
+                  <span class="muted">Comparar:</span>
+                  <span v-for="(c, i) in ver.cmpSel" :key="i" class="vr__chip">
+                    {{ c.sourceName }}
+                    <button class="vr__chipx" @click="store.verToggleCompare(c)"><Icon name="close" :size="10" /></button>
+                  </span>
+                  <span v-if="ver.cmpSel.length < 2" class="vr__trayhint">elige {{ 2 - ver.cmpSel.length }} más</span>
+                  <button class="hbtn hbtn--accent vr__traygo" :disabled="ver.cmpSel.length !== 2" @click="store.verRunCompare()">
+                    <Icon name="globe" :size="13" /> Comparar A|B
+                  </button>
+                </div>
+
+                <!-- descarga de versión en curso -->
+                <div v-if="ver.dl" class="vr__dl">
+                  <Spinner :size="14" />
+                  <span>Descargando capítulos que faltan… {{ ver.dl.done }}/{{ ver.dl.total || '?' }}</span>
+                </div>
+
+                <!-- línea base: tu versión local -->
+                <div v-if="ver.local" class="vr__row vr__row--local" :class="{ 'vr__row--cmp': isInCompare(localCand) }">
+                  <div class="vr__main">
+                    <span class="vr__src"><Icon name="library" :size="13" /> Tu versión local <span class="vr__badge vr__badge--actual">ACTUAL</span></span>
+                    <span class="vr__q">{{ ver.local.height }}px · score {{ ver.local.score }}</span>
+                  </div>
+                  <div class="vr__acts">
+                    <button class="vr__eye" :class="{ 'is-on': isInCompare(localCand) }" @click="store.verToggleCompare(localCand)" title="Añadir a comparación A|B">
+                      <Icon name="globe" :size="13" /> A|B
+                    </button>
+                  </div>
+                </div>
+
+                <!-- ranking de candidatos -->
+                <ul v-if="verList.length" class="vr__list">
+                  <li v-for="c in verList" :key="verSampleKey(c)" class="vr__item">
+                    <div class="vr__row" :class="{ 'vr__row--best': c === verBest && !isCurrentVersion(c) && !isPrimary(c), 'vr__row--primary': isPrimary(c), 'vr__row--cmp': isInCompare(c) }">
+                      <div class="vr__main">
+                        <span class="vr__src">
+                          {{ c.sourceName }} <em class="vr__lang">{{ flag(c.sourceLang) }} {{ c.sourceLang }}</em>
+                          <span v-if="isPrimary(c)" class="vr__badge vr__badge--primary">★ PRINCIPAL</span>
+                          <span v-else-if="isCurrentVersion(c)" class="vr__badge vr__badge--actual">ACTUAL</span>
+                          <span v-else-if="c === verBest" class="vr__badge vr__badge--best">★ mejor calidad</span>
+                        </span>
+                        <span class="vr__q">{{ c.quality?.height }}px · score {{ c.quality?.score }}</span>
+                      </div>
+                      <div class="vr__acts">
+                        <button class="vr__eye" :class="{ 'is-on': ver.sample.key === verSampleKey(c) && ver.sample.open }" @click="store.verReadSample(c)" title="Leer páginas de muestra">
+                          <Icon name="search" :size="13" />
+                        </button>
+                        <button class="vr__eye" :class="{ 'is-on': isInCompare(c) }" @click="store.verToggleCompare(c)" title="Añadir a comparación A|B">
+                          <Icon name="globe" :size="13" /> A|B
+                        </button>
+                        <button class="vr__eye" :disabled="!!ver.dl" @click="store.verDownloadVersion(c)" title="Descargar de esta versión los capítulos que falten">
+                          <Icon name="download" :size="13" />
+                        </button>
+                        <button class="vr__fix" :class="{ 'is-on': isPrimary(c) }" @click="store.verSetPrimary(c)" :title="isPrimary(c) ? 'Quitar como principal' : 'Fijar como versión principal'">
+                          {{ isPrimary(c) ? 'Fijada ✓' : 'Fijar' }}
+                        </button>
+                      </div>
+                    </div>
+                    <!-- tira de páginas de muestra -->
+                    <div v-if="ver.sample.key === verSampleKey(c) && ver.sample.open" class="vr__prev">
+                      <div v-if="ver.sample.loading" class="vr__prevload"><Spinner :size="16" /></div>
+                      <div v-else-if="ver.sample.pages.length" class="tl__strip">
+                        <a v-for="(u, i) in ver.sample.pages" :key="i" :href="u" target="_blank" rel="noopener" class="tl__thumb" :title="`Página ${i + 1}`">
+                          <img :src="u" loading="lazy" referrerpolicy="no-referrer" />
+                        </a>
+                      </div>
+                      <div v-else class="muted vr__prevempty">Sin páginas de muestra.</div>
+                    </div>
+                  </li>
+                </ul>
+                <div v-else class="empty">No hay versiones en este idioma.</div>
+              </template>
+            </div>
+
             <!-- TRADUCIR (trasplante) -->
             <div v-if="tab === 'translate' && !store.modalLoading" class="tl">
               <p class="tl__lead">Busca la mejor fuente de arte (cualquier idioma) y una en español, y trasplanta el texto ES sobre el arte HD. El resultado reemplaza los capítulos del manga.</p>
+
+              <!-- tomos importados sin repartir en capítulos reales (aún no se intentó) -->
+              <div v-if="tp.pendingVolumes.length" class="tl__vol">
+                <div class="tl__volmsg">
+                  <Icon name="folder" :size="14" />
+                  <span>{{ tp.pendingVolumes.length }} tomo(s) importado(s) abarcan varios capítulos — hace falta repartirlos para que el match de traducción funcione por capítulo.</span>
+                </div>
+                <button class="hbtn hbtn--accent" :disabled="tp.volResolving || !tp.esSel" @click="store.tpResolveVolumes()">
+                  <Spinner v-if="tp.volResolving" :size="13" /><Icon v-else name="globe" :size="14" /> Repartir capítulos
+                </button>
+                <span v-if="!tp.esSel" class="tl__err">Elige primero una fuente en español.</span>
+              </div>
+
+              <!-- tomos que no se pudieron repartir automáticamente (page count no cuadra) -->
+              <div v-if="tp.unresolvedVolumes.length" class="tl__vol tl__vol--warn">
+                <div v-for="vol in tp.unresolvedVolumes" :key="vol.prefix" class="tl__volitem">
+                  <div class="tl__volmsg">
+                    <Icon name="spark" :size="14" />
+                    <span>Tomo de {{ vol.pages }} pág. (sugerido desde cap. {{ vol.chapterStartHint || vol.esChapters?.[0]?.chapter || '?' }}): no encontré una racha de capítulos ES que cuadre exacto — ajusta a mano.</span>
+                  </div>
+                  <button v-if="manualVol?.prefix !== vol.prefix" class="tl__re2" @click="openManualSplit(vol)">Repartir a mano</button>
+                  <div v-else class="tl__manual">
+                    <div class="tl__manualrow" v-for="(c, i) in manualCounts" :key="i">
+                      <span class="muted">Cap.</span>
+                      <input type="text" class="tl__manchin" v-model="c.chapter">
+                      <input type="number" min="0" class="tl__maninput" v-model="c.pages">
+                      <span class="muted">pág.</span>
+                      <button class="tl__rmrow" @click="removeManualRow(i)"><Icon name="close" :size="11" /></button>
+                    </div>
+                    <button class="tl__re2" @click="addManualRow">+ Añadir capítulo</button>
+                    <div class="tl__manualtotal" :class="{ 'is-bad': manualTotal !== vol.pages }">
+                      Total: {{ manualTotal }} / {{ vol.pages }} pág.
+                    </div>
+                    <div class="tl__manualacts">
+                      <button class="hbtn hbtn--accent" :disabled="manualTotal !== vol.pages" @click="submitManualSplit">Guardar reparto</button>
+                      <button class="tl__re2" @click="closeManualSplit">Cancelar</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
 
               <!-- descubrimiento en curso -->
               <div v-if="tp.loading" class="tl__disc">
@@ -293,7 +540,10 @@ async function doExport(toDrive = false) {
                 <div class="tl__picks">
                   <div class="tl__pick">
                     <div class="tl__pickh">Arte <button class="tl__re" @click="store.tpDiscover()" title="Volver a buscar">↻</button></div>
-                    <div v-if="tp.artSel" class="tl__cand">
+                    <div v-if="tp.artSel?.local" class="tl__cand">
+                      <span class="tl__src">Arte local (importado)</span>
+                    </div>
+                    <div v-else-if="tp.artSel" class="tl__cand">
                       <span class="tl__src">{{ tp.artSel.sourceName }} · {{ tp.artSel.sourceLang }}</span>
                       <span v-if="tp.artSel.quality" class="tl__q">{{ tp.artSel.quality.height }}px · score {{ tp.artSel.quality.score }}</span>
                     </div>
@@ -364,6 +614,23 @@ async function doExport(toDrive = false) {
             </div>
 
             <template v-if="tab === 'chapters' && !store.modalLoading && (store.chapters.length || store.hasSourceMeta)">
+            <!-- Taller: exclusión manual de páginas a color antes de escalar -->
+            <div v-if="m.source_meta?.imported" class="colors colors--ws">
+              <div class="colors__head">
+                <span class="colors__title">Páginas a color (excluir del escalado)</span>
+                <button class="btn-xs" :disabled="store.colorLoading || !store.chapters.length" @click="store.loadColorPages(store.chapters.map(c => c.chapter))">
+                  <span v-if="store.colorLoading" class="xspin" />Detectar
+                </button>
+              </div>
+              <div v-if="store.colorPages.length" class="colors__grid">
+                <button v-for="cp in store.colorPages" :key="cp.filename" class="colorpg" :class="{ 'is-excl': store.excludedPages.includes(cp.filename) }"
+                        :title="cp.label + (store.excludedPages.includes(cp.filename) ? ' (excluida)' : '')" @click="store.toggleExclude(cp.filename)">
+                  <img :src="cp.url" loading="lazy" alt="" />
+                  <span v-if="store.excludedPages.includes(cp.filename)" class="colorpg__x"><Icon name="close" :size="12" /></span>
+                </button>
+              </div>
+              <p v-else-if="!store.colorLoading" class="colors__hint">Detecta y excluye páginas a color antes de pulsar "Escalar todo 4K".</p>
+            </div>
             <div class="modal__chhead">
               <span>Capítulos</span>
               <select v-if="store.mdLangs.length > 1" v-model="store.mdLang" class="langsel">
@@ -433,7 +700,7 @@ async function doExport(toDrive = false) {
                     <button class="ib" title="Comparar versiones (scanlations)" :class="{ 'ib--accent': store.scanCmp.open && store.scanCmp.chapter === c.chapter }" @click="store.openComparePanel(c.chapter)"><Icon name="globe" :size="14" /></button>
                     <button class="ib" title="Leer original" @click="store.read(c.chapter, 'original')"><Icon name="library" :size="14" /></button>
                     <button v-if="upState(c.chapter) === 'partial'" class="ib ib--warn" title="Reparar upscale" @click="store.repairChapter(c.chapter)"><Icon name="spark" :size="14" /></button>
-                    <button v-else-if="upState(c.chapter) !== true" class="ib ib--accent" title="Escalar a 4K" @click="store.upscaleChapter(c.chapter)"><Icon name="spark" :size="14" /></button>
+                    <button v-else-if="upState(c.chapter) !== true" class="ib ib--accent" title="Escalar a 4K" @click="store.upscaleChapter(c.chapter, m.source_meta?.imported ? { excludePages: store.excludedPages } : {})"><Icon name="spark" :size="14" /></button>
                     <button class="ib ib--danger" title="Borrar capítulo" @click="store.deleteChapter(c.chapter)"><Icon name="close" :size="14" /></button>
                   </template>
                   </template>
@@ -531,6 +798,22 @@ async function doExport(toDrive = false) {
 .savebtn { padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); }
 .savebtn:hover { background: var(--azure-bright); }
 
+/* ── Selector visual de portada ───────────────────────────────────────── */
+.cvp__toggle { display: inline-flex; align-items: center; gap: 6px; margin-top: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line); font-size: var(--fs-xs); color: var(--azure-bright); }
+.cvp__toggle:hover { border-color: var(--azure); background: var(--azure-haze); }
+.cvp { margin-top: var(--s-2); }
+.cvp__load { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-faint); padding: var(--s-3); }
+.cvp__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(5rem, 1fr)); gap: var(--s-2); max-height: 18rem; overflow-y: auto; padding: 2px; }
+.cvp__item { position: relative; aspect-ratio: 2/3; border-radius: var(--r-sm); overflow: hidden; border: 2px solid transparent; background: var(--surface-2); cursor: pointer; transition: border-color var(--t-fast); }
+.cvp__item:hover:not(:disabled) { border-color: var(--azure); }
+.cvp__item.is-current { border-color: var(--azure-bright); cursor: default; }
+.cvp__item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cvp__item:disabled { opacity: .7; cursor: progress; }
+.cvp__tag { position: absolute; bottom: 0; left: 0; right: 0; font-size: 9px; line-height: 1.4; text-align: center; background: rgba(0,0,0,.6); color: #fff; padding: 1px 2px; }
+.cvp__tag--al { background: color-mix(in oklab, var(--azure) 75%, #000); }
+.cvp__busy { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.45); }
+.cvp__empty { font-size: var(--fs-2xs); color: var(--ink-faint); padding: var(--s-2); }
+
 .modal__tabs { display: flex; gap: var(--s-1); padding: var(--s-2) var(--s-4) 0; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .mtab { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-4); border-radius: var(--r-sm) var(--r-sm) 0 0; font-size: var(--fs-sm); font-weight: 500; color: var(--ink-faint); border-bottom: 2px solid transparent; transition: all var(--t-fast); }
 .mtab:hover { color: var(--ink); }
@@ -587,6 +870,67 @@ async function doExport(toDrive = false) {
 .tl__chip--doing { color: var(--azure-bright); background: var(--azure-haze); }
 .muted { color: var(--ink-faint); font-weight: 400; }
 
+/* Pestaña Versiones (ranking de calidad de imagen) */
+.vr { padding: var(--s-2) 0 var(--s-4); }
+.vr__lead { font-size: var(--fs-xs); color: var(--ink-soft); line-height: var(--lh-body); margin-bottom: var(--s-3); }
+.vr__disc { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-4); }
+.vr__cta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-3); padding: var(--s-3) 0; }
+.vr__hint { font-size: var(--fs-2xs); color: var(--ink-ghost); }
+.vr__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s-3); }
+.vr__filter { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); }
+.vr__langsel { font-size: var(--fs-xs); padding: 4px 8px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); cursor: pointer; }
+.vr__list { display: flex; flex-direction: column; gap: var(--s-1); }
+.vr__row { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
+.vr__row--local { margin-bottom: var(--s-2); background: var(--surface-2); border-style: dashed; }
+.vr__row--best { border-color: color-mix(in srgb, var(--cyan) 45%, transparent); background: var(--cyan-glow, color-mix(in srgb, var(--cyan) 8%, transparent)); }
+.vr__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vr__src { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm); font-weight: 600; color: var(--ink); }
+.vr__lang { font-style: normal; font-weight: 400; font-size: var(--fs-2xs); color: var(--ink-faint); }
+.vr__q { font-size: var(--fs-2xs); color: var(--ink-faint); font-family: var(--font-mono); }
+.vr__badge { font-size: 9px; font-weight: 800; letter-spacing: .04em; padding: 2px 7px; border-radius: var(--r-pill); flex-shrink: 0; }
+.vr__badge--actual { background: var(--ink-ghost); color: var(--base); }
+.vr__badge--best { background: var(--cyan); color: #04130c; }
+.vr__eye { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; padding: 5px 10px; border-radius: var(--r-sm); font-size: var(--fs-2xs); color: var(--ink-faint); border: 1px solid var(--line); }
+.vr__eye:hover:not(:disabled) { color: var(--azure-bright); border-color: var(--azure); }
+.vr__eye.is-on { color: var(--azure-bright); background: var(--azure-haze); border-color: var(--azure); }
+.vr__eye:disabled { opacity: .4; cursor: default; }
+.vr__dl { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); margin-bottom: var(--s-3); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); font-size: var(--fs-xs); color: var(--ink-soft); }
+.vr__prev { padding: var(--s-2) var(--s-1) var(--s-1); }
+.vr__prevload, .vr__prevempty { padding: var(--s-2); font-size: var(--fs-2xs); }
+.vr__acts { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.vr__fix { padding: 5px 12px; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
+.vr__fix:hover { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 45%, transparent); }
+.vr__fix.is-on { color: #04130c; background: var(--cyan); border-color: transparent; }
+.vr__row--primary { border-color: color-mix(in srgb, var(--cyan) 55%, transparent); }
+.vr__row--cmp { box-shadow: 0 0 0 1px var(--azure) inset; }
+.vr__badge--primary { background: var(--cyan); color: #04130c; }
+.vr__primary { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--cyan); margin-bottom: var(--s-2); }
+.vr__primary strong { color: var(--ink); font-weight: 600; }
+.vr__tray { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); padding: var(--s-2) var(--s-3); margin-bottom: var(--s-3); border-radius: var(--r-md); background: var(--azure-haze); border: 1px solid color-mix(in srgb, var(--azure) 30%, transparent); }
+.vr__chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 4px 3px 10px; border-radius: var(--r-pill); font-size: var(--fs-2xs); font-weight: 600; background: var(--surface); border: 1px solid var(--line); }
+.vr__chipx { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; color: var(--ink-faint); }
+.vr__chipx:hover { color: var(--coral); }
+.vr__trayhint { font-size: var(--fs-2xs); color: var(--ink-faint); }
+.vr__traygo { margin-left: auto; }
+
+/* tomos sin repartir en capítulos reales */
+.tl__vol { display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-3); margin-bottom: var(--s-3); border-radius: var(--r-md); background: var(--azure-haze); border: 1px solid color-mix(in srgb, var(--azure) 30%, transparent); }
+.tl__vol--warn { background: color-mix(in srgb, var(--rose, #e8748b) 10%, transparent); border-color: color-mix(in srgb, var(--rose, #e8748b) 30%, transparent); }
+.tl__volitem { display: flex; flex-direction: column; gap: var(--s-2); padding-bottom: var(--s-2); }
+.tl__volitem + .tl__volitem { padding-top: var(--s-2); border-top: 1px solid color-mix(in srgb, var(--rose, #e8748b) 20%, transparent); }
+.tl__volmsg { display: flex; align-items: flex-start; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-soft); line-height: var(--lh-body); }
+.tl__re2 { align-self: flex-start; font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); padding: 4px 10px; border-radius: var(--r-sm); border: 1px solid var(--azure); }
+.tl__re2:hover { background: var(--azure-haze); }
+.tl__manual { display: flex; flex-direction: column; gap: 6px; padding: var(--s-2); background: var(--surface); border-radius: var(--r-sm); }
+.tl__manualrow { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); }
+.tl__manchin { width: 3.6rem; font-size: var(--fs-xs); padding: 3px 6px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); }
+.tl__maninput { width: 5rem; font-size: var(--fs-xs); padding: 3px 6px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); }
+.tl__rmrow { color: var(--ink-faint); transition: color var(--t-fast); margin-left: auto; }
+.tl__rmrow:hover { color: var(--coral); }
+.tl__manualtotal { font-size: var(--fs-2xs); color: var(--ink-faint); }
+.tl__manualtotal.is-bad { color: var(--rose, #e8748b); font-weight: 600; }
+.tl__manualacts { display: flex; gap: var(--s-2); }
+
 /* flex-basis auto (not 0): the modal has max-height, not a fixed height, so basis:0
    would collapse this scroll region to 0 and hide the chapters. auto lets it size to
    content and only shrink+scroll once the modal hits its max-height. */
@@ -631,6 +975,9 @@ async function doExport(toDrive = false) {
 .chap__read-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--jade); flex-shrink: 0; }
 .chap__flag { font-size: 1.05rem; line-height: 1; flex-shrink: 0; }
 .colors { margin-top: var(--s-2); }
+.colors--ws { margin: 0 0 var(--s-4); padding: var(--s-3); border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line); }
+.colors__head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); }
+.colors__title { font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); }
 .colors__hint { font-size: var(--fs-2xs); color: var(--ink-faint); margin-top: var(--s-1); }
 .colors__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(2.75rem, 1fr)); gap: 5px; margin-top: var(--s-2); max-height: 150px; overflow-y: auto; }
 .colorpg { position: relative; aspect-ratio: 2/3; border-radius: var(--r-xs); overflow: hidden; border: 2px solid transparent; }

@@ -8,6 +8,7 @@ const props = defineProps({ manga: { type: Object, required: true }, updates: { 
 const hasCover = computed(() => !!props.manga.cover)
 const upscaled = computed(() => (props.manga.upscaled || 0) > 0)
 const translated = computed(() => (props.manga.translated_count || 0) > 0)
+const hasPrimary = computed(() => !!props.manga.source_meta?.recommended_source)
 const status = computed(() => MANGA_STATUS[props.manga.status] || null)
 const initials = computed(() =>
   (props.manga.name || '?').replace(/[\[\]_]/g, ' ').trim().slice(0, 2).toUpperCase()
@@ -32,6 +33,7 @@ const initials = computed(() =>
         <span v-if="translated" class="badge badge--es" :title="`${manga.translated_count} capítulo(s) traducidos`">
           ES · {{ manga.translated_count }}
         </span>
+        <span v-if="hasPrimary" class="badge badge--primary" :title="`Versión principal: ${manga.source_meta.recommended_source.sourceName}`">★</span>
       </div>
       <div class="card__topright">
         <span v-if="updates" class="card__new" :title="`${updates} capítulos nuevos`">+{{ updates }}</span>
@@ -115,6 +117,7 @@ const initials = computed(() =>
 }
 .badge--up { background: var(--cyan-glow); color: #d6fffb; border: 1px solid rgba(70, 224, 216, 0.4); box-shadow: var(--glow-cyan); }
 .badge--es { background: color-mix(in srgb, var(--jade) 24%, transparent); color: #c8ffe4; border: 1px solid color-mix(in srgb, var(--jade) 45%, transparent); }
+.badge--primary { background: color-mix(in srgb, var(--cyan) 28%, transparent); color: #d6fffb; border: 1px solid color-mix(in srgb, var(--cyan) 50%, transparent); }
 .card__topright { position: absolute; top: var(--s-2); right: var(--s-2); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .card__new { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 7px; border-radius: var(--r-pill); color: #fff; background: var(--azure); box-shadow: var(--glow-azure); }
 .card__status {

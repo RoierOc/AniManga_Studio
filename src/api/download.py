@@ -521,11 +521,12 @@ def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=
                     existing = _json.loads(meta_path.read_text())
                 except Exception:
                     pass
-            meta = {'sourceId': str(source_id), 'mangaId': int(manga_id)}
-            if existing.get('thumbnailUrl'):
-                meta['thumbnailUrl'] = existing['thumbnailUrl']
-            if existing.get('title'):
-                meta['title'] = existing['title']
+            # Conservar el meta existente (recommended_source, pending_volumes, etc.) y solo
+            # actualizar la fuente activa de capítulos. Al fijar una versión como principal,
+            # esto la convierte en la fuente real de descarga sin perder el resto del meta.
+            meta = dict(existing)
+            meta['sourceId'] = str(source_id)
+            meta['mangaId'] = int(manga_id)
             name = source_name or existing.get('sourceName')
             lang = source_lang or existing.get('sourceLang')
             if name:

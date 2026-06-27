@@ -52,13 +52,17 @@ const transform = computed(() => `translate(${store.panX}px, ${store.panY}px) sc
 // ── drag-to-pan + click navigation ──
 let drag = { active: false, moved: false, ox: 0, oy: 0, px: 0, py: 0 }
 function onDown(e) {
-  if (store.compareMode) return
+  // En modo comparar permitimos paneo SOLO con zoom (para inspeccionar el detalle); sin
+  // zoom no registramos arrastre para no estorbar al divisor/etiquetas. (El divisor usa
+  // @mousedown.stop, así que agarrarlo no dispara este handler.)
+  if (store.compareMode && store.zoom <= 1.01) return
   // Always register the press so a plain click navigates; panning only kicks in when zoomed.
   drag = { active: true, moved: false, ox: e.clientX, oy: e.clientY, px: store.panX, py: store.panY }
 }
 function onMove(e) {
-  // Pan only while dragging AND zoomed in — never on a plain cursor move.
-  if (!drag.active || store.zoom <= 1.01 || store.compareMode) return
+  // Pan only while dragging AND zoomed in — never on a plain cursor move. Sí se permite en
+  // modo comparar cuando hay zoom (ambas capas comparten el mismo transform → se mueven juntas).
+  if (!drag.active || store.zoom <= 1.01) return
   const dx = e.clientX - drag.ox, dy = e.clientY - drag.oy
   if (Math.abs(dx) > 4 || Math.abs(dy) > 4) drag.moved = true
   if (drag.moved) {
@@ -158,7 +162,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
           <div class="rd__meta">
             <span class="rd__title">{{ isManga ? store.current?.name : store.reader.title }}</span>
             <span v-if="store.reader.chapter" class="rd__ch">{{ isManga ? 'Cap. ' : '' }}{{ store.reader.chapter }}</span>
-            <span v-if="isManga" class="rd__src" :class="{ 'is-4k': isUpscaled }">{{ isUpscaled ? '4K' : 'ORIG' }}</span>
+            <span v-if="isManga && store.reader.source !== 'compare'" class="rd__src" :class="{ 'is-4k': isUpscaled }">{{ isUpscaled ? '4K' : 'ORIG' }}</span>
           </div>
           <div class="rd__tools">
             <button class="rd__btn" :title="`Ajuste: ${store.fit}`" @click="store.cycleFit()">
@@ -194,12 +198,12 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
           <!-- compare overlay: both images fill the same container so they render at identical
                CSS dimensions regardless of their natural pixel counts (1440 vs 5760). -->
           <div v-if="store.compareMode" ref="wrap" class="rd__cmp" :class="`fit-${store.fit}`" :style="{ transform }">
-            <img :src="store.pageUpUrl" class="rd__cmp-img" alt="" />
-            <img :src="store.pageOrigUrl" class="rd__cmp-img rd__cmp-orig"
+            <img :src="store.pageUpUrl" class="rd__cmp-img" referrerpolicy="no-referrer" alt="" />
+            <img :src="store.pageOrigUrl" class="rd__cmp-img rd__cmp-orig" referrerpolicy="no-referrer"
                  :style="{ clipPath: `inset(0 ${100 - store.compareX}% 0 0)` }" alt="" />
             <div class="rd__divider" :style="{ left: store.compareX + '%' }" @mousedown.stop="cmpStart"><span class="rd__handle">⟷</span></div>
-            <span class="rd__clabel rd__clabel--l">{{ store.scanCompareMode ? 'PRINCIPAL' : 'ORIGINAL' }}</span>
-            <span class="rd__clabel rd__clabel--r">{{ store.scanCompareMode ? 'VARIANTE' : '4K' }}</span>
+            <span class="rd__clabel rd__clabel--l">{{ store.compareLabels?.left || (store.scanCompareMode ? 'PRINCIPAL' : 'ORIGINAL') }}</span>
+            <span class="rd__clabel rd__clabel--r">{{ store.compareLabels?.right || (store.scanCompareMode ? 'VARIANTE' : '4K') }}</span>
           </div>
           <!-- two-page spread -->
           <div v-else-if="store.spreadActive && store.spreadPair.length === 2" :key="'sp' + store.page"
@@ -299,7 +303,12 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__cmp.fit-original { width: auto; height: auto; }
 .rd__cmp-img { display: block; width: 100%; height: auto; }
 .rd__cmp.fit-height .rd__cmp-img { width: auto; height: 100%; }
-.rd__cmp-orig { position: absolute; inset: 0; width: 100% !important; height: 100% !important; object-fit: cover; }
+/* La capa superpuesta (A) se ESTIRA a la MISMA caja que la base (B) — no se recorta —
+   para que un punto de pantalla sea el MISMO contenido en ambos lados. Con `cover` se
+   recortaba/centraba y, al diferir las dimensiones de cada scan, el divisor revelaba zonas
+   desalineadas (parecía que la imagen "se movía"). Son la misma página (emparejada por
+   dHash), así que el estiramiento por la pequeña diferencia de aspecto es imperceptible. */
+.rd__cmp-orig { position: absolute; inset: 0; width: 100% !important; height: 100% !important; object-fit: fill; }
 /* 24px-wide invisible grab zone centred on a 2px visible line — much easier to drag */
 .rd__divider { position: absolute; top: 0; bottom: 0; width: 24px; transform: translateX(-50%); cursor: col-resize; z-index: 5; display: grid; place-items: center; }
 .rd__divider::before { content: ''; position: absolute; top: 0; bottom: 0; width: 2px; background: var(--azure); box-shadow: 0 0 12px var(--azure-glow); }

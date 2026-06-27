@@ -1803,9 +1803,12 @@ def anime_library_get():
         positions_map = anime.get('positions', {})
         durations_map = anime.get('durations', {})
         local_path = anime.get('local_path', '')
-        if local_path:
-            overrides = anime.get('episode_overrides', {})
-            local_eps = _scan_local_episodes(local_path, overrides)
+        # Sólo usar la rama LOCAL si el folder existe y tiene episodios. Un local_path
+        # OBSOLETO/inaccesible (p.ej. un /mnt/d de otra máquina o un disco no montado) ya
+        # NO debe ensombrecer el enlace por TORRENT: si no hay archivos locales reales,
+        # caemos a la rama qBittorrent y el episodio queda enlazado/reproducible igual.
+        local_eps = _scan_local_episodes(local_path, anime.get('episode_overrides', {})) if local_path else []
+        if local_eps:
             regular_count = sum(1 for ep in local_eps if ep.get('ep_type', 'episode') == 'episode')
             episodes_out = [
                 {

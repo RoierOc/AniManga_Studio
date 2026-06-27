@@ -18,6 +18,7 @@ const PATHS = {
   pause:   '<path d="M9 5v14M15 5v14"/>',
   external:'<path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M19 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>',
   clock:   '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
+  upload:  '<path d="M12 15V3m0 0 4 4m-4-4-4 4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
 }
 defineProps({ name: { type: String, required: true }, size: { type: [Number, String], default: 20 } })
 </script>

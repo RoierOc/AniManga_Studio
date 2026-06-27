@@ -78,6 +78,7 @@ from api.subtitle import subtitle_bp
 from api.imgproxy import imgproxy_bp
 from api.backup import backup_bp
 from api.transplant import transplant_bp
+from api.import_cbz import import_bp
 
 app.register_blueprint(library_bp, url_prefix='/api/library')
 app.register_blueprint(search_bp, url_prefix='/api/search')
@@ -97,6 +98,7 @@ app.register_blueprint(subtitle_bp, url_prefix='/api/subtitle')
 app.register_blueprint(imgproxy_bp, url_prefix='/api/img')
 app.register_blueprint(backup_bp, url_prefix='/api/backup')
 app.register_blueprint(transplant_bp, url_prefix='/api/transplant')
+app.register_blueprint(import_bp, url_prefix='/api/import')
 
 
 def _try_start_suwayomi():

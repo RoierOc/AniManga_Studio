@@ -23,4 +23,18 @@ export const api = {
   get:  (p, o) => request(p, { ...o, method: 'GET' }),
   post: (p, body, o) => request(p, { ...o, method: 'POST', body }),
   del:  (p, o) => request(p, { ...o, method: 'DELETE' }),
+  // Multipart upload (FormData) — bypasses request()'s JSON encoding so the
+  // browser can set the correct multipart boundary itself.
+  async upload(p, formData) {
+    const res = await fetch(p, { method: 'POST', body: formData })
+    if (!res.ok) {
+      const text = await res.text().catch(() => '')
+      const err = new Error(`${res.status} ${res.statusText} — ${p}`)
+      err.status = res.status
+      err.body = text
+      throw err
+    }
+    const ct = res.headers.get('content-type') || ''
+    return ct.includes('application/json') ? res.json() : res.text()
+  },
 }

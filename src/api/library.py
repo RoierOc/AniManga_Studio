@@ -403,18 +403,30 @@ def edit_metadata(title):
     if not folder.exists():
         return jsonify({'error': 'not found'}), 404
 
-    # Update cover image
+    # Update cover image — quita primero cualquier cover.* viejo para que la prioridad
+    # jpg→png→webp del lector no deje una portada anterior "ensombreciendo" a la nueva.
+    def _clear_covers():
+        for e in ('jpg', 'png', 'webp'):
+            (folder / f'cover.{e}').unlink(missing_ok=True)
+
     if cover_b64:
         import base64 as _b64
         raw = cover_b64.split(',')[-1]  # strip "data:image/...;base64," prefix
+        _clear_covers()
         (folder / 'cover.jpg').write_bytes(_b64.b64decode(raw))
     elif cover_url and cover_url.startswith('http'):
         try:
-            r = _http.get(cover_url, timeout=10)
+            # NO mandar Referer: el CDN de MangaDex (uploads.mangadex.org) devuelve un
+            # placeholder "you can read this at mangadex.org" si ve un Referer vacío/ajeno.
+            # Sin header Referer entrega el original a resolución completa.
+            r = _http.get(cover_url, timeout=15)
             if r.status_code == 200:
                 ct = r.headers.get('content-type', '')
                 ext = 'webp' if 'webp' in ct else 'png' if 'png' in ct else 'jpg'
+                _clear_covers()
                 (folder / f'cover.{ext}').write_bytes(r.content)
+            else:
+                return jsonify({'error': f'no se pudo descargar la portada ({r.status_code})'}), 502
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
@@ -430,6 +442,66 @@ def edit_metadata(title):
         return jsonify({'ok': True, 'new_title': new_title})
 
     return jsonify({'ok': True})
+
+
+@library_bp.route('/cover_options')
+def cover_options():
+    """Portadas candidatas para CAMBIAR la de un manga (corrupta / baja calidad):
+    AniList (1 oficial en alta resolución) + MangaDex (varias, por tomo). El frontend
+    muestra el grid y al elegir una se aplica vía PUT /meta (cover_url). Params: title, mdId?."""
+    title = (request.args.get('title') or '').strip()
+    md_id = (request.args.get('mdId') or '').strip()
+    out = {'current': None, 'anilist': [], 'mangadex': []}
+
+    folder = Path(MANGA_DIR) / title
+    if folder.is_dir() and any((folder / f'cover.{e}').exists() for e in ('jpg', 'png', 'webp')):
+        out['current'] = f"/api/library/cover/{quote(title, safe='')}"
+
+    # AniList: una portada oficial en alta resolución (extraLarge)
+    try:
+        from api.anilist import _ql
+        q = 'query($s:String){ Media(search:$s, type:MANGA){ coverImage{ extraLarge large } } }'
+        d = _ql(q, {'s': title})
+        ci = ((d or {}).get('Media') or {}).get('coverImage') or {}
+        url = ci.get('extraLarge') or ci.get('large')
+        if url:
+            out['anilist'].append({'url': url, 'thumb': ci.get('large') or url, 'label': 'AniList'})
+    except Exception:
+        pass
+
+    # MangaDex: todas las portadas (por tomo/idioma)
+    try:
+        mid = md_id
+        if not mid:
+            rs = _http.get('https://api.mangadex.org/manga', params={'title': title, 'limit': 1}, timeout=10)
+            data = rs.json().get('data', []) if rs.ok else []
+            mid = data[0]['id'] if data else ''
+        if mid:
+            offset = 0
+            while True:
+                rc = _http.get('https://api.mangadex.org/cover',
+                               params={'manga[]': mid, 'limit': 100, 'offset': offset, 'order[volume]': 'asc'},
+                               timeout=10)
+                if not rc.ok:
+                    break
+                dd = rc.json()
+                for it in dd.get('data', []):
+                    a = it.get('attributes', {})
+                    fn = a.get('fileName', '')
+                    if not fn:
+                        continue
+                    out['mangadex'].append({
+                        'volume': a.get('volume') or '?', 'locale': a.get('locale', ''),
+                        'url': f"https://uploads.mangadex.org/covers/{mid}/{fn}",
+                        'thumb': f"https://uploads.mangadex.org/covers/{mid}/{fn}.256.jpg",
+                    })
+                offset += 100
+                if offset >= dd.get('total', 0):
+                    break
+    except Exception:
+        pass
+
+    return jsonify(out)
 
 
 @library_bp.route('/scan_corrupt/<path:title>')

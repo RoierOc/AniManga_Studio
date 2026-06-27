@@ -19,6 +19,7 @@ export const VIEWS = [
       { id: 'mangadex', label: 'MangaDex',   icon: 'search' },
       { id: 'sources',  label: 'Fuentes',    icon: 'globe' },
       { id: 'local',    label: 'Local',      icon: 'folder' },
+      { id: 'workshop', label: 'Taller',     icon: 'upload' },
     ],
   },
   {
