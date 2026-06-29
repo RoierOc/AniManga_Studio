@@ -7,7 +7,7 @@ Suwayomi exposes Tachiyomi/Mihon extensions via GraphQL at localhost:4567.
 from flask import Blueprint, jsonify, request, Response, stream_with_context
 from pathlib import Path
 import json as _json
-import requests as http_requests
+from api.resilient_http import http as http_requests  # retry + backoff + per-host rate limiting
 
 from api.runtime import MANGA_DIR
 
@@ -33,7 +33,7 @@ def _gql(query: str, variables: dict = None):
 
 def _suwayomi_online() -> bool:
     try:
-        http_requests.get(SUWAYOMI_BASE, timeout=3)
+        http_requests.get(SUWAYOMI_BASE, timeout=3, retries=1)  # health check: fail fast
         return True
     except Exception:
         return False
@@ -188,6 +188,7 @@ def search_all_stream():
                 SUWAYOMI_URL,
                 json={"query": query_str, "variables": variables},
                 timeout=_GQL_STREAM_TIMEOUT,
+                retries=1,  # parallel multi-source search: a slow source must fail fast
             )
             resp.raise_for_status()
             data = resp.json()

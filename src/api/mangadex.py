@@ -15,9 +15,11 @@ from api.runtime import MANGA_DIR, normalize_chapter
 
 auth_bp = Blueprint('mangadex', __name__)
 
-_SESSION = requests.Session()
-# No custom User-Agent: MangaDex's WAF now blocks desktop-browser UA strings (any Chrome/Firefox
-# UA gets a 400 error page); the default `python-requests/x.x` UA is allowed through.
+# Shared resilient client (retry + backoff + per-host rate limiting). Drop-in for a Session:
+# exposes .get/.post/.delete and returns requests.Response. It honors MangaDex's 429s and
+# never injects a browser User-Agent — MangaDex's WAF 400s any Chrome/Firefox UA; the default
+# `python-requests/x.x` UA is allowed through.
+from api.resilient_http import http as _SESSION
 
 MANGA_DIR = str(MANGA_DIR)
 
@@ -61,6 +63,72 @@ def _first_title(attrs):
     if not title_map:
         return "Untitled"
     return title_map.get("en") or next(iter(title_map.values()), "Untitled")
+
+
+def _canon(s: str) -> str:
+    """Normaliza un título para comparar: minúsculas y sólo alfanumérico (ignora idioma de
+    puntuación/espacios). 'The Moon on a Rainy Night' ~ 'themoononarainynight'."""
+    return ''.join(ch for ch in (s or '').lower() if ch.isalnum())
+
+
+def _all_titles(attrs: dict) -> list:
+    """Todos los títulos de una obra MangaDex: principal (todos los idiomas) + altTitles."""
+    out = []
+    for v in (attrs.get("title") or {}).values():
+        if v: out.append(v)
+    for alt in (attrs.get("altTitles") or []):
+        for v in (alt or {}).values():
+            if v: out.append(v)
+    return out
+
+
+def resolve_manga_by_title(title: str, al_id=None, fuzzy=False):
+    """Resuelve un título LOCAL a una obra de MangaDex probando TODAS sus variantes de nombre
+    (romaji/inglés/nativo/sinónimos vía AniList), no sólo el nombre principal — así un manga
+    cuya carpeta usa el romaji encuentra su entrada aunque MangaDex la indexe en inglés, y
+    viceversa. Compara cada variante contra el título principal Y los altTitles de cada
+    candidato (canónico: alfanumérico en minúsculas).
+
+    Devuelve el dict serializado del mejor match EXACTO, o None. Con `fuzzy=True` (p.ej. para
+    traer PORTADAS, donde acertar la obra exacta importa menos que mostrar algo), si no hay
+    match exacto cae al MEJOR candidato (el primer resultado del 1er variante, que MangaDex
+    rankea por relevancia) y lo marca `approx: True` para que la UI avise y permita corregir."""
+    try:
+        from api.anilist import title_variants
+        variants = title_variants(title, int(al_id) if al_id else None) or [title]
+    except Exception:
+        variants = [title]
+    variants = [v for v in variants if v]
+    canon_variants = {_canon(v) for v in variants}
+    if not canon_variants:
+        return None
+
+    candidates = {}
+    first_id = None
+    for q in variants[:5]:   # romaji + inglés + nativo + 2 sinónimos
+        try:
+            r = _SESSION.get("https://api.mangadex.org/manga", params={
+                "title": q, "limit": 8, "includes[]": ["cover_art"],
+                "contentRating[]": _ALL_RATINGS,
+            }, timeout=15)
+            if r.status_code != 200:
+                continue
+            for m in r.json().get("data", []):
+                if first_id is None:
+                    first_id = m["id"]
+                candidates.setdefault(m["id"], m)
+        except Exception:
+            continue
+
+    for m in candidates.values():
+        attrs = m.get("attributes", {})
+        if any(_canon(t) in canon_variants for t in _all_titles(attrs)):
+            return _parse_manga_list([m])[0]   # exact alias match — take it
+    if fuzzy and first_id and first_id in candidates:
+        out = _parse_manga_list([candidates[first_id]])[0]
+        out["approx"] = True   # mejor coincidencia aproximada (sin match exacto de alias)
+        return out
+    return None
 
 def get_access_token():
     """Get valid access token, refresh if needed"""
@@ -340,6 +408,21 @@ def search():
     except Exception as e:
         print(f"MangaDex search error: {e}")
         return jsonify([])
+
+
+@auth_bp.route('/resolve')
+def resolve():
+    """Auto-resuelve un título local a su obra de MangaDex por VARIANTES de nombre (sinónimos
+    AniList), no sólo por el nombre principal. Params: title (req), al_id (opt). Devuelve el
+    dict del manga o {} si no hay match exacto. Lo usa el Tomo Builder (Exportar Tomo)."""
+    title = (request.args.get("title") or "").strip()
+    al_id = (request.args.get("al_id") or "").strip()
+    fuzzy = request.args.get("fuzzy") in ("1", "true")
+    if len(title) < 2:
+        return jsonify({})
+    m = resolve_manga_by_title(title, int(al_id) if al_id.isdigit() else None, fuzzy=fuzzy)
+    return jsonify(m or {})
+
 
 @auth_bp.route('/popular')
 def popular():

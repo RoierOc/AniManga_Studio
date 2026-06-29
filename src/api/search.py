@@ -4,7 +4,8 @@ Search API - Search manga on MangaDex
 """
 
 from flask import Blueprint, jsonify, request
-import requests
+
+from api.resilient_http import http as requests  # retry + backoff + per-host rate limiting
 
 search_bp = Blueprint('search', __name__)
 

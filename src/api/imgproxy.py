@@ -11,7 +11,7 @@ import mimetypes
 from pathlib import Path as _Path
 from urllib.parse import urlparse
 
-import requests
+from api.resilient_http import http as requests  # retry + backoff + per-host rate limiting
 from flask import Blueprint, request, send_file, redirect
 
 imgproxy_bp = Blueprint('imgproxy', __name__)
