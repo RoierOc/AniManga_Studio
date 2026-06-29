@@ -37,7 +37,12 @@ const sel = ref(new Set())
 const volName = ref('')
 const fmt = ref('cbz')
 const quality = ref(92)
+const codec = ref('jpeg')
 const downscale = ref(false)
+// WebP holds up at lower quality than JPEG (no ringing on text), so its slider floor is lower.
+const qMin = computed(() => codec.value === 'webp' ? 70 : 85)
+// Keep quality within the codec's valid range when switching codecs.
+watch(codec, () => { if (quality.value < qMin.value) quality.value = qMin.value })
 
 // management panel
 const showManage = ref(false)
@@ -75,6 +80,10 @@ const verList = computed(() => {
 })
 const verBest = computed(() => verList.value[0] || null)   // mejor de la selección actual (para "recomendada ↑")
 const verSampleKey = (c) => `${c.sourceId}_${c.mangaId}`
+// Calidad "irregular": el peor capítulo muestreado es notablemente peor que la mediana
+// (consistency = peor/mediana). El ranking ya lo penaliza; aquí solo lo señalamos.
+const isIrregular = (q) => !!(q && q.consistency != null && q.consistency < 0.85
+  && q.heightMax && q.heightMin && q.heightMax - q.heightMin > 150)
 function isCurrentVersion(c) {
   const sm = store.current?.source_meta
   return !!(sm && c.sourceId === sm.sourceId && String(c.mangaId) === String(sm.mangaId))
@@ -136,8 +145,8 @@ watch(m, (v) => {
 
 // Live tomo estimate: recompute whenever the selection, quality or exclusions change
 // while the export tab is open.
-watch([sel, quality, tab, () => store.excludedPages.length], () => {
-  if (tab.value === 'tomo') store.loadExportPreview([...sel.value], quality.value)
+watch([sel, quality, codec, tab, () => store.excludedPages.length], () => {
+  if (tab.value === 'tomo') store.loadExportPreview([...sel.value], quality.value, codec.value)
 })
 
 function applyVol(vol) {
@@ -167,7 +176,7 @@ const selectAll = () => { sel.value = allSelected.value ? new Set() : new Set(st
 async function doExport(toDrive = false) {
   if (!sel.value.size) return
   const chapters = [...sel.value].sort((a, b) => parseFloat(a) - parseFloat(b))
-  await store.exportTomo({ chapters, volumeName: volName.value, format: fmt.value, quality: quality.value, downscaleHalf: downscale.value, coverB64: tomoCover.value || store.mdex.coverB64, toDrive })
+  await store.exportTomo({ chapters, volumeName: volName.value, format: fmt.value, quality: quality.value, codec: codec.value, downscaleHalf: downscale.value, coverB64: tomoCover.value || store.mdex.coverB64, toDrive })
 }
 </script>
 
@@ -299,8 +308,12 @@ async function doExport(toDrive = false) {
                   <label class="fld"><span>Formato</span>
                     <select v-model="fmt"><option value="cbz">CBZ</option><option value="cbr">CBR</option></select>
                   </label>
-                  <label class="fld"><span>Calidad: {{ quality }}</span><input v-model.number="quality" type="range" min="85" max="100" /></label>
+                  <label class="fld"><span>Compresión</span>
+                    <select v-model="codec"><option value="jpeg">JPEG</option><option value="webp">WebP (menor tamaño)</option></select>
+                  </label>
+                  <label class="fld"><span>Calidad: {{ quality }}</span><input v-model.number="quality" type="range" :min="qMin" max="100" /></label>
                 </div>
+                <p v-if="codec === 'webp'" class="codec-hint">WebP pesa menos a calidad equivalente y conserva mejor el texto al comprimir. Requiere que tu lector lo soporte (la mayoría de los modernos sí).</p>
                 <label class="chk"><input v-model="downscale" type="checkbox" /> Reducir a la mitad (menor tamaño)</label>
                 <label class="upbtn"><Icon name="library" :size="13" /> {{ tomoCover ? 'Portada elegida ✓' : 'Portada del tomo (opcional)' }}<input type="file" accept="image/*" @change="onTomoCover" hidden /></label>
                 <div v-if="sel.size && store.exportPreview.pages" class="tprev">
@@ -317,7 +330,7 @@ async function doExport(toDrive = false) {
                 <div class="dests">
                   <button v-if="!store.drive.connected" class="dlink" @click="store.connectDrive()">Conectar Google Drive</button>
                   <template v-else><span class="dok">Drive: {{ store.drive.email }}</span><button class="dlink" @click="store.disconnectDrive()">Desconectar</button></template>
-                  <a v-if="store.webdav.phoneUrl" :href="store.webdav.phoneUrl" target="_blank" class="dlink">Abrir en el móvil ↗</a>
+                  <a v-if="store.webdav.localUrl" :href="store.webdav.localUrl" target="_blank" class="dlink">Biblioteca móvil (PC) ↗</a>
                 </div>
 
                 <!-- color pages exclusion -->
@@ -338,9 +351,28 @@ async function doExport(toDrive = false) {
               <!-- MangaDex volumes + covers -->
               <div class="mdex">
                 <div class="mdex__head">
-                  <span>Tomos de MangaDex</span>
+                  <span>Tomos y portadas de MangaDex</span>
                   <button class="btn-xs" :disabled="store.mdex.volumesLoading" @click="store.loadMdexVolumes(); store.loadMdexCovers()">
                     <span v-if="store.mdex.volumesLoading" class="xspin" />{{ store.mdex.volumes.length ? 'Recargar' : 'Cargar' }}
+                  </button>
+                </div>
+                <!-- Coincidencia activa + corrección manual (la auto-resolución puede acertar
+                     aproximado; el buscador permite fijar la obra correcta y sus portadas). -->
+                <p v-if="store.mdex.mdManga" class="mdex__match" :class="{ 'is-approx': store.mdex.approx }">
+                  {{ store.mdex.approx ? '≈' : '✓' }} {{ store.mdex.mdManga.title }}
+                  <a :href="'https://mangadex.org/title/' + store.mdex.id" target="_blank" rel="noopener">↗</a>
+                </p>
+                <div class="mdex__search">
+                  <input v-model="store.mdex.search" placeholder="¿Manga incorrecto? Búscalo en MangaDex…"
+                         @keyup.enter="store.searchMdexForTomo()" />
+                  <button class="btn-xs" :disabled="store.mdex.searching" @click="store.searchMdexForTomo()">
+                    <span v-if="store.mdex.searching" class="xspin" />Buscar
+                  </button>
+                </div>
+                <div v-if="store.mdex.results.length" class="mdex__results">
+                  <button v-for="r in store.mdex.results" :key="r.id" class="mdres" @click="store.selectMdexEntry(r)">
+                    <img v-if="r.cover" :src="r.cover" loading="lazy" alt="" />
+                    <span class="mdres__t">{{ r.title }}<small v-if="r.year"> · {{ r.year }}</small></span>
                   </button>
                 </div>
                 <div v-if="store.mdex.volumes.length" class="mdex__vols">
@@ -394,7 +426,7 @@ async function doExport(toDrive = false) {
                       <option v-for="l in verLangs" :key="l" :value="l">{{ flag(l) }} {{ l }} ({{ ver.byLang[l].length }})</option>
                     </select>
                   </div>
-                  <button class="btn-xs" @click="store.verDiscover()" title="Volver a buscar">↻ Buscar de nuevo</button>
+                  <button class="btn-xs" @click="store.verDiscover(true)" title="Volver a buscar (ignora la caché)">↻ Buscar de nuevo</button>
                 </div>
 
                 <!-- versión principal fijada -->
@@ -447,6 +479,7 @@ async function doExport(toDrive = false) {
                           <span v-else-if="c === verBest" class="vr__badge vr__badge--best">★ mejor calidad</span>
                         </span>
                         <span class="vr__q">{{ c.quality?.height }}px · score {{ c.quality?.score }}</span>
+                        <span v-if="isIrregular(c.quality)" class="vr__irr" :title="`Calidad irregular entre capítulos (${c.quality.heightMin}–${c.quality.heightMax}px). Algún capítulo es notablemente peor — penalizado en el ranking.`">⚠ irregular</span>
                       </div>
                       <div class="vr__acts">
                         <button class="vr__eye" :class="{ 'is-on': ver.sample.key === verSampleKey(c) && ver.sample.open }" @click="store.verReadSample(c)" title="Leer páginas de muestra">
@@ -633,18 +666,29 @@ async function doExport(toDrive = false) {
             </div>
             <div class="modal__chhead">
               <span>Capítulos</span>
+              <span v-if="store.effectiveSource?.pinned" class="chsrc" :title="`Fuente fijada: ${store.effectiveSource.sourceName}`">
+                <Icon name="spark" :size="11" /> {{ store.effectiveSource.sourceName || 'versión fijada' }}
+              </span>
               <select v-if="store.mdLangs.length > 1" v-model="store.mdLang" class="langsel">
                 <option value="">Todos</option>
                 <option v-for="l in store.mdLangs" :key="l" :value="l">{{ flag(l) }} {{ l }}</option>
               </select>
             </div>
 
+            <!-- Continuar leyendo donde lo dejaste -->
+            <button v-if="store.continueInfo()" class="contbar" @click="store.resumeCurrent()">
+              <Icon name="spark" :size="14" />
+              <span class="contbar__t">Continuar — Cap. {{ formatChapter(store.continueInfo().chapter) }}</span>
+              <span v-if="store.continueInfo().total" class="contbar__p">pág {{ store.continueInfo().page + 1 }}/{{ store.continueInfo().total }}</span>
+            </button>
+
             <ul class="chaps">
               <template v-for="c in (store.hasSourceMeta ? store.mergedChapters : store.sortedChapters)" :key="c.chapter">
               <li class="chap"
-                  :class="{ 'chap--4k': upState(c.chapter) === true, 'chap--part': upState(c.chapter) === 'partial', 'chap--src': c._sourceId || c._mdChapterId, 'chap--md': !!c._mdChapterId }">
-                <!-- Downloaded chapter: clickable to read -->
-                <button v-if="!c._sourceId && !c._mdChapterId" class="chap__read" @click="store.read(c.chapter)">
+                  :class="{ 'chap--4k': upState(c.chapter) === true, 'chap--part': upState(c.chapter) === 'partial', 'chap--src': c._sourceId || c._mdChapterId, 'chap--md': !!c._mdChapterId, 'chap--read': store.isChapterRead(c.chapter) }">
+                <!-- Downloaded chapter: clic = leer · clic derecho = marcar/desmarcar leído -->
+                <button v-if="!c._sourceId && !c._mdChapterId" class="chap__read" @click="store.read(c.chapter)"
+                        @contextmenu.prevent="store.toggleChapterRead(c.chapter)" :title="store.isChapterRead(c.chapter) ? 'Leído · clic derecho para desmarcar' : 'Clic derecho: marcar leído'">
                   <span v-if="store.isChapterRead(c.chapter)" class="chap__read-dot" title="Leído" />
                   <span class="chap__num">{{ formatChapter(c.chapter) }}</span>
                   <span class="chap__pages">{{ c.page_count }} pág.</span>
@@ -887,6 +931,7 @@ async function doExport(toDrive = false) {
 .vr__src { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm); font-weight: 600; color: var(--ink); }
 .vr__lang { font-style: normal; font-weight: 400; font-size: var(--fs-2xs); color: var(--ink-faint); }
 .vr__q { font-size: var(--fs-2xs); color: var(--ink-faint); font-family: var(--font-mono); }
+.vr__irr { margin-left: 0.5rem; font-size: var(--fs-2xs); color: var(--warn); white-space: nowrap; cursor: help; }
 .vr__badge { font-size: 9px; font-weight: 800; letter-spacing: .04em; padding: 2px 7px; border-radius: var(--r-pill); flex-shrink: 0; }
 .vr__badge--actual { background: var(--ink-ghost); color: var(--base); }
 .vr__badge--best { background: var(--cyan); color: #04130c; }
@@ -946,6 +991,18 @@ async function doExport(toDrive = false) {
 .btn-xs { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); }
 .btn-xs:hover { background: var(--azure-haze); }
 .xspin { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--azure); animation: spin .7s linear infinite; display: inline-block; }
+.mdex__match { font-size: var(--fs-2xs); color: var(--jade); margin-bottom: var(--s-2); display: flex; align-items: center; gap: 5px; }
+.mdex__match.is-approx { color: var(--amber, var(--ink-faint)); }
+.mdex__match a { color: var(--azure-bright); text-decoration: none; }
+.mdex__search { display: flex; gap: var(--s-2); margin-bottom: var(--s-2); }
+.mdex__search input { flex: 1; min-width: 0; padding: 5px 9px; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-2xs); }
+.mdex__search input:focus { outline: none; border-color: var(--azure); }
+.mdex__results { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; margin-bottom: var(--s-3); }
+.mdres { display: flex; align-items: center; gap: var(--s-2); padding: 4px; border-radius: var(--r-sm); border: 1px solid var(--line); text-align: left; transition: all var(--t-fast); }
+.mdres:hover { border-color: var(--azure); background: var(--azure-haze); }
+.mdres img { width: 28px; height: 40px; object-fit: cover; border-radius: var(--r-xs); flex-shrink: 0; }
+.mdres__t { font-size: var(--fs-2xs); color: var(--ink-soft); line-height: 1.25; }
+.mdres__t small { color: var(--ink-faint); }
 .mdex__vols { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: var(--s-3); }
 .volchip { padding: 4px 10px; border-radius: var(--r-pill); font-size: var(--fs-2xs); color: var(--violet); border: 1px solid color-mix(in srgb, var(--violet) 30%, transparent); transition: all var(--t-fast); }
 .volchip:hover { background: color-mix(in srgb, var(--violet) 14%, transparent); }
@@ -962,6 +1019,7 @@ async function doExport(toDrive = false) {
 .fld input:focus, .fld select:focus { outline: none; border-color: var(--azure); }
 .fld-row { display: flex; gap: var(--s-3); }
 .fld-row .fld { flex: 1; }
+.codec-hint { margin: calc(-1 * var(--s-1)) 0 0; font-size: var(--fs-2xs); line-height: 1.4; color: var(--ink-faint); }
 .chk { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--ink-soft); cursor: pointer; }
 .exportbtn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; margin-top: var(--s-2); padding: var(--s-3); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); transition: background var(--t-fast); }
 .exportbtn:hover:not(:disabled) { background: var(--azure-bright); }
@@ -1010,6 +1068,13 @@ async function doExport(toDrive = false) {
 
 .chaps { display: flex; flex-direction: column; gap: 4px; }
 .modal__chhead { display: flex; align-items: center; justify-content: space-between; padding: var(--s-3) var(--s-3); font-weight: 600; font-size: var(--fs-sm); border-bottom: 1px solid var(--line); }
+.contbar { display: flex; align-items: center; gap: var(--s-2); width: 100%; margin: var(--s-2) 0; padding: var(--s-2) var(--s-3); border-radius: var(--r-md); background: var(--azure-haze); border: 1px solid var(--azure); color: var(--azure-bright); font-size: var(--fs-sm); font-weight: 500; transition: background var(--t-fast); }
+.contbar:hover { background: color-mix(in oklab, var(--azure) 22%, transparent); }
+.contbar__t { flex: 1; text-align: left; }
+.contbar__p { font-size: var(--fs-2xs); color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+.chap--read { opacity: .55; }
+.chap--read:hover { opacity: 1; }
+.chsrc { display: inline-flex; align-items: center; gap: 4px; margin-right: auto; margin-left: var(--s-3); padding: 2px 8px; border-radius: var(--r-pill); font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); background: var(--azure-haze); border: 1px solid color-mix(in srgb, var(--azure) 30%, transparent); }
 .langsel { padding: 4px 8px; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-xs); }
 .langsel:focus { outline: none; border-color: var(--azure); }
 .chap { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid transparent; transition: background var(--t-fast), border-color var(--t-fast); }

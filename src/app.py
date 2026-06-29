@@ -227,7 +227,7 @@ if __name__ == '__main__':
     try:
         from waitress import serve
         print("   WSGI server: waitress")
-        serve(app, host='127.0.0.1', port=5101, threads=8)
+        serve(app, host='0.0.0.0', port=5101, threads=8)
     except ImportError:
         print("   WSGI server: Flask dev (install waitress for production)")
-        app.run(port=5101, debug=False, host='127.0.0.1')
+        app.run(port=5101, debug=False, host='0.0.0.0')

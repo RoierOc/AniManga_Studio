@@ -4,6 +4,7 @@ import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
 import { useAnimeStore } from '@/stores/anime'
+import { formatBytes } from '@/lib/format'
 import Icon from '@/components/ui/Icon.vue'
 import FolderPicker from '@/components/anime/FolderPicker.vue'
 
@@ -14,12 +15,29 @@ const anime = useAnimeStore()
 const dlPath = ref('')
 watch(() => anime.dlSettings.download_path, (v) => { dlPath.value = v || '' }, { immediate: true })
 
+const qaInfo = ref({ bytes: 0, flags: 0 })
+async function loadQa() { qaInfo.value = await manga.qaSize() }
+async function clearQa() {
+  if (!confirm('¿Borrar todos los datos QA (artefactos y páginas marcadas)?')) return
+  await manga.qaClear(); loadQa()
+}
+
 onMounted(() => {
   if (!Object.keys(manga.models).length) manga.loadModels()
   manga.loadDestinations()
   anime.loadDlSettings()
   anime.checkQbt()
+  loadQa()
 })
+
+const phoneCopied = ref(false)
+function copyPhoneUrl() {
+  if (!manga.webdav.phoneUrl) return
+  navigator.clipboard.writeText(manga.webdav.phoneUrl).then(() => {
+    phoneCopied.value = true
+    setTimeout(() => { phoneCopied.value = false }, 2000)
+  })
+}
 
 const importInput = ref(null)
 function triggerImport() { importInput.value?.click() }
@@ -109,12 +127,37 @@ async function onImportFile(e) {
           </template>
           <button v-else class="btn btn--accent" @click="manga.connectDrive()">Conectar Drive</button>
         </div>
-        <div class="dest">
-          <span class="dest__lbl">WebDAV / móvil</span>
-          <a v-if="manga.webdav.phoneUrl" :href="manga.webdav.phoneUrl" target="_blank" rel="noopener" class="dest__link">Abrir URL móvil ↗</a>
-          <span v-else class="dest__muted">No configurado</span>
+        <div class="dest dest--col">
+          <span class="dest__lbl">Biblioteca móvil</span>
+          <div v-if="manga.webdav.localUrl" class="dest__row">
+            <a :href="manga.webdav.localUrl" target="_blank" rel="noopener" class="dest__link">Abrir en este PC ↗</a>
+            <span class="dest__hint">— funciona desde este navegador</span>
+          </div>
+          <div v-if="manga.webdav.phoneUrl" class="dest__row">
+            <code class="dest__url">{{ manga.webdav.phoneUrl }}</code>
+            <button class="btn btn--xs" @click="copyPhoneUrl">{{ phoneCopied ? '✓ Copiado' : 'Copiar' }}</button>
+            <span class="dest__hint">— pega esta URL en el móvil (debe estar en el mismo WiFi)</span>
+          </div>
+          <span v-if="!manga.webdav.localUrl && !manga.webdav.phoneUrl" class="dest__muted">No configurado</span>
         </div>
       </div>
+    </section>
+
+    <!-- Modo QA de traducción (testing) -->
+    <section class="card">
+      <div class="card__title"><Icon name="spark" :size="16" /> Modo QA de traducción <span class="tag">testing</span></div>
+      <label class="fld fld--chk">
+        <span>Activar modo QA <em>· conserva artefactos de debug al traducir y habilita el botón ⚑ en el lector para marcar páginas mal traducidas</em></span>
+        <input type="checkbox" :checked="manga.qaMode" @change="manga.toggleQa()" />
+      </label>
+      <div class="sep" />
+      <div class="qa-foot">
+        <span class="hint">{{ qaInfo.flags }} página(s) marcada(s) · {{ formatBytes(qaInfo.bytes) }} en disco</span>
+        <button class="btn btn--danger" :disabled="!qaInfo.bytes && !qaInfo.flags" @click="clearQa">
+          <Icon name="close" :size="14" /> Borrar datos QA
+        </button>
+      </div>
+      <p class="hint">Los casos se guardan en <code>data/_translation_qa/</code> (salida + arte EN + ES emparejada + overlay + diagnóstico) para afinar el algoritmo. Apagar el modo no borra lo ya guardado.</p>
     </section>
 
     <!-- Backup de biblioteca -->
@@ -162,6 +205,11 @@ async function onImportFile(e) {
 .btn:hover { color: var(--ink); border-color: var(--line-strong); }
 .btn--accent { background: var(--azure); color: #fff; border-color: transparent; font-weight: 600; }
 .btn--accent:hover { background: var(--azure-bright); color: #fff; }
+.btn--danger { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
+.btn--danger:hover:not(:disabled) { color: #fff; background: var(--coral); border-color: transparent; }
+.btn--danger:disabled { opacity: .5; cursor: not-allowed; }
+.tag { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; letter-spacing: var(--tracking-caps); color: var(--coral); border: 1px solid color-mix(in srgb, var(--coral) 35%, transparent); border-radius: var(--r-pill); padding: 1px 8px; }
+.qa-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; margin-bottom: var(--s-2); }
 .hint { font-size: var(--fs-xs); color: var(--ink-faint); margin-top: 2px; }
 .hint code, code { font-family: var(--font-mono); color: var(--ink-soft); }
 
@@ -173,6 +221,11 @@ async function onImportFile(e) {
 
 .dests { display: flex; flex-direction: column; gap: var(--s-3); }
 .dest { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.dest--col { flex-direction: column; align-items: flex-start; gap: var(--s-2); }
+.dest__row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.dest__url { font-size: var(--fs-xs); font-family: var(--font-mono); color: var(--ink-faint); background: var(--surface-2); padding: 2px 6px; border-radius: var(--r-sm); user-select: all; }
+.dest__hint { font-size: var(--fs-2xs); color: var(--ink-ghost); }
+.btn--xs { font-size: var(--fs-2xs); padding: 2px 8px; }
 .dest__lbl { font-weight: 500; min-width: 130px; }
 .dest__ok { color: var(--jade); font-size: var(--fs-sm); }
 .dest__link { color: var(--azure-bright); font-size: var(--fs-sm); }

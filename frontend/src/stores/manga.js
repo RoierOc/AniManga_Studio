@@ -2,11 +2,15 @@ import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { onStatus } from '@/lib/sse'
 import { useUiStore } from './ui'
-import { taskId, canonicalTitle } from '@/lib/manga'
+import { taskId } from '@/lib/manga'
 
 let statusBound = false
 let previewTimer = null
 let upDoneSeen = new Set()   // upscale ids already refreshed-for (bounded, pruned each SSE tick)
+// Activity center bookkeeping (module-level so it survives store re-creation in HMR):
+let firstStatusSeen = false  // primed on the first SSE snapshot so we never replay OLD terminal toasts
+let tpTermSeen = new Set()   // transplant task ids whose terminal side-effects (toasts/refresh) already fired
+let exportTermSeen = new Set() // export ids whose completion auto-download already fired (bounded, pruned each tick)
 
 // Preferred MangaDex chapter language (Spanish-first, then English), or the first
 // available — so a freshly opened manga shows one clean language, not all at once.
@@ -34,6 +38,77 @@ function buildProgressMap(taskTable, statusDict) {
     }
   }
   return out
+}
+
+/* ── Modelo unificado de tareas para el Centro de Actividad ─────────────────────
+   Aplana CADA entrada de estado del backend (download/upscale/export/transplant) a una
+   forma común que el indicador de la TopBar, el drawer, la vista Actividad y el progreso
+   contextual del modal consumen por igual — una sola fuente de verdad. */
+const _TASK_TERMINAL = ['done', 'complete', 'cancelled', 'error', 'interrupted']
+
+function _pct(progress, total, fallback = 0) {
+  if (total) return Math.min(100, Math.round((progress || 0) / total * 100))
+  return fallback
+}
+// Backend status string → estado unificado del centro.
+function _mapStatus(raw) {
+  if (raw === 'error') return 'error'
+  if (raw === 'cancelled' || raw === 'interrupted') return 'cancelled'
+  if (raw === 'done' || raw === 'complete') return 'done'
+  if (raw === 'starting') return 'queued'
+  return 'running'
+}
+// One backend task entry → unified shape, or null to hide it.
+function normalizeTask(kind, id, v) {
+  if (!v || typeof v !== 'object') return null
+  const status = _mapStatus(v.status)
+  const _ts = v.ended_at || v._ts   // epoch seconds; ended_at is stamped once on terminal
+  const base = { id, kind, status, ts: _ts ? _ts * 1000 : Date.now(), error: v.error || '', msg: v.message || '' }
+  if (kind === 'download')
+    return { ...base, mangaId: v.title || '', title: v.title || '', chapter: v.chapter,
+      pct: _pct(v.progress, v.total), label: v.chapter != null ? `Cap. ${v.chapter}` : 'Descarga' }
+  if (kind === 'upscale')
+    return { ...base, mangaId: v.title || '', title: v.title || '', chapter: v.chapter,
+      pct: _pct(v.progress ?? v.current, v.total), label: v.chapter != null ? `Cap. ${v.chapter}` : 'Escalar todo' }
+  if (kind === 'export')
+    return { ...base, mangaId: v.title || v.volume_name || '', title: v.title || v.volume_name || '',
+      pct: status === 'done' ? 100 : _pct(v.progress, v.total), label: v.volume_name || 'Tomo', file: status === 'done' }
+  if (kind === 'translate') {
+    // `chapterDone` is the 1-based chapter being WORKED ON (not the count completed), so a
+    // single-chapter job would otherwise pin the bar at 100%. Make it page-aware: chapters
+    // fully done + the current chapter's page fraction → a smooth bar that mirrors the modal's
+    // "pág d/t" detail. `pageDone/pageTotal` only flow during the compose phase.
+    const total = v.chapterTotal || 0
+    const completed = Math.max(0, (v.chapterDone || 0) - 1)
+    const frac = (v.phase === 'compose' && v.pageTotal) ? (v.pageDone || 0) / v.pageTotal : 0
+    let pct = total ? Math.min(100, Math.round((completed + frac) / total * 100)) : 0
+    if (status === 'done') pct = 100
+    let label
+    if (v.phase === 'compose' && v.pageTotal) label = `Cap. ${v.chapter} · pág ${v.pageDone || 0}/${v.pageTotal}`
+    else if (v.phase === 'download') label = `Cap. ${v.chapter} · descargando`
+    else if (v.phase === 'start' || !total) label = 'Preparando…'
+    else label = `Cap. ${Math.min(v.chapterDone || 0, total)}/${total}`
+    return { ...base, mangaId: v.title || '', title: v.title || '', chapter: v.chapter, pct, label }
+  }
+  if (kind === 'versiondl')   // descarga de versión: visualmente una descarga
+    return { ...base, kind: 'download', mangaId: v.title || '', title: v.title || '',
+      pct: _pct(v.chapterDone, v.chapterTotal), label: v.chapterTotal ? `Versión · ${v.chapterDone || 0}/${v.chapterTotal} cap.` : 'Descarga de versión' }
+  return null
+}
+// Agrupa una lista de tareas normalizadas por manga, con portada (si se conoce) y % medio.
+function groupByManga(tasks, coverCache) {
+  const map = new Map()
+  for (const t of tasks) {
+    const key = t.mangaId || t.title || t.id
+    if (!map.has(key)) map.set(key, { mangaId: key, title: t.title || key, cover: coverCache[key] || '', tasks: [], pct: 0, anyError: false, anyActive: false })
+    map.get(key).tasks.push(t)
+  }
+  for (const g of map.values()) {
+    g.pct = Math.round(g.tasks.reduce((a, t) => a + (t.pct || 0), 0) / g.tasks.length)
+    g.anyError = g.tasks.some(t => t.status === 'error')
+    g.anyActive = g.tasks.some(t => t.status === 'running' || t.status === 'queued')
+  }
+  return [...map.values()]
 }
 
 export const useMangaStore = defineStore('manga', {
@@ -88,7 +163,12 @@ export const useMangaStore = defineStore('manga', {
     downloads: {},
     upscale: {},
     exports: {},
-    queueOpen: true,
+    transplant: {},           // { taskId: {status, phase, chapterDone, chapterTotal, ...} } — traducción + descarga de versión
+
+    // Centro de Actividad: historial DERIVADO del mismo snapshot (rebanada terminal). No se
+    // graba en el cliente — activas e historial son la misma fuente de verdad y sobreviven F5.
+    coverCache: {},           // { mangaId: coverUrl } poblado al abrir/listar mangas, para las tarjetas del centro
+    hiddenHistoryIds: (() => { try { return JSON.parse(localStorage.getItem('act-hidden') || '[]') } catch { return [] } })(),
 
     // reader
     reader: null,             // { title, chapter, source, kind } | null  (kind: manga | cbz)
@@ -135,7 +215,7 @@ export const useMangaStore = defineStore('manga', {
 
     // MangaDex Tomo Builder (volumes + covers)
     mdex: {
-      id: null, mdManga: null,
+      id: null, mdManga: null, approx: false,
       search: '', results: [], searching: false,
       volumes: [], volumesLoading: false,
       covers: [], coversLoading: false,
@@ -149,6 +229,10 @@ export const useMangaStore = defineStore('manga', {
     models: {},                 // { key: label }
     activeModel: 'eula',
     eco: localStorage.getItem('upscale-eco') !== '0',   // eco on by default (lets MPV run)
+
+    // Modo QA de traducción (SOLO testing): conserva artefactos de debug por página al traducir
+    // y habilita el botón ⚑ en el lector para marcar páginas mal traducidas. Off por defecto.
+    qaMode: localStorage.getItem('tp-qa') === '1',
   }),
 
   getters: {
@@ -168,18 +252,34 @@ export const useMangaStore = defineStore('manga', {
     mdLangs: (s) => [...new Set(s.mdChapters.map(c => c.language).filter(Boolean))].sort(),
     // Merge local + source + MD chapters, showing all available for download
     mergedChapters: (s) => {
-      const dlNorms = new Set(s.chapters.map(c => String(c.chapter)))
-      const result = [...s.chapters]
+      // Only truly in-flight downloads suppress the local chapter (positive check avoids
+      // stale/failed statuses like 'no_chapters' or 'starting' from a crashed session from
+      // incorrectly hiding local chapters and causing source+MD duplicates).
+      const _IN_FLIGHT = ['downloading', 'started', 'starting']
+      const curId = s.current?.id
+      const activeDownloading = new Set(
+        Object.entries(s.dlTasks).filter(([, tid]) => {
+          const st = s.downloads[tid]
+          return st && st.title === curId && _IN_FLIGHT.includes(st.status)
+        }).map(([ch]) => ch)
+      )
+      const localChapters = s.chapters.filter(c => !activeDownloading.has(String(c.chapter)))
+      // seenNorms tracks what's already in result; prevents a chapter from appearing via both
+      // sourceChapters (Suwayomi) AND mdChapters (MangaDex) when dlNorms misses it.
+      const seenNorms = new Set(localChapters.map(c => String(c.chapter)))
+      const result = [...localChapters]
       for (const sc of s.sourceChapters) {
-        if (!dlNorms.has(sc.chapterNorm)) {
+        if (!seenNorms.has(sc.chapterNorm)) {
           result.push({ chapter: sc.chapterNorm, page_count: sc.pageCount || 0, _sourceId: sc.id, _sourceName: sc.name, _scanlator: sc.scanlator })
+          seenNorms.add(sc.chapterNorm)
         }
       }
       for (const mc of s.mdChapters) {
         if (s.mdLang && mc.language !== s.mdLang) continue
         const cNorm = String(mc.chapter)
-        if (!dlNorms.has(cNorm)) {
+        if (!seenNorms.has(cNorm)) {
           result.push({ chapter: cNorm, page_count: mc.pages || 0, _mdChapterId: mc.id, _mdGroup: (mc.groups || []).join(', '), _mdTitle: mc.title, _mdLang: mc.language })
+          seenNorms.add(cNorm)
         }
       }
       return result.sort((a, b) => parseFloat(b.chapter) - parseFloat(a.chapter))
@@ -191,14 +291,16 @@ export const useMangaStore = defineStore('manga', {
     effectiveSource: (s) => {
       const sm = s.current?.source_meta
       const rec = sm?.recommended_source
-      // Solo una fuente Suwayomi puede alimentar la descarga de Capítulos (usa /api/sources/…).
-      // Si se fijó MangaDex/local, el pin sigue valiendo como etiqueta de calidad, pero los
-      // capítulos se listan/descargan desde la fuente de ORIGEN (no romper esa ruta).
-      const isSuwa = (id) => id && id !== '__mangadex__' && id !== '__local__'
-      if (rec?.sourceId && rec?.mangaId && isSuwa(rec.sourceId)) {
-        return { sourceId: rec.sourceId, mangaId: rec.mangaId, sourceName: rec.sourceName || '', sourceLang: rec.sourceLang || '', pinned: true }
+      // La versión FIJADA manda, sea de la fuente que sea: Suwayomi se lista/descarga vía
+      // /api/sources, MangaDex vía /api/mangadex (mangaId = `uuid@@lang`). Una versión LOCAL
+      // fijada es la que ya tienes = origen, así que no cambia la fuente de Capítulos.
+      const kindOf = (id) => id === '__mangadex__' ? 'mangadex' : id === '__local__' ? 'local' : 'suwayomi'
+      if (rec?.sourceId && rec?.mangaId) {
+        const kind = kindOf(rec.sourceId)
+        if (kind !== 'local')
+          return { sourceId: rec.sourceId, mangaId: rec.mangaId, sourceName: rec.sourceName || '', sourceLang: rec.sourceLang || '', kind, pinned: true }
       }
-      if (sm?.sourceId && sm?.mangaId) return { sourceId: sm.sourceId, mangaId: sm.mangaId, sourceName: sm.sourceName || '', sourceLang: sm.sourceLang || '', pinned: false }
+      if (sm?.sourceId && sm?.mangaId) return { sourceId: sm.sourceId, mangaId: sm.mangaId, sourceName: sm.sourceName || '', sourceLang: sm.sourceLang || '', kind: 'suwayomi', pinned: false }
       return null
     },
     // Whether we have any external chapters to show (source, MD, or local)
@@ -240,28 +342,50 @@ export const useMangaStore = defineStore('manga', {
       return (p.startsWith('/') || p.startsWith('http')) ? p : '/uploads/upscaled/' + p
     },
 
-    // Unified active task list for the global queue widget.
-    activeTasks: (s) => {
+    /* ── Centro de Actividad: modelo unificado ──────────────────────────────
+       normalizedTasks aplana las CUATRO fuentes de estado a una forma común. Todo lo
+       demás (indicador TopBar, drawer, vista, historial) deriva de aquí → una sola fuente
+       de verdad, sincronizada por reactividad de Pinia. */
+    normalizedTasks: (s) => {
       const out = []
-      const pct = (p, t) => t ? Math.min(100, Math.round((p || 0) / t * 100)) : (p || 0)
       for (const [id, v] of Object.entries(s.downloads)) {
         if (s.cancelledIds.includes(id)) continue
-        if (['done', 'complete', 'error', 'cancelled', 'interrupted'].includes(v.status)) continue
-        out.push({ id, kind: 'download', label: `${v.title || ''} · cap. ${v.chapter ?? ''}`, status: v.status, pct: pct(v.progress, v.total), msg: v.message })
+        const t = normalizeTask('download', id, v); if (t) out.push(t)
       }
       for (const [id, v] of Object.entries(s.upscale)) {
         if (s.cancelledIds.includes(id)) continue
-        if (!['starting', 'started', 'upscaling'].includes(v.status)) continue
-        out.push({ id, kind: 'upscale', label: `4K · ${v.title || ''} cap. ${v.chapter ?? ''}`, status: v.status, pct: pct(v.progress ?? v.current, v.total) })
+        const t = normalizeTask('upscale', id, v); if (t) out.push(t)
       }
       for (const [id, v] of Object.entries(s.exports)) {
         if (s.dismissedExports.includes(id)) continue
-        const done = v.status === 'complete'
-        if (['error', 'cancelled'].includes(v.status)) continue
-        out.push({ id, kind: 'export', label: v.volume_name || 'Tomo', status: v.status, pct: pct(v.progress, v.total), done, file: done })
+        const t = normalizeTask('export', id, v); if (t) out.push(t)
+      }
+      for (const [id, v] of Object.entries(s.transplant)) {
+        const kind = id.endsWith('_transplant_chdlversion') ? 'versiondl' : 'translate'
+        const t = normalizeTask(kind, id, v); if (t) out.push(t)
       }
       return out
     },
+    // Solo lo que está vivo ahora (cola + corriendo) — alimenta indicador, drawer y "Activas".
+    liveTasks() { return this.normalizedTasks.filter(t => t.status === 'running' || t.status === 'queued') },
+    activeCount() { return this.liveTasks.length },
+    aggregatePct() {
+      const t = this.liveTasks
+      return t.length ? Math.round(t.reduce((a, x) => a + (x.pct || 0), 0) / t.length) : 0
+    },
+    // Historial = la rebanada TERMINAL del mismo snapshot, por recencia (sello ended_at),
+    // acotada y sin las ocultadas por el usuario. Misma fuente que las activas → siempre
+    // sincronizado y sobrevive a F5; sin grabación frágil en el cliente.
+    historyTasks() {
+      const hidden = new Set(this.hiddenHistoryIds)
+      return this.normalizedTasks
+        .filter(t => ['done', 'error', 'cancelled'].includes(t.status) && !hidden.has(t.id))
+        .sort((a, b) => b.ts - a.ts)
+        .slice(0, 80)
+    },
+    // Tarjetas agrupadas por manga (activas) y del historial.
+    processingGroups() { return groupByManga(this.liveTasks, this.coverCache) },
+    historyGroups() { return groupByManga(this.historyTasks, this.coverCache) },
   },
 
   actions: {
@@ -275,6 +399,7 @@ export const useMangaStore = defineStore('manga', {
         this.downloads = data.downloads || {}
         this.upscale = data.upscale || {}
         this.exports = data.exports || {}
+        this.transplant = data.transplant || {}
         // Drop cancelled ids once the backend has actually stopped them (terminal
         // status or gone), so the set can't grow unbounded.
         if (this.cancelledIds.length) {
@@ -315,7 +440,136 @@ export const useMangaStore = defineStore('manga', {
         }
         if (refreshCh) this._refreshChapters()
         if (refreshUp) this._refreshUpscaled()
+
+        // On the FIRST snapshot this page-load, mark everything already terminal as "seen" so we
+        // don't replay old TOASTS from a previous session (the history itself is derived, not grabbed).
+        if (!firstStatusSeen) {
+          for (const t of this.normalizedTasks)
+            if (['done', 'error', 'cancelled'].includes(t.status)) tpTermSeen.add(t.id)
+          // Exports already complete on first load (e.g. a finished export from before an F5)
+          // must NOT auto-download — only newly-completed ones should. Seed them as seen.
+          for (const id of Object.keys(this.exports)) exportTermSeen.add(id)
+          firstStatusSeen = true
+        }
+        // Translation / version-download flow through the SSE snapshot (no polling): bind the open
+        // manga's modal to its live task and fire terminal side-effects (toasts/refresh) once.
+        this._reconcileTransplant()
+        // Auto-download finished tomos the moment they complete — globally, so the file is saved
+        // even if the user already left the export view.
+        this._reconcileExports()
+        // Rebuild dlTasks for any active chapter downloads of the open manga that aren't
+        // tracked yet — handles page-refresh (dlTasks starts empty) and modal re-open.
+        this._reconcileDownloads()
       })
+    },
+
+    // Rebuild dlTasks entries for active (non-terminal) chapter downloads of the current manga
+    // from the live `downloads` snapshot. Needed on page-refresh (dlTasks starts empty) and
+    // modal re-open after navigating away mid-download (partial pages on disk hide the source
+    // chapter in mergedChapters unless dlTasks is current).
+    _reconcileDownloads() {
+      const curId = this.current?.id
+      if (!curId) return
+      for (const [tid, v] of Object.entries(this.downloads)) {
+        if (v.title !== curId || _TASK_TERMINAL.includes(v.status)) continue
+        const ch = String(v.chapter || '')
+        if (ch && !(ch in this.dlTasks)) this.dlTasks[ch] = tid
+      }
+    },
+
+    // Drive the open manga's contextual progress (tp.runStatus / ver.dl) straight from the
+    // aggregated `transplant` snapshot, and run each task's terminal handler exactly once.
+    _reconcileTransplant() {
+      const TERMINAL = ['done', 'cancelled', 'error']
+      for (const [id, st] of Object.entries(this.transplant)) {
+        const isDl = id.endsWith('_transplant_chdlversion')
+        const terminal = TERMINAL.includes(st.status)
+        // Task ids are deterministic per manga+kind, so a RE-run reuses the same id. Once it
+        // goes active again, forget its previous terminal so the next completion fires anew.
+        if (!terminal) tpTermSeen.delete(id)
+        if (this.current && st.title === this.current.id) {
+          if (isDl) {
+            if (!terminal) this.ver.dl = { running: true, done: st.chapterDone || 0, total: st.chapterTotal || 0, name: this.ver.dl?.name || st.title }
+          } else {
+            this.tp.taskId = id; this.tp.runStatus = st; this.tp.running = !terminal
+          }
+        }
+        if (terminal && !tpTermSeen.has(id)) {
+          tpTermSeen.add(id)
+          if (isDl) this._onVersionDlDone(st)
+          else this._onTranslateDone(st)
+        }
+      }
+      if (tpTermSeen.size > 200) tpTermSeen = new Set([...tpTermSeen].filter(id => id in this.transplant))
+    },
+    // Terminal handler for a translation run (replaces the old _pollTpRun terminal branch).
+    _onTranslateDone(st) {
+      const ui = useUiStore()
+      const n = (st.chapters || []).length
+      if (st.status === 'cancelled') ui.toast('Traducción detenida', 'info')
+      else if (st.status === 'error') ui.toast('Falló la traducción', 'error')
+      else ui.toast(n ? `Listo: ${n} capítulo(s) en español` : 'Sin capítulos compuestos', n ? 'ok' : 'error')
+      this.libraryDirty++
+      if (this.current?.id && this.current.id === st.title) {
+        this.tp.running = false
+        this.tpLoadChapters()
+        api.get(`/api/library/${encodeURIComponent(this.current.id)}`)
+          .then(d => { this.chapters = d.chapters || []; this.upscaled = d.upscaled || {}; this.current.transplant_meta = d.transplant_meta || null })
+          .catch(() => {})
+      }
+    },
+    // Terminal handler for a version download (replaces the old _pollVerDl terminal branch).
+    _onVersionDlDone(st) {
+      const ui = useUiStore()
+      if (st.status === 'error') ui.toast('Falló la descarga de la versión', 'error')
+      else if (st.status === 'cancelled') ui.toast('Descarga de versión detenida', 'info')
+      else { const n = st.downloaded || 0; ui.toast(n ? `Descargados ${n} capítulo(s) de esta versión` : 'No faltaban capítulos de esta versión', n ? 'ok' : 'info') }
+      this.libraryDirty++
+      if (this.current?.id === st.title) {
+        this.ver.dl = null
+        api.get(`/api/library/${encodeURIComponent(this.current.id)}`)
+          .then(d => { this.chapters = d.chapters || []; this.upscaled = d.upscaled || {} }).catch(() => {})
+      }
+    },
+    // Detecta exportaciones recién completadas en el snapshot SSE y dispara su descarga UNA vez.
+    // Vive en el store (no en la vista de exportar) → la descarga ocurre aunque el usuario ya haya
+    // salido de esa pantalla. El backend mantiene el .cbz en /tmp hasta que se sirve (luego pasa a
+    // 'downloaded' y desaparece del snapshot), así que aquí basta con pedir el archivo.
+    _reconcileExports() {
+      for (const [id, v] of Object.entries(this.exports)) {
+        if (exportTermSeen.has(id)) continue
+        if (_mapStatus(v.status) === 'done') {
+          exportTermSeen.add(id)
+          this._onExportDone(id, v)
+        } else if (v.status === 'error') {
+          exportTermSeen.add(id)
+          useUiStore().toast(`Falló la exportación${v.title ? ' de «' + v.title + '»' : ''}`, 'error')
+        }
+      }
+      if (exportTermSeen.size > 200) exportTermSeen = new Set([...exportTermSeen].filter(id => id in this.exports))
+    },
+    // Dispara la descarga del navegador para un tomo terminado. Un <a download> apuntando al
+    // endpoint (Content-Disposition: attachment) guarda el archivo sin abrir pestaña; el backend
+    // marca la tarea como 'downloaded' al servirla y la limpia. Si el navegador la bloqueara, la
+    // vista Actividad ofrece un botón "Descargar" manual como respaldo.
+    _onExportDone(id, v) {
+      this.downloadExportFile(id)
+      useUiStore().toast(`✓ Tomo listo: ${v.volume_name || v.title || 'descarga'}`, 'ok')
+    },
+    downloadExportFile(id) {
+      try {
+        const a = document.createElement('a')
+        a.href = this.exportFileUrl(id); a.download = ''
+        document.body.appendChild(a); a.click(); a.remove()
+      } catch (_) { window.location.assign(this.exportFileUrl(id)) }
+    },
+    // El historial se DERIVA del snapshot (getter historyTasks). Estas acciones solo afectan
+    // a la VISTA (no se puede borrar lo que el backend reporta): ocultan ids localmente.
+    _persistHidden() { try { localStorage.setItem('act-hidden', JSON.stringify(this.hiddenHistoryIds.slice(-300))) } catch {} },
+    hideFromHistory(id) { if (!this.hiddenHistoryIds.includes(id)) { this.hiddenHistoryIds = [...this.hiddenHistoryIds, id]; this._persistHidden() } },
+    clearActivityHistory() {
+      this.hiddenHistoryIds = [...new Set([...this.hiddenHistoryIds, ...this.historyTasks.map(t => t.id)])]
+      this._persistHidden()
     },
 
     async open(manga, opts = {}) {
@@ -324,6 +578,7 @@ export const useMangaStore = defineStore('manga', {
         mdOnly: !!manga.mdOnly, trackedOnly: !!manga.trackedOnly,
         trackedId: manga.trackedId || manga.mdId || null, status: manga.status || '',
       }
+      if (this.current.cover) this.coverCache[this.current.id] = this.current.cover
       this.chapters = []
       this.sourceChapters = []
       this.mdChapters = []
@@ -347,8 +602,9 @@ export const useMangaStore = defineStore('manga', {
         // If source_meta exists (downloaded, or tracked from Fuentes pre-download), load source
         // chapters from the EFFECTIVE source (the pinned version if any, else the origin source).
         this._loadSourceChapters()
-        // If mdId exists, load MangaDex chapters
-        if (this.mdId) {
+        // If mdId exists, load MangaDex chapters — UNLESS a MangaDex version is pinned, in which
+        // case _loadSourceChapters already loaded THAT version's chapters into mdChapters.
+        if (this.mdId && this.effectiveSource?.kind !== 'mangadex') {
           this.mdChaptersLoading = true
           api.get(`/api/mangadex/chapters/${this.mdId}`)
             .then(chs => {
@@ -362,7 +618,15 @@ export const useMangaStore = defineStore('manga', {
             .finally(() => { this.mdChaptersLoading = false })
         }
       } catch (_) { useUiStore().toast('No se pudieron cargar los capítulos', 'error') }
-      finally { this.modalLoading = false }
+      finally {
+        this.modalLoading = false
+        // If a translation/version-download is already running for this manga, rebind the
+        // modal's contextual progress immediately (don't wait for the next 500ms SSE tick).
+        this._reconcileTransplant()
+        // Rebuild chapter download tracking so mid-download re-opens show the progress ring
+        // instead of the partial pages.
+        this._reconcileDownloads()
+      }
     },
 
     // Carga la lista de capítulos de la fuente ACTIVA (effectiveSource). Se reusa al abrir el
@@ -372,6 +636,21 @@ export const useMangaStore = defineStore('manga', {
       const src = this.effectiveSource
       this.sourceChapters = []
       if (!src) return
+      // Versión MangaDex fijada: cargar SUS capítulos en mdChapters (el merge los enruta por la
+      // vía MangaDex vía `_mdChapterId`). mangaId viene como `uuid@@lang`.
+      if (src.kind === 'mangadex') {
+        const [uuid, lang] = String(src.mangaId).split('@@')
+        this.mdChaptersLoading = true
+        api.get(`/api/mangadex/chapters/${uuid}`)
+          .then(chs => {
+            this.mdChapters = chs || []
+            const langs = [...new Set(this.mdChapters.map(c => c.language).filter(Boolean))]
+            this.mdLang = (lang && langs.includes(lang)) ? lang : preferredLang(langs)
+          })
+          .catch(() => {})
+          .finally(() => { this.mdChaptersLoading = false })
+        return
+      }
       this.sourceLoading = true
       api.get(`/api/sources/manga/${src.mangaId}/chapters`)
         .then(chs => {
@@ -520,43 +799,54 @@ export const useMangaStore = defineStore('manga', {
       if (!t.artSel || !t.esSel) { ui.toast('Elige fuente de arte y de español', 'error'); return }
       await this._tpConfirm()
       try {
-        const res = await api.post('/api/transplant/run', { title: this.current.id, chapters: chapters || 'all' })
+        const res = await api.post('/api/transplant/run', { title: this.current.id, chapters: chapters || 'all', qa: this.qaMode })
         t.running = true
         t.taskId = res.task_id
         t.runStatus = { phase: 'start', chapterTotal: (res.chapters || []).length }
         ui.toast(`Traduciendo ${(res.chapters || []).length} capítulo(s)…`, 'info')
-        this._pollTpRun(res.task_id)
+        // Progreso + terminación llegan por el snapshot SSE (_reconcileTransplant); sin polling.
       } catch (e) {
         ui.toast(e?.body?.includes('no chapters') ? 'No hay capítulos comunes a ambas fuentes' : 'No se pudo iniciar', 'error')
       }
     },
-    _pollTpRun(taskId) {
-      const ui = useUiStore(); const t = this.tp
-      if (t._rpoll) clearInterval(t._rpoll)
-      t._rpoll = setInterval(async () => {
-        try {
-          const st = await api.get(`/api/transplant/status?task_id=${encodeURIComponent(taskId)}`)
-          t.runStatus = st
-          if (st.status === 'done' || st.status === 'cancelled') {
-            clearInterval(t._rpoll); t._rpoll = null; t.running = false
-            const n = (st.chapters || []).length
-            if (st.status === 'cancelled') ui.toast('Traducción detenida', 'info')
-            else ui.toast(n ? `Listo: ${n} capítulo(s) en español` : 'Sin capítulos compuestos', n ? 'ok' : 'error')
-            this.tpLoadChapters()
-            this.libraryDirty++
-            // recargar capítulos locales (ahora en ES) si el manga sigue abierto
-            if (this.current?.id) api.get(`/api/library/${encodeURIComponent(this.current.id)}`)
-              .then(d => { this.chapters = d.chapters || []; this.upscaled = d.upscaled || {}; this.current.transplant_meta = d.transplant_meta || null })
-              .catch(() => {})
-          }
-        } catch (_) {}
-      }, 1200)
-    },
     async tpCancel() {
-      const t = this.tp
-      if (!t.taskId) return
-      try { await api.post('/api/transplant/cancel', { task_id: t.taskId }) } catch (_) {}
+      if (this.tp.taskId) this.cancelTransplant(this.tp.taskId)
+    },
+    // Cancel any transplant task (translation run) by id — used from the modal AND the
+    // Activity drawer/view, where the task may not belong to the currently-open manga.
+    async cancelTransplant(taskId) {
+      if (!taskId) return
+      try { await api.post('/api/transplant/cancel', { task_id: taskId }) } catch (_) {}
       useUiStore().toast('Deteniendo…', 'info')
+    },
+
+    /* ── Modo QA de traducción (SOLO testing) ───────────────────────────────── */
+    toggleQa() {
+      this.qaMode = !this.qaMode
+      localStorage.setItem('tp-qa', this.qaMode ? '1' : '0')
+    },
+    // Marca la página ACTUAL del lector como mal traducida, con un motivo y nota opcional.
+    // El backend conserva salida + arte EN + ES + overlay + stats en data/_translation_qa.
+    async qaFlagPage(reason, note = '') {
+      const ui = useUiStore()
+      if (!this.reader) return
+      const url = this.pages[this.page] || ''
+      const page = decodeURIComponent(url.split('?')[0].split('/').pop() || '')
+      if (!page) { ui.toast('No se pudo identificar la página', 'error'); return }
+      try {
+        await api.post('/api/transplant/qa/flag', {
+          title: this.reader.title, chapter: this.reader.chapter, page, reason, note,
+        })
+        ui.toast(`Página marcada · ${reason}`, 'ok')
+      } catch (_) { ui.toast('No se pudo marcar la página', 'error') }
+    },
+    async qaSize() {
+      try { return await api.get('/api/transplant/qa/size') } catch (_) { return { bytes: 0, flags: 0 } }
+    },
+    async qaClear() {
+      const ui = useUiStore()
+      try { const d = await api.post('/api/transplant/qa/clear', {}); ui.toast('Datos QA borrados', 'ok'); return d }
+      catch (_) { ui.toast('No se pudo borrar', 'error'); return null }
     },
 
     // Vista previa de páginas de un capítulo (para revisar calidad de la fuente de arte)
@@ -575,7 +865,7 @@ export const useMangaStore = defineStore('manga', {
     },
 
     /* ── Versiones (ranking de calidad, solo lectura) ────────────────────── */
-    async verDiscover() {
+    async verDiscover(refresh = false) {
       const ui = useUiStore()
       const title = this.current?.id
       if (!title) return
@@ -587,6 +877,7 @@ export const useMangaStore = defineStore('manga', {
         const res = await api.post('/api/transplant/versions', {
           title, anilistId: this.current?.al_id || null,
           currentLang: this.current?.source_meta?.sourceLang || '',
+          refresh,   // "Buscar de nuevo" fuerza re-barrido (salta la caché de 24h)
         })
         this._pollVer(res.task_id)
       } catch (e) {
@@ -658,8 +949,11 @@ export const useMangaStore = defineStore('manga', {
         }
         this.pages = pairs.map(p => p.left)
         this.comparePages2 = pairs.map(p => p.right)
-        const avg = Math.round(100 * pairs.reduce((s, p) => s + p.sim, 0) / pairs.length)
-        this.compareLabels = { left: `${label(a)} · ${avg}% coincidencia`, right: label(b) }
+        const avg = Math.round(100 * (d.sim_avg ?? (pairs.reduce((s, p) => s + p.sim, 0) / pairs.length)))
+        // Muestra distribuida: la comparación abarca varios capítulos repartidos por la serie.
+        const chs = (d.chapters || []).filter(Boolean)
+        const chLbl = chs.length > 1 ? ` · caps ${chs.join(', ')}` : (chs[0] ? ` · cap ${chs[0]}` : '')
+        this.compareLabels = { left: `${label(a)} · ${avg}% coincidencia${chLbl}`, right: label(b) }
         this.compareMode = true
         this.scanCompareMode = true
       } catch (e) {
@@ -676,33 +970,12 @@ export const useMangaStore = defineStore('manga', {
           title: this.current.id,
           source: { mangaId: cand.mangaId, sourceId: cand.sourceId, sourceName: cand.sourceName, sourceLang: cand.sourceLang },
         })
-        this._pollVerDl(res.task_id)
+        // Progreso + terminación llegan por el snapshot SSE (_reconcileTransplant); sin polling.
+        void res
       } catch (e) {
         v.dl = null
         ui.toast(e?.status === 503 ? 'Suwayomi offline' : 'No se pudo iniciar la descarga', 'error')
       }
-    },
-    _pollVerDl(taskId) {
-      const ui = useUiStore(); const v = this.ver
-      if (v._dlpoll) clearInterval(v._dlpoll)
-      v._dlpoll = setInterval(async () => {
-        try {
-          const st = await api.get(`/api/transplant/status?task_id=${encodeURIComponent(taskId)}`)
-          if (v.dl) v.dl = { ...v.dl, done: st.chapterDone || 0, total: st.chapterTotal || 0 }
-          if (st.status === 'done') {
-            clearInterval(v._dlpoll); v._dlpoll = null
-            const n = st.downloaded || 0
-            v.dl = null
-            ui.toast(n ? `Descargados ${n} capítulo(s) de esta versión` : 'No faltaban capítulos de esta versión', n ? 'ok' : 'info')
-            this.libraryDirty++
-            if (this.current?.id) api.get(`/api/library/${encodeURIComponent(this.current.id)}`)
-              .then(d => { this.chapters = d.chapters || []; this.upscaled = d.upscaled || {} }).catch(() => {})
-          } else if (st.status === 'error') {
-            clearInterval(v._dlpoll); v._dlpoll = null; v.dl = null
-            ui.toast('Falló la descarga de la versión', 'error')
-          }
-        } catch (_) {}
-      }, 1200)
     },
     // Fijar como principal (solo etiqueta, no destructivo)
     async verSetPrimary(cand) {
@@ -884,7 +1157,19 @@ export const useMangaStore = defineStore('manga', {
         await api.post('/api/download/delete_chapter', { title: this.current.id, chapter })
         this.chapters = this.chapters.filter(c => c.chapter !== chapter)
         delete this.upscaled[chapter]
+        this._forgetChapterProgress(this.current.id, chapter)
       } catch (_) { useUiStore().toast('No se pudo borrar el capítulo', 'error') }
+    },
+    // Al borrar un capítulo: quitar su marca de leído y, si era el "último leído" del
+    // rail "Continuar leyendo", soltar la entrada (sin ts no aparece) para no ofrecer
+    // reanudar un capítulo que ya no existe en disco.
+    _forgetChapterProgress(mangaId, chapter) {
+      const e = this.progress[mangaId]; if (!e) return
+      if (e.read) delete e.read[String(chapter)]
+      if (String(e.lastChapter) === String(chapter)) {
+        delete e.lastChapter; delete e.lastPage; delete e.lastTotal; delete e.ts
+      }
+      this._persistProgress()
     },
 
     // Delete a whole manga from the library: downloaded + upscaled files, and the
@@ -894,10 +1179,15 @@ export const useMangaStore = defineStore('manga', {
       const title = this.current.id
       const name = this.current.name || title
       const mdId = this.mdId
+      const trackedId = this.current.trackedId || mdId   // id en local_library.json (src_… o uuid)
       const ui = useUiStore()
       // Optimistic: close the modal and hide it from the grid, with a 6s undo window
       // before the (irreversible) file deletion actually runs — no confirm dialog needed.
       this.close(); ui.replaceNav()
+      // Olvida el progreso de lectura (localStorage) para que NO siga en "Continuar leyendo"
+      // ni deje reanudar un manga eliminado. Se hace ya (no en el timeout) porque el borrado
+      // es lo que el usuario pidió; si deshace, no recupera la posición exacta (aceptable).
+      if (this.progress[title]) { delete this.progress[title]; this._persistProgress() }
       if (!this.pendingDelete.includes(title)) this.pendingDelete = [...this.pendingDelete, title]
       this.libraryDirty++
       let undone = false
@@ -908,8 +1198,9 @@ export const useMangaStore = defineStore('manga', {
       setTimeout(async () => {
         if (undone) return
         let ok = false
-        try { await api.del('/api/download/delete_manga', { body: { title } }); ok = true } catch (_) {}
-        if (mdId) { try { await api.del(`/api/mangadex/local_library/remove/${encodeURIComponent(mdId)}`); ok = true } catch (_) {} }
+        // delete_manga ahora borra carpeta Y purga local_library.json (por trackedId o título)
+        try { await api.del('/api/download/delete_manga', { body: { title, trackedId } }); ok = true } catch (_) {}
+        if (trackedId) { try { await api.del(`/api/mangadex/local_library/remove/${encodeURIComponent(trackedId)}`); ok = true } catch (_) {} }
         this.pendingDelete = this.pendingDelete.filter(t => t !== title)
         if (!ok) ui.toast('No se pudo eliminar el manga', 'error')
         this.libraryDirty++
@@ -926,6 +1217,22 @@ export const useMangaStore = defineStore('manga', {
       } catch (_) {}
       if (task.kind === 'upscale') setTimeout(() => this._refreshUpscaled(), 1500)
       else if (task.kind === 'download') setTimeout(() => this._refreshChapters(), 1500)
+    },
+    // Unified cancel/dismiss dispatcher used by the Activity drawer + view. `t` is a
+    // normalized task ({ id, kind, status, ... }). Routes to the right per-kind action.
+    cancelAnyTask(t) {
+      if (!t) return
+      if (t.kind === 'translate') return this.cancelTransplant(t.id)
+      if (t.kind === 'export') {
+        const terminal = ['done', 'complete', 'error', 'cancelled']
+        if (terminal.includes(t.status)) return this.dismissExport(t.id)
+        return this.cancelExport(t.id)
+      }
+      return this.cancelTask({ id: t.id, kind: t.kind })   // download (incl. version dl) / upscale
+    },
+    async cancelExport(id) {
+      this._markCancelled(id)
+      try { await api.post(`/api/export/cancel/${encodeURIComponent(id)}`, {}) } catch (_) {}
     },
     exportFileUrl(id) { return `/api/export/file/${id}` },
     // Remove a finished export from the queue (and delete its temp file on the backend).
@@ -945,10 +1252,10 @@ export const useMangaStore = defineStore('manga', {
     async disconnectDrive() {
       try { await api.post('/api/drive/disconnect', {}); this.drive = { configured: this.drive.configured, connected: false, email: '' }; useUiStore().toast('Drive desconectado', 'info') } catch (_) {}
     },
-    async exportTomo({ chapters, volumeName, format = 'cbz', quality = 92, downscaleHalf = false, coverB64 = '', toDrive = false }) {
+    async exportTomo({ chapters, volumeName, format = 'cbz', quality = 92, codec = 'jpeg', downscaleHalf = false, coverB64 = '', toDrive = false }) {
       const body = {
         title: this.current.id, chapters, volume_name: volumeName || this.current.name,
-        format, quality, downscale_half: downscaleHalf, ...(coverB64 ? { cover_data: coverB64 } : {}),
+        format, quality, codec, downscale_half: downscaleHalf, ...(coverB64 ? { cover_data: coverB64 } : {}),
         ...(this.excludedPages.length ? { exclude_pages: this.excludedPages } : {}),
       }
       try {
@@ -1047,7 +1354,7 @@ export const useMangaStore = defineStore('manga', {
       this.excludedPages = this.excludedPages.includes(filename) ? this.excludedPages.filter(f => f !== filename) : [...this.excludedPages, filename]
     },
     // Debounced live estimate of the tomo (pages + size) for the selected chapters.
-    loadExportPreview(chapters, quality = 92) {
+    loadExportPreview(chapters, quality = 92, codec = 'jpeg') {
       clearTimeout(previewTimer)
       if (!chapters?.length || !this.current) {
         this.exportPreview = { pages: 0, est_mb: 0, upscaled_pages: 0, original_pages: 0 }
@@ -1055,7 +1362,7 @@ export const useMangaStore = defineStore('manga', {
       }
       previewTimer = setTimeout(async () => {
         try {
-          const d = await api.post('/api/export/preview', { title: this.current.id, chapters, quality, exclude_pages: this.excludedPages })
+          const d = await api.post('/api/export/preview', { title: this.current.id, chapters, quality, codec, exclude_pages: this.excludedPages })
           this.exportPreview = {
             pages: d.pages || 0, est_mb: d.est_mb || 0,
             upscaled_pages: d.upscaled_pages || 0, original_pages: d.original_pages || 0,
@@ -1086,17 +1393,23 @@ export const useMangaStore = defineStore('manga', {
     },
 
     /* ── MangaDex Tomo Builder ──────────────────────────────────────────── */
-    async resolveMdexId() {
+    async resolveMdexId({ fuzzy = false } = {}) {
       if (this.mdex.id) return this.mdex.id
+      // Manga ya emparejado con MangaDex → su UUID es autoritativo, sin búsqueda.
+      if (this.mdId) { this.mdex.id = this.mdId; return this.mdId }
       const title = this.current?.name
       if (!title) return null
       try {
-        const results = await api.get('/api/mangadex/search?q=' + encodeURIComponent(title))
-        if (!Array.isArray(results) || !results.length) return null
-        const exact = results.find(r => canonicalTitle(r.title) === canonicalTitle(title))
-        if (!exact) return null
-        this.mdex.id = exact.id; this.mdex.mdManga = exact
-        return exact.id
+        // Resuelve por VARIANTES de nombre (sinónimos AniList: romaji/inglés/nativo), no sólo
+        // por el nombre principal — así la carpeta local encuentra su entrada aunque MangaDex
+        // la indexe bajo otro título/idioma. El backend compara contra altTitles. Con `fuzzy`
+        // (portadas) cae al mejor candidato si no hay match exacto (marcado `approx`).
+        const qs = new URLSearchParams({ title })
+        if (this.current?.al_id) qs.set('al_id', this.current.al_id)
+        if (fuzzy) qs.set('fuzzy', '1')
+        const m = await api.get('/api/mangadex/resolve?' + qs.toString())
+        if (m && m.id) { this.mdex.id = m.id; this.mdex.mdManga = m; this.mdex.approx = !!m.approx; return m.id }
+        return null
       } catch (_) { return null }
     },
     async searchMdexForTomo() {
@@ -1106,13 +1419,17 @@ export const useMangaStore = defineStore('manga', {
       catch (_) {} finally { this.mdex.searching = false }
     },
     async selectMdexEntry(entry) {
-      this.mdex.id = entry.id; this.mdex.mdManga = entry; this.mdex.results = []; this.mdex.search = ''
+      this.mdex.id = entry.id; this.mdex.mdManga = entry; this.mdex.approx = false
+      this.mdex.results = []; this.mdex.search = ''
       this.mdex.volumes = []; this.mdex.covers = []
       await this.loadMdexVolumes(); this.loadMdexCovers()
     },
     async loadMdexVolumes() {
-      const id = await this.resolveMdexId()
-      if (!id) { useUiStore().toast('No se encontró este manga en MangaDex', 'warn'); return }
+      // fuzzy: si no hay match exacto, usa el mejor candidato para TRAER las portadas igual
+      // (como en /legacy). Si es aproximado, se avisa y el buscador manual permite corregir.
+      const id = await this.resolveMdexId({ fuzzy: true })
+      if (!id) { useUiStore().toast('No se encontró en MangaDex — búscalo manualmente abajo', 'warn'); return }
+      if (this.mdex.approx) useUiStore().toast(`Coincidencia aproximada: "${this.mdex.mdManga?.title || ''}" — verifica o busca manualmente`, 'info')
       this.mdex.volumesLoading = true; this.mdex.volumes = []
       try {
         const [vol, cov] = await Promise.all([
@@ -1187,7 +1504,7 @@ export const useMangaStore = defineStore('manga', {
       return { selected, label }
     },
     async loadMdexCovers() {
-      const id = await this.resolveMdexId(); if (!id) return
+      const id = await this.resolveMdexId({ fuzzy: true }); if (!id) return
       this.mdex.coversLoading = true; this.mdex.covers = []
       try { this.mdex.covers = await api.get(`/api/mangadex/covers/${id}`) || [] } catch (_) {}
       finally { this.mdex.coversLoading = false }
@@ -1200,7 +1517,7 @@ export const useMangaStore = defineStore('manga', {
       } catch (_) {}
       finally { this.mdex.coverLoadingId = null }
     },
-    resetMdex() { this.mdex = { id: null, mdManga: null, search: '', results: [], searching: false, volumes: [], volumesLoading: false, covers: [], coversLoading: false, selectedCover: null, coverLoadingId: null, coverB64: '', coverUrl: '' } },
+    resetMdex() { this.mdex = { id: null, mdManga: null, approx: false, search: '', results: [], searching: false, volumes: [], volumesLoading: false, covers: [], coversLoading: false, selectedCover: null, coverLoadingId: null, coverB64: '', coverUrl: '' } },
 
     /* ── Reader ─────────────────────────────────────────────────────────── */
     _resetView() { this.zoom = 1.0; this.panX = 0; this.panY = 0; this.compareMode = false; this.barsHidden = false; this.scanCompareMode = false; this.comparePages2 = []; this.compareLabels = null },
@@ -1347,6 +1664,8 @@ export const useMangaStore = defineStore('manga', {
       const k = this.reader.title
       const e = this.progress[k] || (this.progress[k] = { read: {} })
       e.lastChapter = String(this.reader.chapter); e.lastPage = this.page
+      e.lastTotal = this.pages.length || e.lastTotal || 0
+      e.ts = Date.now()   // recencia → "Continuar leyendo"
       this._persistProgress()
     },
     markRead(chapter) {
@@ -1363,7 +1682,47 @@ export const useMangaStore = defineStore('manga', {
       const e = this.progress[k] || (this.progress[k] = { read: {} })
       e.read ||= {}
       if (e.read[String(chapter)]) delete e.read[String(chapter)]; else e.read[String(chapter)] = true
+      e.ts = Date.now()
       this._persistProgress()
+    },
+    // Marca como leídos TODOS los capítulos hasta `chapter` (inclusive) — atajo típico.
+    markReadUpTo(chapter) {
+      const k = this.current?.id; if (!k) return
+      const hi = parseFloat(chapter)
+      const e = this.progress[k] || (this.progress[k] = { read: {} })
+      e.read ||= {}
+      for (const c of this.chapters) {
+        const n = parseFloat(c.chapter)
+        if (!isNaN(n) && n <= hi) e.read[String(c.chapter)] = true
+      }
+      e.ts = Date.now(); this._persistProgress()
+    },
+    // Info para "Continuar" en el manga abierto: dónde se quedó (si hay y no terminó el todo).
+    continueInfo() {
+      const pr = this.progress[this.current?.id]
+      if (!pr?.lastChapter) return null
+      return { chapter: pr.lastChapter, page: pr.lastPage || 0, total: pr.lastTotal || 0 }
+    },
+    resumeCurrent() {
+      const info = this.continueInfo()
+      if (info) this.read(info.chapter, this.upscaled[info.chapter] ? 'upscaled' : 'auto')
+    },
+    // Desde el rail "Continuar leyendo": abre el manga y reanuda donde se quedó.
+    async resumeManga(item) {
+      await this.open(item)
+      this.resumeCurrent()
+    },
+    // Lista para el rail "Continuar leyendo": entradas con progreso, por recencia.
+    recentlyRead(limit = 12) {
+      return Object.entries(this.progress)
+        .filter(([, e]) => e && e.lastChapter != null && e.ts)
+        .map(([title, e]) => ({
+          title, lastChapter: e.lastChapter, lastPage: e.lastPage || 0,
+          total: e.lastTotal || 0, ts: e.ts,
+          pct: e.lastTotal ? Math.min(100, Math.round(((e.lastPage + 1) / e.lastTotal) * 100)) : 0,
+        }))
+        .sort((a, b) => b.ts - a.ts)
+        .slice(0, limit)
     },
 
     /* ── Reading history ──────────────────────────────────────────────── */

@@ -88,14 +88,8 @@ if grep -qi "microsoft" /proc/version 2>/dev/null; then
         MIRRORED=true
     fi
 
-    if [[ "$MIRRORED" == "false" && -n "$WSL2_IP" ]]; then
-        # Try portproxy (silent — only works if called from an elevated context)
-        /mnt/c/Windows/System32/netsh.exe interface portproxy delete v4tov4 \
-            listenport=5100 listenaddress=0.0.0.0 2>/dev/null || true
-        /mnt/c/Windows/System32/netsh.exe interface portproxy add v4tov4 \
-            listenport=5100 listenaddress=0.0.0.0 \
-            connectport=5100 connectaddress="$WSL2_IP" 2>/dev/null || true
-    fi
+    # (portproxy eliminado: Flask escucha solo en 127.0.0.1 — no hay nada que reenviar
+    #  al exterior. Para acceso desde el móvil el usuario activa acceso LAN en Ajustes.)
 fi
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -157,10 +151,10 @@ while true; do
 from app import app
 try:
     from waitress import serve
-    print('[server] waitress WSGI — http://127.0.0.1:5101', flush=True)
-    serve(app, host='127.0.0.1', port=5101, threads=8)
+    print('[server] waitress WSGI — http://0.0.0.0:5101', flush=True)
+    serve(app, host='0.0.0.0', port=5101, threads=8)
 except ImportError:
-    app.run(port=5101, debug=False, threaded=True, host='127.0.0.1')
+    app.run(port=5101, debug=False, threaded=True, host='0.0.0.0')
 " || true
     echo "[watchdog] El servidor se detuvo. Reiniciando en 5s..." >&2
     sleep 5
