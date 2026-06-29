@@ -30,9 +30,10 @@ import uuid
 
 import numpy as np
 import cv2
-import requests as http_requests
+from api.resilient_http import http as http_requests  # retry + backoff + per-host rate limiting
 
-from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter, build_task_id, push_sse_event
+from api.runtime import (MANGA_DIR, UPSCALED_DIR, QA_DIR, normalize_chapter, build_task_id, push_sse_event,
+                         cache_get, cache_set, cache_invalidate)
 from api.sources import _gql, SUWAYOMI_URL, SUWAYOMI_BASE, _suwayomi_online
 from api.download import _fetch_with_retry, _dl_semaphore, _chapter_file_prefix
 from api.anilist import title_variants
@@ -57,13 +58,22 @@ def _chnum(x):
 _ES_LANGS = {"es", "es-419", "es-es", "es-la", "es-mx"}
 # muestreo de calidad: nº de páginas por capítulo y nº de capítulos a muestrear
 _SAMPLE_PAGES = 3
-_SAMPLE_CHAPTERS = 2   # uno del principio + uno del medio de la serie (evita sesgo del cap 1)
+_SAMPLE_CHAPTERS = 2   # (legado) usado por la comparación A|B; el ranking usa _SCORE_CHAPTERS
 _SAMPLE_START = 8      # arrancar el muestreo en una página PROFUNDA (~10): las primeras suelen
                        # ser portada/créditos del scan y no sirven para comparar calidad
 _COLOR_MARGIN = 3      # páginas extra de margen: algunas profundas pueden seguir siendo a color
+# Ranking de calidad EXHAUSTIVO (decisión del usuario 2026-06-27): no basta con inicio+medio,
+# una fuente puede tener un cap 1 horrible y ganar por la fuerza de un cap intermedio bueno.
+# Se muestrean capítulos DISTRIBUIDOS por toda la serie (incl. los más adelantados) y se
+# puntúa POR capítulo, penalizando la IRREGULARIDAD (mezcla mediana + peor capítulo).
+_SCORE_CHAPTERS = 8                              # capítulos a muestrear, repartidos por la serie
+_SCORE_FRACS = (0.0, 0.14, 0.28, 0.43, 0.57, 0.71, 0.86, 0.97)  # inicio … tramo final
+_SCORE_PAGES = 4                                # páginas B/N a medir por capítulo (exhaustivo)
+_WORST_WEIGHT = 0.45    # peso del PEOR capítulo frente a la mediana de capítulos (irregularidad)
 _COLOR_DIFF = 15       # umbral de diferencia entre canales (mismo criterio que export/upscale)
 _COLOR_FRAC = 0.10     # fracción de píxeles a color → página a color (portada/créditos)
 _SHARP_REF = 500.0     # varianza Laplaciana de referencia (nitidez "buena")
+_BPP_REF   = 0.10      # bytes/px de referencia (calidad de compresión "buena")
 _FUZZY_MIN = 0.60      # ratio mínimo título-candidato vs variante
 _RANK_CAP = 15         # máx candidatos a muestrear (acota descargas de calidad)
 _SEARCH_TIMEOUT = 7    # s por fuente: una fuente más lenta no vale la espera (era 20s de _gql)
@@ -77,8 +87,40 @@ def _set_status(task_id: str, **fields):
     with _status_lock:
         cur = transplant_status.get(task_id, {})
         cur.update(fields)
+        cur["_ts"] = time.time()
+        # Stamp completion time once, on entering a terminal state — feeds Activity history.
+        if cur.get("status") in ("done", "cancelled", "error") and not cur.get("ended_at"):
+            cur["ended_at"] = time.time()
         transplant_status[task_id] = cur
+        # RAM acotada: purga tareas TERMINADAS (done/error) de hace > 30 min. Las activas
+        # nunca se tocan. Evita que el dict de estado crezca sin tope en un proceso de días.
+        if len(transplant_status) > 40:
+            cutoff = time.time() - 1800
+            for tid in [t for t, s in transplant_status.items()
+                        if s.get("status") in ("done", "error") and s.get("_ts", 0) < cutoff]:
+                transplant_status.pop(tid, None)
     push_sse_event("transplant", task_id=task_id, **fields)
+
+
+# Kinds de tarea-trabajo que el Centro de Actividad global vigila: la traducción (run) y la
+# descarga de versión (dlversion). Los pasos cortos discover/versions son de ranking y solo
+# importan dentro del modal, así que NO se exponen en el snapshot agregado. El sufijo viene de
+# build_task_id(title, "run"|"dlversion", "transplant") → "..._transplant_chrun"/"...chdlversion".
+_CENTER_TASK_SUFFIXES = ("_transplant_chrun", "_transplant_chdlversion")
+
+
+def get_transplant_tasks() -> dict:
+    """Estado de las tareas de traducción/descarga-de-versión para el snapshot SSE agregado.
+    Espeja cómo download/upscale exponen sus dicts de estado (status.py los junta en un solo
+    payload). Incluye también las terminales recientes —igual que downloads— para que el
+    frontend detecte la transición a done/error UNA vez (refresco de capítulos + historial);
+    el purgado de >30 min de `_set_status` evita que crezcan sin tope."""
+    with _status_lock:
+        return {
+            tid: {k: v for k, v in st.items() if k != "_ts"}
+            for tid, st in transplant_status.items()
+            if tid.endswith(_CENTER_TASK_SUFFIXES)
+        }
 
 
 def _meta_path(title: str) -> Path:
@@ -159,6 +201,7 @@ def _search_source(source: dict, query: str) -> list:
             SUWAYOMI_URL,
             json={"query": _SEARCH_Q, "variables": {"source": source["id"], "query": query, "page": 1}},
             timeout=_SEARCH_TIMEOUT,
+            retries=1,  # ranking path: a slow/failing source must fail fast, not retry
         )
         if resp.status_code != 200:
             return []
@@ -228,7 +271,8 @@ def _discover_candidates(variants: list, source_ids=None, on_progress=None) -> l
 def _gql_fast(query: str, variables: dict, timeout: float):
     """GraphQL con timeout corto para el camino de RANKING: una fuente lenta no debe
     colgar la consulta de capítulos/páginas (el _gql normal usa 20s, bien para `run`)."""
-    resp = http_requests.post(SUWAYOMI_URL, json={"query": query, "variables": variables}, timeout=timeout)
+    resp = http_requests.post(SUWAYOMI_URL, json={"query": query, "variables": variables},
+                              timeout=timeout, retries=1)  # fast ranking path: no retry latency
     resp.raise_for_status()
     d = resp.json()
     if "errors" in d:
@@ -521,13 +565,15 @@ def _is_color_bytes(content: bytes) -> bool:
     return float(np.mean(max_diff > _COLOR_DIFF)) > _COLOR_FRAC
 
 
-def _deep_slice(seq: list, count: int) -> list:
+def _deep_slice(seq: list, count: int, extra_offset: int = 0) -> list:
     """Devuelve hasta `count` elementos arrancando en una página PROFUNDA (~_SAMPLE_START).
-    Las primeras páginas de un scan suelen ser portada/créditos y falsean la comparación
-    de calidad; si el capítulo es corto cae al centro."""
+    `extra_offset` rota el punto de inicio entre capítulos (mejora C): si un cap tiene
+    créditos fijos en las páginas 8-10, no se muestrea siempre el mismo punto.
+    El inicio se clampea para no salirse del capítulo."""
     if not seq:
         return []
-    start = _SAMPLE_START if len(seq) > _SAMPLE_START + 1 else len(seq) // 2
+    base = _SAMPLE_START if len(seq) > _SAMPLE_START + 1 else len(seq) // 2
+    start = min(base + extra_offset, max(0, len(seq) - count))
     return seq[start:start + count] or seq[start:] or seq[:count]
 
 
@@ -549,133 +595,37 @@ def _filter_noncolor(urls: list, want: int) -> list:
     return keep
 
 
-def _score_source(manga_id: int) -> dict | None:
-    """Puntúa la calidad de una fuente SIN descargar capítulos enteros: muestrea unas
-    páginas de _SAMPLE_CHAPTERS capítulos (uno del principio y uno del medio de la
-    serie, para no sesgar por un cap 1 de otro grupo/calidad) y mide resolución +
-    nitidez. score = altura_nativa * factor_nitidez (un scan grande pero borroso pierde)."""
-    chmap = _chapters_map(manga_id, timeout=_SAMPLE_TIMEOUT)
-    if not chmap:
-        return None
-    ordered = sorted(chmap.values(),
-                     key=lambda c: float(c["number"]) if c["number"] is not None else 0)
-    with_pages = [c for c in ordered if (c.get("pageCount") or 1) > 0] or ordered
-    if not with_pages:
-        return None
-    # elegir hasta _SAMPLE_CHAPTERS capítulos: el primero con páginas y uno hacia el medio
-    picks = [with_pages[0]]
-    if _SAMPLE_CHAPTERS > 1 and len(with_pages) > 1:
-        picks.append(with_pages[len(with_pages) // 2])
-    # juntar URLs de muestra: páginas PROFUNDAS de cada capítulo (saltando portada/créditos).
-    # El margen extra cubre las que sigan siendo a color y se descartarán al medir.
-    sample = []
-    for ch in picks:
-        try:
-            urls = _chapter_page_urls(ch["id"], timeout=_SAMPLE_TIMEOUT)
-        except Exception:
-            continue
-        if not urls:
-            continue
-        sample += _deep_slice(urls, _SAMPLE_PAGES + _COLOR_MARGIN)
-    if not sample:
-        return None
-    # El muestreo es ligero y se baja TODO EN PARALELO: así una fuente lenta cuelga
-    # ~_SAMPLE_TIMEOUT (una página) y no Nº_páginas×timeout en serie. NO usa el semáforo
-    # de descargas pesadas (_dl_semaphore, para capítulos enteros).
-    def _grab(u):
-        try:
-            r = http_requests.get(u, timeout=_SAMPLE_TIMEOUT)
-            return r.content if (r and r.status_code == 200 and r.content) else None
-        except Exception:
-            return None
-    heights, sharps, bytes_per_px = [], [], []
-    with ThreadPoolExecutor(max_workers=len(sample) or 1) as pool:
-        for content in pool.map(_grab, sample):
-            if not content:
-                continue
-            if _is_color_bytes(content):
-                continue   # descartar páginas a color (portada/créditos): falsean el muestreo
-            img = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_GRAYSCALE)
-            if img is None:
-                continue
-            h, w = img.shape[:2]
-            heights.append(h)
-            sharps.append(float(cv2.Laplacian(img, cv2.CV_64F).var()))
-            bytes_per_px.append(len(content) / max(1, h * w))
-    if not heights:
-        return None
-    height = float(np.median(heights))
-    sharp = float(np.median(sharps))
-    # factor de nitidez SATURANTE (no se clampa): sharp/(sharp+ref) ∈ (0,1). La
-    # resolución manda, pero entre dos scans de la MISMA altura el más nítido SIEMPRE
-    # gana (rompe empates), y un upscale borroso de igual tamaño queda penalizado.
-    sharp_factor = 0.5 + 0.5 * (sharp / (sharp + _SHARP_REF))   # 0.5..~1.0, estrictamente creciente
-    score = height * sharp_factor
-    return {
-        "height": round(height),
-        "sharpness": round(sharp, 1),
-        "bytesPerPx": round(float(np.median(bytes_per_px)), 4),
-        "samples": len(heights),
-        "score": round(score, 1),
-    }
+def _sharp_factor(sharp: float) -> float:
+    """Factor de nitidez SATURANTE y estrictamente creciente: sharp/(sharp+ref) ∈ (0,1).
+    Piso 0.35 (antes 0.5): castiga MÁS los upscales borrosos — un scan grande pero blando
+    (típico de agregadores) NO debe ganarle a un nativo nítido más pequeño. La resolución
+    sigue mandando, pero la nitidez ya no es solo un desempate."""
+    return 0.35 + 0.65 * (sharp / (sharp + _SHARP_REF))
 
 
-def _score_local(title: str) -> dict | None:
-    """Puntúa la versión LOCAL con el MISMO algoritmo que `_score_source`
-    (altura_nativa × factor_nitidez), muestreando páginas del centro de un par de
-    capítulos locales. Permite mostrar la versión actual como línea base ([ACTUAL])
-    en el ranking de versiones — "¿vale la pena cambiar?"."""
-    chfiles = _local_chapter_files(title)
-    if not chfiles:
-        return None
-    ordered = [chfiles[k] for k in sorted(chfiles.keys(), key=_chnum)]
-    with_pages = [f for f in ordered if f] or ordered
-    if not with_pages:
-        return None
-    picks = [with_pages[0]]
-    if _SAMPLE_CHAPTERS > 1 and len(with_pages) > 1:
-        picks.append(with_pages[len(with_pages) // 2])
-    sample = []
-    for files in picks:
-        if not files:
-            continue
-        sample += _deep_slice(files, _SAMPLE_PAGES + _COLOR_MARGIN)
-    if not sample:
-        return None
-    heights, sharps, bytes_per_px = [], [], []
-    for f in sample:
-        try:
-            content = f.read_bytes()
-        except Exception:
-            continue
-        if _is_color_bytes(content):
-            continue   # descartar páginas a color (portada/créditos): falsean el muestreo
-        img = cv2.imdecode(np.frombuffer(content, np.uint8), cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            continue
-        h, w = img.shape[:2]
-        heights.append(h)
-        sharps.append(float(cv2.Laplacian(img, cv2.CV_64F).var()))
-        bytes_per_px.append(len(content) / max(1, h * w))
-    if not heights:
-        return None
-    height = float(np.median(heights))
-    sharp = float(np.median(sharps))
-    sharp_factor = 0.5 + 0.5 * (sharp / (sharp + _SHARP_REF))
-    score = height * sharp_factor
-    return {
-        "height": round(height),
-        "sharpness": round(sharp, 1),
-        "bytesPerPx": round(float(np.median(bytes_per_px)), 4),
-        "samples": len(heights),
-        "score": round(score, 1),
-    }
+def _bpp_factor(bpp: float) -> float:
+    """Factor de calidad de compresión: bytes/px sigmoide con piso 0.70.
+    Penaliza scans re-comprimidos agresivamente (JPEG 60-70%) sin castigar demasiado
+    las diferencias entre formatos (JPEG 90% vs PNG lossless)."""
+    return 0.70 + 0.30 * (bpp / (bpp + _BPP_REF))
 
 
-def _measure_contents(contents) -> dict | None:
-    """Mide altura/nitidez/bytes-px sobre una lista de bytes de página (descarta las que
-    sean a color). Mismo algoritmo que `_score_source`; reusado por MangaDex nativo."""
-    heights, sharps, bpp = [], [], []
+def _spread_pick(seq: list, n: int = _SCORE_CHAPTERS, fracs=_SCORE_FRACS) -> list:
+    """Hasta `n` elementos de `seq` DISTRIBUIDOS por toda la serie (incl. los más
+    adelantados), no solo inicio+medio. Dedup de índices en series cortas."""
+    if not seq:
+        return []
+    L = len(seq)
+    use = list(fracs)[:n]
+    idxs = sorted({min(L - 1, max(0, int(round(f * (L - 1))))) for f in use})
+    return [seq[i] for i in idxs]
+
+
+def _measure_chapter(contents) -> dict | None:
+    """Mide UN capítulo: mediana de altura/nitidez/bytes-px sobre sus páginas B/N
+    (descarta color: portada/créditos falsean el muestreo). Sub-score del capítulo =
+    altura × sharp_factor × bpp_factor."""
+    heights, sharps, bpp_vals = [], [], []
     for content in contents:
         if not content or _is_color_bytes(content):
             continue
@@ -685,15 +635,119 @@ def _measure_contents(contents) -> dict | None:
         h, w = img.shape[:2]
         heights.append(h)
         sharps.append(float(cv2.Laplacian(img, cv2.CV_64F).var()))
-        bpp.append(len(content) / max(1, h * w))
+        bpp_vals.append(len(content) / max(1, h * w))
     if not heights:
         return None
     height = float(np.median(heights))
-    sharp = float(np.median(sharps))
-    sharp_factor = 0.5 + 0.5 * (sharp / (sharp + _SHARP_REF))
-    return {"height": round(height), "sharpness": round(sharp, 1),
-            "bytesPerPx": round(float(np.median(bpp)), 4),
-            "samples": len(heights), "score": round(height * sharp_factor, 1)}
+    sharp  = float(np.median(sharps))
+    bpp    = float(np.median(bpp_vals))
+    return {"height": height, "sharp": sharp, "bpp": bpp,
+            "n": len(heights), "score": height * _sharp_factor(sharp) * _bpp_factor(bpp)}
+
+
+def _combine_quality(chapters: list) -> dict | None:
+    """Combina los sub-scores POR capítulo penalizando la IRREGULARIDAD: el resultado
+    mezcla la mediana de capítulos con el PEOR capítulo (`_WORST_WEIGHT`), así una fuente
+    con algún capítulo malo no gana por la fuerza de los buenos. Expone el rango de altura
+    y un índice de consistencia (worst/median, 1.0 = uniforme) para la UI."""
+    chs = [c for c in chapters if c and c.get("n")]
+    if not chs:
+        return None
+    scores = sorted(c["score"] for c in chs)
+    heights = [c["height"] for c in chs]
+    median_s = float(np.median(scores))
+    worst_s = scores[0]
+    combined = (1 - _WORST_WEIGHT) * median_s + _WORST_WEIGHT * worst_s
+    return {
+        "height": round(float(np.median(heights))),
+        "heightMin": round(min(heights)),
+        "heightMax": round(max(heights)),
+        "sharpness": round(float(np.median([c["sharp"] for c in chs])), 1),
+        "bytesPerPx": round(float(np.median([c["bpp"] for c in chs])), 4),
+        "samples": sum(c["n"] for c in chs),
+        "chapters": len(chs),
+        "worstScore": round(worst_s, 1),
+        "medianScore": round(median_s, 1),
+        "consistency": round(worst_s / median_s, 2) if median_s else 1.0,
+        "score": round(combined, 1),
+    }
+
+
+def _grab_url(u):
+    """Baja una página de muestra (sin reintentos). NO usa el semáforo de descargas
+    pesadas (_dl_semaphore, para capítulos enteros)."""
+    try:
+        r = http_requests.get(u, timeout=_SAMPLE_TIMEOUT)
+        return r.content if (r and r.status_code == 200 and r.content) else None
+    except Exception:
+        return None
+
+
+def _score_url_chapters(chapter_url_lists: list) -> dict | None:
+    """`chapter_url_lists` = una lista de URLs por capítulo. Baja TODAS las páginas EN
+    PARALELO (un solo pool, así una fuente lenta cuelga ~_SAMPLE_TIMEOUT y no en serie),
+    mide por capítulo y combina con penalización de irregularidad."""
+    flat = [(ci, u) for ci, urls in enumerate(chapter_url_lists) for u in (urls or [])]
+    if not flat:
+        return None
+    buckets = [[] for _ in chapter_url_lists]
+    with ThreadPoolExecutor(max_workers=len(flat)) as pool:
+        for ci, content in pool.map(lambda iu: (iu[0], _grab_url(iu[1])), flat):
+            buckets[ci].append(content)
+    return _combine_quality([_measure_chapter(b) for b in buckets])
+
+
+def _score_source(manga_id: int) -> dict | None:
+    """Puntúa la calidad de una fuente SIN descargar capítulos enteros: muestrea páginas
+    profundas de _SCORE_CHAPTERS capítulos DISTRIBUIDOS por toda la serie (no solo
+    inicio+medio) y combina por capítulo penalizando la irregularidad."""
+    chmap = _chapters_map(manga_id, timeout=_SAMPLE_TIMEOUT)
+    if not chmap:
+        return None
+    ordered = sorted(chmap.values(),
+                     key=lambda c: float(c["number"]) if c["number"] is not None else 0)
+    with_pages = [c for c in ordered if (c.get("pageCount") or 1) > 0] or ordered
+    if not with_pages:
+        return None
+    # páginas PROFUNDAS de cada capítulo (saltando portada/créditos); margen extra para las
+    # que sigan a color y se descarten al medir. Rotación de offset entre capítulos (mejora C).
+    chapter_urls = []
+    for i, ch in enumerate(_spread_pick(with_pages)):
+        try:
+            urls = _chapter_page_urls(ch["id"], timeout=_SAMPLE_TIMEOUT)
+        except Exception:
+            continue
+        sl = _deep_slice(urls, _SCORE_PAGES + _COLOR_MARGIN, extra_offset=(i % 4) * 3)
+        if sl:
+            chapter_urls.append(sl)
+    return _score_url_chapters(chapter_urls)
+
+
+def _score_local(title: str) -> dict | None:
+    """Puntúa la versión LOCAL con el MISMO algoritmo que `_score_source`, muestreando
+    capítulos locales distribuidos. Permite mostrar la versión actual como línea base
+    ([ACTUAL]) en el ranking de versiones — "¿vale la pena cambiar?"."""
+    chfiles = _local_chapter_files(title)
+    if not chfiles:
+        return None
+    ordered = [chfiles[k] for k in sorted(chfiles.keys(), key=_chnum)]
+    with_pages = [f for f in ordered if f] or ordered
+    if not with_pages:
+        return None
+    chapters = []
+    for i, files in enumerate(_spread_pick(with_pages)):
+        if not files:
+            continue
+        contents = []
+        for f in _deep_slice(files, _SCORE_PAGES + _COLOR_MARGIN, extra_offset=(i % 4) * 3):
+            try:
+                contents.append(f.read_bytes())
+            except Exception:
+                contents.append(None)
+        m = _measure_chapter(contents)
+        if m:
+            chapters.append(m)
+    return _combine_quality(chapters)
 
 
 # ── MangaDex NATIVO como fuente de versiones (su propia API, no vía Suwayomi) ──
@@ -820,33 +874,51 @@ def _md_candidates(variants, cur_lang="") -> list:
 
 
 def _score_md(manga_uuid, lang=None, chapter_id=None) -> dict | None:
-    """Puntúa una versión de MangaDex (mismo algoritmo: altura × nitidez, sin color)."""
+    """Puntúa una versión de MangaDex con el MISMO motor exhaustivo: capítulos
+    DISTRIBUIDOS del feed (de ese idioma) + penalización de irregularidad."""
     try:
         manga_uuid = str(manga_uuid).split("@@")[0]   # id puede venir como `uuid@@lang`
-        if not chapter_id:
-            chapter_id, _ = _md_pick_chapter(manga_uuid, lang)
-        urls = _md_page_urls(chapter_id) if chapter_id else []
-        if not urls:
-            return None
-        sample = _deep_slice(urls, _SAMPLE_PAGES + _COLOR_MARGIN)
-        def _grab(u):
-            try:
-                r = http_requests.get(u, timeout=_SAMPLE_TIMEOUT)
-                return r.content if (r and r.status_code == 200 and r.content) else None
-            except Exception:
-                return None
-        with ThreadPoolExecutor(max_workers=len(sample) or 1) as pool:
-            contents = list(pool.map(_grab, sample))
-        return _measure_contents(contents)
+        feed = _md_feed(manga_uuid)
+        if lang:
+            same = [c for c in feed if c["lang"] == lang.lower()]
+            feed = same or feed
+        numbered = [c for c in feed if c["number"]] or feed
+        chapter_urls = []
+        for i, ch in enumerate(_spread_pick(numbered)):
+            sl = _deep_slice(_md_page_urls(ch["id"]), _SCORE_PAGES + _COLOR_MARGIN, extra_offset=(i % 4) * 3)
+            if sl:
+                chapter_urls.append(sl)
+        if not chapter_urls:   # fallback al capítulo representativo
+            cid = chapter_id or _md_pick_chapter(manga_uuid, lang)[0]
+            sl = _deep_slice(_md_page_urls(cid), _SCORE_PAGES + _COLOR_MARGIN) if cid else []
+            if sl:
+                chapter_urls.append(sl)
+        return _score_url_chapters(chapter_urls)
     except Exception:
         return None
 
 
-def _score_candidate(c) -> dict | None:
-    """Enruta el scoring por tipo de fuente (MangaDex nativo vs Suwayomi)."""
+_QUALITY_TTL = 86400   # 24h: el score de una versión (resolución/nitidez) no cambia
+
+def _score_candidate(c, use_cache: bool = True) -> dict | None:
+    """Enruta el scoring por tipo de fuente (MangaDex nativo vs Suwayomi). Memoiza el score
+    —lo MÁS caro: descarga páginas de muestra— por (sourceId, mangaId, lang), así Versiones y
+    Traducir reutilizan el mismo cálculo y un re-barrido no vuelve a bajar muestras. Resultado
+    idéntico (el score es determinista); solo los fallos (None) no se cachean → se reintentan."""
+    # `v2`: versión del algoritmo de scoring (muestreo exhaustivo distribuido + penalización
+    # de irregularidad). Bumpea la clave para NO reusar scores cacheados del algoritmo viejo.
+    qkey = f"v3|{c.get('sourceId')}|{c.get('id')}|{(c.get('sourceLang') or '').lower()}"
+    if use_cache:
+        cached = cache_get("quality", qkey, _QUALITY_TTL)
+        if cached is not None:
+            return cached
     if str(c.get("sourceId")) == "__mangadex__":
-        return _score_md(c["id"], c.get("sourceLang"), c.get("_mdChapterId"))
-    return _score_source(int(c["id"]))
+        q = _score_md(c["id"], c.get("sourceLang"), c.get("_mdChapterId"))
+    else:
+        q = _score_source(int(c["id"]))
+    if q is not None:
+        cache_set("quality", qkey, q, ttl=_QUALITY_TTL, max_entries=600)
+    return q
 
 
 # ── Emparejado de páginas por hash perceptual (comparar la MISMA página entre scans) ──
@@ -945,6 +1017,39 @@ def _candidate_chapter_urls(cand, title, want_num=None):
         return (ch.get("number"), [])
 
 
+def _candidate_chapter_numbers(cand, title) -> list:
+    """Lista ASC de números de capítulo del candidato (para muestrear varios al comparar)."""
+    sid = str(cand.get("sourceId") or ""); mid = cand.get("mangaId")
+    if str(mid) == "__local__" or sid == "__local__":
+        return sorted(_local_chapter_files(title).keys(), key=_chnum)
+    if sid == "__mangadex__":
+        uuid = str(mid).split("@@")[0]
+        lang = (cand.get("sourceLang") or "").lower()
+        nums, seen = [], set()
+        for c in sorted(_md_feed(uuid), key=lambda c: _chnum(c.get("number") or "0")):
+            n = c.get("number")
+            if n and (not lang or c.get("lang") == lang) and n not in seen:
+                seen.add(n); nums.append(n)
+        return nums
+    cmap = _chapters_map(int(mid), timeout=_SAMPLE_TIMEOUT)
+    ordered = sorted((c for c in (cmap or {}).values() if (c.get("pageCount") or 1) > 0),
+                     key=lambda c: float(c["number"]) if c["number"] is not None else 0)
+    return [c["number"] for c in ordered if c.get("number") is not None]
+
+
+def _distributed_picks(seq, fracs=(0.25, 0.5, 0.75)) -> list:
+    """Elige elementos repartidos (p.ej. ~25/50/75%) — evita el sesgo del cap 1 (suele ser el
+    de mejor calidad) y retrata mejor la calidad real de toda la serie."""
+    out, seen = [], set()
+    for f in fracs:
+        if not seq:
+            break
+        i = min(len(seq) - 1, int(len(seq) * f))
+        if i not in seen:
+            seen.add(i); out.append(seq[i])
+    return out
+
+
 def _match_pairs(urls_a, urls_b, want_pairs):
     """Empareja páginas equivalentes entre dos capítulos por dHash. Devuelve
     [{left, right, sim}] en orden de A; greedy (cada página de B se usa una vez) y solo
@@ -972,12 +1077,13 @@ def _match_pairs(urls_a, urls_b, want_pairs):
     return pairs
 
 
-def _rank(candidates: list, on_progress=None) -> list:
-    """Puntúa cada candidato (muestreo) y devuelve ordenado desc por score."""
+def _rank(candidates: list, on_progress=None, use_cache: bool = True) -> list:
+    """Puntúa cada candidato (muestreo) y devuelve ordenado desc por score. `use_cache=False`
+    ('Buscar de nuevo') fuerza re-bajar muestras saltando la memoización del score."""
     out = []
     done = 0
     with ThreadPoolExecutor(max_workers=10) as pool:
-        futs = {pool.submit(_score_candidate, c): c for c in candidates}
+        futs = {pool.submit(_score_candidate, c, use_cache): c for c in candidates}
         for fut in as_completed(futs):
             c = futs[fut]
             done += 1
@@ -988,6 +1094,32 @@ def _rank(candidates: list, on_progress=None) -> list:
                 out.append(dict(c, quality=q))
     out.sort(key=lambda c: c["quality"]["score"], reverse=True)
     return out
+
+
+# ── Búsqueda de fuentes memoizada (compartida por Versiones y Traducir) ───────────
+_CANDIDATES_TTL = 6 * 3600   # 6h: el fan-out de búsqueda (~185 fuentes) se cachea por título
+
+
+def _search_key(title, al_id, source_ids):
+    return f"{title}|{al_id or ''}|{','.join(map(str, source_ids or []))}"
+
+
+def _candidates_cached(title, al_id, variants, source_ids, on_progress=None, refresh=False):
+    """`_discover_candidates` (barrido de fuentes) memoizado en disco por (title, al_id,
+    source_ids). Resultado idéntico; evita re-barrer ~185 fuentes en cada apertura de
+    Versiones/Traducir o en re-barridos del mismo título. `refresh` lo salta y re-cachea."""
+    key = _search_key(title, al_id, source_ids)
+    if not refresh:
+        cached = cache_get("candidates", key, _CANDIDATES_TTL)
+        if cached is not None:
+            if on_progress:
+                try: on_progress(len(cached), len(cached))
+                except Exception: pass
+            return cached
+    cands = _discover_candidates(variants, source_ids=source_ids, on_progress=on_progress)
+    if cands:
+        cache_set("candidates", key, cands, ttl=_CANDIDATES_TTL, max_entries=120)
+    return cands
 
 
 # ── Endpoint: discover ────────────────────────────────────────────────────────
@@ -1003,8 +1135,8 @@ def _run_discover(task_id: str, title: str, al_id, source_ids, art_local: bool =
         variants = title_variants(title, int(al_id) if al_id else None)
         _set_status(task_id, phase="searching", variants=variants, searched=0, searchTotal=0)
 
-        candidates = _discover_candidates(
-            variants, source_ids=source_ids,
+        candidates = _candidates_cached(
+            title, al_id, variants, source_ids,
             on_progress=lambda d, t: _set_status(task_id, phase="searching", searched=d, searchTotal=t),
         )
 
@@ -1102,18 +1234,32 @@ def discover():
     return jsonify({"task_id": task_id, "title": title})
 
 
-def _run_versions(task_id: str, title: str, al_id, source_ids, cur_lang: str = ""):
+_VERSIONS_TTL = 86400   # 24h: el ranking de versiones se cachea en DISCO (caro: fan-out + descargas)
+
+
+def _versions_cache_key(title, al_id, source_ids, cur_lang):
+    return f"{title}|{al_id or ''}|{cur_lang or ''}|{','.join(map(str, source_ids or []))}"
+
+
+def _run_versions(task_id: str, title: str, al_id, source_ids, cur_lang: str = "", refresh: bool = False):
     """Descubre TODAS las versiones del título en las fuentes, las rankea por calidad
     de imagen (altura × nitidez) y las agrupa por idioma, para la pestaña 'Versiones'.
     Incluye el score de la versión LOCAL como línea base. La UI sondea /status.
-    Reutiliza _discover_candidates + _rank sin tocar el flujo de _run_discover."""
+    Reutiliza _discover_candidates + _rank sin tocar el flujo de _run_discover.
+    Cachea el resultado en DISCO (24h) → reabrir la pestaña es instantáneo y no re-barre
+    ~185 fuentes ni re-descarga páginas de muestra (menos rate-limits). `refresh` lo salta."""
+    if not refresh:
+        cached = cache_get("versions", _versions_cache_key(title, al_id, source_ids, cur_lang), _VERSIONS_TTL)
+        if cached:
+            _set_status(task_id, status="done", phase="ranked", cached=True, **cached)
+            return
     try:
         _set_status(task_id, status="discovering", title=title, phase="variants")
         variants = title_variants(title, int(al_id) if al_id else None)
         _set_status(task_id, phase="searching", variants=variants, searched=0, searchTotal=0)
         try:
-            candidates = _discover_candidates(
-                variants, source_ids=source_ids,
+            candidates = _candidates_cached(
+                title, al_id, variants, source_ids, refresh=refresh,
                 on_progress=lambda d, t: _set_status(task_id, phase="searching", searched=d, searchTotal=t),
             )
         except Exception:
@@ -1148,7 +1294,8 @@ def _run_versions(task_id: str, title: str, al_id, source_ids, cur_lang: str = "
             if is_cur or is_md:
                 to_rank.append(c); seen.add((c["sourceId"], c["id"]))
         _set_status(task_id, phase="ranking", rankTotal=len(to_rank), ranked=0)
-        ranked = _rank(to_rank, on_progress=lambda d, t: _set_status(task_id, phase="ranking", ranked=d, rankTotal=t))
+        ranked = _rank(to_rank, on_progress=lambda d, t: _set_status(task_id, phase="ranking", ranked=d, rankTotal=t),
+                       use_cache=not refresh)
 
         def _slim(c):
             return {"sourceId": c["sourceId"], "mangaId": c["id"],
@@ -1158,9 +1305,12 @@ def _run_versions(task_id: str, title: str, al_id, source_ids, cur_lang: str = "
         by_lang: dict = {}
         for c in ranked:
             by_lang.setdefault((c.get("sourceLang") or "?").lower(), []).append(_slim(c))
-        _set_status(task_id, status="done", phase="ranked", variants=variants,
-                    versions=[_slim(c) for c in ranked], byLang=by_lang,
-                    local=local, currentLang=cur_lang)
+        payload = {"variants": variants, "versions": [_slim(c) for c in ranked],
+                   "byLang": by_lang, "local": local, "currentLang": cur_lang}
+        _set_status(task_id, status="done", phase="ranked", **payload)
+        # cachea en disco solo rankings reales (no vacíos/errores), TTL 24h
+        cache_set("versions", _versions_cache_key(title, al_id, source_ids, cur_lang),
+                  payload, ttl=_VERSIONS_TTL, max_entries=120)
     except Exception as e:
         _set_status(task_id, status="error", phase="error", error=str(e))
 
@@ -1179,9 +1329,10 @@ def versions():
     al_id = body.get("anilistId")
     source_ids = body.get("sourceIds") or None
     cur_lang = (body.get("currentLang") or "").strip()
+    refresh = bool(body.get("refresh"))   # "Buscar de nuevo" salta la caché
     task_id = build_task_id(title, "versions", "transplant")
     _set_status(task_id, status="discovering", title=title, phase="start")
-    threading.Thread(target=_run_versions, args=(task_id, title, al_id, source_ids, cur_lang), daemon=True).start()
+    threading.Thread(target=_run_versions, args=(task_id, title, al_id, source_ids, cur_lang, refresh), daemon=True).start()
     return jsonify({"task_id": task_id, "title": title})
 
 
@@ -1346,8 +1497,12 @@ def list_chapters(title):
     if not _suwayomi_online():
         return jsonify({"error": "Suwayomi offline"}), 503
     try:
-        art_map = _local_chapters_map(title) if art.get("local") else _chapters_map(int(art["mangaId"]), timeout=_SAMPLE_TIMEOUT)
-        es_map = _chapters_map(int(es["mangaId"]), timeout=_SAMPLE_TIMEOUT)
+        # Sin timeout corto aquí: el endpoint de capítulos NO está en el camino del
+        # ranking. La primera vez Suwayomi necesita sincronizar capítulos desde la
+        # fuente externa (fetchChapters mutation), lo que puede tardar >8s; con
+        # _SAMPLE_TIMEOUT retornaba {} → common vacío → "sin capítulos".
+        art_map = _local_chapters_map(title) if art.get("local") else _chapters_map(int(art["mangaId"]))
+        es_map = _chapters_map(int(es["mangaId"]))
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     translated = set(meta.get("translated", []))
@@ -1438,17 +1593,32 @@ def compare_pages():
         return jsonify({"error": "a.mangaId and b.mangaId required"}), 400
     chapter = body.get("chapter")
     try:
-        num_a, urls_a = _candidate_chapter_urls(a, title, want_num=chapter)
-        # alinear B al MISMO número de capítulo que A
-        num_b, urls_b = _candidate_chapter_urls(b, title, want_num=(num_a if num_a is not None else chapter))
-        if not urls_a or not urls_b:
+        # MUESTRA DISTRIBUIDA: salvo que se pida un capítulo concreto, comparar páginas de
+        # ~3 capítulos repartidos por la serie (25/50/75%) — no solo el cap 1 (suele ser el de
+        # mejor calidad). Se empareja por capítulo y se combinan los pares + promedio de similitud.
+        if chapter is not None:
+            nums = [chapter]
+        else:
+            nums = _distributed_picks(_candidate_chapter_numbers(a, title)) or [None]
+        per = max(2, -(-_MATCH_REF_PAGES // len(nums)))   # reparte el objetivo entre capítulos
+        all_pairs, used = [], []
+        for n in nums:
+            num_a, urls_a = _candidate_chapter_urls(a, title, want_num=n)
+            num_b, urls_b = _candidate_chapter_urls(b, title, want_num=(num_a if num_a is not None else n))
+            if not urls_a or not urls_b:
+                continue
+            pairs = _match_pairs(urls_a, urls_b, per)
+            if pairs:
+                all_pairs += pairs
+                used.append(num_a)
+        if not all_pairs:
             return jsonify({"pairs": [], "matched": 0, "asked": _MATCH_REF_PAGES,
-                            "chapter": num_a, "reason": "sin-paginas"})
-        pairs = _match_pairs(urls_a, urls_b, _MATCH_REF_PAGES)
+                            "chapter": None, "chapters": [], "sim_avg": 0, "reason": "sin-paginas"})
+        sim_avg = round(sum(p["sim"] for p in all_pairs) / len(all_pairs), 3)
     except Exception as ex:
         return jsonify({"error": str(ex)}), 500
-    return jsonify({"pairs": pairs, "matched": len(pairs),
-                    "asked": _MATCH_REF_PAGES, "chapter": num_a})
+    return jsonify({"pairs": all_pairs, "matched": len(all_pairs), "asked": _MATCH_REF_PAGES,
+                    "chapter": used[0] if used else None, "chapters": used, "sim_avg": sim_avg})
 
 
 @transplant_bp.route("/status", methods=["GET"])
@@ -1513,7 +1683,7 @@ def _persist_run_meta(title: str, translated: set, failed: set, task_id=None, st
     _write_meta(title, meta)
 
 
-def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict):
+def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict, qa: bool = False):
     from transplant_core import transplant_chapter
     _transplant_cancel[task_id] = False
     art_local = bool((art or {}).get("local"))
@@ -1569,6 +1739,9 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict)
                     task_id, phase="compose", chapter=chn, pageDone=d, pageTotal=t,
                     note=note, chapterDone=ci, chapterTotal=total),
                 should_cancel=_cancelled,
+                # Modo QA: conserva arte EN + ES emparejada + overlay + stats por página.
+                # Subcarpeta = título crudo (igual que MANGA_DIR/<title>) para mapear desde el flag.
+                debug_dir=(QA_DIR / title / prefix) if qa else None,
             )
             if res.get("cancelled"):
                 cancelled = True            # staging se descarta en finally -> sin capítulo a medias
@@ -1633,8 +1806,105 @@ def run():
     if not isinstance(chapters, list) or not chapters:
         return jsonify({"error": "no chapters to process"}), 400
 
+    qa = bool(body.get("qa"))   # modo QA (testing): conserva artefactos de debug por página
     task_id = build_task_id(title, "run", "transplant")
     _set_status(task_id, status="running", title=title, phase="start",
                 chapterTotal=len(chapters), art=art, es=es)
-    threading.Thread(target=_run_chapters, args=(task_id, title, chapters, art, es), daemon=True).start()
+    threading.Thread(target=_run_chapters, args=(task_id, title, chapters, art, es),
+                     kwargs={"qa": qa}, daemon=True).start()
     return jsonify({"task_id": task_id, "title": title, "chapters": chapters})
+
+
+# ── Modo QA de traducción (SOLO testing): marcar páginas malas + datos de depuración ──────────
+_qa_lock = threading.Lock()
+_QA_FLAGS = QA_DIR / "flags.json"
+
+
+def _qa_read_flags() -> list:
+    try:
+        return _json.loads(_QA_FLAGS.read_text())
+    except Exception:
+        return []
+
+
+def _dir_size(path: Path) -> int:
+    total = 0
+    if path.exists():
+        for p in path.rglob("*"):
+            if p.is_file():
+                try: total += p.stat().st_size
+                except OSError: pass
+    return total
+
+
+@transplant_bp.route("/qa/flag", methods=["POST"])
+def qa_flag():
+    """Marca una página mal traducida: copia el caso (salida + arte EN + ES + overlay + stats)
+    a QA_DIR/_flagged/<case> y lo añade a flags.json. Body: {title, chapter, page, reason, note}."""
+    body = request.get_json(silent=True) or {}
+    title = (body.get("title") or "").strip()
+    chapter = body.get("chapter")
+    page = (body.get("page") or "").strip()
+    reason = (body.get("reason") or "otro").strip()
+    note = (body.get("note") or "").strip()
+    if not title or chapter is None or not page:
+        return jsonify({"error": "title, chapter and page required"}), 400
+
+    prefix = _chapter_file_prefix(normalize_chapter(chapter))
+    bundle = QA_DIR / title / prefix
+    stem = page[:-4] if page.lower().endswith(".png") else Path(page).stem
+    stats = None
+    try:
+        stats = _json.loads((bundle / "pages.json").read_text()).get(page)
+    except Exception:
+        pass
+
+    case_id = uuid.uuid4().hex[:12]
+    case_dir = QA_DIR / "_flagged" / case_id
+    case_dir.mkdir(parents=True, exist_ok=True)
+    # La página de salida (lo que el usuario ve mal) vive en la biblioteca.
+    out_src = Path(MANGA_DIR) / title / page
+    if out_src.exists():
+        shutil.copy2(out_src, case_dir / f"output{out_src.suffix}")
+    # Artefactos de depuración del bundle del capítulo (si la traducción fue en modo QA).
+    for suffix in ("__en.png", "__es.png", "__overlay.png"):
+        src = bundle / f"{stem}{suffix}"
+        if src.exists():
+            shutil.copy2(src, case_dir / f"{stem}{suffix}")
+
+    at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    case = {"case_id": case_id, "title": title, "chapter": normalize_chapter(chapter),
+            "page": page, "reason": reason, "note": note, "stats": stats,
+            "has_artifacts": (bundle / f"{stem}__en.png").exists(), "at": at}
+    _json.dump(case, open(case_dir / "case.json", "w"), ensure_ascii=False, indent=2)
+    with _qa_lock:
+        flags = _qa_read_flags()
+        flags.append(case)
+        QA_DIR.mkdir(parents=True, exist_ok=True)
+        _json.dump(flags, open(_QA_FLAGS, "w"), ensure_ascii=False, indent=2)
+    return jsonify(case)
+
+
+@transplant_bp.route("/qa/flags", methods=["GET"])
+def qa_flags():
+    """Lista los casos marcados + conteo por motivo (para la fase de mejora)."""
+    flags = _qa_read_flags()
+    by_reason = {}
+    for f in flags:
+        by_reason[f.get("reason", "otro")] = by_reason.get(f.get("reason", "otro"), 0) + 1
+    return jsonify({"flags": flags, "count": len(flags), "by_reason": by_reason})
+
+
+@transplant_bp.route("/qa/size", methods=["GET"])
+def qa_size():
+    """Tamaño en disco de los datos QA (para el contador de Ajustes)."""
+    return jsonify({"bytes": _dir_size(QA_DIR), "flags": len(_qa_read_flags())})
+
+
+@transplant_bp.route("/qa/clear", methods=["POST"])
+def qa_clear():
+    """Borra TODOS los datos QA (artefactos + casos + manifiesto)."""
+    with _qa_lock:
+        freed = _dir_size(QA_DIR)
+        shutil.rmtree(QA_DIR, ignore_errors=True)
+    return jsonify({"ok": True, "freed_bytes": freed})

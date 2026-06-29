@@ -11,6 +11,26 @@ const isManga = computed(() => store.reader?.kind !== 'cbz')
 const isUpscaled = computed(() => store.reader?.source === 'upscaled')
 const isRTL = computed(() => store.dir === 'rtl')
 
+// Modo QA (testing): marcar la página actual como mal traducida. Solo sobre páginas locales.
+const qaCanFlag = computed(() => store.qaMode && isManga.value && !['online', 'compare'].includes(store.reader?.source))
+const qaOpen = ref(false)
+const qaNote = ref('')
+const QA_REASONS = [
+  { id: 'globo', label: 'Globo equivocado' },
+  { id: 'desalineado', label: 'Desalineado' },
+  { id: 'cortado', label: 'Texto cortado' },
+  { id: 'emparejado', label: 'Página mal emparejada' },
+  { id: 'no_traducido', label: 'No traducido' },
+  { id: 'tapo_arte', label: 'Tapó arte' },
+  { id: 'color', label: 'Página a color' },
+  { id: 'otro', label: 'Otro' },
+]
+function qaSubmit(reason) {
+  store.qaFlagPage(reason, qaNote.value.trim())
+  qaNote.value = ''
+  qaOpen.value = false
+}
+
 // Page counter label — a range when showing a two-page spread.
 const counterLabel = computed(() => {
   const total = store.pages.length
@@ -174,7 +194,17 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
             <button class="rd__btn rd__zoom" title="Restablecer zoom" @click="store.resetZoom()">{{ Math.round(store.zoom * 100) }}%</button>
             <button v-if="store.canCompare" class="rd__btn" :class="{ 'is-on': store.compareMode }" title="Comparar original / 4K (C)" @click="store.toggleCompare()"><Icon name="spark" :size="15" /></button>
             <button v-if="isManga" class="rd__btn" :class="{ 'is-on': store.isChapterRead(store.reader.chapter) }" title="Marcar leído" @click="store.toggleChapterRead(store.reader.chapter)"><Icon name="check" :size="15" /></button>
+            <button v-if="qaCanFlag" class="rd__btn rd__btn--qa" :class="{ 'is-on': qaOpen }" title="Marcar página mal traducida (QA)" @click="qaOpen = !qaOpen"><span class="rd__txt">⚑</span></button>
             <button class="rd__btn" title="Pantalla completa" @click="toggleFullscreen"><Icon name="spark" :size="15" /></button>
+          </div>
+
+          <!-- QA: picker de motivo para la página actual -->
+          <div v-if="qaCanFlag && qaOpen" class="rd__qa" :class="{ 'is-hidden': store.barsHidden }" @click.stop>
+            <div class="rd__qa-head">Marcar <b>pág. {{ store.page + 1 }}</b> como mal traducida</div>
+            <div class="rd__qa-reasons">
+              <button v-for="r in QA_REASONS" :key="r.id" class="rd__qa-chip" @click="qaSubmit(r.id)">{{ r.label }}</button>
+            </div>
+            <input v-model="qaNote" class="rd__qa-note" type="text" placeholder="Nota opcional (qué falla)…" @keydown.enter="qaSubmit('otro')" />
           </div>
         </header>
 
@@ -259,6 +289,23 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__src { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 7px; border-radius: var(--r-pill); color: var(--ink-faint); background: var(--surface); }
 .rd__src.is-4k { color: var(--cyan); background: var(--cyan-glow); }
 .rd__tools { display: flex; gap: var(--s-1); }
+.rd__btn--qa.is-on { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 50%, transparent); background: color-mix(in srgb, var(--coral) 12%, transparent); }
+
+/* QA: popover de marcado (testing) */
+.rd__qa { position: absolute; top: 56px; right: var(--s-4); z-index: 7; width: min(22rem, 92vw);
+  padding: var(--s-3); border-radius: var(--r-md); background: var(--glass-strong); backdrop-filter: blur(16px);
+  border: 1px solid var(--line-2); box-shadow: var(--shadow-lg); transition: opacity var(--t-fast); }
+.rd__qa.is-hidden { opacity: 0; pointer-events: none; }
+.rd__qa-head { font-size: var(--fs-xs); color: var(--ink-soft); margin-bottom: var(--s-2); }
+.rd__qa-head b { color: var(--ink); }
+.rd__qa-reasons { display: flex; flex-wrap: wrap; gap: var(--s-1); margin-bottom: var(--s-2); }
+.rd__qa-chip { font-size: var(--fs-2xs); font-weight: 600; padding: 5px 10px; border-radius: var(--r-pill);
+  color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
+.rd__qa-chip:hover { color: #fff; background: var(--coral); border-color: transparent; }
+.rd__qa-note { width: 100%; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); font-size: var(--fs-xs); outline: none; }
+.rd__qa-note:focus { border-color: var(--azure); }
+@media (prefers-reduced-motion: reduce) { .rd__qa { transition: none; } }
 
 .rd__center { flex: 1; display: grid; place-items: center; }
 .rd__empty { color: var(--ink-faint); }

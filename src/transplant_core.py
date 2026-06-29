@@ -18,6 +18,7 @@ Uso:
     stats = transplant_chapter(es_dir, en_dir, out_dir, file_prefix="ch0036")
 """
 from pathlib import Path
+import json
 import numpy as np, cv2, torch
 from PIL import Image
 from scipy.optimize import linear_sum_assignment
@@ -42,11 +43,51 @@ IOU_MIN = 0.50           # verificación "mismo globo" por FORMA del interior (i
 MAX_ECC_DRIFT = 6.0      # px: la homografía global ya es sub-píxel; un ECC que derive más
                          # que esto es un mal-anclaje local (cajas planas) -> se descarta
 MATCH_GATE_FRAC = 0.05   # coste máx de match globo = 5% del alto de página
-TOL_FRAC = 0.06          # tolerancia de búsqueda de texto libre = 6% del alto
+TOL_FRAC = 0.06          # tolerancia de búsqueda de texto libre = 6% del alto (legacy, ver text_free)
+TEXTFREE_GAP_FRAC = 0.055  # ADYACENCIA de borde (no centroide) para agrupar captions EN<->ES.
+                           # Los captions ES se re-tipografían en otra posición/desglose que los EN
+                           # (otra longitud -> otro salto de línea -> otro bbox): el match 1:1 por
+                           # CENTROIDE perdía ~38% (offset>tol) y fragmentaba los de varias piezas.
+                           # Medido en cap 2+3: el 62% de las cajas perdidas SOLAPA un candidato ES
+                           # (gap=0) y hay un valle natural en la distribución de gaps entre ~112px y
+                           # ~181px; 5.5% del alto cae en ese valle (capta los adyacentes reales,
+                           # excluye los lejanos = SFX/títulos/maquetado distinto).
+TEXTFREE_CLUSTER_MAXAREA = 0.35  # un cluster cuyo bbox supere el 35% del área de página es casi
+                                 # seguro un sobre-merge -> no se pega (lo cubren globos/fallback)
+TEXTFREE_LARGE_FRAC = 0.12  # un cluster de texto libre que cubra >12% de la página pega mucho FONDO;
+                            # si la homografía está algo corrida (página de baja textura / fuente ES
+                            # de mucha menor resolución), el borde del paste deja una COSTURA visible
+                            # (líneas/tramado que no casan). Para esos se EXIGE confirmación de ECC
+                            # ajustado (igual que el fallback de globos); si el ECC no confirma, NO se
+                            # pega -> mejor el caption en inglés limpio que una costura. Los clusters
+                            # pequeños no lo necesitan (la costura sería imperceptible). Medido: p007
+                            # HDWR (costura) ECC=None NCC=0.12; p026 (oscura, OK) ECC=0.44 NCC=0.53.
 FALLBACK_BUBBLE_MIN_CONF = 0.50  # sólo recuperar globos sueltos si la homografía de la
                                  # página es confiable (>=50% de globos ya emparejados)
+# ── Validación de la similaridad estimada (causa raíz del parche torcido) ──────
+# estimateAffinePartial2D devuelve SIEMPRE una matriz aunque tenga pocos inliers; aceptarla a
+# ciegas produce un warp con rotación/escala espuria -> es_w corrido/rotado -> parches ES
+# torcidos sobre el arte (QA: How Do We Relationship cap10 p004, fragmento ES rotado ~15° sobre
+# el dibujo, globos en inglés). Dos escaneos de la MISMA página difieren sólo por similaridad
+# casi-identidad (rotación ~0°, escala = razón de resoluciones), así que se rechaza la matriz si:
+HOMOG_MIN_INLIERS = 8     # piso de degeneración: por debajo el ajuste no es fiable. Bajo a
+                          # propósito para NO regresar el caso salvado por ECC (p021: 15 inliers).
+HOMOG_MAX_ROT_DEG = 10.0  # dos escaneos de la misma página no rotan; >10° = warp roto (el caso
+                          # salvado tenía -2.9°, así que 10° lo deja pasar sin regresión).
+HOMOG_SCALE_LO = 0.6      # banda de escala RELATIVA a la razón de resoluciones EN/ES (no absoluta:
+HOMOG_SCALE_HI = 1.7      # un ES a mitad de resolución del EN da escala ~2 y es legítimo).
+TEXTFREE_MIN_BUBBLES = 2  # nº mínimo de globos EN para poder juzgar la homografía por la tasa de
+                          # composición. Con menos globos no se puede inferir si el warp está roto,
+                          # así que NO se gatea el texto libre (se confía en sus guardas por-cluster).
 COVERAGE_MIN = 0.50       # si se tradujo <50% del texto de la página -> usar la página ES completa
 TEXTFREE_BG_MAXDIFF = 30  # umbral de brillo para texto libre (captions sobre arte); ver text_free()
+TEXTFREE_DARK_LUMA = 128  # captions INVERTIDAS (texto blanco sobre panel negro): si AMBOS lados
+                          # son oscuros (mediana < esto) la guarda de brillo NO es fiable —el trazo
+                          # blanco del texto ES, más grueso para legibilidad sobre negro, sube la
+                          # mediana aunque el fondo sea el MISMO crosshatch (medido p026: EN 41 vs
+                          # ES 94)— así que se omite y se confía en art_not_erased, que sí caza un
+                          # globo blanco (mediana alta -> no oscuro -> guarda activa) o un relleno
+                          # plano (std baja). Antes estas captions oscuras quedaban en inglés.
 TEXTFREE_ART_MAXEXTRA = 30  # umbral de std para texto libre: un scan ES más BLANDO (menos
                             # contraste) que el EN da std_diff +12..27 con el MISMO arte
                             # (medianDiff~0). Con 11 se rechazaban captions reales; los pegados
@@ -55,6 +96,13 @@ TEXTFREE_ART_MAXEXTRA = 30  # umbral de std para texto libre: un scan ES más BL
 
 def load_rgb(p): return cv2.cvtColor(cv2.imread(str(p)), cv2.COLOR_BGR2RGB)
 def dhash(g, hs=16): g = cv2.resize(g, (hs+1, hs)); return (g[:, 1:] > g[:, :-1]).flatten()
+
+def _is_color_page(rgb):
+    """True si >10% de píxeles tienen diferencia R/G/B > 15 (portada/splash en color).
+    Mismo criterio que upscale.py / transplant.py:_is_color_bytes."""
+    arr = rgb.astype(np.float32)
+    max_diff = arr.max(axis=2) - arr.min(axis=2)
+    return float(np.mean(max_diff > 15)) > 0.10
 def cxcy(b): return ((b[0]+b[2])/2.0, (b[1]+b[3])/2.0)
 def area(b): return max(1, (b[2]-b[0])*(b[3]-b[1]))
 
@@ -64,6 +112,16 @@ def box_iou(a, b):
     ix1, iy1 = min(a[2], b[2]), min(a[3], b[3])
     inter = max(0, ix1-ix0) * max(0, iy1-iy0)
     return inter / max(1, area(a) + area(b) - inter)
+
+
+def edge_gap(a, b):
+    """Distancia mínima borde-a-borde entre dos cajas (0 si solapan). A diferencia de la
+    distancia de centroide, no crece con el tamaño de la caja: dos captions del MISMO texto
+    re-tipografiado (uno más alto/ancho que el otro) siguen teniendo gap ~0 aunque sus
+    centroides se separen mucho. Es la métrica de adyacencia para agrupar texto libre."""
+    dx = max(a[0]-b[2], b[0]-a[2], 0.0)
+    dy = max(a[1]-b[3], b[1]-a[3], 0.0)
+    return (dx*dx + dy*dy) ** 0.5
 
 
 def dedup(boxes, thr=0.6):
@@ -100,8 +158,18 @@ def homography(es, en):
     # rotaciones/perspectivas espurias cuando hay pocos inliers (p021: 15 inliers -> rot
     # falsa de -2.9° -> texto de las cajas planas cortado/torcido, porque el ECC no las
     # corrige). El modelo restringido da muchos más inliers (69) y rotación correcta ~0°.
-    M, _ = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC, ransacReprojThreshold=5.0)
+    M, inliers = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC, ransacReprojThreshold=5.0)
     if M is None: return None
+    # Validar que la similaridad estimada es PLAUSIBLE (ver constantes HOMOG_*). Si no lo es, el
+    # warp está roto: rechazar -> la página cae a "arte EN limpio" en vez de a un parche torcido.
+    n_in = int(inliers.sum()) if inliers is not None else 0
+    a, b = float(M[0, 0]), float(M[1, 0])
+    scale = (a * a + b * b) ** 0.5
+    rot = abs(np.degrees(np.arctan2(b, a)))
+    exp_scale = ((en.shape[1] / es.shape[1]) + (en.shape[0] / es.shape[0])) / 2.0
+    if (n_in < HOMOG_MIN_INLIERS or rot > HOMOG_MAX_ROT_DEG
+            or not (HOMOG_SCALE_LO * exp_scale <= scale <= HOMOG_SCALE_HI * exp_scale)):
+        return None
     return np.vstack([M, [0.0, 0.0, 1.0]])   # 2x3 afín -> 3x3 para warpPerspective/map_box
 
 
@@ -155,7 +223,18 @@ def interior_mask(rgb, box):
     if x1-x0 < 6 or y1-y0 < 6: return None, None
     crop = cv2.cvtColor(rgb[y0:y1, x0:x1], cv2.COLOR_RGB2GRAY)
     comp, frac = _dominant_component(crop)
-    if comp is None or frac < 0.05: return None, None
+    if comp is None or frac < 0.05:
+        # Globo con arte/sombreado interno (burbujas de pensamiento, fondos con degradado):
+        # la región dominante no supera el 5 %. Usar rectángulo con inset como máscara;
+        # el shape_iou y el ECC siguen protegiendo de composiciones incorrectas.
+        ins = max(2, int(0.04 * min(x1-x0, y1-y0)))
+        bh, bw = y1-y0, x1-x0
+        mm = np.zeros((bh, bw), np.uint8)
+        if ins * 2 < bh and ins * 2 < bw:
+            mm[ins:bh-ins, ins:bw-ins] = 255
+        else:
+            mm[:] = 255
+        return mm, (x0, y0, x1, y1)
     if frac >= 0.90:
         mm = np.zeros_like(crop); ins = max(2, int(0.04*min(crop.shape))); mm[ins:-ins or None, ins:-ins or None] = 255
     else:
@@ -168,10 +247,13 @@ def interior_mask(rgb, box):
 def interior_blob(gray_crop):
     """Forma del interior rellena (globo/caja): la firma del globo, igual en ES y EN
     (el texto de dentro NO influye). Polaridad-agnóstica: sirve para globos claros
-    (interior blanco) y OSCUROS (interior negro)."""
+    (interior blanco) y OSCUROS (interior negro). Para globos con arte interno sin región
+    dominante, devuelve el rectángulo completo (shape_iou entre dos globos de arte = 1.0)."""
     if gray_crop.size == 0: return None
     comp, _ = _dominant_component(gray_crop)
-    if comp is None: return None
+    if comp is None:
+        # Sin región dominante clara (arte/sombreado interno): usar todo el crop como firma.
+        return np.ones(gray_crop.shape, np.uint8)
     mm = comp.astype(np.uint8)
     ff = mm.copy(); fm = np.zeros((mm.shape[0]+2, mm.shape[1]+2), np.uint8)
     cv2.floodFill(ff, fm, (0, 0), 1); return mm | (1 - ff)
@@ -196,11 +278,38 @@ def ecc_refine(en_gray, es_gray):
         return None
 
 
-def bg_consistent(en, es_w, x0, y0, x1, y1, max_diff=20):
+def bg_consistent(en, es_w, x0, y0, x1, y1, max_diff=20, blockwise=False, grid=4, min_frac=0.6):
+    """¿Casa el fondo del ES warpeado con el del EN en la caja? Compara la mediana GLOBAL
+    (rápido, para globos). `blockwise=True` (texto libre) AÑADE un respaldo: si la prueba
+    global FALLA, reintenta por una rejilla grid×grid y pasa si una MAYORÍA (`min_frac`) de
+    celdas casa con su tono LOCAL. Es un OR sobre la global → estrictamente MÁS permisivo,
+    nunca rechaza lo que la global aceptaba (cero regresión), sólo recupera casos extra.
+
+    Motivo: una caption que CRUZA un borde de alto contraste (p.ej. margen blanco de la
+    página ↔ panel fotográfico oscuro) tiene medianas globales EN/ES que difieren sólo por
+    cuánto tono claro/oscuro cae a cada lado tras una homografía sub-píxel imperfecta —no
+    porque el fondo sea realmente distinto—, y la prueba global la rechazaba en falso. Por
+    celdas, cada una se compara con su tono LOCAL (blanco con blanco, negro con negro), así
+    que el straddle pasa; un paste de verdad desalineado (otro arte) falla la global Y la
+    mayoría de celdas, y sigue rechazándose."""
     ae = cv2.cvtColor(en[y0:y1, x0:x1], cv2.COLOR_RGB2GRAY)
     be = cv2.cvtColor(es_w[y0:y1, x0:x1], cv2.COLOR_RGB2GRAY)
     if ae.size == 0: return False
-    return abs(float(np.median(ae)) - float(np.median(be))) < max_diff
+    if abs(float(np.median(ae)) - float(np.median(be))) < max_diff:
+        return True
+    gh, gw = ae.shape
+    if not blockwise or gh < grid * 2 or gw < grid * 2:
+        return False
+    ok = tot = 0
+    for gy in range(grid):
+        ya, yb = gy * gh // grid, (gy + 1) * gh // grid
+        for gx in range(grid):
+            xa, xb = gx * gw // grid, (gx + 1) * gw // grid
+            ab, bb = ae[ya:yb, xa:xb], be[ya:yb, xa:xb]
+            if ab.size == 0: continue
+            tot += 1
+            if abs(float(np.median(ab)) - float(np.median(bb))) < max_diff: ok += 1
+    return tot > 0 and ok / tot >= min_frac
 
 
 def art_not_erased(en, es_w, x0, y0, x1, y1, max_extra=11):
@@ -303,41 +412,91 @@ def precise_bubbles(en, es_w, de_b, ds_b, H):
     return res[0], stats, es_leftover
 
 
+def _cluster_textfree(en_tf, es_tf_mapped, gap):
+    """Agrupa las cajas de texto libre EN y ES por ADYACENCIA de borde (union-find): dos
+    cajas quedan en el mismo cluster si su `edge_gap` <= `gap`, sin importar el idioma. Esto
+    une un caption EN con su(s) caja(s) ES re-tipografiadas en otra posición/desglose, y
+    cose las piezas de un caption partido en varias cajas. Devuelve lista de clusters; cada
+    cluster = (bbox_union, n_en, n_es)."""
+    nodes = [(b, 0) for b in en_tf] + [(b, 1) for b in es_tf_mapped]   # (box, is_es)
+    n = len(nodes)
+    parent = list(range(n))
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+
+    for i in range(n):
+        for j in range(i+1, n):
+            if edge_gap(nodes[i][0], nodes[j][0]) <= gap:
+                ri, rj = find(i), find(j)
+                if ri != rj: parent[ri] = rj
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    out = []
+    for members in groups.values():
+        bxs = [nodes[m][0] for m in members]
+        n_en = sum(1 for m in members if nodes[m][1] == 0)
+        n_es = len(members) - n_en
+        bbox = [min(b[0] for b in bxs), min(b[1] for b in bxs),
+                max(b[2] for b in bxs), max(b[3] for b in bxs)]
+        out.append((bbox, n_en, n_es))
+    return out
+
+
 def text_free(res, en, es_w, en_tf, es_tf_mapped, feather=4):
-    """Aplica el texto libre emparejado sobre `res` (in place via blend). Devuelve matched."""
-    h, w = en.shape[:2]; tol = TOL_FRAC * h; matched = 0
-    full = np.zeros((h, w), np.float32)
-    # Emparejado GLOBAL (Hungarian) EN<->ES por DISTANCIA DE CENTRO pura: el greedy "el más
-    # cercano libre" provocaba ROBOS (una caja EN agarraba el ES que le tocaba a otra y la
-    # dejaba sin traducir). El óptimo global lo evita. Se gatea por tolerancia tras asignar.
-    pairs = []
-    if en_tf and es_tf_mapped:
-        C = np.zeros((len(en_tf), len(es_tf_mapped)))
-        for i, eb in enumerate(en_tf):
-            ec = cxcy(eb)
-            for j, sb in enumerate(es_tf_mapped):
-                sc = cxcy(sb)
-                C[i, j] = ((ec[0]-sc[0])**2 + (ec[1]-sc[1])**2) ** 0.5
-        ri, cj = linear_sum_assignment(C)
-        pairs = [(i, j) for i, j in zip(ri, cj) if C[i, j] <= tol]
-    for i_en, j_es in pairs:
-        box = en_tf[i_en]; mb = es_tf_mapped[j_es]
-        union = [min(box[0], mb[0]), min(box[1], mb[1]), max(box[2], mb[2]), max(box[3], mb[3])]
-        x0, y0, x1, y1 = [max(0, union[0]), max(0, union[1]), min(w, union[2]), min(h, union[3])]
+    """Aplica el texto libre (captions) sobre `res` por CLUSTERING ESPACIAL. Devuelve matched.
+
+    El emparejado 1:1 por distancia de CENTROIDE fallaba con los captions: el español se
+    re-tipografía en otra posición/desglose (otra longitud de frase -> otro salto de línea ->
+    otro bounding-box), así que su centroide se aleja del EN aunque el texto esté justo al
+    lado, y los captions de varias líneas detectados como varias cajas se fragmentaban
+    ('cortado'). En su lugar se AGRUPAN por adyacencia de borde las cajas EN y ES; cada
+    cluster con texto en AMBOS idiomas se pega COMPLETO (es_w sobre el bbox del cluster: borra
+    el texto EN y deja el ES, esté donde esté dentro del cluster). Mismas guardas bg/art.
+    Los clusters GRANDES (>TEXTFREE_LARGE_FRAC) además exigen alineación ECC ajustada (si no,
+    se saltan) para no dejar una costura de paste en páginas de homografía imprecisa."""
+    h, w = en.shape[:2]; matched = 0
+    if not en_tf:
+        return res, 0
+    gap = TEXTFREE_GAP_FRAC * h
+    page_area = float(w * h)
+    en_g = cv2.cvtColor(en, cv2.COLOR_RGB2GRAY); esw_g = cv2.cvtColor(es_w, cv2.COLOR_RGB2GRAY)
+    for bbox, n_en, n_es in _cluster_textfree(en_tf, es_tf_mapped, gap):
+        if n_en == 0 or n_es == 0:
+            continue   # sólo-EN (SFX/título/caption reubicado sin ES) o sólo-ES (añadido): no se pega
+        x0, y0 = max(0, bbox[0]), max(0, bbox[1])
+        x1, y1 = min(w, bbox[2]), min(h, bbox[3])
         if x1-x0 < 4 or y1-y0 < 4: continue
+        area = (x1-x0) * (y1-y0)
+        if area > TEXTFREE_CLUSTER_MAXAREA * page_area:
+            continue   # sobre-merge -> no arriesgar a pegar media página
         # bg_consistent con umbral MÁS LAXO para TEXTO LIBRE (captions sobre arte): la caja
-        # union abarca mucho fondo y dos escaneos distintos del MISMO arte difieren en brillo
-        # ~20-30 (no es un globo blanco sobre arte, que daría 45-150). El umbral de 20 daba
-        # falsos rechazos (caption en inglés sin traducir). La guarda de ESTRUCTURA
-        # (art_not_erased) sigue protegiendo de tapar arte real. El fallback de globos sí
-        # usa 20 (ahí un pegado blanco-sobre-arte sí debe rechazarse).
-        if not bg_consistent(en, es_w, x0, y0, x1, y1, max_diff=TEXTFREE_BG_MAXDIFF): continue
+        # abarca mucho fondo y dos escaneos distintos del MISMO arte difieren en brillo ~20-30
+        # (no es un globo blanco sobre arte, que daría 45-150). La guarda de ESTRUCTURA
+        # (art_not_erased) sigue protegiendo de tapar arte real. EXCEPCIÓN: captions invertidas
+        # (texto blanco sobre panel negro) — si AMBOS lados son oscuros la mediana no es fiable
+        # (ver TEXTFREE_DARK_LUMA) -> se omite el brillo y manda art_not_erased.
+        en_med = float(np.median(en_g[y0:y1, x0:x1]))
+        es_med = float(np.median(esw_g[y0:y1, x0:x1]))
+        both_dark = en_med < TEXTFREE_DARK_LUMA and es_med < TEXTFREE_DARK_LUMA
+        if not both_dark and not bg_consistent(en, es_w, x0, y0, x1, y1,
+                                               max_diff=TEXTFREE_BG_MAXDIFF, blockwise=True): continue
         if not art_not_erased(en, es_w, x0, y0, x1, y1, max_extra=TEXTFREE_ART_MAXEXTRA): continue
+        src = es_w
+        if area > TEXTFREE_LARGE_FRAC * page_area:
+            # paste grande: refinar por ECC y EXIGIR confirmación ajustada; sin ella el borde
+            # dejaría costura (homografía corrida en página de baja textura / ES de baja resolución).
+            es_full, dxdy = _aligned_es_region(en_g, esw_g, es_w, (x0, y0, x1, y1))
+            if dxdy is None:
+                continue
+            src = es_full
         m = cv2.GaussianBlur(np.full((y1-y0, x1-x0), 255, np.uint8), (0, 0), feather)
-        full[y0:y1, x0:x1] = np.maximum(full[y0:y1, x0:x1], m/255.0)
-        matched += 1
-    a = full[:, :, None]
-    res = es_w.astype(np.float32) * a + res * (1 - a)
+        a = np.zeros((h, w), np.float32); a[y0:y1, x0:x1] = m / 255.0; a = a[:, :, None]
+        res = src.astype(np.float32) * a + res * (1 - a)
+        matched += n_en
     return res, matched
 
 
@@ -363,37 +522,77 @@ def es_fullpage(es, en):
 
 
 def _transplant_page(es, en):
-    """Compone UNA página: arte EN + texto ES. Devuelve (res_rgb_uint8, note, is_fallback)."""
+    """Compone UNA página: arte EN + texto ES. Devuelve (res_rgb_uint8, note, is_fallback, dbg).
+
+    `dbg` es un dict de diagnóstico SOLO para el modo QA (cobertura, globos compuestos/
+    rechazados/fallback, ecc_max, y las cajas EN detectadas para el overlay). No afecta al
+    resultado ni se usa fuera de testing — el caller lo ignora salvo si hay `debug_dir`."""
     H = homography(es, en)
     if H is None:
-        # sin alineación posible -> página ES completa (en español, baja calidad)
-        return es_fullpage(es, en), "FALLBACK-ES (sin homografía)", True
+        # Sin alineación → probablemente el DTW emparejó páginas distintas o la página
+        # no tiene suficientes features SIFT. Conservar arte EN: es de mayor calidad que
+        # caer a la ES completa de baja calidad.
+        dbg = {"coverage": None, "composed": 0, "rejected": 0, "fallback": 0, "ecc_max": 0.0,
+               "en_bubbles": [], "en_free": [], "reason": "no-homography"}
+        return en.copy(), "arte EN (sin homografía)", False, dbg
     es_w = cv2.warpPerspective(es, H, (en.shape[1], en.shape[0]), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
     de, ds = detect(en), detect(es)
     res, st, es_leftover = precise_bubbles(en, es_w, de[0], ds[0], H)
     # Candidatos de texto libre = text_free ES + burbujas ES no emparejadas
     # (cubre la asimetría de clase caption<->burbuja entre los dos scans).
     en_tf = dedup(de[2]); es_tf_mapped = [map_box(H, b) for b in dedup(ds[2])] + es_leftover
-    res, matched = text_free(res, en, es_w, en_tf, es_tf_mapped)
+    # GATE DE CONFIANZA DE HOMOGRAFÍA (mismo criterio que el fallback de globos): si la página
+    # TIENE suficientes globos pero casi ninguno se compuso, el warp global es poco fiable —es_w
+    # quedó mal alineado—, así que text_free estamparía captions ES corridas/rotadas sobre el arte
+    # (QA: How Do We Relationship cap10 p004 = fragmento ES rotado y desfasado sobre el dibujo, con
+    # los globos sin traducir). En ese caso NO se pega texto libre: mejor el arte EN limpio que un
+    # parche desalineado. Con pocos globos no se puede juzgar el warp → se corre como siempre.
+    bubble_conf = st['composed'] / st['en'] if st['en'] else 1.0
+    tf_skipped = st['en'] >= TEXTFREE_MIN_BUBBLES and bubble_conf < FALLBACK_BUBBLE_MIN_CONF
+    if tf_skipped:
+        matched = 0
+    else:
+        res, matched = text_free(res, en, es_w, en_tf, es_tf_mapped)
     res = np.clip(res, 0, 255).astype(np.uint8)
     # ¿se tradujo suficiente? texto = globos EN (dedup) + texto libre EN (dedup)
-    text_boxes = len(dedup(de[0])) + len(en_tf)
+    en_bubbles = dedup(de[0])
+    text_boxes = len(en_bubbles) + len(en_tf)
     translated = st['composed'] + matched
     cov = (translated / text_boxes) if text_boxes else 1.0
+    dbg = {"coverage": round(cov, 4), "composed": st['composed'], "rejected": st['rejected'],
+           "fallback": st['fallback'], "ecc_max": round(float(st.get('ecc_max', 0.0)), 3),
+           "text_boxes": text_boxes, "translated": translated, "tf_skipped": tf_skipped,
+           "en_bubbles": en_bubbles, "en_free": en_tf}
     if text_boxes > 0 and cov < COVERAGE_MIN:
-        # la página no se pudo trasplantar (otra maquetación) -> ES completa
-        return es_fullpage(es, en), f"FALLBACK-ES (cobertura {cov:.0%})", True
-    return res, f"trasplante (cobertura {cov:.0%})", False
+        # Cobertura baja: devolver el resultado parcial (lo que sí se pudo transplantar)
+        # en vez de la página ES completa — el arte EN de alta calidad con texto parcial
+        # es mejor que la ES de baja calidad con cero texto EN.
+        dbg["reason"] = "low-coverage"
+        return res, f"trasplante parcial ({cov:.0%})", False, dbg
+    return res, f"trasplante (cobertura {cov:.0%})", False, dbg
+
+
+def _qa_overlay(en_rgb, dbg):
+    """EN con las cajas detectadas dibujadas: globos en azul, texto libre en cian. Solo QA."""
+    img = cv2.cvtColor(en_rgb, cv2.COLOR_RGB2BGR).copy()
+    for b in (dbg or {}).get("en_bubbles", []):
+        cv2.rectangle(img, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (255, 120, 40), 3)
+    for b in (dbg or {}).get("en_free", []):
+        cv2.rectangle(img, (int(b[0]), int(b[1])), (int(b[2]), int(b[3])), (220, 220, 40), 2)
+    return img
 
 
 def transplant_chapter(es_dir, en_dir, out_dir, file_prefix="ch0000",
-                       progress_cb=None, should_cancel=None) -> dict:
+                       progress_cb=None, should_cancel=None, debug_dir=None) -> dict:
     """Trasplanta un capítulo completo: empareja páginas ES↔EN, compone cada una y
     escribe `{file_prefix}_{i:03d}.png` en `out_dir`. Devuelve un resumen.
 
     progress_cb(done, total, note) — opcional, se llama tras cada página.
     should_cancel() -> bool — opcional; si devuelve True el trasplante para a mitad
-    de capítulo y el resumen trae `cancelled: True` (el caller descarta el staging)."""
+    de capítulo y el resumen trae `cancelled: True` (el caller descarta el staging).
+    debug_dir — SOLO modo QA (testing): si se pasa, vuelca por página el arte EN, la ES
+    emparejada, un overlay con las cajas detectadas y `pages.json` con el diagnóstico. NO
+    cambia el resultado; con `debug_dir=None` el comportamiento es idéntico al original."""
     es_dir, en_dir, out_dir = Path(es_dir), Path(en_dir), Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     es_paths = sorted(p for p in es_dir.glob("*.*") if p.suffix.lower() in (".jpg", ".jpeg", ".png", ".webp"))
@@ -404,22 +603,71 @@ def transplant_chapter(es_dir, en_dir, out_dir, file_prefix="ch0000",
     n_trans = n_fallback = 0
     pages = []
     total = len(en_paths)
+    qa = None
+    if debug_dir is not None:
+        qa = Path(debug_dir); qa.mkdir(parents=True, exist_ok=True)
+        qa_pages = {}
     for idx, en_p in enumerate(en_paths, 1):
         if should_cancel and should_cancel():
             return {"trans": n_trans, "fallback": n_fallback, "pages": pages, "cancelled": True}
         ei = idx - 1
         en = load_rgb(en_p)
+        es = None
         if ei in en2es:
-            es = load_rgb(es_paths[en2es[ei]])
-            res, note, is_fb = _transplant_page(es, en)
+            es_idx = en2es[ei]
+            es = load_rgb(es_paths[es_idx])
+            en_g = cv2.cvtColor(en, cv2.COLOR_RGB2GRAY)
+            es_g = cv2.cvtColor(es, cv2.COLOR_RGB2GRAY)
+            hash_dist = int(np.count_nonzero(dhash(en_g) != dhash(es_g)))
+            bad_match = (_is_color_page(es) and not _is_color_page(en)) or hash_dist > 80
+            if bad_match:
+                # El DTW emparejó una página ES incorrecta (portada de créditos, TOC…).
+                # Buscar en páginas ES adyacentes la que mejor coincida con este arte EN
+                # (dHash < 60). Caso típico: el scan ES tiene una portada extra al inicio
+                # que el EN no tiene; la página real está en es_idx+1.
+                best_es = None
+                best_dist = 60  # sólo aceptar si el candidato es claramente mejor
+                for cand in range(max(0, es_idx - 1), min(len(es_paths), es_idx + 4)):
+                    if cand == es_idx:
+                        continue
+                    es_cand = load_rgb(es_paths[cand])
+                    if _is_color_page(es_cand) and not _is_color_page(en):
+                        continue
+                    d = int(np.count_nonzero(dhash(en_g) != dhash(cv2.cvtColor(es_cand, cv2.COLOR_RGB2GRAY))))
+                    if d < best_dist:
+                        best_dist = d
+                        best_es = es_cand
+                if best_es is not None:
+                    res, note, is_fb, dbg = _transplant_page(best_es, en)
+                else:
+                    reason = "es-color-page" if _is_color_page(es) else f"es-mismatch-d{hash_dist}"
+                    res, note, is_fb, dbg = en.copy(), f"arte EN ({reason})", False, {"reason": reason}
+            else:
+                res, note, is_fb, dbg = _transplant_page(es, en)
         else:
             # sin par ES -> deja el arte EN tal cual (no debería pasar con DTW completo)
-            res, note, is_fb = en, "sin par ES (arte EN)", False
+            res, note, is_fb, dbg = en, "sin par ES (arte EN)", False, {"reason": "no-es-match"}
         if is_fb: n_fallback += 1
         else:     n_trans += 1
         fname = f"{file_prefix}_{idx:03d}.png"
         cv2.imwrite(str(out_dir / fname), cv2.cvtColor(res, cv2.COLOR_RGB2BGR))
         pages.append(fname)
+        if qa is not None:
+            stem = fname[:-4]   # sin .png
+            cv2.imwrite(str(qa / f"{stem}__en.png"), cv2.cvtColor(en, cv2.COLOR_RGB2BGR))
+            if es is not None:
+                cv2.imwrite(str(qa / f"{stem}__es.png"), cv2.cvtColor(es, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(str(qa / f"{stem}__overlay.png"), _qa_overlay(en, dbg))
+            qa_pages[fname] = {
+                "note": note, "is_fallback": is_fb,
+                "coverage": dbg.get("coverage"), "composed": dbg.get("composed"),
+                "rejected": dbg.get("rejected"), "fallback": dbg.get("fallback"),
+                "ecc_max": dbg.get("ecc_max"), "reason": dbg.get("reason"),
+                "es_match_index": en2es.get(ei),
+                "es_src": es_paths[en2es[ei]].name if ei in en2es else None,
+                "en_src": en_p.name,
+            }
+            json.dump(qa_pages, open(qa / "pages.json", "w"), ensure_ascii=False, indent=2)
         if progress_cb:
             try: progress_cb(idx, total, note)
             except Exception: pass
