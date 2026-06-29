@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useUiStore, VIEWS } from '@/stores/ui'
 import { useAnimeStore } from '@/stores/anime'
 import Icon from '@/components/ui/Icon.vue'
+import ActivityIndicator from '@/components/ui/ActivityIndicator.vue'
 
 const ui = useUiStore()
 const anime = useAnimeStore()
@@ -25,14 +26,17 @@ const current = computed(() => {
       <h2>{{ current?.label }}</h2>
     </div>
 
-    <button
-      class="topbar__gear"
-      :class="{ 'is-active': ui.currentView === 'settings' }"
-      title="Ajustes"
-      @click="ui.goto('settings')"
-    >
-      <Icon name="settings" :size="18" />
-    </button>
+    <div class="topbar__actions">
+      <ActivityIndicator />
+      <button
+        class="topbar__gear"
+        :class="{ 'is-active': ui.currentView === 'settings' }"
+        title="Ajustes"
+        @click="ui.goto('settings')"
+      >
+        <Icon name="settings" :size="18" />
+      </button>
+    </div>
   </header>
 </template>
 
@@ -56,8 +60,9 @@ const current = computed(() => {
 .topbar__title-icon { color: var(--azure); }
 .topbar__title h2 { font-size: var(--fs-lg); font-weight: 600; }
 
+.topbar__actions { margin-left: auto; display: flex; align-items: center; gap: var(--s-2); }
 .topbar__gear {
-  margin-left: auto; color: var(--ink-faint);
+  color: var(--ink-faint);
   width: 38px; height: 38px; display: grid; place-items: center;
   border-radius: var(--r-sm); border: 1px solid transparent;
   transition: all var(--t-fast);

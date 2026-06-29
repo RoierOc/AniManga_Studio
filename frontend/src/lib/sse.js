@@ -27,7 +27,7 @@ function ensure() {
       try { data = JSON.parse(e.data) } catch { return }
 
       // Aggregated status snapshot
-      if (data.downloads || data.upscale || data.exports) {
+      if (data.downloads || data.upscale || data.exports || data.transplant) {
         statusListeners.forEach(fn => { try { fn(data) } catch (_) {} })
       }
       // Event bus

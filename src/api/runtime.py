@@ -52,6 +52,10 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = Path(os.environ.get("DATA_ROOT") or str(PROJECT_ROOT / "data")).expanduser()
 MANGA_DIR = Path(os.environ.get("MANGA_DIR") or str(DATA_ROOT / "MangaLibrary")).expanduser()
 UPSCALED_DIR = Path(os.environ.get("UPSCALED_DIR") or str(DATA_ROOT / "MangaLibrary_Upscaled")).expanduser()
+# Translation QA (testing-only): when the QA flag is on, the transplant run keeps per-page
+# debug bundles here (EN art + matched ES + detection overlay + stats) so flagged pages can
+# be diagnosed. Off by default; "Borrar datos QA" wipes this dir.
+QA_DIR = Path(os.environ.get("QA_DIR") or str(DATA_ROOT / "_translation_qa")).expanduser()
 
 # Upscale model weights live here by default (gitignored — see docs/MODELS.md
 # for download links and the registry.json format that makes them pluggable).
@@ -97,3 +101,71 @@ def sanitize_title_for_id(title: str) -> str:
 def build_task_id(title: str, chapter, task_type: str) -> str:
     chapter_part = normalize_chapter(chapter) or str(chapter)
     return f"{sanitize_title_for_id(title)}_{task_type}_ch{chapter_part}"
+
+
+# ── Caché en DISCO (no RAM) ───────────────────────────────────────────────────
+# Para resultados caros de búsquedas online (ranking de versiones, portadas, etc.).
+# RAM plana: solo se lee/escribe un JSON por namespace; el archivo se acota por TTL y
+# por max_entries (se descartan las entradas más viejas), así el disco tampoco crece sin fin.
+import json as _json
+import time as _time
+
+_CACHE_DIR = MANGA_DIR / ".cache"
+_cache_lock = threading.Lock()
+
+
+def cache_get(namespace: str, key: str, ttl: float):
+    """Valor cacheado si tiene < ttl segundos; si no, None."""
+    p = _CACHE_DIR / f"{namespace}.json"
+    try:
+        with _cache_lock:
+            if not p.exists():
+                return None
+            data = _json.loads(p.read_text(encoding="utf-8"))
+        entry = data.get(key)
+        if not entry or (_time.time() - entry.get("ts", 0)) > ttl:
+            return None
+        return entry.get("value")
+    except Exception:
+        return None
+
+
+def cache_set(namespace: str, key: str, value, ttl: float = 0, max_entries: int = 200):
+    """Guarda en disco y purga expiradas (si ttl) + acota a max_entries (descarta las más viejas)."""
+    p = _CACHE_DIR / f"{namespace}.json"
+    try:
+        with _cache_lock:
+            _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+            data = {}
+            if p.exists():
+                try:
+                    data = _json.loads(p.read_text(encoding="utf-8"))
+                except Exception:
+                    data = {}
+            now = _time.time()
+            data[key] = {"ts": now, "value": value}
+            if ttl:
+                data = {k: v for k, v in data.items() if (now - v.get("ts", 0)) <= ttl}
+            if len(data) > max_entries:
+                for k in sorted(data, key=lambda k: data[k].get("ts", 0))[:len(data) - max_entries]:
+                    data.pop(k, None)
+            p.write_text(_json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def cache_invalidate(namespace: str, key: str = None):
+    """Borra una clave (o todo el namespace) — para forzar refresco."""
+    p = _CACHE_DIR / f"{namespace}.json"
+    try:
+        with _cache_lock:
+            if key is None:
+                p.unlink(missing_ok=True)
+                return
+            if not p.exists():
+                return
+            data = _json.loads(p.read_text(encoding="utf-8"))
+            if data.pop(key, None) is not None:
+                p.write_text(_json.dumps(data), encoding="utf-8")
+    except Exception:
+        pass

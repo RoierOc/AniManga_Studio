@@ -15,6 +15,7 @@ def _all_status():
     from api.download import get_download_status as get_dl_status
     from api.upscale import get_upscale_status
     from api.export import get_export_tasks
+    from api.transplant import get_transplant_tasks
 
     dl_status = get_dl_status()
     up_status = get_upscale_status()
@@ -23,7 +24,11 @@ def _all_status():
         for k, v in get_export_tasks().items()
         if v.get('status') not in ('downloaded',)
     }
-    return {'downloads': dl_status, 'upscale': up_status, 'exports': export_tasks}
+    # Translation/version-download tasks ride the same aggregated snapshot as everything
+    # else so the unified Activity center + the in-modal progress read ONE source of truth.
+    transplant_tasks = get_transplant_tasks()
+    return {'downloads': dl_status, 'upscale': up_status, 'exports': export_tasks,
+            'transplant': transplant_tasks}
 
 
 @status_bp.route('/stream')

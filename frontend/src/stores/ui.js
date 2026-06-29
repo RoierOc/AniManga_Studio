@@ -20,6 +20,7 @@ export const VIEWS = [
       { id: 'sources',  label: 'Fuentes',    icon: 'globe' },
       { id: 'local',    label: 'Local',      icon: 'folder' },
       { id: 'workshop', label: 'Taller',     icon: 'upload' },
+      { id: 'activity', label: 'Actividad',  icon: 'spark' },
     ],
   },
   {
@@ -44,6 +45,8 @@ export const useUiStore = defineStore('ui', {
       sidebarCollapsed: s.sidebarCollapsed ?? false,
       sidebarMobileOpen: false,
       showShortcuts: false,
+      activityOpen: false,         // Activity drawer (slide-over) open
+      activityTab: 'active',       // 'active' | 'history' — tab of the full Activity view
       toasts: [],
       _toastSeq: 0,
     }
@@ -117,6 +120,7 @@ export const useUiStore = defineStore('ui', {
     goto(view) {
       if (VALID.has(view)) this.currentView = view
       this.sidebarMobileOpen = false
+      this.activityOpen = false   // navigating away closes the activity drawer
       // switching to a top-level view closes any open detail/modal
       try { const a = useAnimeStore(); a.detailId = null; a.torrentAnime = null } catch {}
       try { const m = useMangaStore(); m.current = null } catch {}

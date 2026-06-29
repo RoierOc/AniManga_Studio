@@ -6,7 +6,7 @@ import Icon from '@/components/ui/Icon.vue'
 import Sidebar from '@/components/layout/Sidebar.vue'
 import TopBar from '@/components/layout/TopBar.vue'
 import Toaster from '@/components/ui/Toaster.vue'
-import TaskQueue from '@/components/ui/TaskQueue.vue'
+import ActivityDrawer from '@/components/ui/ActivityDrawer.vue'
 import ShortcutsModal from '@/components/ui/ShortcutsModal.vue'
 import MangaModal from '@/components/manga/MangaModal.vue'
 import Reader from '@/components/manga/Reader.vue'
@@ -20,6 +20,7 @@ const MangaDexView = defineAsyncComponent(() => import('@/views/MangaDexView.vue
 const SourcesView  = defineAsyncComponent(() => import('@/views/SourcesView.vue'))
 const LocalView    = defineAsyncComponent(() => import('@/views/LocalView.vue'))
 const WorkshopView = defineAsyncComponent(() => import('@/views/WorkshopView.vue'))
+const ActivityView = defineAsyncComponent(() => import('@/views/ActivityView.vue'))
 const AnimeStudio  = defineAsyncComponent(() => import('@/views/anime/AnimeStudio.vue'))
 const SettingsView = defineAsyncComponent(() => import('@/views/SettingsView.vue'))
 
@@ -44,7 +45,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKey))
 // defensive fallback and should never render in normal use.
 const meta = computed(() => VIEWS.flatMap(g => g.items).find(i => i.id === ui.currentView))
 
-const VIEW_COMPONENTS = { library: LibraryView, mangadex: MangaDexView, sources: SourcesView, local: LocalView, workshop: WorkshopView, anime: AnimeStudio, settings: SettingsView }
+const VIEW_COMPONENTS = { library: LibraryView, mangadex: MangaDexView, sources: SourcesView, local: LocalView, workshop: WorkshopView, activity: ActivityView, anime: AnimeStudio, settings: SettingsView }
 const activeComponent = computed(() => VIEW_COMPONENTS[ui.currentView] || null)
 
 // Error boundary: a render error in any view/modal shows a recoverable panel instead of
@@ -96,7 +97,7 @@ watch(() => ui.currentView, () => { crash.value = null })
 
     <MangaModal />
     <Reader />
-    <TaskQueue />
+    <ActivityDrawer />
     <ShortcutsModal />
     <Toaster />
   </div>
