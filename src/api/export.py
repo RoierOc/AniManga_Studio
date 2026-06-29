@@ -23,13 +23,16 @@ import numpy as np
 from flask import Blueprint, jsonify, request, send_file
 from PIL import Image
 
-from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter
+from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter, cache_get, cache_set
+
+_COLOR_TTL = 30 * 86400   # la firma de contenido en la clave auto-invalida; el TTL solo poda viejos
 
 # ── Async export task tracking ────────────────────────────────────────────────
 _export_tasks: dict = {}          # task_id → task dict
 _export_lock = threading.Lock()
 _export_semaphore = threading.Semaphore(3)  # max 3 concurrent exports
 _EXPORT_TTL = 7200                # clean up temp files after 2 hours
+_cancel_flags: set = set()        # task_ids requested to be cancelled
 
 def get_export_tasks() -> dict:
     return dict(_export_tasks)
@@ -37,6 +40,9 @@ def get_export_tasks() -> dict:
 def _set_export(task_id: str, updates: dict):
     with _export_lock:
         if task_id in _export_tasks:
+            # Stamp completion time once, on entering a terminal state — feeds Activity history.
+            if updates.get('status') in ('complete', 'error', 'cancelled') and not _export_tasks[task_id].get('ended_at'):
+                updates = {**updates, 'ended_at': time.time()}
             _export_tasks[task_id].update(updates)
 
 def _cleanup_exports():
@@ -106,27 +112,58 @@ def _mozjpeg_optimize(data: bytes) -> bytes:
         return data
 
 
-def _encode_jpeg(img_path: Path, quality: int, downscale: int = 1) -> bytes:
-    """Load any image and return JPEG bytes at the requested quality.
-    Preserves grayscale mode (L) for B&W pages — 1-channel JPEG is ~3× smaller than RGB.
-    downscale=2 halves width and height before encoding (for tablet-sized exports).
-    Post-processed with MozJPEG lossless optimization when available."""
-    img = Image.open(img_path)
+def _normalize_mode(img):
+    """Flatten any input image to a JPEG/WebP-friendly mode (RGB or L)."""
     if img.mode == 'RGBA':
         bg = Image.new('RGB', img.size, (255, 255, 255))
         bg.paste(img, mask=img.split()[3])
-        img = bg
-    elif img.mode == 'P':
-        img = img.convert('RGB')
-    elif img.mode == 'LA':
-        img = img.convert('L')
-    elif img.mode not in ('RGB', 'L'):
-        img = img.convert('RGB')
+        return bg
+    if img.mode == 'P':
+        return img.convert('RGB')
+    if img.mode == 'LA':
+        return img.convert('L')
+    if img.mode not in ('RGB', 'L'):
+        return img.convert('RGB')
+    return img
+
+
+def _encode_jpeg(img_path: Path, quality: int, downscale: int = 1) -> bytes:
+    """Load any image and return JPEG bytes at the requested quality.
+    Preserves grayscale mode (L) for B&W pages.
+    downscale=2 halves width and height before encoding (for tablet-sized exports).
+    Post-processed with MozJPEG lossless optimization when available."""
+    img = _normalize_mode(Image.open(img_path))
     if downscale > 1:
         img = img.resize((max(1, img.width // downscale), max(1, img.height // downscale)), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format='JPEG', quality=quality, optimize=True, progressive=True)
     return _mozjpeg_optimize(buf.getvalue())
+
+
+def _encode_webp(img_path: Path, quality: int, downscale: int = 1) -> bytes:
+    """Load any image and return WebP bytes at the requested quality.
+    For manga (line art + screentone + sharp translated text), WebP at a matched perceived
+    quality is meaningfully smaller than JPEG and degrades far more gracefully — it doesn't ring
+    around the hard edges of overlaid text the way JPEG does. method=6 = slowest/best ratio."""
+    img = _normalize_mode(Image.open(img_path))
+    if downscale > 1:
+        img = img.resize((max(1, img.width // downscale), max(1, img.height // downscale)), Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format='WEBP', quality=quality, method=6)
+    return buf.getvalue()
+
+
+# Codec registry: maps the request `codec` to (file extension, encoder fn). JPEG stays the default
+# so existing exports and readers are unaffected; WebP is opt-in for users whose reader supports it.
+_CODECS = {
+    'jpeg': ('jpg',  _encode_jpeg),
+    'webp': ('webp', _encode_webp),
+}
+
+
+def _encode_image(img_path: Path, quality: int, downscale: int, codec: str) -> bytes:
+    _, fn = _CODECS.get(codec, _CODECS['jpeg'])
+    return fn(img_path, quality, downscale)
 
 
 def _encode_jpeg_bytes(raw_bytes: bytes, quality: int) -> bytes:
@@ -156,10 +193,10 @@ def _quality_size_factor(quality: int) -> float:
     return 0.35
 
 
-def _collect_images(title: str, chapters: list, exclude_pages: set = None) -> list:
+def _collect_images(title: str, chapters: list, exclude_pages: set = None, arc_ext: str = "jpg") -> list:
     """Return ordered list of (arcname, abs_path) for requested chapters.
     Prefers upscaled images; falls back to originals per-file.
-    arcname always uses .jpg extension (images are re-encoded as JPEG on export).
+    arcname uses arc_ext (matches the codec the pages are re-encoded with).
     exclude_pages: set of original filenames to skip."""
     manga_root = Path(MANGA_DIR) / title
     up_root = Path(UPSCALED_DIR) / title
@@ -188,7 +225,7 @@ def _collect_images(title: str, chapters: list, exclude_pages: set = None) -> li
                 chosen = orig
             if chosen.exists():
                 page_id = orig.stem.split('_', 1)[-1]
-                arcname = f"Ch{ch_norm.zfill(4)}_{page_id}.jpg"
+                arcname = f"Ch{ch_norm.zfill(4)}_{page_id}.{arc_ext}"
                 result.append((arcname, chosen))
 
     return result
@@ -201,7 +238,13 @@ def build_archive(data, progress_cb=None) -> tuple:
     chapters = data.get("chapters") or []
     volume_name = (data.get("volume_name") or title or "tomo").strip()
     fmt = "cbr" if str(data.get("format", "cbz")).lower() == "cbr" else "cbz"
-    quality = max(85, min(100, int(data.get("quality", DEFAULT_QUALITY))))
+    codec = str(data.get("codec", "jpeg")).lower()
+    if codec not in _CODECS:
+        codec = "jpeg"
+    arc_ext, _ = _CODECS[codec]
+    # WebP stays visually clean at lower quality than JPEG, so its sensible floor is lower.
+    q_floor = 70 if codec == "webp" else 85
+    quality = max(q_floor, min(100, int(data.get("quality", DEFAULT_QUALITY))))
     downscale = 2 if data.get("downscale_half") else 1
     cover_path = (data.get("cover_path") or "").strip()
     cover_b64 = (data.get("cover_data") or "").strip()
@@ -212,7 +255,7 @@ def build_archive(data, progress_cb=None) -> tuple:
     if not chapters:
         raise ValueError("select at least one chapter")
 
-    images = _collect_images(title, chapters, exclude_pages)
+    images = _collect_images(title, chapters, exclude_pages, arc_ext)
     if not images:
         raise ValueError("No images found for selected chapters")
 
@@ -244,7 +287,7 @@ def build_archive(data, progress_cb=None) -> tuple:
             total_images = len(images)
             for done, (arcname, img_path) in enumerate(images, 1):
                 try:
-                    zf.writestr(arcname, _encode_jpeg(img_path, quality, downscale))
+                    zf.writestr(arcname, _encode_image(img_path, quality, downscale, codec))
                 except Exception:
                     zf.write(str(img_path), arcname)
                 if progress_cb:
@@ -275,7 +318,10 @@ def preview_cbz():
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip()
     chapters = data.get("chapters") or []
-    quality = max(85, min(100, int(data.get("quality", DEFAULT_QUALITY))))
+    codec = str(data.get("codec", "jpeg")).lower()
+    if codec not in _CODECS:
+        codec = "jpeg"
+    quality = max(70 if codec == "webp" else 85, min(100, int(data.get("quality", DEFAULT_QUALITY))))
     exclude_pages = set(data.get("exclude_pages") or [])
 
     if not title or not chapters:
@@ -288,6 +334,9 @@ def preview_cbz():
     original_count = len(images) - upscaled_count
 
     factor = _quality_size_factor(quality)
+    # WebP runs ~20% smaller than JPEG at a matched perceived quality (more on text-heavy pages).
+    if codec == "webp":
+        factor *= 0.80
     est_bytes = int(raw_bytes * factor)
 
     return jsonify({
@@ -322,33 +371,56 @@ def get_color_pages():
             files.extend(sorted(manga_root.glob(f"{prefix}*.{ext}")))
         files.sort(key=lambda p: p.name)
 
+        # Caché por capítulo: la detección de color es determinista para unos archivos dados.
+        # La firma (nombre+tamaño+mtime) va en la CLAVE, así que reescribir páginas (traducción/
+        # upscale) cambia la firma → recalcula solo ese capítulo; si no, se reusa al instante.
+        sig = "|".join(f"{p.name}:{s.st_size}:{int(s.st_mtime)}"
+                       for p in files for s in (p.stat(),))
+        ckey = f"{title}|{ch_norm}|{sig}"
+        cached = cache_get("color", ckey, _COLOR_TTL)
+        if cached is not None:
+            color_pages.extend(cached)
+            continue
+
+        ch_pages = []
         for img_path in files:
             try:
                 img = Image.open(img_path)
                 if _is_color_image(img):
-                    url = f"/uploads/{quote(title, safe='')}/{img_path.name}"
-                    color_pages.append({
+                    ch_pages.append({
                         "chapter": ch_norm,
                         "filename": img_path.name,
                         "path": str(img_path),
-                        "url": url,
+                        "url": f"/uploads/{quote(title, safe='')}/{img_path.name}",
                         "label": f"Cap. {ch_norm} · {img_path.name}",
                     })
             except Exception:
                 pass
+        cache_set("color", ckey, ch_pages, ttl=_COLOR_TTL, max_entries=400)
+        color_pages.extend(ch_pages)
 
     return jsonify(color_pages)
 
 
 # ── Async export endpoints ────────────────────────────────────────────────────
 
+class _Cancelled(Exception):
+    pass
+
+
 def _run_export(task_id: str, data: dict):
     tmp_path = None
     with _export_semaphore:
+        if task_id in _cancel_flags:
+            _cancel_flags.discard(task_id)
+            _set_export(task_id, {'status': 'cancelled'})
+            return
         _set_export(task_id, {'status': 'running'})
         try:
             def on_progress(done, total):
                 _set_export(task_id, {'progress': done, 'total': total})
+                if task_id in _cancel_flags:
+                    raise _Cancelled()
 
             tmp_path, filename = build_archive(data, progress_cb=on_progress)
             _set_export(task_id, {
@@ -357,6 +429,14 @@ def _run_export(task_id: str, data: dict):
                 'filename': filename,
                 'progress': _export_tasks[task_id].get('total', 0),
             })
+        except _Cancelled:
+            _cancel_flags.discard(task_id)
+            if tmp_path:
+                try:
+                    Path(tmp_path).unlink(missing_ok=True)
+                except Exception:
+                    pass
+            _set_export(task_id, {'status': 'cancelled'})
         except Exception as e:
             if tmp_path:
                 try:
@@ -424,6 +504,19 @@ def export_file(task_id):
     # Mark consumed so it gets cleaned up on next request
     _set_export(task_id, {'status': 'downloaded'})
     return resp
+
+
+@export_bp.route("/cancel/<task_id>", methods=["POST"])
+def export_cancel(task_id):
+    """Request cancellation of a running/queued export."""
+    task = _export_tasks.get(task_id)
+    if not task:
+        return jsonify({'error': 'not found'}), 404
+    status = task.get('status')
+    if status in ('complete', 'error', 'cancelled'):
+        return jsonify({'ok': True, 'status': status})
+    _cancel_flags.add(task_id)
+    return jsonify({'ok': True, 'status': 'cancelling'})
 
 
 @export_bp.route("/task/<task_id>", methods=["DELETE"])
