@@ -124,8 +124,8 @@ def webdav_status():
         "export_dir": str(export_dir),
         "server_ip": lan_ip,
         "wsl_ip": wsl_ip,
-        "library_url_local": "http://localhost:5100/library",
-        "library_url_phone": f"http://{lan_ip}:5100/library",
+        "library_url_local": "http://localhost:5101/library",
+        "library_url_phone": f"http://{lan_ip}:5101/library",
         "folders": items["folders"],
         "files": items["files"],
     })

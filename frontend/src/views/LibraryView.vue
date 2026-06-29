@@ -6,6 +6,7 @@ import { useMangaStore } from '@/stores/manga'
 import { MANGA_STATUS, MANGA_STATUS_ORDER } from '@/lib/manga'
 import MangaCard from '@/components/manga/MangaCard.vue'
 import HistoryPanel from '@/components/manga/HistoryPanel.vue'
+import { imgProxy } from '@/lib/img'
 import Spinner from '@/components/ui/Spinner.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -31,6 +32,15 @@ const statusCounts = computed(() => {
   const c = { all: items.value.length }
   for (const k of MANGA_STATUS_ORDER) c[k] = items.value.filter(m => m.status === k).length
   return c
+})
+
+// "Continuar leyendo": series con progreso reciente, cruzadas con la biblioteca (cover/nombre).
+const continueItems = computed(() => {
+  const byId = new Map(items.value.map(m => [m.id, m]))
+  return manga.recentlyRead(10)
+    .map(r => { const m = byId.get(r.title); return m ? { ...m, _resume: r } : null })
+    .filter(Boolean)
+    .slice(0, 8)
 })
 
 const filtered = computed(() => {
@@ -191,6 +201,24 @@ watch(() => manga.libraryDirty, () => load())
       </div>
     </div>
 
+    <!-- Continuar leyendo -->
+    <section v-if="!loading && continueItems.length" class="cont">
+      <h2 class="cont__title"><Icon name="spark" :size="15" /> Continuar leyendo</h2>
+      <div class="cont__rail">
+        <button v-for="m in continueItems" :key="m.id" class="contcard" @click="manga.resumeManga(m)"
+                :title="`Reanudar ${m.name} · Cap. ${m._resume.lastChapter}`">
+          <div class="contcard__cov">
+            <img v-if="m.cover" :src="imgProxy(m.cover)" loading="lazy" alt="" />
+            <div v-else class="contcard__ph"><Icon name="library" :size="20" /></div>
+            <span class="contcard__play"><Icon name="spark" :size="18" /></span>
+            <span v-if="m._resume.pct" class="contcard__bar"><span :style="{ width: m._resume.pct + '%' }" /></span>
+          </div>
+          <span class="contcard__name">{{ m.name }}</span>
+          <span class="contcard__ch">Cap. {{ m._resume.lastChapter }}<template v-if="m._resume.pct"> · {{ m._resume.pct }}%</template></span>
+        </button>
+      </div>
+    </section>
+
     <!-- Grid -->
     <div v-if="loading" class="grid">
       <div v-for="n in 12" :key="n" class="skeleton" />
@@ -217,6 +245,22 @@ watch(() => manga.libraryDirty, () => load())
 
 <style scoped>
 .view { padding: var(--s-4) var(--s-6) var(--s-8); max-width: var(--content-max); margin: 0 auto; }
+
+/* ── Continuar leyendo ────────────────────────────────────────────────── */
+.cont { margin: var(--s-2) 0 var(--s-6); }
+.cont__title { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-md); color: var(--azure-bright); margin-bottom: var(--s-3); }
+.cont__rail { display: flex; gap: var(--s-4); overflow-x: auto; padding-bottom: var(--s-2); scroll-snap-type: x proximity; }
+.contcard { flex: 0 0 8.5rem; scroll-snap-align: start; display: flex; flex-direction: column; gap: 4px; text-align: left; }
+.contcard__cov { position: relative; aspect-ratio: 2/3; border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
+.contcard__cov img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform var(--t-fast); }
+.contcard:hover .contcard__cov img { transform: scale(1.04); }
+.contcard__ph { width: 100%; height: 100%; display: grid; place-items: center; color: var(--ink-faint); }
+.contcard__play { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.35); color: #fff; opacity: 0; transition: opacity var(--t-fast); }
+.contcard:hover .contcard__play { opacity: 1; }
+.contcard__bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.4); }
+.contcard__bar span { display: block; height: 100%; background: var(--azure); box-shadow: 0 0 6px var(--azure-glow); }
+.contcard__name { font-size: var(--fs-xs); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.contcard__ch { font-size: var(--fs-2xs); color: var(--ink-faint); font-variant-numeric: tabular-nums; }
 
 /* ── Hero ─────────────────────────────────────────────────────────────── */
 .hero {

@@ -10,6 +10,7 @@ import queue
 import json
 import os
 import shutil
+import time
 import numpy as np
 from decimal import Decimal, InvalidOperation
 from concurrent.futures import ThreadPoolExecutor
@@ -478,7 +479,11 @@ def set_upscale_status(task_id, status):
         except (TypeError, ValueError, ZeroDivisionError):
             pass
     payload.setdefault('task_id', task_id)
-    old_status = upscale_status.get(task_id, {}).get('status')
+    old = upscale_status.get(task_id, {})
+    old_status = old.get('status')
+    # Stamp completion time once, on entering a terminal state — feeds the Activity history.
+    if payload.get('status') in ('done', 'complete', 'error', 'cancelled', 'interrupted'):
+        payload.setdefault('ended_at', old.get('ended_at') or time.time())
     upscale_status[task_id] = payload
     if payload.get('status') != old_status:
         _persist_upscale_status()

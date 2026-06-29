@@ -8,12 +8,34 @@ from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
 import json
-import requests as _http
+from api.resilient_http import http as _http  # retry + backoff + per-host rate limiting
 import threading
 
-from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter
+from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter, cache_get, cache_set
 
 _COVER_CACHE_FILE = Path(MANGA_DIR) / '.cover_cache.json'
+
+# Portadas: lado largo máximo. Se muestran a ~225-340px en las tarjetas/rail; 1000px da
+# margen retina. Sin esto, elegir una PÁGINA HD como portada (p.ej. arte local 3024x4299,
+# 5.7MB) guardaba ese archivo tal cual -> carga lentísima y la tarjeta se veía gigante.
+MAX_COVER_DIM = 1000
+
+
+def _normalize_cover_bytes(raw: bytes):
+    """Decodifica, reescala si el lado largo excede MAX_COVER_DIM y recodifica a JPEG q90.
+    Devuelve bytes JPEG, o None si no se puede decodificar (el caller cae a los bytes crudos)."""
+    try:
+        from io import BytesIO
+        from PIL import Image
+        im = Image.open(BytesIO(raw)); im.load()
+        w, h = im.size
+        if max(w, h) > MAX_COVER_DIM:
+            s = MAX_COVER_DIM / float(max(w, h))
+            im = im.resize((max(1, round(w * s)), max(1, round(h * s))), Image.LANCZOS)
+        out = BytesIO(); im.convert('RGB').save(out, format='JPEG', quality=90)
+        return out.getvalue()
+    except Exception:
+        return None
 
 
 def _load_cover_cache() -> dict:
@@ -57,8 +79,8 @@ def get_library():
 
     folders = []
     for f in Path(MANGA_DIR).iterdir():
-        if not f.is_dir():
-            continue
+        if not f.is_dir() or f.name.startswith('.'):
+            continue   # salta carpetas internas: .cache, .import_staging, etc.
 
         images = list(f.glob('*.png')) + list(f.glob('*.jpg')) + list(f.glob('*.webp'))
         upscaled = list(Path(UPSCALED_DIR).joinpath(f.name).glob('*.jpg'))
@@ -135,8 +157,8 @@ def cache_cover():
 @library_bp.route('/search-covers')
 def search_covers():
     """Search MangaDex for covers of library manga"""
-    import requests as http_requests
-    
+    from api.resilient_http import http as http_requests
+
     results = {}
     for folder in Path(MANGA_DIR).iterdir():
         if not folder.is_dir():
@@ -412,8 +434,9 @@ def edit_metadata(title):
     if cover_b64:
         import base64 as _b64
         raw = cover_b64.split(',')[-1]  # strip "data:image/...;base64," prefix
+        data = _b64.b64decode(raw)
         _clear_covers()
-        (folder / 'cover.jpg').write_bytes(_b64.b64decode(raw))
+        (folder / 'cover.jpg').write_bytes(_normalize_cover_bytes(data) or data)
     elif cover_url and cover_url.startswith('http'):
         try:
             # NO mandar Referer: el CDN de MangaDex (uploads.mangadex.org) devuelve un
@@ -422,9 +445,13 @@ def edit_metadata(title):
             r = _http.get(cover_url, timeout=15)
             if r.status_code == 200:
                 ct = r.headers.get('content-type', '')
-                ext = 'webp' if 'webp' in ct else 'png' if 'png' in ct else 'jpg'
+                norm = _normalize_cover_bytes(r.content)
                 _clear_covers()
-                (folder / f'cover.{ext}').write_bytes(r.content)
+                if norm is not None:
+                    (folder / 'cover.jpg').write_bytes(norm)   # reescalado -> siempre JPEG
+                else:
+                    ext = 'webp' if 'webp' in ct else 'png' if 'png' in ct else 'jpg'
+                    (folder / f'cover.{ext}').write_bytes(r.content)
             else:
                 return jsonify({'error': f'no se pudo descargar la portada ({r.status_code})'}), 502
         except Exception as e:
@@ -451,11 +478,24 @@ def cover_options():
     muestra el grid y al elegir una se aplica vía PUT /meta (cover_url). Params: title, mdId?."""
     title = (request.args.get('title') or '').strip()
     md_id = (request.args.get('mdId') or '').strip()
-    out = {'current': None, 'anilist': [], 'mangadex': []}
+    refresh = request.args.get('refresh') in ('1', 'true')
 
+    # La lista de candidatas (AniList + MangaDex) se cachea en DISCO 7 días: salvo "refrescar",
+    # reabrir el selector es instantáneo y no repega a las APIs. La portada ACTUAL se calcula
+    # siempre fresca (puede haber cambiado al aplicar otra).
+    ck = f"{title}|{md_id}"
+    cached = None if refresh else cache_get('cover_options', ck, 604800)
+
+    out = {'current': None, 'anilist': [], 'mangadex': []}
     folder = Path(MANGA_DIR) / title
     if folder.is_dir() and any((folder / f'cover.{e}').exists() for e in ('jpg', 'png', 'webp')):
         out['current'] = f"/api/library/cover/{quote(title, safe='')}"
+
+    if cached is not None:
+        out['anilist'] = cached.get('anilist', [])
+        out['mangadex'] = cached.get('mangadex', [])
+        out['cached'] = True
+        return jsonify(out)
 
     # AniList: una portada oficial en alta resolución (extraLarge)
     try:
@@ -473,9 +513,15 @@ def cover_options():
     try:
         mid = md_id
         if not mid:
-            rs = _http.get('https://api.mangadex.org/manga', params={'title': title, 'limit': 1}, timeout=10)
-            data = rs.json().get('data', []) if rs.ok else []
-            mid = data[0]['id'] if data else ''
+            # Auto-resuelve por VARIANTES de nombre (sinónimos AniList), no sólo por el título
+            # principal — así una carpeta nombrada en romaji encuentra su entrada aunque MangaDex
+            # la indexe en inglés (y viceversa). Misma ruta compartida que el Tomo Builder.
+            try:
+                from api.mangadex import resolve_manga_by_title
+                m = resolve_manga_by_title(title)
+                mid = m['id'] if m else ''
+            except Exception:
+                mid = ''
         if mid:
             offset = 0
             while True:
@@ -501,6 +547,10 @@ def cover_options():
     except Exception:
         pass
 
+    # cachea en disco solo si encontramos algo (no cachear fallos transitorios), 7 días
+    if out['anilist'] or out['mangadex']:
+        cache_set('cover_options', ck, {'anilist': out['anilist'], 'mangadex': out['mangadex']},
+                  ttl=604800, max_entries=300)
     return jsonify(out)
 
 
@@ -578,8 +628,20 @@ def serve_local_cover(title):
     for ext in ('jpg', 'png', 'webp'):
         p = folder / f'cover.{ext}'
         if p.exists():
+            data = p.read_bytes()
+            # Normaliza UNA vez en disco las portadas heredadas demasiado grandes (una página
+            # HD elegida como portada): reescala y reescribe como cover.jpg para que las
+            # siguientes lecturas sean rápidas y la tarjeta no se vea gigante.
+            if len(data) > 1_200_000:
+                norm = _normalize_cover_bytes(data)
+                if norm is not None and len(norm) < len(data):
+                    for e in ('jpg', 'png', 'webp'):
+                        (folder / f'cover.{e}').unlink(missing_ok=True)
+                    (folder / 'cover.jpg').write_bytes(norm)
+                    return Response(norm, mimetype='image/jpeg',
+                                    headers={'Cache-Control': 'public, max-age=86400'})
             mime = {'jpg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp'}[ext]
-            return Response(p.read_bytes(), mimetype=mime,
+            return Response(data, mimetype=mime,
                             headers={'Cache-Control': 'public, max-age=86400'})
     return 'not found', 404
 

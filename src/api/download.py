@@ -8,7 +8,7 @@ from pathlib import Path
 import json
 import time
 import threading
-import requests as http_requests
+from api.resilient_http import http as http_requests  # retry + backoff + per-host rate limiting
 import subprocess
 import re
 from decimal import Decimal, InvalidOperation
@@ -58,22 +58,13 @@ _dl_semaphore = threading.Semaphore(4)  # max 4 concurrent chapter downloads
 
 
 def _fetch_with_retry(url, retries=3, timeout=30):
-    """GET with exponential backoff on 429 / network errors."""
-    delay = 1.5
-    for attempt in range(retries):
-        try:
-            r = http_requests.get(url, timeout=timeout)
-            if r.status_code == 200:
-                return r
-            if r.status_code == 429:
-                time.sleep(delay * (2 ** attempt))
-                continue
-            # Other non-200: don't retry
-            return r
-        except Exception:
-            if attempt < retries - 1:
-                time.sleep(delay * (2 ** attempt))
-    return None
+    """GET via the shared resilient client (retry + backoff on 429/5xx/network,
+    honors Retry-After). Returns the Response, or None if it ultimately failed —
+    callers rely on the None-on-failure contract (`if resp:`)."""
+    try:
+        return http_requests.get(url, timeout=timeout, retries=retries)
+    except Exception:
+        return None
 
 
 def _canonical_title(value):
@@ -164,10 +155,17 @@ def _find_chapter_id_with_chapter_endpoint(manga_id, chapter_norm):
             continue
     return None
 
+_TERMINAL_DL = ('complete', 'done', 'error', 'cancelled', 'interrupted')
+
 def set_download_status(task_id, status):
     payload = dict(status)
     payload.setdefault('task_id', task_id)
-    old_status = download_status.get(task_id, {}).get('status')
+    old = download_status.get(task_id, {})
+    old_status = old.get('status')
+    # Stamp completion time once, on entering a terminal state — feeds the Activity history
+    # (ordered by recency). Preserve an existing stamp so re-writes don't bump it.
+    if payload.get('status') in _TERMINAL_DL:
+        payload.setdefault('ended_at', old.get('ended_at') or time.time())
     download_status[task_id] = payload
     if payload.get('status') != old_status:
         _persist_download_status()
@@ -436,13 +434,17 @@ def delete_chapter():
 
 @download_bp.route('/delete_manga', methods=['DELETE'])
 def delete_manga():
-    """Delete a manga and all its chapters"""
-    data = request.get_json()
+    """Delete a manga and all its chapters. Borra la carpeta (si existe) Y purga la entrada
+    de local_library.json — por id (trackedId) o por título. Así también se pueden eliminar
+    mangas 'solo seguidos' (importados por JSON, sin carpeta en disco), que antes daban 404
+    y reaparecían."""
+    data = request.get_json() or {}
     title = data.get('title')
-    
+    track_id = data.get('trackedId') or data.get('id')
+
     if not title:
         return jsonify({'error': 'title required'}), 400
-    
+
     try:
         import shutil
         folder = Path(MANGA_DIR) / title
@@ -456,8 +458,24 @@ def delete_manga():
             shutil.rmtree(upscaled_folder)
             deleted += 1
 
-        if deleted > 0:
-            return jsonify({'status': 'ok', 'deleted': deleted})
+        # Auto-sana: quita la entrada seguida (por id exacto o por título insensible a mayúsculas)
+        purged = 0
+        try:
+            from api.mangadex import load_local_library, save_local_library
+            lib = load_local_library()
+            tnorm = (title or '').strip().lower()
+            new_lib = [m for m in lib if not (
+                (track_id and m.get('id') == track_id) or
+                ((m.get('title') or '').strip().lower() == tnorm)
+            )]
+            purged = len(lib) - len(new_lib)
+            if purged:
+                save_local_library(new_lib)
+        except Exception:
+            pass
+
+        if deleted or purged:
+            return jsonify({'status': 'ok', 'deleted': deleted, 'purged': purged})
         return jsonify({'error': 'Manga no encontrado'}), 404
 
     except Exception as e:
