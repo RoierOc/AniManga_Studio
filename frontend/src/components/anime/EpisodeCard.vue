@@ -52,8 +52,8 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
         <span :style="{ width: Math.min(100, (ep.resume_pos / ep.duration) * 100) + '%' }" />
       </div>
 
-      <!-- downloading overlay -->
-      <div v-if="downloading" class="ep__dlbar"><span :style="{ width: dlPct + '%' }" /><em>{{ Math.round(dlPct) }}%</em></div>
+      <!-- downloading overlay — barra fina como la de progreso; el % va en el estado -->
+      <div v-if="downloading" class="ep__dlbar"><span :style="{ width: dlPct + '%' }" /></div>
 
       <!-- watched scrim -->
       <div v-if="ep.watched" class="ep__seen-veil" />
@@ -105,7 +105,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
           <Icon name="close" :size="13" />
         </button>
       </div>
-      <div v-else-if="downloading" class="ep__status">↓ Descargando</div>
+      <div v-else-if="downloading" class="ep__status">↓ Descargando {{ Math.round(dlPct) }}%</div>
       <div v-else class="ep__actions">
         <button class="ep__searchbtn" :title="'Buscar torrent para Ep. ' + ep.num" @click.stop="store.openTorrents(anime, ep.num)">
           <Icon name="search" :size="13" /> Buscar
@@ -159,9 +159,9 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 
 .ep__resumebar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 3px; background: rgba(0,0,0,.4); }
 .ep__resumebar span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--azure-bright); box-shadow: 0 0 8px var(--azure-glow); transition: width .6s var(--ease-silk); }
-.ep__dlbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 22px; background: rgba(7,10,18,.7); display: flex; align-items: center; }
-.ep__dlbar span { position: absolute; left: 0; bottom: 0; top: 0; background: linear-gradient(90deg, var(--cyan), var(--azure)); opacity: .35; }
-.ep__dlbar em { position: relative; margin-left: auto; margin-right: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-style: normal; color: var(--cyan); }
+/* Barra de descarga: fina (3px) e igual a la de progreso/resume; el % se muestra en el estado. */
+.ep__dlbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 3px; background: rgba(7,10,18,.5); }
+.ep__dlbar span { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, var(--cyan), var(--azure)); box-shadow: 0 0 8px var(--azure-glow); transition: width .5s var(--ease-silk); }
 
 .ep__play { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; color: #fff; opacity: 0; transition: opacity var(--t-base); }
 .ep__play :deep(svg) { filter: drop-shadow(0 2px 8px rgba(0,0,0,.6)); transform: scale(.85); transition: transform var(--t-base) var(--ease-snap); }

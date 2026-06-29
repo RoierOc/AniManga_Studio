@@ -31,13 +31,13 @@ const logoUrl = computed(() => c.value?.anime?.logo || '')
 const hasLogo = computed(() => !!logoUrl.value && !logoFailed.value)
 watch(() => c.value?.anime?.id, () => { bgIdx.value = 0; logoFailed.value = false })
 
-const EYEBROW = { new: 'NUEVO EPISODIO', downloaded: 'LISTO PARA VER', continue: 'SIGUE VIENDO', seasonal: 'TEMPORADA' }
+const EYEBROW = { new: 'NUEVO EPISODIO', downloaded: 'LISTO PARA VER', continue: 'SIGUE VIENDO', seasonal: 'TEMPORADA', recommendation: 'RECOMENDADO' }
 const eyebrow = computed(() => EYEBROW[c.value?.kind] || '')
 const genres = computed(() => (Array.isArray(c.value?.anime?.genres) ? c.value.anime.genres.slice(0, 4) : []))
 
 const epLabel = computed(() => {
   if (!c.value) return ''
-  if (c.value.kind === 'seasonal') {
+  if (c.value.kind === 'seasonal' || c.value.kind === 'recommendation') {
     const na = store.nextAiring[c.value.anime.al_id || c.value.anime.id]
     return na ? `Ep ${na.episode} · Próximamente` : 'Próximamente'
   }
@@ -78,27 +78,40 @@ watch([items, active], () => {
   if (active.value >= items.value.length) active.value = 0   // clamp without jumping to 0 on silent reloads
   preload(active.value + 1); preload(active.value - 1)
 }, { immediate: true })
+
+// Eagerly enrich recommendation items so the hero shows TMDB images/logo
+watch(items, (list) => {
+  list.forEach(it => {
+    if (it.kind === 'recommendation' && it.anime?.al_id) store.enrichPreview(it.anime.al_id)
+  })
+}, { immediate: true })
 watch(() => items.value.length, () => startTimer(), { immediate: true })
 onUnmounted(() => clearInterval(timer))
 
 // Can we play right now? (a downloaded file exists). 'new' without a file → fetch it.
-const canPlay = computed(() => c.value?.kind !== 'seasonal' && c.value?.hasFile)
+const canPlay = computed(() => !['seasonal', 'recommendation'].includes(c.value?.kind) && c.value?.hasFile)
 const primaryLabel = computed(() => {
   if (!c.value) return ''
   if (canPlay.value) return progress.value ? 'Reanudar' : 'Ver episodio'
+  if (c.value.kind === 'recommendation') return 'Información'
   if (c.value.kind === 'new') return `Buscar Ep ${c.value.ep?.num}`
   return 'Buscar torrents'
 })
-const primaryIcon = computed(() => (canPlay.value ? 'play' : 'search'))
+const primaryIcon = computed(() => {
+  if (canPlay.value) return 'play'
+  if (c.value?.kind === 'recommendation') return 'spark'
+  return 'search'
+})
 
 function primary() {
   if (!c.value) return
   if (canPlay.value) store.play(c.value.anime, c.value.ep)
+  else if (c.value.kind === 'recommendation') store.openPreview(c.value.anime)
   else store.openTorrents(c.value.anime, c.value.kind === 'new' ? c.value.ep?.num : null)
 }
 function secondary() {
   if (!c.value) return
-  if (c.value.kind === 'seasonal') store.addToLibrary(c.value.anime)
+  if (c.value.kind === 'seasonal' || c.value.kind === 'recommendation') store.addToLibrary(c.value.anime)
   else store.openDetail(c.value.anime)
 }
 </script>
@@ -147,7 +160,7 @@ function secondary() {
             </button>
             <button class="hbtn" @click="secondary">
               <Icon name="spark" :size="14" />
-              {{ c.kind === 'seasonal' ? '+ Mi Anime' : 'Información' }}
+              {{ ['seasonal', 'recommendation'].includes(c.kind) ? '+ Mi Anime' : 'Información' }}
             </button>
           </div>
         </div>

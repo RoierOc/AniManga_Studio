@@ -20,6 +20,7 @@ from pathlib import Path as _Path
 from urllib.parse import urlencode, quote
 
 import requests as _http
+from api.resilient_http import http as _rhttp  # retry + backoff + per-host rate limiting (AniList/Jikan)
 from flask import Blueprint, jsonify, request, send_file
 
 from api.imgproxy import warm as _warm_img
@@ -121,18 +122,12 @@ def _norm_title(s):
 
 
 def _anilist_post(query, variables, tries=4):
-    """POST to AniList honoring its rate limit (HTTP 429 + Retry-After). AniList's
-    degraded limit is ~30 req/min, so a single backfill can hit it; back off and retry
+    """POST to AniList. The shared resilient client honors AniList's rate limit
+    (HTTP 429 + Retry-After) and proactively spaces requests — AniList's degraded
+    limit is ~30 req/min, so a single backfill can hit it; back off and retry
     instead of silently dropping the entry."""
-    r = None
-    for _ in range(tries):
-        r = _http.post(_ANILIST, json={'query': query, 'variables': variables}, timeout=10)
-        if r.status_code == 429:
-            wait = r.headers.get('Retry-After')
-            time.sleep(min(int(wait) if (wait and wait.isdigit()) else 8, 60))
-            continue
-        return r
-    return r
+    return _rhttp.post(_ANILIST, json={'query': query, 'variables': variables},
+                       timeout=10, retries=tries)
 
 
 def _clean_synopsis(text, limit=320):
@@ -390,8 +385,12 @@ _AIRING_TTL = 1800  # 30 min — airing data only changes when an episode actual
 
 def _fetch_airing(al_ids):
     """For the given AniList ids return {al_id: {status, next_episode, next_airing_at,
-    last_episode, last_aired_at}} via one batched, paginated query. The last aired
-    episode comes from the real airing schedule (exact time), not an estimate."""
+    last_episode, last_aired_at}} via two batched queries.
+
+    Pass 1: nextAiringEpisode to know which episode (N) is next.
+    Pass 2: airingSchedules for episode N-1 per show to get the EXACT time it aired.
+    The estimate (next_at - 604800) was wrong for bi-weekly/monthly shows — it put
+    last_aired_at in the future, causing the hero banner to show "hace un momento"."""
     now = time.time()
     if now - _airing_cache['ts'] < _AIRING_TTL and _airing_cache['data']:
         return _airing_cache['data']
@@ -399,10 +398,9 @@ def _fetch_airing(al_ids):
     out = {}
     if not ids:
         return out
-    # Only currently-airing anime expose nextAiringEpisode. The latest aired episode
-    # is (next - 1), which aired ~one interval (a week) before the next one — a good
-    # estimate for "aired recently" without the schedule connection (no sort there).
-    q = '''query($ids:[Int],$p:Int){Page(page:$p,perPage:50){
+
+    # Pass 1 — next airing episode per show
+    q1 = '''query($ids:[Int],$p:Int){Page(page:$p,perPage:50){
         pageInfo{hasNextPage}
         media(id_in:$ids,type:ANIME){
             id status
@@ -410,8 +408,10 @@ def _fetch_airing(al_ids):
         }
     }}'''
     page = 1
+    # next_ep_map: media_id -> next_ep (for shows with a known upcoming episode)
+    next_ep_map = {}
     while True:
-        r = _anilist_post(q, {'ids': ids, 'p': page})
+        r = _anilist_post(q1, {'ids': ids, 'p': page})
         if r is None:
             break
         pg = (r.json().get('data') or {}).get('Page') or {}
@@ -420,18 +420,52 @@ def _fetch_airing(al_ids):
             next_ep = nae.get('episode')
             next_at = nae.get('airingAt')
             last_ep = (next_ep - 1) if (next_ep and next_ep > 1) else None
-            last_at = (next_at - 604800) if (next_at and last_ep) else None
             out[m['id']] = {
                 'status':         m.get('status'),
                 'next_episode':   next_ep,
                 'next_airing_at': next_at,
                 'last_episode':   last_ep,
-                'last_aired_at':  last_at,
+                'last_aired_at':  None,  # filled in pass 2
             }
+            if last_ep:
+                next_ep_map[m['id']] = next_ep
         if not (pg.get('pageInfo') or {}).get('hasNextPage'):
             break
         page += 1
         time.sleep(1.0)
+
+    # Pass 2 — get actual airingAt for each show's last episode (episode N-1).
+    # Query the root-level airingSchedules connection filtered by mediaId+episode pairs.
+    # The cross-product filter (mediaId_in × episode_in) may over-select, so we
+    # validate each entry by checking it matches the show's expected last episode.
+    if next_ep_map:
+        want_ids = list(next_ep_map.keys())
+        want_eps = list({ep - 1 for ep in next_ep_map.values() if ep > 1})
+        q2 = '''query($ids:[Int],$eps:[Int]){Page(perPage:50){
+            airingSchedules(mediaId_in:$ids,episode_in:$eps,notYetAired:false){
+                mediaId episode airingAt
+            }
+        }}'''
+        r2 = _anilist_post(q2, {'ids': want_ids, 'eps': want_eps})
+        if r2 is not None:
+            schedules = ((r2.json().get('data') or {}).get('Page') or {}).get('airingSchedules') or []
+            for s in schedules:
+                mid = s.get('mediaId')
+                ep  = s.get('episode')
+                at  = s.get('airingAt')
+                if mid and ep and at and mid in next_ep_map and ep == next_ep_map[mid] - 1:
+                    out[mid]['last_aired_at'] = at
+
+        # Fallback for shows whose schedule entry wasn't returned (AniList data gaps):
+        # estimate as next_at - 604800, but clamp to now so we never put a future
+        # timestamp in last_aired_at (which caused "hace un momento" on bi-weekly shows).
+        for mid, next_ep in next_ep_map.items():
+            if out[mid]['last_aired_at'] is None:
+                next_at = out[mid].get('next_airing_at')
+                if next_at:
+                    estimated = next_at - 604800
+                    out[mid]['last_aired_at'] = min(estimated, now)
+
     if out:
         _airing_cache['data'] = out
         _airing_cache['ts'] = now
@@ -1206,7 +1240,7 @@ _nyaa_http.mount('https://', _http.adapters.HTTPAdapter(pool_connections=4, pool
 
 def _ql(query, variables=None):
     try:
-        r = _http.post(_ANILIST, json={'query': query, 'variables': variables or {}}, timeout=10)
+        r = _rhttp.post(_ANILIST, json={'query': query, 'variables': variables or {}}, timeout=10)
         return r.json().get('data') or {}
     except Exception:
         return {}
@@ -1215,7 +1249,7 @@ def _ql(query, variables=None):
 def _jikan_search(q: str) -> list:
     """Jikan (MAL) search — fallback when AniList is down."""
     try:
-        r = _http.get(f'{_JIKAN}/anime', params={'q': q, 'limit': 20},
+        r = _rhttp.get(f'{_JIKAN}/anime', params={'q': q, 'limit': 20},
                       timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
         r.raise_for_status()
         items = r.json().get('data') or []
@@ -1258,12 +1292,27 @@ def _parse_episode(title: str) -> int:
     """Episode number >0, 0=batch, -1=unknown."""
     if re.search(r'\b(batch|complete|BD ?[Pp]ack|全話|COMPLETE|Pack)\b', title, re.I):
         return 0
-    # Range pattern requires BOTH sides to be 2+ digits to avoid "Part 2 - 01" false positives
+    # "Season N Complete/Pack/Full", "Complete Series/Collection" → batch
+    if re.search(
+        r'\bSeason\s*\d+\s*(?:Complete|Full|Pack)\b'
+        r'|\bComplete\s*(?:Series|Season|Pack|Collection)\b'
+        r'|\bFull\s*Season\b',
+        title, re.I,
+    ):
+        return 0
+    # Numeric range (01-13, 001-026) → batch.  Both sides must be 2+ digits to avoid "Part 2 - 01"
     if re.search(r'(?<!\d)\d{2,3}\s*[-~–]\s*\d{2,3}(?!\d)', title):
+        return 0
+    # Episode range with E prefix: E01-E13, S01E01-E12 → batch
+    if re.search(r'\b[Ee]\d{1,3}\s*[-~–]\s*[Ee]?\d{1,3}\b', title):
         return 0
     # Strip codec identifiers so x264/x265/h264/h265 numbers are never extracted as episodes
     clean = re.sub(r'[xXhH]\.?26[45]', ' ', title)
     clean = re.sub(r'\b(HEVC|AVC1?|xvid|divx)\b', ' ', clean, flags=re.I)
+    # Remove resolution tags (1080p, 720p…) — prevents extracting them as episode numbers
+    clean = re.sub(r'\b(2160|1080|720|480|360)[pPiI]?\b', ' ', clean)
+    # Remove 6-8 char hex CRCs in brackets [A1B2C3D4] — never episode numbers
+    clean = re.sub(r'\[[0-9A-Fa-f]{6,8}\]', ' ', clean)
     # SxxExx / SxxOVAxx patterns — extract episode part only
     m = re.search(r'\bS\d{1,2}[Ee](\d{1,3})\b', clean, re.I)
     if m:
@@ -1408,6 +1457,23 @@ def _q(method, path, **kw):
 
 
 # ── AniList anime search ───────────────────────────────────────────────────────
+
+@anime_bp.route('/title_variants')
+def anime_title_variants():
+    """Variantes de nombre (romaji/inglés/nativo/sinónimos vía AniList) de un anime, para que la
+    búsqueda de torrents no dependa sólo del título principal. Params: al_id (opt), title (opt).
+    Comparte la misma maquinaria de alias que la búsqueda de mejor fuente de manga."""
+    from api.anilist import title_variants
+    al_id = (request.args.get('al_id') or '').strip()
+    title = (request.args.get('title') or '').strip()
+    if not al_id and len(title) < 2:
+        return jsonify([])
+    try:
+        out = title_variants(title or None, int(al_id) if al_id.isdigit() else None, 'ANIME')
+    except Exception:
+        out = [title] if title else []
+    return jsonify(out)
+
 
 @anime_bp.route('/search')
 def search_anime():
@@ -2022,7 +2088,7 @@ def anime_library_add():
         try:
             _q = '''query($id:Int){Media(id:$id,type:ANIME){episodes format
                 title{english romaji} coverImage{large}}}'''
-            r = _http.post(_ANILIST, json={'query': _q, 'variables': {'id': int(al_id)}}, timeout=8)
+            r = _rhttp.post(_ANILIST, json={'query': _q, 'variables': {'id': int(al_id)}}, timeout=8)
             m = (r.json().get('data') or {}).get('Media') or {}
             if m.get('episodes'):
                 total_eps = m['episodes']
@@ -2206,7 +2272,7 @@ def _cover_candidates(v: dict) -> list:
 
     if v.get('mal_id'):
         try:
-            r = _http.get(f"{_JIKAN}/anime/{v['mal_id']}", timeout=8).json()
+            r = _rhttp.get(f"{_JIKAN}/anime/{v['mal_id']}", timeout=8).json()
             img = ((r.get('data') or {}).get('images') or {}).get('jpg') or {}
             add(img.get('large_image_url'), 'mal', 'MyAnimeList')
         except Exception:
@@ -2518,7 +2584,7 @@ def anime_scan_suggest():
             id title{romaji english}coverImage{large}}}}'''
 
         def _search(name):
-            r = _http.post(_ANILIST, json={'query': q, 'variables': {'s': name}}, timeout=8)
+            r = _rhttp.post(_ANILIST, json={'query': q, 'variables': {'s': name}}, timeout=8)
             return ((r.json().get('data') or {}).get('Page') or {}).get('media') or []
 
         # Search with the RAW folder name first — AniList titles routinely spell
@@ -2646,7 +2712,7 @@ def anime_scan_match():
             title{romaji english native}
             coverImage{large}
         }}'''
-        r = _http.post(_ANILIST, json={'query': q, 'variables': {'id': int(anilist_id)}}, timeout=8)
+        r = _rhttp.post(_ANILIST, json={'query': q, 'variables': {'id': int(anilist_id)}}, timeout=8)
         al_media = (r.json().get('data') or {}).get('Media') or {}
         if al_media:
             t = al_media.get('title') or {}
@@ -2857,8 +2923,8 @@ def anime_seasonal():
             else:
                 jikan_url = f'{_JIKAN}/seasons/{year}/{season.lower()}'
                 jparams = {'limit': 25}
-            r = _http.get(jikan_url, params=jparams, timeout=15,
-                          headers={'User-Agent': 'Mozilla/5.0'})
+            r = _rhttp.get(jikan_url, params=jparams, timeout=15,
+                           headers={'User-Agent': 'Mozilla/5.0'})
             r.raise_for_status()
             jitems = r.json().get('data') or []
             results = []
@@ -3106,7 +3172,7 @@ def anime_episode_info(mal_id, episode):
     if key in _ep_info_cache:
         return jsonify(_ep_info_cache[key])
     try:
-        r = _http.get(
+        r = _rhttp.get(
             f'{_JIKAN}/anime/{mal_id}/episodes/{episode}',
             timeout=8, headers={'User-Agent': 'Mozilla/5.0'},
         )
@@ -3336,6 +3402,40 @@ query ($tag: String) {
 """
 
 
+@anime_bp.route('/enrich/<int:al_id>')
+def anime_enrich_preview(al_id):
+    """AniList extraLarge cover + TMDB backdrop/logo for a non-library anime
+    (hero recommendation). Returns the same quality fields that the backfill
+    produces for library entries so the detail panel looks identical."""
+    data = _anilist_enrich(al_id)
+    if not data:
+        return jsonify({})
+    t          = data.get('title') or {}
+    title_en   = t.get('english') or ''
+    title_rom  = t.get('romaji') or ''
+    year       = data.get('seasonYear')
+    fmt        = data.get('format') or ''
+    cover_xl   = (data.get('coverImage') or {}).get('extraLarge') or ''
+    al_banner  = data.get('bannerImage') or ''
+    synopsis   = _clean_synopsis(data.get('description') or '')
+    total_eps  = data.get('episodes')
+    banner = al_banner
+    logo   = ''
+    if title_en or title_rom:
+        art = _tmdb_art(title_en, title_rom, year, fmt=fmt)
+        if art:
+            banner   = art.get('backdrop') or al_banner
+            logo     = art.get('logo') or ''
+            cover_xl = art.get('poster') or cover_xl
+    return jsonify({
+        'cover_xl':       cover_xl,
+        'banner':         banner,
+        'logo':           logo,
+        'synopsis':       synopsis,
+        'total_episodes': total_eps,
+    })
+
+
 @anime_bp.route('/tags/<int:al_id>')
 def anime_tags(al_id):
     cached = _al_cache_get('tags', al_id)
@@ -3525,7 +3625,7 @@ def anime_resolve_al_id():
         return jsonify({'error': 'mal_id required'}), 400
     _q = 'query($mid:Int){Media(idMal:$mid,type:ANIME){id idMal title{english romaji} coverImage{large} episodes format}}'
     try:
-        resp = _http.post(_ANILIST, json={'query': _q, 'variables': {'mid': mal_id}}, timeout=8)
+        resp = _rhttp.post(_ANILIST, json={'query': _q, 'variables': {'mid': mal_id}}, timeout=8)
         m = (resp.json().get('data') or {}).get('Media') or {}
         if not m:
             return jsonify({'error': 'not found on AniList'}), 404

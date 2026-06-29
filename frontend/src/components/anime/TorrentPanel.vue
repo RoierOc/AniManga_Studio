@@ -10,6 +10,19 @@ import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useAnimeStore()
 const a = computed(() => store.torrentAnime)
+const inLibrary = computed(() => store.isInLibrary(a.value))
+
+// Stepper +/−: navigating to an episode deep-fetches its torrents (debounced so rapid clicks
+// only fire once). Nyaa's RSS window starves early episodes, so each episode needs its own
+// targeted "<title> - 0N" fetch — without it ep2 would show the 1-2 torrents that happened to
+// fall inside the newest-75 window instead of its true count (e.g. 36 for Honzuki ep2).
+let _stepTimer = null
+function stepEp(delta) {
+  const next = Math.max(1, (store.targetEp ?? 1) + delta)
+  store.targetEp = next
+  clearTimeout(_stepTimer)
+  _stepTimer = setTimeout(() => store.fetchEpisodeTorrents(next), 350)
+}
 const expanded = ref(new Set())
 
 // openTorrents() always pushes one history entry, so back consumes it and runs
@@ -26,18 +39,22 @@ const LANGS = computed(() => [
 
 function toggle(ep) {
   const s = new Set(expanded.value)
-  s.has(ep) ? s.delete(ep) : s.add(ep)
+  if (s.has(ep)) s.delete(ep)
+  else { s.add(ep); if (ep > 0) store.fetchEpisodeTorrents(ep) }  // deep-fetch this episode on expand
   expanded.value = s
 }
 const isOpen = (ep) => expanded.value.has(ep)
+const epLoading = (ep) => store.epFetch[ep] === 'loading'
 
 // Seed the expanded state when results change: few groups (e.g. opened from a
 // specific episode) start expanded for convenience, but the user can still collapse
 // them — the toggle is no longer overridden by the template.
 watch(() => store.groupedEpisodes, (groups) => {
-  expanded.value = groups.length && groups.length <= 3
-    ? new Set(groups.map(g => g.episode))
-    : new Set()
+  const few = groups.length && groups.length <= 3
+  expanded.value = few ? new Set(groups.map(g => g.episode)) : new Set()
+  // Auto-expanded episode groups get deep-fetched too, so opening on a specific episode (or a
+  // result set with only a couple of episodes) loads the full torrent list without a manual click.
+  if (few) for (const g of groups) if (g.episode > 0) store.fetchEpisodeTorrents(g.episode)
 }, { immediate: true })
 const epLabel = (n) => n === 0 ? 'Batch / Completo' : n === -1 ? 'Sin clasificar' : `Episodio ${n}`
 const keyOf = (t) => t.info_hash || t.torrent_url
@@ -52,13 +69,26 @@ const keyOf = (t) => t.info_hash || t.torrent_url
     <header class="tp__head">
       <img v-if="a.cover" :src="imgProxy(a.cover)" class="tp__cover" :alt="a.title" />
       <div class="tp__meta">
-        <span class="tp__fmt">{{ animeFormatLabel(a.format) }}</span>
+        <div class="tp__title-row">
+          <span class="tp__fmt">{{ animeFormatLabel(a.format) }}</span>
+          <button v-if="!inLibrary" class="tp__add-lib" @click="store.addToLibrary(a)">
+            <Icon name="plus" :size="13" /> Mi Anime
+          </button>
+          <span v-else class="tp__in-lib"><Icon name="check" :size="13" /> En biblioteca</span>
+        </div>
         <h1 class="tp__title">{{ a.title }}</h1>
         <p v-if="a.title_romaji && a.title_romaji !== a.title" class="tp__romaji">{{ a.title_romaji }}</p>
         <div class="tp__searchbar">
           <input v-model="store.torrentQuery" @keyup.enter="store.searchTorrents()" placeholder="Refinar búsqueda en Nyaa…" />
           <button class="tp__sbtn" @click="store.searchTorrents()"><Icon name="search" :size="14" /> Nyaa</button>
           <button class="tp__sbtn tp__sbtn--alt" @click="store.searchTosho()">Animetosho</button>
+        </div>
+        <div v-if="store.torrentVariants.length > 1" class="tp__alias" title="Alias de AniList que se buscan en Nyaa">
+          <Icon name="search" :size="11" />
+          <span class="tp__alias-lbl">Alias:</span>
+          <button v-for="al in store.torrentVariants" :key="al" class="tp__chip"
+                  :class="{ 'is-on': store.torrentQuery.trim() === al.trim() }"
+                  @click="store.torrentQuery = al; store.searchTorrents()">{{ al }}</button>
         </div>
       </div>
     </header>
@@ -67,9 +97,9 @@ const keyOf = (t) => t.info_hash || t.torrent_url
     <div v-if="store.targetEp !== null" class="tep">
       <span class="tep__label">Registrar como episodio:</span>
       <div class="tep__stepper">
-        <button class="tep__btn" @click="store.targetEp = Math.max(1, store.targetEp - 1)">−</button>
+        <button class="tep__btn" @click="stepEp(-1)">−</button>
         <span class="tep__num">{{ store.targetEp }}</span>
-        <button class="tep__btn" @click="store.targetEp = store.targetEp + 1">+</button>
+        <button class="tep__btn" @click="stepEp(+1)">+</button>
       </div>
       <button class="tep__clear" @click="store.targetEp = null">Ver todos</button>
     </div>
@@ -105,9 +135,14 @@ const keyOf = (t) => t.info_hash || t.torrent_url
         <button class="egrp__head" @click="toggle(g.episode)">
           <Icon name="chevron" :size="14" :style="{ transform: isOpen(g.episode) ? 'rotate(90deg)' : 'none' }" />
           <span class="egrp__label">{{ epLabel(g.episode) }}</span>
+          <Spinner v-if="epLoading(g.episode)" :size="13" />
           <span class="egrp__count">{{ g.torrents.length }}</span>
         </button>
         <div v-show="isOpen(g.episode)" class="egrp__list">
+          <div v-if="!g.torrents.length" class="egrp__empty">
+            <template v-if="epLoading(g.episode)"><Spinner :size="14" /> Buscando torrents…</template>
+            <template v-else>Sin torrents para este episodio.</template>
+          </div>
           <div v-for="t in g.torrents" :key="keyOf(t)" class="tr">
             <div class="tr__info">
               <div class="tr__name">
@@ -147,7 +182,11 @@ const keyOf = (t) => t.info_hash || t.torrent_url
 .tp__head { display: flex; gap: var(--s-5); margin-bottom: var(--s-5); }
 .tp__cover { width: 120px; aspect-ratio: 2/3; object-fit: cover; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
 .tp__meta { flex: 1; min-width: 0; }
+.tp__title-row { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-1); }
 .tp__fmt { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); }
+.tp__add-lib { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: var(--r-pill); background: transparent; border: 1px solid var(--line-2); color: var(--ink-soft); font-size: var(--fs-2xs); font-weight: 500; transition: all var(--t-fast); }
+.tp__add-lib:hover { border-color: var(--azure); color: var(--azure-bright); background: var(--azure-haze); }
+.tp__in-lib { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-2xs); color: var(--jade); }
 .tp__title { font-size: var(--fs-2xl); }
 .tp__romaji { color: var(--ink-faint); font-size: var(--fs-sm); margin-bottom: var(--s-3); }
 .tp__searchbar { display: flex; gap: var(--s-2); margin-top: var(--s-3); flex-wrap: wrap; }
@@ -155,6 +194,11 @@ const keyOf = (t) => t.info_hash || t.torrent_url
 .tp__searchbar input:focus { outline: none; border-color: var(--azure); }
 .tp__sbtn { display: inline-flex; align-items: center; gap: 5px; padding: var(--s-2) var(--s-4); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-size: var(--fs-sm); font-weight: 600; }
 .tp__sbtn--alt { background: var(--surface-2); border: 1px solid var(--line-2); color: var(--ink-soft); }
+.tp__alias { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: var(--s-2); color: var(--ink-faint); }
+.tp__alias-lbl { font-size: var(--fs-2xs); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.tp__chip { padding: 2px 8px; border-radius: var(--r-pill); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink-soft); font-size: var(--fs-2xs); transition: all var(--t-fast); }
+.tp__chip:hover { border-color: var(--azure); color: var(--ink); }
+.tp__chip.is-on { background: var(--azure-haze); border-color: var(--azure); color: var(--azure-bright); font-weight: 600; }
 
 .tp__filters { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; margin-bottom: var(--s-5); padding-bottom: var(--s-4); border-bottom: 1px solid var(--line); }
 .seg { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
@@ -184,6 +228,7 @@ const keyOf = (t) => t.info_hash || t.torrent_url
 .egrp__label { flex: 1; text-align: left; }
 .egrp__count { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); padding: 2px 8px; border-radius: var(--r-pill); background: var(--surface-3); }
 .egrp__list { border-top: 1px solid var(--line); }
+.egrp__empty { display: flex; align-items: center; justify-content: center; gap: var(--s-2); padding: var(--s-4); font-size: var(--fs-xs); color: var(--ink-faint); }
 
 .tr { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--line); }
 .tr:last-child { border-bottom: none; }

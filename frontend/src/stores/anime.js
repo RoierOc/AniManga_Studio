@@ -7,6 +7,7 @@ import { nextUnwatchedEp, isSpanishOrMulti, isEnglishSub } from '@/lib/anime'
 let autoplayTimer = null
 let nowTimer = null
 let sseBound = false
+let dlPoll = null       // interval para refrescar el progreso de descarga de qBittorrent en vivo
 const subPollers = {}   // subKey -> interval handle
 
 export const useAnimeStore = defineStore('anime', {
@@ -16,7 +17,10 @@ export const useAnimeStore = defineStore('anime', {
     // Guard against a stale localStorage value landing on the placeholder fallback.
     sub: ['library', 'search', 'seasonal', 'downloads', 'history'].includes(localStorage.getItem('anime-sub'))
       ? localStorage.getItem('anime-sub') : 'library',   // library | search | seasonal | downloads | history
-    detailId: null,            // open anime detail id
+    detailId: null,            // open anime detail id (library entry)
+    previewAnime: null,        // non-library anime open in detail (recommendations)
+    enrichedPreviews: {},      // al_id → {cover_xl, banner, logo} fetched from /enrich
+    recSeed: Math.floor(Math.random() * 100),  // rotates which 2 recs show — random per session
     libSort: localStorage.getItem('anime-libsort') || 'last_watched',  // recently-watched first by default
     libFilter: 'all',
     libSearch: '',
@@ -87,15 +91,18 @@ export const useAnimeStore = defineStore('anime', {
     torrents: [],
     torrentsLoading: false,
     torrentQuery: '',
+    torrentVariants: [],         // alias/sinónimos (AniList) que se buscan en Nyaa, visibles en el panel (cap 5)
+    torrentAllVariants: [],      // full AniList synonym list (no cap) — used by _buildExtraQueries
     torrentCategory: '1_2',
     flt: { lang: 'all', hideDead: true, quality: '', group: '', ep: 'all' },
     targetEp: null,             // target episode when navigating from detail
+    epFetch: {},                 // per-episode deep-fetch state: epNum → 'loading' | 'done'
     addingHashes: [],            // keys currently being added to qbt
     addedHashes: [],             // keys just added (transient ✓)
   }),
 
   getters: {
-    detail: (s) => s.library.find(a => a.id === s.detailId) || null,
+    detail: (s) => s.previewAnime || s.library.find(a => a.id === s.detailId) || null,
 
     // "Continue watching": in-progress or next-unwatched episode per recently-watched anime.
     // Excludes fully-watched series (where every available episode is watched).
@@ -119,23 +126,19 @@ export const useAnimeStore = defineStore('anime', {
         .slice(0, 12)
     },
 
-    // Hero banner content, in priority order:
-    //   1) library anime currently airing whose newest episode JUST aired (carousel,
-    //      most recently aired first) — "Capítulo nuevo N de anime X"
-    //   2) library anime with a freshly downloaded unwatched episode
-    //   3) "continue watching" (most recently watched)
-    //   4) seasonal popular when the library is empty
     heroItems() {
       const now = Date.now() / 1000
-      const RECENT = 12 * 86400   // an episode aired within ~12 days counts as "new"
+      const RECENT = 12 * 86400
 
-      // 1 — newly aired episodes of library (seasonal/airing) anime
+      // Fast lookup set to exclude library titles from recommendations
+      const libIds = new Set(this.library.flatMap(a => [a.al_id, a.mal_id].filter(Boolean)))
+
+      // 1 — newly aired library episodes, interspersed with high-scored recommendations
       const aired = []
       for (const a of this.library) {
         const inf = this.airing[a.al_id]
         if (!inf || !inf.last_episode || !inf.last_aired_at) continue
         if (now - inf.last_aired_at > RECENT) continue
-        // play it directly if that episode is already downloaded & unwatched
         const dl = (a.episodes || []).find(e => e.num === inf.last_episode
           && (e.in_local || (e.in_qbt && e.progress >= 100)) && !e.watched)
         aired.push({
@@ -143,9 +146,40 @@ export const useAnimeStore = defineStore('anime', {
           ts: inf.last_aired_at, aired_at: inf.last_aired_at, hasFile: !!dl,
         })
       }
-      if (aired.length) return aired.sort((x, y) => y.ts - x.ts).slice(0, 8)
+      if (aired.length) {
+        aired.sort((x, y) => y.ts - x.ts)
+        // Top-6 high-scored seasonal series not in library (score ≥ 70/100).
+        // recSeed (random per session) picks 2 well-separated entries so the hero
+        // shows different recommendations every time the app opens.
+        const pool = this.seasonal
+          .filter(a => !libIds.has(a.al_id) && !libIds.has(a.mal_id) && (a.score || 0) >= 70)
+          .sort((x, y) => (y.score || 0) - (x.score || 0))
+          .slice(0, 6)
+        const n = pool.length
+        const i0 = n ? this.recSeed % n : 0
+        const i1 = n > 2 ? (i0 + Math.ceil(n / 2)) % n : (i0 + 1) % Math.max(n, 1)
+        const picks = n <= 2 ? pool : [pool[i0], pool[i1]].filter(Boolean)
+        const recs = picks.map(a => {
+          const enriched = this.enrichedPreviews[a.al_id] || {}
+          return {
+            anime: { ...a, ...enriched, id: a.al_id || a.id, episodes: [], total_episodes: typeof a.episodes === 'number' ? a.episodes : (a.total_episodes || null), last_watched_at: 0, status: a.status || 'RELEASING' },
+            ep: { num: this.nextAiring[a.al_id]?.episode || a.next_episode || a.episodes || '?' },
+            kind: 'recommendation', ts: 0, hasFile: false,
+          }
+        })
+        // Interleave: insert 1 rec every 3 aired items; skip if < 2 aired or no recs
+        if (recs.length === 0 || aired.length < 2) return aired.slice(0, 8)
+        const result = []
+        let ri = 0
+        for (let i = 0; i < aired.length && result.length < 8; i++) {
+          result.push(aired[i])
+          if ((i + 1) % 3 === 0 && ri < recs.length && result.length < 8) result.push(recs[ri++])
+        }
+        while (result.length < 8 && ri < recs.length) result.push(recs[ri++])
+        return result
+      }
 
-      // 2 — fresh, unwatched, downloaded episodes (previous behaviour)
+      // 2 — fresh, unwatched, downloaded episodes
       const fresh = []
       for (const a of this.library) {
         const eps = (a.episodes || []).filter(e =>
@@ -161,14 +195,14 @@ export const useAnimeStore = defineStore('anime', {
       const cw = this.continueWatching
       if (cw.length) return cw.slice(0, 8).map(c => ({ anime: c.anime, ep: c.ep, kind: 'continue', ts: c.anime.last_watched_at || 0, hasFile: true }))
 
-      // 4 — seasonal popular (not already in library)
+      // 4 — seasonal popular (library empty or nothing aired)
       if (this.seasonal.length) {
         return this.seasonal
-          .filter(a => !this.library.find(lib => lib.al_id === a.al_id || lib.mal_id === a.mal_id))
+          .filter(a => !libIds.has(a.al_id) && !libIds.has(a.mal_id))
           .sort((x, y) => (y.popularity || 0) - (x.popularity || 0))
           .slice(0, 8)
           .map(a => ({
-            anime: { ...a, id: a.al_id || a.id, episodes: [], last_watched_at: 0, status: a.status || 'RELEASING' },
+            anime: { ...a, id: a.al_id || a.id, episodes: [], total_episodes: typeof a.episodes === 'number' ? a.episodes : (a.total_episodes || null), last_watched_at: 0, status: a.status || 'RELEASING' },
             ep: { num: this.nextAiring[a.al_id]?.episode || a.next_episode || a.episodes || '?' },
             kind: 'seasonal', ts: 0, hasFile: false,
           }))
@@ -203,6 +237,21 @@ export const useAnimeStore = defineStore('anime', {
       const list = this.filteredTorrents.map(t => ({ ...t, isSpanish: isSpanishOrMulti(t.title), isEnglish: isEnglishSub(t.title) }))
       const map = {}
       for (const t of list) { (map[t.episode] ??= []).push(t) }
+      // Seed placeholder groups for early episodes the RSS window starved to zero, so they remain
+      // expandable (expanding triggers fetchEpisodeTorrents). Capped to single-cour/season shows to
+      // avoid seeding hundreds of empty groups for long-runners. When AniList knows the episode
+      // count, that count is the ceiling; otherwise we seed up to the highest episode actually seen.
+      const epNums = Object.keys(map).map(Number).filter(n => n > 0)
+      // AniList episode count (0 = unknown). Raw search results carry it as a number in `episodes`;
+      // library/seasonal objects get normalized so `episodes` is the episode LIST and the count
+      // lives in `total_episodes`. Read both so the cap works regardless of entry path.
+      const epField = this.torrentAnime?.episodes
+      const known = (typeof epField === 'number' ? epField : Number(this.torrentAnime?.total_episodes)) || 0
+      let maxEp = known > 0 ? known : Math.max(0, ...epNums)
+      if (this.targetEp) maxEp = Math.max(maxEp, this.targetEp)
+      if (maxEp > 0 && maxEp <= 50) {
+        for (let n = 1; n <= maxEp; n++) if (!map[n]) map[n] = []
+      }
       for (const k in map) {
         map[k].sort((a, b) => {
           if (a.isSpanish !== b.isSpanish) return a.isSpanish ? -1 : 1
@@ -219,6 +268,13 @@ export const useAnimeStore = defineStore('anime', {
           if (b.episode === -1) return -1
           return a.episode - b.episode
         })
+      // Cap to the real episode count AniList reports: drops phantom/mislabeled groups (absolute
+      // numbering across seasons, resolutions misparsed as episodes, eps beyond the season). When
+      // AniList doesn't know the total (ongoing shows → null), keep everything as-is. Batch (0) and
+      // unclassified (-1) are always kept, plus the active targetEp as a safety net.
+      if (known > 0) {
+        groups = groups.filter(g => g.episode <= 0 || g.episode <= known || g.episode === this.targetEp)
+      }
       // "Registrar como episodio N": show only that episode (+ batches), like the legacy.
       if (this.targetEp !== null) {
         groups = groups.filter(g => g.episode === 0 || g.episode === this.targetEp)
@@ -270,6 +326,7 @@ export const useAnimeStore = defineStore('anime', {
       try {
         const data = await api.get('/api/anime/library')
         this.library = Array.isArray(data) ? data : []
+        this._ensureDlPolling()   // si hay descargas en curso, refresca el progreso en vivo
       } catch (_) {
         if (!silent) useUiStore().toast('No se pudo cargar tu anime', 'error')
       } finally {
@@ -285,18 +342,58 @@ export const useAnimeStore = defineStore('anime', {
 
     openDetail(anime) {
       this.hidePreview()
+      this.previewAnime = null
       this.detailId = anime.id
       this.epInfoOpen = null
       this.linkTorrent = { show: false, list: [], loading: false, subpath: '' }
       if (anime.al_id) { this.loadTags(anime); this.loadRecs(anime) }
-      // Push a history entry encoding this detail → browser back closes it and
-      // forward reopens it (the snapshot model in ui.js).
+      useUiStore().pushNav()
+    },
+    // Eagerly enriches a non-library anime with TMDB/AniList HD data and caches the
+    // result in enrichedPreviews so heroItems reacts and updates the hero slider too.
+    async enrichPreview(al_id) {
+      if (al_id === undefined || al_id === null) return
+      if (this.enrichedPreviews[al_id] !== undefined) return  // already fetching or done
+      this.enrichedPreviews[al_id] = null  // mark in-progress (avoids duplicate requests)
+      try {
+        const data = await api.get(`/api/anime/enrich/${al_id}`)
+        if (data) this.enrichedPreviews[al_id] = data
+      } catch (_) {}
+    },
+    // Opens a non-library anime (recommendation / seasonal) in the detail panel.
+    // Uses cached enrichment if already available; triggers enrichment otherwise.
+    openPreview(anime) {
+      this.hidePreview()
+      this.detailId = null
+      const cached = this.enrichedPreviews[anime.al_id] || {}
+      this.previewAnime = {
+        ...anime,
+        ...cached,
+        id: anime.al_id || anime.id,
+        episodes: [],
+        downloaded_count: 0,
+        total_episodes: typeof anime.episodes === 'number' ? anime.episodes : (anime.total_episodes || null),
+      }
+      this.epInfoOpen = null
+      this.linkTorrent = { show: false, list: [], loading: false, subpath: '' }
+      if (anime.al_id) {
+        this.loadTags(anime)
+        this.loadRecs(anime)
+        // enrichPreview caches result → also updates previewAnime via watcher below
+        this.enrichPreview(anime.al_id).then(() => {
+          const enriched = this.enrichedPreviews[anime.al_id]
+          if (enriched && this.previewAnime?.al_id === anime.al_id) {
+            this.previewAnime = { ...this.previewAnime, ...enriched }
+          }
+        })
+      }
       useUiStore().pushNav()
     },
     // Pure reset for programmatic callers (tab switches, openRec). The "Volver"
     // button uses ui.back() so forward can reopen the detail.
     closeDetail() {
       this.detailId = null
+      this.previewAnime = null
     },
 
     async loadTags(anime) {
@@ -561,6 +658,36 @@ export const useAnimeStore = defineStore('anime', {
     hasActiveQbt() {
       return this.library.some(a => (a.episodes || []).some(e => e.in_qbt && e.progress < 100))
     },
+    // Progreso de descarga EN VIVO: el backend NO emite SSE de progreso de qBittorrent, así que
+    // sondeamos /qbt/list mientras haya torrents activos y parcheamos los episodios por info_hash.
+    // Al completar un torrent recargamos la biblioteca (para reflejar in_local) y paramos el poll.
+    _patchDlProgress(torrents) {
+      const byHash = {}
+      for (const t of (torrents || [])) byHash[(t.hash || '').toLowerCase()] = t
+      let active = false, justDone = false
+      for (const a of this.library) {
+        for (const e of (a.episodes || [])) {
+          const h = (e.info_hash || '').toLowerCase()
+          const t = h && byHash[h]
+          if (!t) continue
+          if ((e.progress ?? 0) < 100 && t.progress >= 100) justDone = true
+          e.progress = t.progress; e.in_qbt = true
+          if (t.progress < 100) active = true
+        }
+      }
+      return { active, justDone }
+    },
+    _ensureDlPolling() {
+      if (dlPoll || !this.hasActiveQbt()) return
+      dlPoll = setInterval(async () => {
+        let torrents = []
+        try { torrents = await api.get('/api/anime/qbt/list') || [] } catch (_) { return }
+        this.qbtTorrents = torrents
+        const { active, justDone } = this._patchDlProgress(torrents)
+        if (justDone) await this.loadLibrary(true)   // recoge in_local + estado final
+        if (!active && !this.hasActiveQbt()) { clearInterval(dlPoll); dlPoll = null }
+      }, 3000)
+    },
     async checkQbt() {
       try {
         const d = await api.get('/api/anime/qbt/status')
@@ -658,16 +785,120 @@ export const useAnimeStore = defineStore('anime', {
     },
     closeTorrents() { this.torrentAnime = null },
 
-    async _nyaaMultiFetch(queries) {
+    // extraQueries are fetched with category '1_0' (all anime) to also surface Spanish/Non-English
+    // group releases that the user's selected category (1_2 = English-translated) would miss.
+    async _nyaaMultiFetch(queries, extraQueries = []) {
       const cat = this.torrentCategory
-      const lists = await Promise.all(queries.map(q =>
-        api.get(`/api/anime/torrents?${new URLSearchParams({ q, category: cat })}`).catch(() => [])))
+      const allFetches = [
+        ...queries.map(q => ({ q, cat })),
+        ...extraQueries.map(q => ({ q, cat: '1_0' })),
+      ]
+      const lists = await Promise.all(allFetches.map(({ q, cat: c }) =>
+        api.get(`/api/anime/torrents?${new URLSearchParams({ q, category: c })}`).catch(() => [])))
       const seen = new Set(); const merged = []
       for (const list of lists) for (const t of (list || [])) {
         const key = t.info_hash || t.title
         if (!seen.has(key)) { seen.add(key); merged.push(t) }
       }
       return merged
+    },
+    // Strip trailing season/ordinal suffix so AniList synonyms become usable Nyaa queries.
+    // "X 4th Season" → "X", "X Season 4" → "X", "X Part 2" → "X"
+    _stripSeasonSuffix(s) {
+      return s
+        .replace(/\s+(?:\d+(?:st|nd|rd|th)\s+(?:Season|Cour)|(?:Season|Cour|Part|Series)(?:\s+\d+)?)\s*$/i, '')
+        .replace(/\s+\d+$/, '')
+        .trim()
+    },
+
+    // Extracts the reusable title "shapes" used to build Nyaa queries:
+    //   fullTitle   — primary variant, colons flattened ("Honzuki no Gekokujou Shisho ni Naru…")
+    //   baseTitle   — segment before the first colon ("Honzuki no Gekokujou") or null
+    //   sub         — segment after the colon in the anime title ("Ryoushu no Youjo") or null
+    //   synonyms    — long AniList synonyms beyond the 5-cap, season suffix stripped. These often
+    //                 carry the full official franchise title (e.g. "…Shudan wo Erandeiraremasen
+    //                 4th Season") which, stripped, matches ALL erai-raws episodes regardless of
+    //                 how the per-episode subtitle is romanized.
+    _titleParts() {
+      const primary = this.torrentVariants[0] || ''
+      const fullTitle = primary.replace(/[:：]/g, ' ').replace(/\s+/g, ' ').trim()
+      const colonIdx = primary.indexOf(':')
+      const baseTitle = colonIdx > 5 ? primary.substring(0, colonIdx).trim() : null
+
+      const animeTitle = this.torrentAnime
+        ? (this.torrentAnime.title_romaji || this.torrentAnime.title || '')
+        : primary
+      const subMatch = animeTitle.match(/^[^:：]+[：:]\s*(.+)$/)
+      const sub = subMatch && subMatch[1].trim().length >= 8 ? subMatch[1].trim() : null
+
+      const synonyms = []
+      for (const syn of (this.torrentAllVariants || []).slice(5)) {
+        if (!/[a-zA-Z]/.test(syn)) continue  // skip CJK-only synonyms
+        const cleaned = this._stripSeasonSuffix(syn).replace(/[:：]/g, ' ').replace(/\s+/g, ' ').trim()
+        if (cleaned.length >= 15 && cleaned.toLowerCase() !== fullTitle.toLowerCase()) synonyms.push(cleaned)
+      }
+      return { fullTitle, baseTitle, sub, synonyms }
+    },
+
+    // Builds supplementary Nyaa queries (fetched with cat 1_0) for the INITIAL broad load:
+    //   1. fullTitle/baseTitle/sub + batch — covers batch releases from every naming convention
+    //   2. baseTitle + "- 01" (always-on)  — ep1 anchor even without a targetEp set
+    //   3. long-synonym broad search       — surfaces the franchise's recent episodes
+    // Per-episode coverage is handled lazily on demand by fetchEpisodeTorrents() — see that action
+    // for why early episodes need a targeted query (Nyaa RSS caps at 75 newest, starving old eps).
+    _buildExtraQueries() {
+      if (!this.torrentVariants.length) return []
+      const { fullTitle, baseTitle, sub, synonyms } = this._titleParts()
+
+      const extra = new Set()
+      extra.add(fullTitle + ' batch')
+      if (baseTitle) extra.add(baseTitle + ' batch')
+      if (sub) extra.add(sub + ' batch')
+      if (baseTitle) extra.add(`${baseTitle} - 01`)
+      for (const syn of synonyms) extra.add(syn)
+
+      const varLower = new Set(this.torrentVariants.map(v => v.toLowerCase().replace(/\s+/g, ' ')))
+      return [...extra].filter(q => !varLower.has(q.toLowerCase().replace(/\s+/g, ' ')))
+    },
+
+    // Targeted queries for ONE episode: "<title> - 0N" across every title shape. These are the only
+    // way to retrieve a specific early episode's torrents — Nyaa RSS returns just the 75 newest
+    // items (no sort support), so for an airing show the recent episodes saturate the window and
+    // episodes 1-5 collapse to 1-2 results. A targeted "Honzuki no Gekokujou - 02" returns 36.
+    _episodeQueries(epNum) {
+      const pad = String(epNum).padStart(2, '0')
+      const { fullTitle, baseTitle, sub, synonyms } = this._titleParts()
+      const out = new Set()
+      out.add(`${fullTitle} - ${pad}`)
+      if (baseTitle) out.add(`${baseTitle} - ${pad}`)
+      if (sub) out.add(`${sub} - ${pad}`)
+      for (const syn of synonyms) out.add(`${syn} - ${pad}`)
+      return [...out]
+    },
+
+    // Lazy deep-fetch for a single episode's torrents, merged (dedup by info_hash) into the list.
+    // Triggered when the user expands an episode group: brings a sparse group (1-3 torrents that
+    // happened to fall inside the RSS window) up to its true count. cat 1_0 to catch every language.
+    async fetchEpisodeTorrents(epNum) {
+      if (!epNum || epNum <= 0) return
+      if (this.epFetch[epNum]) return            // already loading or done
+      if (!this.torrentVariants.length) return
+      this.epFetch = { ...this.epFetch, [epNum]: 'loading' }
+      try {
+        const queries = this._episodeQueries(epNum)
+        const lists = await Promise.all(queries.map(q =>
+          api.get(`/api/anime/torrents?${new URLSearchParams({ q, category: '1_0' })}`).catch(() => [])))
+        const seen = new Set(this.torrents.map(t => t.info_hash || t.title))
+        const additions = []
+        for (const list of lists) for (const t of (list || [])) {
+          const key = t.info_hash || t.title
+          if (!seen.has(key)) { seen.add(key); additions.push(t) }
+        }
+        if (additions.length) this.torrents = [...this.torrents, ...additions]
+      } catch (_) {
+      } finally {
+        this.epFetch = { ...this.epFetch, [epNum]: 'done' }
+      }
     },
     async openTorrents(anime, targetEpisode = null) {
       this.hidePreview()
@@ -683,20 +914,59 @@ export const useAnimeStore = defineStore('anime', {
       this.flt = { lang: 'all', hideDead: true, quality: '', group: '', ep: 'all' }
       const fmt = anime.format || ''
       this.targetEp = (fmt === 'MOVIE' || fmt === 'MUSIC') ? null : (targetEpisode && targetEpisode > 0 ? targetEpisode : null)
-      const variants = [...new Set([anime.title_romaji, anime.title_english, anime.title].map(t => (t || '').trim()).filter(Boolean))]
+      const allVariants = await this._resolveTorrentVariants(anime)
+      this.torrentAllVariants = allVariants
+      const variants = allVariants.slice(0, 5)  // first 5 for main search + alias display
+      this.torrentVariants = variants
       this.torrentQuery = variants[0] || ''
       this.torrentsLoading = true
-      try { this.torrents = await this._nyaaMultiFetch(variants) }
+      this.epFetch = {}
+      try { this.torrents = await this._nyaaMultiFetch(variants, this._buildExtraQueries()) }
       catch (_) { useUiStore().toast('Error buscando en Nyaa', 'error') }
       finally { this.torrentsLoading = false }
+      // When opened on a specific episode, deep-fetch it immediately so its group is complete.
+      if (this.targetEp) this.fetchEpisodeTorrents(this.targetEp)
     },
+    // Lista de alias a buscar en Nyaa: los 3 títulos de la tarjeta + SINÓNIMOS/títulos
+    // alternativos de AniList (romaji/inglés/nativo/akas) — no depende sólo del nombre principal,
+    // así una release nombrada con otro alias también aparece. Cap a 5 para no saturar Nyaa.
+    async _resolveTorrentVariants(anime) {
+      const base = [...new Set([anime.title_romaji, anime.title_english, anime.title].map(t => (t || '').trim()).filter(Boolean))]
+      let variants = base
+      try {
+        const qs = new URLSearchParams()
+        if (anime.al_id) qs.set('al_id', anime.al_id)
+        if (base[0]) qs.set('title', base[0])
+        const syn = await api.get('/api/anime/title_variants?' + qs.toString())
+        if (Array.isArray(syn) && syn.length) {
+          const seen = new Set(); const merged = []
+          for (const t of [...base, ...syn]) {
+            const k = (t || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+            if (t && k && !seen.has(k)) { seen.add(k); merged.push(t) }
+          }
+          variants = merged
+        }
+      } catch (_) {}
+      return variants  // full list; callers apply their own cap
+    },
+    // "Refinar en Nyaa": si el usuario NO tocó la query (sigue siendo el alias principal) se
+    // re-buscan TODAS las variantes (sinónimos incluidos); si escribió algo propio, búsqueda
+    // literal de eso (no se le añaden alias para no ensanchar su filtro).
     async searchTorrents() {
       const q = this.torrentQuery.trim()
       if (!q) return
-      this.torrentsLoading = true; this.torrents = []
-      try { this.torrents = await api.get(`/api/anime/torrents?${new URLSearchParams({ q, category: this.torrentCategory })}`) || [] }
+      const custom = q !== (this.torrentVariants[0] || '').trim()
+      this.torrentsLoading = true; this.torrents = []; this.epFetch = {}
+      try {
+        // Custom query: search literally without extras (user is explicitly filtering)
+        // Default query: re-run all variants plus supplementary batch/episode queries
+        this.torrents = custom
+          ? (await api.get(`/api/anime/torrents?${new URLSearchParams({ q, category: this.torrentCategory })}`) || [])
+          : await this._nyaaMultiFetch(this.torrentVariants.length ? this.torrentVariants : [q], this._buildExtraQueries())
+      }
       catch (_) { useUiStore().toast('Error buscando en Nyaa', 'error') }
       finally { this.torrentsLoading = false }
+      if (!custom && this.targetEp) this.fetchEpisodeTorrents(this.targetEp)
     },
     async searchTosho() {
       const q = this.torrentQuery.trim()
@@ -741,6 +1011,9 @@ export const useAnimeStore = defineStore('anime', {
               torrent_title: torrent.title, info_hash: torrent.info_hash || '',
             }).then(() => this.loadLibrary(true)).catch(() => {})
           }
+          // El torrent tarda 1-2s en aparecer en qBittorrent con progreso → un refresco extra
+          // arranca el polling en vivo aunque el primer loadLibrary aún no lo viera.
+          setTimeout(() => this.loadLibrary(true), 2500)
         } else ui.toast('qBittorrent: ' + (d.msg || d.error || 'Error'), 'error')
       } catch (_) { ui.toast('Error conectando qBittorrent', 'error') }
       finally { this.addingHashes = this.addingHashes.filter(k => k !== key) }

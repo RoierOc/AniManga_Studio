@@ -5,8 +5,9 @@ No API key required. Rate limit: ~90 req/min.
 """
 
 from flask import Blueprint, jsonify, request
-import requests as _http
 import time
+
+from api.resilient_http import http as _http  # retry + Retry-After + rate limiting
 
 anilist_bp = Blueprint('anilist', __name__)
 
@@ -124,13 +125,19 @@ def top_manga():
     return jsonify(res)
 
 
-def title_variants(title: str | None = None, al_id: int | None = None) -> list[str]:
+def title_variants(title: str | None = None, al_id: int | None = None,
+                   media_type: str = 'MANGA') -> list[str]:
     """Return name variants for a series so multi-source search doesn't miss a
     release indexed under a different language/alias (e.g. "Amayo no Tsuki" ↔
     "The Moon on a Rainy Night"). Source: AniList title{romaji,english,native} +
     synonyms — the richest alias list available without auth. Falls back to just
     `title` if AniList is unreachable. Dedups case/space-insensitively while
-    preserving the original casing of the first occurrence."""
+    preserving the original casing of the first occurrence.
+
+    `media_type` is 'MANGA' (default) or 'ANIME' — the same alias machinery powers
+    manga source discovery, MangaDex auto-resolution and anime torrent search, so
+    every online lookup in the app can share one variant list."""
+    mt = 'ANIME' if str(media_type).upper().startswith('ANI') else 'MANGA'
     out: list[str] = []
     seen: set[str] = set()
 
@@ -142,11 +149,11 @@ def title_variants(title: str | None = None, al_id: int | None = None) -> list[s
 
     _add(title)
     if al_id:
-        q = 'query ($id: Int) { Media(id: $id, type: MANGA) { title { romaji english native } synonyms } }'
+        q = 'query ($id: Int) { Media(id: $id, type: %s) { title { romaji english native } synonyms } }' % mt
         d = _ql(q, {'id': int(al_id)})
         media = (d or {}).get('Media')
     else:
-        q = 'query ($s: String) { Media(search: $s, type: MANGA) { title { romaji english native } synonyms } }'
+        q = 'query ($s: String) { Media(search: $s, type: %s) { title { romaji english native } synonyms } }' % mt
         d = _ql(q, {'s': title})
         media = (d or {}).get('Media')
     if media:
@@ -202,7 +209,8 @@ def variants_route():
     """Debug/UI endpoint: name variants for a title (or al_id)."""
     title = request.args.get('title', '').strip()
     al_id = request.args.get('al_id', '').strip()
-    return jsonify(title_variants(title or None, int(al_id) if al_id.isdigit() else None))
+    media_type = request.args.get('type', 'MANGA')
+    return jsonify(title_variants(title or None, int(al_id) if al_id.isdigit() else None, media_type))
 
 
 @anilist_bp.route('/genres')

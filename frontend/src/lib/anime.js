@@ -54,9 +54,11 @@ export function nextUnwatchedEp(anime) {
   return eps.find(e => !e.watched && isEpisodePlayable(e, batch)) || null
 }
 
-/* Torrent title language detection — identical to the original regexes. */
+/* Torrent title language detection.
+   Catches common multi-sub markers used by groups like erai-raws ([Multiple Subtitle]) and
+   SubsPlease ([Multi]), plus explicit Spanish tags (ESP, Español, Dual, Latino). */
 export const isSpanishOrMulti = (title) =>
-  /\b(esp|espa[nñ]ol|castellano|multi|lat|latino|multi.?sub|sub.?esp|dual)\b/i.test(title || '')
+  /\b(esp|espa[nñ]ol|castellano|multi|lat|latino|multi.?sub|multiple.?sub(?:title)?|sub.?esp|dual)\b/i.test(title || '')
 
 export const isEnglishSub = (title) => {
   if (isSpanishOrMulti(title)) return false
