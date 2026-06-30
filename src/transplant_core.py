@@ -64,18 +64,24 @@ TEXTFREE_LARGE_FRAC = 0.12  # un cluster de texto libre que cubra >12% de la pá
                             # HDWR (costura) ECC=None NCC=0.12; p026 (oscura, OK) ECC=0.44 NCC=0.53.
 FALLBACK_BUBBLE_MIN_CONF = 0.50  # sólo recuperar globos sueltos si la homografía de la
                                  # página es confiable (>=50% de globos ya emparejados)
-# ── Validación de la similaridad estimada (causa raíz del parche torcido) ──────
-# estimateAffinePartial2D devuelve SIEMPRE una matriz aunque tenga pocos inliers; aceptarla a
-# ciegas produce un warp con rotación/escala espuria -> es_w corrido/rotado -> parches ES
-# torcidos sobre el arte (QA: How Do We Relationship cap10 p004, fragmento ES rotado ~15° sobre
-# el dibujo, globos en inglés). Dos escaneos de la MISMA página difieren sólo por similaridad
-# casi-identidad (rotación ~0°, escala = razón de resoluciones), así que se rechaza la matriz si:
-HOMOG_MIN_INLIERS = 8     # piso de degeneración: por debajo el ajuste no es fiable. Bajo a
-                          # propósito para NO regresar el caso salvado por ECC (p021: 15 inliers).
-HOMOG_MAX_ROT_DEG = 10.0  # dos escaneos de la misma página no rotan; >10° = warp roto (el caso
-                          # salvado tenía -2.9°, así que 10° lo deja pasar sin regresión).
-HOMOG_SCALE_LO = 0.6      # banda de escala RELATIVA a la razón de resoluciones EN/ES (no absoluta:
-HOMOG_SCALE_HI = 1.7      # un ES a mitad de resolución del EN da escala ~2 y es legítimo).
+# ── Homografía: matchear a RESOLUCIÓN COMÚN + validar la similaridad estimada ──
+# CAUSA RAÍZ (medida en QA How Do We Relationship cap10 p004): el arte EN local es HD (3840px) y
+# la fuente ES (Mangas.in) viene a 960px = ¼ de resolución. ORB calcula descriptores a la
+# resolución NATIVA de cada imagen; con 4× de diferencia los descriptores son incomparables ->
+# cientos de matches ESPURIOS y RANSAC colapsa (medido: 4 inliers/573, escala 0.877, rot 153°)
+# -> warp basura -> es_w rotado -> globos sin componer (inglés) + parche ES torcido sobre el arte.
+# FIX: se reescalan AMBAS imágenes a un lado mayor común (HOMOG_WORK) ANTES de ORB; en ese espacio
+# son la misma página a la misma escala -> matches limpios (medido: 1316 inliers/1706, escala 1.000,
+# rot 0.00°) -> alineación perfecta. El transform se compone de vuelta a coords de la ES original.
+HOMOG_WORK = 1500         # lado mayor del espacio de trabajo común (más inliers que 2000/2500;
+                          # además ORB en 1500px es más rápido que en el EN nativo de 3840px).
+# Dos escaneos de la MISMA página, ya igualados en resolución, difieren sólo por similaridad
+# casi-identidad (rotación ~0°, ESCALA ~1.0 en el espacio de trabajo). Se rechaza la matriz si:
+HOMOG_MIN_INLIERS = 8     # piso de degeneración: por debajo el ajuste no es fiable (con res común
+                          # se obtienen cientos de inliers en páginas reales, así que sólo caza basura).
+HOMOG_MAX_ROT_DEG = 10.0  # dos escaneos de la misma página no rotan; >10° = warp roto.
+HOMOG_SCALE_LO = 0.6      # banda de escala en el ESPACIO DE TRABAJO (esperada ~1.0 porque ambas
+HOMOG_SCALE_HI = 1.7      # imágenes se normalizaron al mismo lado mayor antes de matchear).
 TEXTFREE_MIN_BUBBLES = 2  # nº mínimo de globos EN para poder juzgar la homografía por la tasa de
                           # composición. Con menos globos no se puede inferir si el warp está roto,
                           # así que NO se gatea el texto libre (se confía en sus guardas por-cluster).
@@ -146,8 +152,16 @@ def detect(rgb):
 
 def homography(es, en):
     eg, ng = cv2.cvtColor(es, cv2.COLOR_RGB2GRAY), cv2.cvtColor(en, cv2.COLOR_RGB2GRAY)
+    # RESOLUCIÓN COMÚN antes de ORB: si ES y EN difieren mucho de tamaño (ES de baja res vs arte
+    # local HD), los descriptores nativos son incomparables y RANSAC colapsa (ver HOMOG_WORK).
+    # Se reescala cada gris a un lado mayor = HOMOG_WORK y se matchea ahí; luego se compone el
+    # transform de vuelta a las coords de la ES ORIGINAL (que es la que se warpea/mapea después).
+    s_es = HOMOG_WORK / max(eg.shape)
+    s_en = HOMOG_WORK / max(ng.shape)
+    egw = cv2.resize(eg, None, fx=s_es, fy=s_es, interpolation=cv2.INTER_AREA if s_es < 1 else cv2.INTER_CUBIC)
+    ngw = cv2.resize(ng, None, fx=s_en, fy=s_en, interpolation=cv2.INTER_AREA if s_en < 1 else cv2.INTER_CUBIC)
     orb = cv2.ORB_create(4000)
-    k1, d1 = orb.detectAndCompute(eg, None); k2, d2 = orb.detectAndCompute(ng, None)
+    k1, d1 = orb.detectAndCompute(egw, None); k2, d2 = orb.detectAndCompute(ngw, None)
     if d1 is None or d2 is None: return None
     matches = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True).match(d1, d2)
     if len(matches) < 12: return None
@@ -158,19 +172,24 @@ def homography(es, en):
     # rotaciones/perspectivas espurias cuando hay pocos inliers (p021: 15 inliers -> rot
     # falsa de -2.9° -> texto de las cajas planas cortado/torcido, porque el ECC no las
     # corrige). El modelo restringido da muchos más inliers (69) y rotación correcta ~0°.
-    M, inliers = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC, ransacReprojThreshold=5.0)
-    if M is None: return None
-    # Validar que la similaridad estimada es PLAUSIBLE (ver constantes HOMOG_*). Si no lo es, el
-    # warp está roto: rechazar -> la página cae a "arte EN limpio" en vez de a un parche torcido.
+    Mw, inliers = cv2.estimateAffinePartial2D(src, dst, method=cv2.RANSAC, ransacReprojThreshold=5.0)
+    if Mw is None: return None
+    # Validar en el ESPACIO DE TRABAJO (escala esperada ~1.0, rot ~0°). Si no es plausible el warp
+    # está roto: rechazar -> la página cae a "arte EN limpio" en vez de a un parche torcido.
     n_in = int(inliers.sum()) if inliers is not None else 0
-    a, b = float(M[0, 0]), float(M[1, 0])
+    a, b = float(Mw[0, 0]), float(Mw[1, 0])
     scale = (a * a + b * b) ** 0.5
     rot = abs(np.degrees(np.arctan2(b, a)))
-    exp_scale = ((en.shape[1] / es.shape[1]) + (en.shape[0] / es.shape[0])) / 2.0
     if (n_in < HOMOG_MIN_INLIERS or rot > HOMOG_MAX_ROT_DEG
-            or not (HOMOG_SCALE_LO * exp_scale <= scale <= HOMOG_SCALE_HI * exp_scale)):
+            or not (HOMOG_SCALE_LO <= scale <= HOMOG_SCALE_HI)):
         return None
-    return np.vstack([M, [0.0, 0.0, 1.0]])   # 2x3 afín -> 3x3 para warpPerspective/map_box
+    # Componer de vuelta a coords ORIGINALES: es_orig --(×s_es)--> trabajo --(Mw)--> en_trabajo
+    # --(÷s_en)--> en_orig.  H = S_en⁻¹ · Mw · S_es   (mapea es_orig → en_orig, como esperan
+    # warpPerspective(es, H, en_size) y map_box(H, caja_es)).
+    Mw3 = np.vstack([Mw, [0.0, 0.0, 1.0]])
+    S_es = np.diag([s_es, s_es, 1.0])
+    S_en_inv = np.diag([1.0 / s_en, 1.0 / s_en, 1.0])
+    return S_en_inv @ Mw3 @ S_es
 
 
 def map_box(H, b):
