@@ -124,7 +124,19 @@ def read_chapter():
         return jsonify({'pages': [], 'error': 'Folder not found'})
 
     pages = chapter_pages(folder)
-    return jsonify({'pages': [f"{actual_folder}/{p}" for p in pages], 'folder': actual_folder, 'source': resolved})
+    # Cache-bust por mtime: las páginas se sirven con max_age de 7 días ("inmutables"), pero la
+    # TRADUCCIÓN reescribe el archivo MANTENIENDO el nombre -> el navegador seguía mostrando la
+    # versión vieja (inglés) de su caché tras re-traducir. Anexar ?v=<mtime> cambia la URL sólo
+    # cuando el contenido cambia (re-traducción/upscale) y la deja cacheable si no. Los consumidores
+    # del path (pageUrl, qaFlagPage con split('?')) ya toleran el query.
+    out = []
+    for p in pages:
+        try:
+            v = int((folder / p).stat().st_mtime)
+            out.append(f"{actual_folder}/{p}?v={v}")
+        except OSError:
+            out.append(f"{actual_folder}/{p}")
+    return jsonify({'pages': out, 'folder': actual_folder, 'source': resolved})
 
 @reader_bp.route('/read_compare', methods=['POST'])
 def read_compare():
