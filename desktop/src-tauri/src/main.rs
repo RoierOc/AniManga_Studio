@@ -91,12 +91,18 @@ fn stop_backend(child: &mut Child) {
 }
 
 fn main() {
-    // WebKitGTK + driver NVIDIA propietario: el renderer DMA-BUF composita mal
-    // (jitter de imágenes/iconos al hacer scroll, texturas en blanco, portadas
-    // que no pintan). Desactivarlo cae al camino de memoria compartida, estable
-    // en NVIDIA. Respetamos el valor si el usuario ya lo fijó en su entorno.
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    // WebKitGTK + NVIDIA propietario en Wayland: el renderer DMA-BUF composita
+    // mal (jitter al hacer scroll, texturas/portadas en blanco). Desactivarlo lo
+    // arregla pero cae a composición por software (lento). El equilibrio: correr
+    // el webview bajo XWayland (GDK_BACKEND=x11), donde el GL de NVIDIA funciona
+    // bien CON la aceleración intacta. ANIMANGA_WAYLAND=1 fuerza Wayland nativo
+    // (con DMA-BUF desactivado para evitar el glitch, a costa de fluidez).
+    if std::env::var_os("ANIMANGA_WAYLAND").is_some() {
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+    } else if std::env::var_os("GDK_BACKEND").is_none() {
+        std::env::set_var("GDK_BACKEND", "x11");
     }
 
     tauri::Builder::default()
