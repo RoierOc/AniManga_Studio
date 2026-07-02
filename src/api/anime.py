@@ -36,6 +36,8 @@ _NS      = '{https://nyaa.si/xmlns/nyaa}'
 _search_cache:   dict = {}
 _nyaa_cache:     dict = {}
 _seasonal_cache: dict = {}
+_seasonal_refreshing: set = set()   # claves con refresh en background en vuelo
+_SEASONAL_DISK_TTL = 6 * 3600       # tolerancia del stale servido desde disco
 _qbt_files_cache: dict = {}   # info_hash → {ep_num: stem}; immutable per torrent, pruned to live hashes
 _SEASONAL_TTL = 600  # 10 min
 
@@ -2882,6 +2884,36 @@ def anime_seasonal():
         if time.time() - ts < _SEASONAL_TTL:
             return jsonify(res)
 
+    # Caché disco (stale-while-revalidate): tras un reinicio, la temporada pinta
+    # al instante desde disco (hasta 6 h de antigüedad) y se refresca en
+    # background — abrir la app no espera a AniList ni gasta rate-limit.
+    from api.runtime import cache_get, cache_set
+    disk = cache_get('seasonal', cache_key, _SEASONAL_DISK_TTL)
+    if disk and disk.get('results'):
+        if cache_key not in _seasonal_refreshing:
+            _seasonal_refreshing.add(cache_key)
+            def _bg_refresh(s=season, y=year, sb=sort_by, gs=sort_map.get(sort_by, 'SCORE_DESC'), ck=cache_key):
+                try:
+                    payload = _fetch_seasonal(s, y, sb, gs)
+                    if payload and payload.get('results'):
+                        _seasonal_cache[ck] = (payload, time.time())
+                        cache_set('seasonal', ck, payload, ttl=_SEASONAL_DISK_TTL)
+                finally:
+                    _seasonal_refreshing.discard(ck)
+            threading.Thread(target=_bg_refresh, daemon=True).start()
+        _seasonal_cache[cache_key] = (disk, time.time() - _SEASONAL_TTL)  # RAM: stale a propósito
+        return jsonify(disk)
+
+    payload = _fetch_seasonal(season, year, sort_by, gql_sort)
+    if payload.get('results'):
+        _seasonal_cache[cache_key] = (payload, time.time())
+        cache_set('seasonal', cache_key, payload, ttl=_SEASONAL_DISK_TTL)
+    return jsonify(payload)
+
+
+def _fetch_seasonal(season, year, sort_by, gql_sort):
+    """Consulta AniList (fallback Jikan) y construye el payload de temporada."""
+    import datetime
     gql = '''
     query ($season: MediaSeason, $seasonYear: Int, $sort: [MediaSort]) {
       Page(perPage: 50) {
@@ -2976,10 +3008,7 @@ def anime_seasonal():
         except Exception:
             pass
 
-    payload = {'season': season, 'year': year, 'sort': sort_by, 'results': results}
-    if results:
-        _seasonal_cache[cache_key] = (payload, time.time())
-    return jsonify(payload)
+    return {'season': season, 'year': year, 'sort': sort_by, 'results': results}
 
 
 @anime_bp.route('/library/<anime_id>/watched', methods=['POST'])
