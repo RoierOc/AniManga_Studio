@@ -2,6 +2,7 @@
 import { computed, defineAsyncComponent, onErrorCaptured, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useUiStore, VIEWS } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
+import { useAnimeStore } from '@/stores/anime'
 import Icon from '@/components/ui/Icon.vue'
 import Sidebar from '@/components/layout/Sidebar.vue'
 import TopBar from '@/components/layout/TopBar.vue'
@@ -38,6 +39,7 @@ onMounted(() => {
   ui.initNav()   // capture the landing view as the first history entry (before any nav),
                  // so browser back/forward traverses the whole app, not just details.
   manga.init()
+  useAnimeStore().reportCaps()  // qué códecs decodifica este navegador → log backend
   window.addEventListener('keydown', onGlobalKey)
 })
 onUnmounted(() => window.removeEventListener('keydown', onGlobalKey))

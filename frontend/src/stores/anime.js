@@ -307,6 +307,7 @@ export const useAnimeStore = defineStore('anime', {
 
   actions: {
     init() {
+      this.reportCaps()
       if (!nowTimer) nowTimer = setInterval(() => { this.nowSec = Math.floor(Date.now() / 1000) }, 30000)
       if (!sseBound) {
         sseBound = true
@@ -582,6 +583,21 @@ export const useAnimeStore = defineStore('anime', {
       } catch (_) {
         useUiStore().toast('No se pudo iniciar MPV', 'error')
       }
+    },
+
+    /* Reporta una vez qué códecs decodifica este navegador (log del backend). */
+    reportCaps() {
+      if (this._capsSent || typeof MediaSource === 'undefined') return
+      this._capsSent = true
+      const t = (c) => MediaSource.isTypeSupported(c)
+      api.post('/api/stream/caps', {
+        hevc_main10: t('video/mp4; codecs="hvc1.2.4.L153.B0"'),
+        hevc_main: t('video/mp4; codecs="hvc1.1.6.L120.B0"'),
+        av1: t('video/mp4; codecs="av01.0.08M.08"'),
+        h264: t('video/mp4; codecs="avc1.640028"'),
+        webgpu: !!navigator.gpu,
+        ua: navigator.userAgent.slice(0, 80),
+      }).catch(() => {})
     },
 
     setPlayerMode(mode) {

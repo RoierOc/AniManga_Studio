@@ -311,6 +311,19 @@ def stream_progress():
     return jsonify({'ok': True, 'watched': watched})
 
 
+_browser_caps = {}
+
+
+@stream_bp.route('/caps', methods=['POST'])
+def stream_caps():
+    """El frontend reporta qué códecs decodifica su navegador (diagnóstico +
+    telemetría local para decidir copy vs transcode sin adivinar)."""
+    global _browser_caps
+    _browser_caps = request.get_json(silent=True) or {}
+    print(f'[stream] caps del navegador: {_browser_caps}', flush=True)
+    return jsonify({'ok': True})
+
+
 @stream_bp.route('/close', methods=['POST'])
 def stream_close():
     with _lock:

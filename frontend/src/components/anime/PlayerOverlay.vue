@@ -46,6 +46,7 @@ const SKIP_SECS = 88
 /* ── next-episode countdown ── */
 const nextCd = ref(0)
 let nextTimer = null
+const tcDismissed = ref(false)
 
 let hls = null
 let jassub = null
@@ -324,6 +325,16 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
         <Icon name="play" :size="34" />
       </button>
 
+      <!-- aviso de transcode: la calidad NO es la original — ofrecer MPV -->
+      <div v-if="p.sess?.transcode && !tcDismissed" class="wp__tc">
+        <p><strong>Códec no soportado por el navegador</strong> — reproduciendo
+          una conversión (no es la calidad original del archivo).</p>
+        <div class="wp__nextacts">
+          <button class="wp__btnalt" @click="tcDismissed = true">Continuar así</button>
+          <button class="wp__btnmain" @click="openInMpv"><Icon name="play" :size="14" /> Ver original en MPV</button>
+        </div>
+      </div>
+
       <!-- siguiente episodio -->
       <div v-if="nextCd > 0" class="wp__next">
         <p>Siguiente episodio en <strong>{{ nextCd }}</strong>…</p>
@@ -431,6 +442,14 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
   background: rgba(10,14,24,.92); border: 1px solid var(--line); border-radius: var(--r-md);
   color: var(--ink); backdrop-filter: blur(8px);
 }
+.wp__tc {
+  position: absolute; top: 5.5rem; left: 50%; transform: translateX(-50%);
+  max-width: 34rem; padding: var(--s-4); text-align: center;
+  background: rgba(10,14,24,.94); border: 1px solid color-mix(in srgb, var(--amber) 45%, transparent);
+  border-radius: var(--r-md); color: var(--ink); backdrop-filter: blur(8px);
+}
+.wp__tc strong { color: var(--amber); }
+.wp__tc .wp__nextacts { justify-content: center; }
 .wp__nextacts { display: flex; gap: var(--s-2); margin-top: var(--s-3); }
 .wp__btnmain {
   display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-4);
