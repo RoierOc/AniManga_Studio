@@ -154,6 +154,10 @@ fn spawn_browser_app(browser: &PathBuf) -> Option<Child> {
         // OJO: NO añadir el feature "Vulkan" aquí — rompe el init de GPU de
         // Chromium en Linux/NVIDIA y deja la ventana en blanco/transparente.
         .arg("--enable-features=VaapiOnNvidiaGPUs,VaapiIgnoreDriverChecks,AcceleratedVideoDecodeLinuxGL,PlatformHEVCDecoderSupport")
+        // La decodificación VAAPI/NVDEC en Chromium NO composita bajo Wayland
+        // (vídeo congelado con la página viva); bajo XWayland es el camino
+        // probado de nvidia-vaapi-driver. Solo afecta a esta ventana.
+        .arg("--ozone-platform=x11")
         .arg("--enable-unsafe-webgpu")
         // suprime el infobar "línea de comandos no admitida" que provocan los
         // flags "unsafe"; sin efectos visibles para una app de un solo sitio
