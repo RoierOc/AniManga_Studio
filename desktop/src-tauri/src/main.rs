@@ -151,7 +151,9 @@ fn spawn_browser_app(browser: &PathBuf) -> Option<Child> {
         .arg("--no-default-browser-check")
         // Player embebido: HEVC por hardware (NVDEC vía driver VAAPI de NVIDIA
         // → HEVC se copia sin recodificar = cero pérdida) y WebGPU (Anime4K).
-        .arg("--enable-features=VaapiOnNvidiaGPUs,VaapiIgnoreDriverChecks,AcceleratedVideoDecodeLinuxGL,PlatformHEVCDecoderSupport,Vulkan")
+        // OJO: NO añadir el feature "Vulkan" aquí — rompe el init de GPU de
+        // Chromium en Linux/NVIDIA y deja la ventana en blanco/transparente.
+        .arg("--enable-features=VaapiOnNvidiaGPUs,VaapiIgnoreDriverChecks,AcceleratedVideoDecodeLinuxGL,PlatformHEVCDecoderSupport")
         .arg("--enable-unsafe-webgpu")
         .env("LIBVA_DRIVER_NAME", "nvidia")
         .env("NVD_BACKEND", "direct")
