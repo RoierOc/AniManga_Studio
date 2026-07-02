@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
+import { imgProxy } from '@/lib/img'
 
 const props = defineProps({ manga: { type: Object, required: true }, score: { type: Number, default: null } })
 defineEmits(['open'])
@@ -16,7 +17,9 @@ const tier = computed(() => {
 <template>
   <article class="mc" tabindex="0" @click="$emit('open', manga)" @keydown.enter="$emit('open', manga)">
     <div class="mc__poster">
-      <img v-if="manga.cover" :src="manga.cover" :alt="manga.title" loading="lazy" @load="$event.target.classList.add('is-loaded')" class="mc__img" />
+      <!-- imgProxy: el hotlink directo a uploads.mangadex.org devuelve el
+           placeholder anti-hotlink en WebKitGTK (la app de escritorio) -->
+      <img v-if="manga.cover" :src="imgProxy(manga.cover)" :alt="manga.title" loading="lazy" @load="$event.target.classList.add('is-loaded')" class="mc__img" />
       <div v-else class="mc__ph"><Icon name="library" :size="28" /></div>
       <div class="mc__scrim" />
       <span class="mc__shine" />

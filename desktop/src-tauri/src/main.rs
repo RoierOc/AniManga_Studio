@@ -91,18 +91,24 @@ fn stop_backend(child: &mut Child) {
 }
 
 fn main() {
-    // WebKitGTK + NVIDIA propietario en Wayland: el renderer DMA-BUF composita
-    // mal (jitter al hacer scroll, texturas/portadas en blanco). Desactivarlo lo
-    // arregla pero cae a composición por software (lento). El equilibrio: correr
-    // el webview bajo XWayland (GDK_BACKEND=x11), donde el GL de NVIDIA funciona
-    // bien CON la aceleración intacta. ANIMANGA_WAYLAND=1 fuerza Wayland nativo
-    // (con DMA-BUF desactivado para evitar el glitch, a costa de fluidez).
-    if std::env::var_os("ANIMANGA_WAYLAND").is_some() {
-        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    // WebKitGTK + NVIDIA propietario: el renderer DMA-BUF composita mal (jitter
+    // al hacer scroll, texturas en blanco) tanto en Wayland nativo como bajo
+    // XWayland — verificado en esta máquina (RTX 3050, driver 610). Config
+    // estable: DMA-BUF desactivado (pintado por CPU con Skia) + más hilos de
+    // raster para compensar la fluidez. ANIMANGA_X11=1 queda como experimento
+    // para re-probar la aceleración bajo XWayland con drivers futuros.
+    if std::env::var_os("ANIMANGA_X11").is_some() {
+        if std::env::var_os("GDK_BACKEND").is_none() {
+            std::env::set_var("GDK_BACKEND", "x11");
         }
-    } else if std::env::var_os("GDK_BACKEND").is_none() {
-        std::env::set_var("GDK_BACKEND", "x11");
+    } else if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+    if std::env::var_os("WEBKIT_SKIA_CPU_PAINTING_THREADS").is_none() {
+        let threads = std::thread::available_parallelism()
+            .map(|n| (n.get() / 2).clamp(2, 8))
+            .unwrap_or(4);
+        std::env::set_var("WEBKIT_SKIA_CPU_PAINTING_THREADS", threads.to_string());
     }
 
     tauri::Builder::default()

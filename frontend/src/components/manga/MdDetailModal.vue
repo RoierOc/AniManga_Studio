@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { useMangadexStore } from '@/stores/mangadex'
 import { useMangaStore } from '@/stores/manga'
 import { taskId } from '@/lib/manga'
+import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
@@ -27,9 +28,9 @@ function dlState(ch) {
         <div class="modal">
           <button class="modal__x" @click="store.closeDetail()"><Icon name="close" :size="18" /></button>
 
-          <header class="modal__head" :style="d.cover ? `--bg:url('${d.cover}')` : ''">
+          <header class="modal__head" :style="d.cover ? `--bg:url('${imgProxy(d.cover)}')` : ''">
             <div class="modal__head-scrim" />
-            <img v-if="d.cover" :src="d.cover" class="modal__cover" :alt="d.title" />
+            <img v-if="d.cover" :src="imgProxy(d.cover)" class="modal__cover" :alt="d.title" />
             <div class="modal__info">
               <h2 class="modal__title">{{ d.title }}</h2>
               <p class="modal__by" v-if="d.author">{{ d.author }}<span v-if="d.artist && d.artist !== d.author"> · {{ d.artist }}</span></p>

@@ -242,18 +242,18 @@ async function doExport(toDrive = false) {
                   <template v-else>
                     <div class="cvp__grid">
                       <div v-if="store.coverPicker.current" class="cvp__item is-current" title="Portada actual">
-                        <img :src="store.coverPicker.current" referrerpolicy="no-referrer" alt="" />
+                        <img :src="imgProxy(store.coverPicker.current)" referrerpolicy="no-referrer" alt="" />
                         <span class="cvp__tag">Actual</span>
                       </div>
                       <button v-for="c in store.coverPicker.anilist" :key="'al' + c.url" class="cvp__item"
                               :disabled="!!store.coverPicker.applying" @click="store.applyCover(c.url)" title="Usar esta portada">
-                        <img :src="c.thumb" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                        <img :src="imgProxy(c.thumb)" referrerpolicy="no-referrer" loading="lazy" alt="" />
                         <span class="cvp__tag cvp__tag--al">AniList</span>
                         <span v-if="store.coverPicker.applying === c.url" class="cvp__busy"><span class="xspin" /></span>
                       </button>
                       <button v-for="(c, i) in store.coverPicker.mangadex" :key="'md' + i" class="cvp__item"
                               :disabled="!!store.coverPicker.applying" @click="store.applyCover(c.url)" title="Usar esta portada">
-                        <img :src="c.thumb" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                        <img :src="imgProxy(c.thumb)" referrerpolicy="no-referrer" loading="lazy" alt="" />
                         <span v-if="c.volume && c.volume !== '?'" class="cvp__tag">Vol {{ c.volume }}</span>
                         <span v-if="store.coverPicker.applying === c.url" class="cvp__busy"><span class="xspin" /></span>
                       </button>
@@ -371,7 +371,7 @@ async function doExport(toDrive = false) {
                 </div>
                 <div v-if="store.mdex.results.length" class="mdex__results">
                   <button v-for="r in store.mdex.results" :key="r.id" class="mdres" @click="store.selectMdexEntry(r)">
-                    <img v-if="r.cover" :src="r.cover" loading="lazy" alt="" />
+                    <img v-if="r.cover" :src="imgProxy(r.cover)" loading="lazy" alt="" />
                     <span class="mdres__t">{{ r.title }}<small v-if="r.year"> · {{ r.year }}</small></span>
                   </button>
                 </div>
