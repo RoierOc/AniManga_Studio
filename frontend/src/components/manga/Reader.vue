@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMangaStore } from '@/stores/manga'
 import { pageUrl } from '@/lib/manga'
+import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
@@ -30,6 +31,12 @@ function qaSubmit(reason) {
   qaNote.value = ''
   qaOpen.value = false
 }
+
+// ── chapter-end screen: al pasar de la última página aparece un cierre estilo streaming.
+const endOpen = ref(false)
+const nextChapterNum = computed(() => store.chapterListAsc[store.chapterIndex + 1]?.chapter)
+const endCover = computed(() => imgProxy(store.reader?.cover || store.current?.cover || ''))
+function reReadChapter() { endOpen.value = false; store.setPage(0) }
 
 // Page counter label — a range when showing a two-page spread.
 const counterLabel = computed(() => {
@@ -60,8 +67,17 @@ function preloadNeighbors() {
   }
 }
 // New chapter/file → reset the cache-key set, then warm the neighbours.
-watch(() => store.pages, () => { preloaded = new Set(); preloadNeighbors() })
+watch(() => store.pages, () => { preloaded = new Set(); endOpen.value = false; preloadNeighbors() })
 watch(() => store.page, () => preloadNeighbors())
+watch(() => store.mode, () => { endOpen.value = false })
+
+// Advance: on the last page, open the chapter-end screen instead of a dead click (paged
+// manga only — webtoon shows its end card inline, cbz has no chapter concept).
+function tryNext() {
+  if (isManga.value && store.mode === 'paged' && store.page >= store.pages.length - 1) { endOpen.value = true; return }
+  store.nextPage()
+}
+function goPrev() { endOpen.value = false; store.prevPage() }
 
 const wrap = ref(null)
 let barsTimer = null
@@ -100,7 +116,7 @@ function onUp(e) {
   if (!active || wasDrag || store.mode !== 'paged' || store.compareMode || store.zoom > 1.01) return
   const x = e.clientX / window.innerWidth
   const goNext = isRTL.value ? x < 0.5 : x > 0.5
-  goNext ? store.nextPage() : store.prevPage()
+  goNext ? tryNext() : goPrev()
 }
 // Leaving the area must NOT navigate — only cancel an in-progress drag.
 function endDrag() { drag.active = false }
@@ -111,7 +127,7 @@ function pageClick(e) {
   if (drag.moved) { drag.moved = false; return }
   const x = e.clientX / window.innerWidth
   const goNext = isRTL.value ? x < 0.5 : x > 0.5
-  goNext ? store.nextPage() : store.prevPage()
+  goNext ? tryNext() : goPrev()
 }
 function onWheel(e) {
   if (store.mode === 'webtoon' && !(e.ctrlKey || e.metaKey)) return
@@ -155,10 +171,10 @@ function toggleFullscreen() {
 function onKey(e) {
   if (!open.value) return
   switch (e.key) {
-    case 'Escape': store.closeReader(); break
-    case 'ArrowRight': e.preventDefault(); isRTL.value ? store.prevPage() : store.nextPage(); break
-    case 'ArrowLeft': e.preventDefault(); isRTL.value ? store.nextPage() : store.prevPage(); break
-    case ' ': e.preventDefault(); store.nextPage(); break
+    case 'Escape': endOpen.value ? (endOpen.value = false) : store.closeReader(); break
+    case 'ArrowRight': e.preventDefault(); isRTL.value ? goPrev() : tryNext(); break
+    case 'ArrowLeft': e.preventDefault(); isRTL.value ? tryNext() : goPrev(); break
+    case ' ': e.preventDefault(); tryNext(); break
     case 'f': store.cycleFit(); break
     case 'w': store.setMode(store.mode === 'paged' ? 'webtoon' : 'paged'); break
     case 's': if (store.mode === 'paged') store.toggleSpread(); break
@@ -252,7 +268,49 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
         <!-- Webtoon -->
         <div v-else class="rd__webtoon" @scroll="onScroll">
           <img v-for="(p, i) in store.pages" :key="i" :src="pageUrl(p)" loading="lazy" decoding="async" class="rd__wimg" :style="{ maxWidth: store.fit === 'width' ? '900px' : 'none', transform: `scale(${store.zoom})` }" :alt="`Página ${i + 1}`" />
+          <!-- End-of-chapter card (inline at the bottom of the scroll) -->
+          <div v-if="isManga && store.pages.length" class="rd__wend">
+            <span class="rd__end-check"><Icon name="check" :size="20" /></span>
+            <p class="rd__end-eyebrow">CAPÍTULO COMPLETADO</p>
+            <h2 class="rd__end-title">Cap. {{ store.reader.chapter }}</h2>
+            <button v-if="store.canNextChapter" class="rd__end-primary" @click="store.goNextChapter()">
+              <Icon name="play" :size="17" /> Siguiente · Cap. {{ nextChapterNum }}
+            </button>
+            <p v-else class="rd__end-done">Has llegado al último capítulo disponible.</p>
+            <div class="rd__end-sub">
+              <button class="rd__end-sbtn" @click="reReadChapter"><Icon name="clock" :size="14" /> Releer</button>
+              <button class="rd__end-sbtn" @click="store.closeReader()"><Icon name="library" :size="14" /> Biblioteca</button>
+            </div>
+          </div>
         </div>
+
+        <!-- Chapter-end takeover (paged manga) — streaming-style "next episode" card -->
+        <Transition name="rd-end">
+          <div v-if="endOpen && isManga && store.mode === 'paged'" class="rd__end">
+            <div class="rd__end-bg" :style="endCover ? { backgroundImage: `url('${endCover}')` } : {}" />
+            <div class="rd__end-shade" />
+            <div class="rd__end-card">
+              <span class="rd__end-check"><Icon name="check" :size="24" /></span>
+              <p class="rd__end-eyebrow">CAPÍTULO COMPLETADO</p>
+              <h2 class="rd__end-title">Cap. {{ store.reader.chapter }}</h2>
+              <div class="rd__end-stats">
+                <span>{{ store.pages.length }} páginas</span>
+                <span class="rd__end-dot" />
+                <span>{{ isUpscaled ? '4K' : 'Original' }}</span>
+              </div>
+              <div class="rd__end-btns">
+                <button v-if="store.canNextChapter" class="rd__end-primary" @click="store.goNextChapter()">
+                  <Icon name="play" :size="17" /> Siguiente capítulo · Cap. {{ nextChapterNum }}
+                </button>
+                <p v-else class="rd__end-done">Has llegado al último capítulo disponible.</p>
+                <div class="rd__end-sub">
+                  <button class="rd__end-sbtn" @click="reReadChapter"><Icon name="clock" :size="14" /> Releer</button>
+                  <button class="rd__end-sbtn" @click="store.closeReader()"><Icon name="library" :size="14" /> Biblioteca</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </Transition>
 
         <!-- Bottom bar (paged) -->
         <footer v-if="store.mode === 'paged' && store.pages.length" class="rd__bottom" :class="{ 'is-hidden': store.barsHidden }">
@@ -382,6 +440,74 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__thumb img { width: 100%; height: 100%; object-fit: cover; }
 .rd__thumb:hover { opacity: .85; }
 .rd__thumb.is-active { opacity: 1; border-color: var(--azure); }
+
+/* ── Chapter-end screen (paged takeover + webtoon inline card) ─────────── */
+.rd__end {
+  position: absolute; inset: 0; z-index: 7; overflow: hidden;
+  display: grid; place-items: center;
+}
+.rd__end-bg {
+  position: absolute; inset: 0; background-size: cover; background-position: center;
+  filter: blur(40px) saturate(1.1) brightness(.5); transform: scale(1.2);
+}
+.rd__end-shade {
+  position: absolute; inset: 0;
+  background: radial-gradient(70% 70% at 50% 45%, rgba(7,10,18,.55), rgba(5,7,13,.94) 100%);
+}
+.rd__end-card {
+  position: relative; z-index: 1; text-align: center;
+  display: flex; flex-direction: column; align-items: center;
+  padding: var(--s-6); max-width: 30rem;
+  animation: endRise .5s var(--ease-silk) both;
+}
+@keyframes endRise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+.rd__end-check {
+  width: 3.25rem; height: 3.25rem; display: grid; place-items: center; border-radius: 50%;
+  color: #fff; background: color-mix(in srgb, var(--jade) 30%, transparent);
+  border: 1px solid color-mix(in srgb, var(--jade) 55%, transparent);
+  box-shadow: 0 0 24px color-mix(in srgb, var(--jade) 35%, transparent); margin-bottom: var(--s-4);
+}
+.rd__end-eyebrow {
+  font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps);
+  color: var(--cyan); margin-bottom: var(--s-2);
+}
+.rd__end-title { font-family: var(--font-display); font-weight: 700; color: #fff; font-size: var(--fs-2xl); line-height: var(--lh-tight); }
+.rd__end-stats {
+  display: flex; align-items: center; gap: var(--s-2);
+  margin-top: var(--s-2); font-size: var(--fs-sm); color: var(--ink-soft);
+}
+.rd__end-dot { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-faint); }
+.rd__end-btns { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); margin-top: var(--s-5); width: 100%; }
+.rd__end-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--s-2);
+  padding: var(--s-3) var(--s-6); border-radius: var(--r-md);
+  font-size: var(--fs-sm); font-weight: 600; color: #0b0f1a; background: #fff;
+  box-shadow: var(--shadow-md); transition: box-shadow var(--t-fast) var(--ease-silk), transform var(--t-fast) var(--ease-silk);
+}
+.rd__end-primary:hover { box-shadow: var(--glow-azure); transform: translateY(-1px); }
+.rd__end-done { font-size: var(--fs-sm); color: var(--ink-faint); }
+.rd__end-sub { display: flex; gap: var(--s-2); }
+.rd__end-sbtn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: var(--s-2) var(--s-4); border-radius: var(--r-md);
+  font-size: var(--fs-xs); font-weight: 500; color: var(--ink-soft);
+  background: rgba(255,255,255,.08); border: 1px solid var(--line-2);
+  backdrop-filter: blur(8px); transition: all var(--t-fast) var(--ease-silk);
+}
+.rd__end-sbtn:hover { color: var(--ink); border-color: var(--line-strong); background: rgba(255,255,255,.14); }
+
+/* Webtoon inline end card — same language, sits in the scroll flow */
+.rd__wend {
+  width: 100%; display: flex; flex-direction: column; align-items: center;
+  gap: var(--s-2); padding: var(--s-8) var(--s-5) var(--s-9);
+  background: linear-gradient(0deg, var(--void), transparent);
+}
+.rd__wend .rd__end-primary { margin-top: var(--s-3); }
+.rd__wend .rd__end-sub { margin-top: var(--s-3); }
+
+.rd-end-enter-active { transition: opacity var(--t-base) var(--ease-silk); }
+.rd-end-leave-active { transition: opacity var(--t-fast) var(--ease-silk); }
+.rd-end-enter-from, .rd-end-leave-to { opacity: 0; }
 
 .reader-enter-active, .reader-leave-active { transition: opacity var(--t-base); }
 .reader-enter-from, .reader-leave-to { opacity: 0; }

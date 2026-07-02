@@ -24,6 +24,29 @@ const bgUrl = computed(() => bgTiers.value[bgIdx.value] || '')
 const hasBanner = computed(() => bgIdx.value === 0 && !!c.value?.anime?.banner)
 function onBgError() { if (bgIdx.value < bgTiers.value.length - 1) bgIdx.value++ }
 
+// Muestrea el color dominante del fondo actual y lo emite para que el home lo use como
+// aura sutil detrás de los rieles (imgProxy sirve TMDB/AniList/MangaDex en /api/img →
+// mismo origen → canvas legible; fuentes externas o error → azul del tema).
+const emit = defineEmits(['tint'])
+function sampleTint(url) {
+  if (!url) return
+  const img = new Image()
+  img.onload = () => {
+    try {
+      const cv = document.createElement('canvas'); cv.width = cv.height = 10
+      const ctx = cv.getContext('2d', { willReadFrequently: true })
+      ctx.drawImage(img, 0, 0, 10, 10)
+      const d = ctx.getImageData(0, 0, 10, 10).data
+      let r = 0, g = 0, b = 0, n = 0
+      for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; n++ }
+      emit('tint', `rgb(${r / n | 0}, ${g / n | 0}, ${b / n | 0})`)
+    } catch (_) { emit('tint', 'rgb(77, 141, 255)') }
+  }
+  img.onerror = () => emit('tint', 'rgb(77, 141, 255)')
+  img.src = url
+}
+watch(bgUrl, sampleTint, { immediate: true })
+
 // Crunchyroll-style logo title-treatment (TMDB PNG). Falls back to the text title
 // when none is cached, or when the cached logo URL fails to load.
 const logoFailed = ref(false)

@@ -15,7 +15,7 @@ export const useAnimeStore = defineStore('anime', {
     library: [],
     loading: false,
     // Guard against a stale localStorage value landing on the placeholder fallback.
-    sub: ['library', 'search', 'seasonal', 'downloads', 'history'].includes(localStorage.getItem('anime-sub'))
+    sub: ['library', 'search', 'seasonal', 'schedule', 'downloads', 'history'].includes(localStorage.getItem('anime-sub'))
       ? localStorage.getItem('anime-sub') : 'library',   // library | search | seasonal | downloads | history
     detailId: null,            // open anime detail id (library entry)
     previewAnime: null,        // non-library anime open in detail (recommendations)
@@ -126,14 +126,52 @@ export const useAnimeStore = defineStore('anime', {
         .slice(0, 12)
     },
 
+    // Rotated pool of high-scored seasonal series NOT in the library, mapped to hero items.
+    // recSeed (aleatorio por sesión) rota el orden para variar en cada apertura; alimenta el
+    // relleno del hero (heroItems) para que el carrusel nunca se vea vacío ni con "sólo 2".
+    recommendedItems() {
+      const libIds = new Set(this.library.flatMap(a => [a.al_id, a.mal_id].filter(Boolean)))
+      const pool = this.seasonal
+        .filter(a => !libIds.has(a.al_id) && !libIds.has(a.mal_id) && (a.score || 0) >= 65)
+        .sort((x, y) => (y.score || 0) - (x.score || 0))
+        .slice(0, 16)
+      const n = pool.length
+      if (!n) return []
+      const start = this.recSeed % n
+      return [...pool.slice(start), ...pool.slice(0, start)].map(a => {
+        const enriched = this.enrichedPreviews[a.al_id] || {}
+        return {
+          anime: { ...a, ...enriched, id: a.al_id || a.id, episodes: [], total_episodes: typeof a.episodes === 'number' ? a.episodes : (a.total_episodes || null), last_watched_at: 0, status: a.status || 'RELEASING' },
+          ep: { num: this.nextAiring[a.al_id]?.episode || a.next_episode || a.episodes || '?' },
+          kind: 'recommendation', ts: 0, hasFile: false,
+        }
+      })
+    },
+    // "Populares de la temporada" rail — series de temporada que no están en la biblioteca.
+    seasonalPopular() {
+      const libIds = new Set(this.library.flatMap(a => [a.al_id, a.mal_id].filter(Boolean)))
+      return this.seasonal
+        .filter(a => !libIds.has(a.al_id) && !libIds.has(a.mal_id))
+        .sort((x, y) => (y.popularity || 0) - (x.popularity || 0))
+        .slice(0, 20)
+    },
+
     heroItems() {
       const now = Date.now() / 1000
       const RECENT = 12 * 86400
+      const TARGET = 10   // el hero aspira a llenarse (estilo Crunchyroll) aunque la biblioteca sea chica
 
-      // Fast lookup set to exclude library titles from recommendations
-      const libIds = new Set(this.library.flatMap(a => [a.al_id, a.mal_id].filter(Boolean)))
+      // Rec pool compartido (mismo que el riel "Recomendados") para RELLENAR cualquier nivel
+      // hasta TARGET, así el carrusel nunca se ve vacío ni con "sólo 2".
+      const recs0 = this.recommendedItems
+      const fill = (base) => {
+        if (base.length >= TARGET) return base.slice(0, TARGET)
+        const have = new Set(base.map(it => it.anime.al_id || it.anime.id))
+        const extra = recs0.filter(r => !have.has(r.anime.al_id || r.anime.id))
+        return [...base, ...extra].slice(0, TARGET)
+      }
 
-      // 1 — newly aired library episodes, interspersed with high-scored recommendations
+      // 1 — newly aired library episodes, interspersed with recommendations, filled to TARGET
       const aired = []
       for (const a of this.library) {
         const inf = this.airing[a.al_id]
@@ -148,38 +186,18 @@ export const useAnimeStore = defineStore('anime', {
       }
       if (aired.length) {
         aired.sort((x, y) => y.ts - x.ts)
-        // Top-6 high-scored seasonal series not in library (score ≥ 70/100).
-        // recSeed (random per session) picks 2 well-separated entries so the hero
-        // shows different recommendations every time the app opens.
-        const pool = this.seasonal
-          .filter(a => !libIds.has(a.al_id) && !libIds.has(a.mal_id) && (a.score || 0) >= 70)
-          .sort((x, y) => (y.score || 0) - (x.score || 0))
-          .slice(0, 6)
-        const n = pool.length
-        const i0 = n ? this.recSeed % n : 0
-        const i1 = n > 2 ? (i0 + Math.ceil(n / 2)) % n : (i0 + 1) % Math.max(n, 1)
-        const picks = n <= 2 ? pool : [pool[i0], pool[i1]].filter(Boolean)
-        const recs = picks.map(a => {
-          const enriched = this.enrichedPreviews[a.al_id] || {}
-          return {
-            anime: { ...a, ...enriched, id: a.al_id || a.id, episodes: [], total_episodes: typeof a.episodes === 'number' ? a.episodes : (a.total_episodes || null), last_watched_at: 0, status: a.status || 'RELEASING' },
-            ep: { num: this.nextAiring[a.al_id]?.episode || a.next_episode || a.episodes || '?' },
-            kind: 'recommendation', ts: 0, hasFile: false,
-          }
-        })
-        // Interleave: insert 1 rec every 3 aired items; skip if < 2 aired or no recs
-        if (recs.length === 0 || aired.length < 2) return aired.slice(0, 8)
+        const recs = recs0
+        // Interleave: 1 recomendación cada 2 estrenos, luego se rellena el resto hasta TARGET.
         const result = []
         let ri = 0
-        for (let i = 0; i < aired.length && result.length < 8; i++) {
+        for (let i = 0; i < aired.length && result.length < TARGET; i++) {
           result.push(aired[i])
-          if ((i + 1) % 3 === 0 && ri < recs.length && result.length < 8) result.push(recs[ri++])
+          if ((i + 1) % 2 === 0 && ri < recs.length && result.length < TARGET) result.push(recs[ri++])
         }
-        while (result.length < 8 && ri < recs.length) result.push(recs[ri++])
-        return result
+        return fill(result)
       }
 
-      // 2 — fresh, unwatched, downloaded episodes
+      // 2 — fresh, unwatched, downloaded episodes (+ recomendaciones para dar vida)
       const fresh = []
       for (const a of this.library) {
         const eps = (a.episodes || []).filter(e =>
@@ -189,18 +207,18 @@ export const useAnimeStore = defineStore('anime', {
         const ep = eps.reduce((b, e) => (e.added_on || 0) > (b.added_on || 0) ? e : b)
         fresh.push({ anime: a, ep, kind: 'downloaded', ts: ep.added_on || 0, hasFile: true })
       }
-      if (fresh.length) return fresh.sort((x, y) => y.ts - x.ts).slice(0, 8)
+      if (fresh.length) return fill(fresh.sort((x, y) => y.ts - x.ts))
 
-      // 3 — continue watching
+      // 3 — continue watching (+ recomendaciones)
       const cw = this.continueWatching
-      if (cw.length) return cw.slice(0, 8).map(c => ({ anime: c.anime, ep: c.ep, kind: 'continue', ts: c.anime.last_watched_at || 0, hasFile: true }))
+      if (cw.length) return fill(cw.map(c => ({ anime: c.anime, ep: c.ep, kind: 'continue', ts: c.anime.last_watched_at || 0, hasFile: true })))
 
       // 4 — seasonal popular (library empty or nothing aired)
       if (this.seasonal.length) {
         return this.seasonal
           .filter(a => !libIds.has(a.al_id) && !libIds.has(a.mal_id))
           .sort((x, y) => (y.popularity || 0) - (x.popularity || 0))
-          .slice(0, 8)
+          .slice(0, TARGET)
           .map(a => ({
             anime: { ...a, id: a.al_id || a.id, episodes: [], total_episodes: typeof a.episodes === 'number' ? a.episodes : (a.total_episodes || null), last_watched_at: 0, status: a.status || 'RELEASING' },
             ep: { num: this.nextAiring[a.al_id]?.episode || a.next_episode || a.episodes || '?' },

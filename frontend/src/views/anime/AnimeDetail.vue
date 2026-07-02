@@ -2,14 +2,19 @@
 import { ref, computed, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { useUiStore } from '@/stores/ui'
-import { ANIME_STATUS, animeFormatLabel, batchInfo, fmtCountdown } from '@/lib/anime'
+import { ANIME_STATUS, animeFormatLabel, animeEpLabel, batchInfo, fmtCountdown, nextUnwatchedEp } from '@/lib/anime'
 import { imgProxy } from '@/lib/img'
+import { formatBytes } from '@/lib/format'
 import EpisodeCard from '@/components/anime/EpisodeCard.vue'
+import EpisodeRow from '@/components/anime/EpisodeRow.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useAnimeStore()
 const anime = computed(() => store.detail)
+// Preview = anime no-biblioteca (temporada/recomendación/estrenos). Solo "Agregar" + Torrents.
+const isPreview = computed(() => !!store.previewAnime)
+const inLibrary = computed(() => store.isInLibrary(anime.value))
 
 // Crunchyroll-style hero: TMDB backdrop → AniList banner → blurred cover as last resort.
 // banner_detail (set via the picker's "Fondo de esta página" tab) overrides the
@@ -53,6 +58,30 @@ const specials = computed(() => (anime.value?.episodes || []).filter(e => e.ep_t
 const total = computed(() => anime.value?.total_episodes || 0)
 const done = computed(() => anime.value?.downloaded_count || 0)
 const pct = computed(() => total.value ? Math.min(100, done.value / total.value * 100) : 0)
+const diskSize = computed(() => anime.value?.disk_size || 0)
+
+// "Continuar viendo": episodio en progreso, si no el próximo sin ver (ambos reproducibles).
+// Sólo en biblioteca (los preview no tienen episodios descargados).
+const resumeEp = computed(() => {
+  if (isPreview.value || !anime.value) return null
+  const eps = (anime.value.episodes || [])
+  const inProg = eps.find(e => e.num > 0 && e.ep_type !== 'special' && e.resume_pos > 0 && !e.watched
+    && (e.in_local || (e.in_qbt && e.progress >= 100)))
+  return inProg || nextUnwatchedEp(anime.value)
+})
+const resumePct = computed(() => {
+  const e = resumeEp.value
+  if (!e?.resume_pos || !e?.duration) return 0
+  return Math.min(100, e.resume_pos / e.duration * 100)
+})
+const resumeTitle = computed(() => resumeEp.value ? animeEpLabel(anime.value, resumeEp.value) : '')
+const resumeThumbFailed = ref(false)
+watch(resumeEp, () => { resumeThumbFailed.value = false })
+
+// Vista de episodios: cuadrícula (actual) ⇄ lista. Persiste la preferencia.
+const epView = ref(localStorage.getItem('anime-epview') || 'grid')
+function setEpView(v) { epView.value = v; localStorage.setItem('anime-epview', v) }
+const isCurrent = (ep) => !!resumeEp.value && ep.num === resumeEp.value.num && ep.ep_type !== 'special'
 
 const countdown = computed(() => {
   const na = store.nextAiring[anime.value?.al_id]
@@ -99,7 +128,10 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
           <h1 v-else class="dhero__title">{{ anime.title }}</h1>
 
           <div class="dhero__stats">
-            <span class="dhero__count"><strong>{{ done }}</strong> / {{ total || '?' }} episodios</span>
+            <span class="dhero__count">
+              <strong>{{ done }}</strong> / {{ total || '?' }} episodios
+              <span v-if="diskSize" class="dhero__disk"><Icon name="folder" :size="12" /> {{ formatBytes(diskSize) }}</span>
+            </span>
             <div class="dhero__bar"><span :style="{ width: pct + '%' }" /></div>
           </div>
 
@@ -124,11 +156,22 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
           </div>
 
           <div class="dhero__mgmt">
-            <button v-if="anime.al_id" class="mbtn mbtn--accent" @click="store.openTorrents(anime)" title="Buscar torrents">+ Torrents</button>
-            <button class="mbtn" @click="store.openCoverPicker(anime)" title="Cambiar portada o fondo">Cambiar portada</button>
-            <button class="mbtn" @click="store.openLinkTorrent()" title="Enlazar torrent de qBittorrent">Enlazar</button>
-            <button class="mbtn" @click="store.clearEpisodes(anime)" title="Borrar episodios">Borrar eps</button>
-            <button class="mbtn mbtn--danger" @click="store.removeFromLibrary(anime.id)" title="Eliminar serie">Eliminar</button>
+            <!-- Preview (no en biblioteca): agregar + torrents -->
+            <template v-if="isPreview">
+              <button v-if="!inLibrary" class="mbtn mbtn--accent" @click="store.addToLibrary(anime)" title="Añadir a Mi Anime">
+                <Icon name="plus" :size="14" /> Agregar a Mi Anime
+              </button>
+              <button v-else class="mbtn mbtn--in" disabled><Icon name="check" :size="14" /> En Mi Anime</button>
+              <button v-if="anime.al_id" class="mbtn" @click="store.openTorrents(anime)" title="Buscar torrents">+ Torrents</button>
+            </template>
+            <!-- Biblioteca: gestión completa -->
+            <template v-else>
+              <button v-if="anime.al_id" class="mbtn mbtn--accent" @click="store.openTorrents(anime)" title="Buscar torrents">+ Torrents</button>
+              <button class="mbtn" @click="store.openCoverPicker(anime)" title="Cambiar portada o fondo">Cambiar portada</button>
+              <button class="mbtn" @click="store.openLinkTorrent()" title="Enlazar torrent de qBittorrent">Enlazar</button>
+              <button class="mbtn" @click="store.clearEpisodes(anime)" title="Borrar episodios para liberar espacio">Borrar eps<span v-if="diskSize" class="mbtn__sz">{{ formatBytes(diskSize) }}</span></button>
+              <button class="mbtn mbtn--danger" @click="store.removeFromLibrary(anime.id)" title="Eliminar serie">Eliminar</button>
+            </template>
           </div>
         </div>
       </div>
@@ -151,13 +194,45 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
       </div>
     </div>
 
-    <div class="epgrid">
+    <!-- Continuar viendo: salta directo al próximo episodio sin bajar a la lista -->
+    <section v-if="resumeEp" class="dresume" @click="store.play(anime, resumeEp)">
+      <div class="dresume__thumb">
+        <img v-if="!resumeThumbFailed" :src="`/api/anime/thumb/${anime.id}/${resumeEp.num}`" :alt="'Ep ' + resumeEp.num"
+             loading="lazy" @error="resumeThumbFailed = true" />
+        <img v-else-if="anime.cover" :src="imgProxy(anime.cover)" :alt="anime.title" />
+        <div class="dresume__scrim" />
+        <div class="dresume__play"><Icon name="play" :size="24" /></div>
+        <div v-if="resumePct" class="dresume__bar"><span :style="{ width: resumePct + '%' }" /></div>
+      </div>
+      <div class="dresume__info">
+        <span class="dresume__eyebrow">{{ resumePct ? 'CONTINUAR VIENDO' : 'SIGUIENTE EPISODIO' }}</span>
+        <span class="dresume__ep">Episodio {{ resumeEp.num }}</span>
+        <span v-if="resumeTitle && resumeTitle !== 'Episodio ' + resumeEp.num" class="dresume__t">{{ resumeTitle }}</span>
+      </div>
+      <button class="dresume__btn"><Icon name="play" :size="16" /> {{ resumePct ? 'Continuar' : 'Reproducir' }}</button>
+    </section>
+
+    <div class="eptoolbar">
+      <span class="eptoolbar__lbl">Episodios</span>
+      <div class="epseg">
+        <button :class="{ 'is-on': epView === 'grid' }" title="Cuadrícula" @click="setEpView('grid')"><Icon name="library" :size="15" /></button>
+        <button :class="{ 'is-on': epView === 'list' }" title="Lista" @click="setEpView('list')"><Icon name="menu" :size="15" /></button>
+      </div>
+    </div>
+
+    <div v-if="epView === 'list'" class="eplist">
+      <EpisodeRow v-for="ep in mainEps" :key="ep.num" :anime="anime" :ep="ep" :batch="batch" :current="isCurrent(ep)" />
+    </div>
+    <div v-else class="epgrid">
       <EpisodeCard v-for="ep in mainEps" :key="ep.num" :anime="anime" :ep="ep" :batch="batch" />
     </div>
 
     <template v-if="specials.length">
       <div class="epgrid__sep"><Icon name="spark" :size="14" /> Especiales / Extras</div>
-      <div class="epgrid">
+      <div v-if="epView === 'list'" class="eplist">
+        <EpisodeRow v-for="ep in specials" :key="'sp-' + ep.num" :anime="anime" :ep="ep" :batch="batch" />
+      </div>
+      <div v-else class="epgrid">
         <EpisodeCard v-for="ep in specials" :key="'sp-' + ep.num" :anime="anime" :ep="ep" :batch="batch" />
       </div>
     </template>
@@ -306,6 +381,10 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .dhero__stats { display: flex; flex-direction: column; gap: var(--s-2); max-width: 360px; }
 .dhero__count { font-size: var(--fs-sm); color: var(--ice); text-shadow: 0 1px 8px rgba(0,0,0,.7); }
 .dhero__count strong { color: #fff; font-family: var(--font-display); }
+.dhero__disk { display: inline-flex; align-items: center; gap: 4px; margin-left: var(--s-2); padding: 1px 8px;
+  border-radius: var(--r-pill); font-size: var(--fs-2xs); color: var(--ice);
+  background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.16); }
+.dhero__disk :deep(svg) { color: var(--cyan); }
 .dhero__bar { height: 4px; border-radius: var(--r-pill); background: rgba(255,255,255,.22); overflow: hidden; }
 .dhero__bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--azure-deep), var(--azure)); }
 
@@ -321,7 +400,39 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
   border: 1px solid rgba(255,255,255,.16); backdrop-filter: blur(8px); color: var(--ink); font-size: var(--fs-sm); transition: all var(--t-fast); }
 .dhero__link:hover { color: #fff; border-color: var(--azure); background: rgba(255,255,255,.2); }
 
-.epgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: var(--s-4); }
+/* Continuar viendo — franja horizontal antes de la lista de episodios */
+.dresume {
+  display: flex; align-items: center; gap: var(--s-4); margin: 0 0 var(--s-6);
+  padding: var(--s-3); border-radius: var(--r-lg); cursor: pointer;
+  background: linear-gradient(100deg, color-mix(in srgb, var(--azure) 12%, var(--surface)), var(--surface) 70%);
+  border: 1px solid var(--line-2); transition: border-color var(--t-base), box-shadow var(--t-base), transform var(--t-base) var(--ease-snap);
+}
+.dresume:hover { border-color: var(--azure-glow); box-shadow: var(--shadow-md); transform: translateY(-2px); }
+.dresume__thumb { position: relative; flex-shrink: 0; width: 200px; aspect-ratio: 16/9; border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
+.dresume__thumb img { width: 100%; height: 100%; object-fit: cover; }
+.dresume__scrim { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7,10,18,.1), rgba(5,7,13,.55)); }
+.dresume__play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; transition: transform var(--t-base) var(--ease-snap); }
+.dresume__play :deep(svg) { filter: drop-shadow(0 2px 8px rgba(0,0,0,.7)); }
+.dresume:hover .dresume__play { transform: scale(1.14); }
+.dresume__bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.4); }
+.dresume__bar span { display: block; height: 100%; background: var(--azure-bright); box-shadow: 0 0 6px var(--azure-glow); }
+.dresume__info { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.dresume__eyebrow { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--cyan); }
+.dresume__ep { font-family: var(--font-display); font-weight: 600; font-size: var(--fs-lg); color: var(--ink); }
+.dresume__t { font-size: var(--fs-sm); color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dresume__btn { flex-shrink: 0; display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-3) var(--s-5);
+  border-radius: var(--r-md); background: var(--azure); color: #fff; font-size: var(--fs-sm); font-weight: 600; transition: all var(--t-fast); }
+.dresume__btn:hover { background: var(--azure-bright); box-shadow: var(--glow-azure); }
+
+.eptoolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin: 0 0 var(--s-4); }
+.eptoolbar__lbl { font-family: var(--font-display); font-size: var(--fs-lg); font-weight: 600; color: var(--ink); }
+.epseg { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
+.epseg button { width: 34px; height: 30px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-faint); transition: all var(--t-fast); }
+.epseg button:hover { color: var(--ink); }
+.epseg button.is-on { background: var(--surface-3); color: var(--azure-bright); }
+
+.eplist { display: flex; flex-direction: column; gap: var(--s-2); }
+.epgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: var(--s-5); }
 .epgrid__sep { display: flex; align-items: center; gap: var(--s-2); margin: var(--s-7) 0 var(--s-4); color: var(--ink-soft); font-family: var(--font-display); font-weight: 600; }
 .epgrid__sep :deep(svg) { color: var(--gold); }
 
@@ -331,8 +442,12 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
   background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.16); backdrop-filter: blur(8px); transition: all var(--t-fast); }
 .mbtn:hover { color: #fff; border-color: rgba(255,255,255,.32); background: rgba(255,255,255,.18); }
 .mbtn--danger:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
+.mbtn__sz { margin-left: 6px; padding: 1px 6px; border-radius: var(--r-pill); font-family: var(--font-mono);
+  font-size: var(--fs-2xs); color: var(--cyan); background: rgba(255,255,255,.1); }
 .mbtn--accent { background: var(--azure); color: #fff; border-color: transparent; }
 .mbtn--accent:hover { background: var(--azure-bright); color: #fff; }
+.mbtn--accent, .mbtn--in { display: inline-flex; align-items: center; gap: 5px; }
+.mbtn--in { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 40%, transparent); background: color-mix(in srgb, var(--jade) 12%, transparent); opacity: 1; }
 
 .linkpanel { margin: 0 0 var(--s-6); padding: var(--s-4); border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--surface); }
 .linkpanel__head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; margin-bottom: var(--s-3); }
@@ -411,6 +526,8 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
   .dhero__inner { padding: var(--s-5) var(--s-4); }
   .dhero__poster { display: none; }
   .dhero__logo { max-width: 70%; max-height: 90px; }
-  .epgrid { grid-template-columns: repeat(auto-fill, minmax(11.25rem, 1fr)); gap: var(--s-3); }
+  .epgrid { grid-template-columns: repeat(auto-fill, minmax(13.5rem, 1fr)); gap: var(--s-3); }
+  .dresume__thumb { width: 128px; }
+  .dresume__btn { padding: var(--s-2) var(--s-3); }
 }
 </style>

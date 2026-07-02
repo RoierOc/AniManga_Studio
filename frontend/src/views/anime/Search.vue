@@ -1,13 +1,20 @@
 <script setup>
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { animeFormatLabel } from '@/lib/anime'
 import TorrentPanel from '@/components/anime/TorrentPanel.vue'
+import AnimeRail from '@/components/anime/AnimeRail.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useAnimeStore()
-onMounted(() => { store.checkQbt() })
+onMounted(() => {
+  store.checkQbt()
+  if (!store.seasonal.length) store.loadSeasonal()   // descubrimiento para el estado inicial
+})
+
+// Populares de la temporada → envueltos para AnimeRail (poster). Clic = buscar torrents.
+const popularItems = computed(() => store.seasonalPopular.map(a => ({ anime: a })))
 </script>
 
 <template>
@@ -28,9 +35,14 @@ onMounted(() => { store.checkQbt() })
     <div v-if="store.searchLoading" class="grid">
       <div v-for="n in 10" :key="n" class="skeleton" />
     </div>
-    <div v-else-if="!store.searchResults.length" class="hint">
-      <Icon name="film" :size="34" />
-      <p>Busca un anime para ver torrents disponibles y enviarlos a qBittorrent.</p>
+    <!-- Estado inicial (sin búsqueda): descubre populares de la temporada -->
+    <div v-else-if="!store.searchResults.length" class="discover">
+      <AnimeRail v-if="popularItems.length" title="Populares de la temporada" variant="poster"
+                 :items="popularItems" @select="it => store.openTorrents(it.anime)" />
+      <div v-else class="hint">
+        <Icon name="film" :size="34" />
+        <p>Busca un anime para ver torrents disponibles y enviarlos a qBittorrent.</p>
+      </div>
     </div>
     <div v-else class="grid">
       <article v-for="a in store.searchResults" :key="a.al_id || a.title" class="rc" tabindex="0"

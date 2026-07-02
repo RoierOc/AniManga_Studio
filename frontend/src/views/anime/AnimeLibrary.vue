@@ -1,7 +1,7 @@
 <script setup>
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
-import { ANIME_STATUS, STATUS_ORDER } from '@/lib/anime'
+import { ANIME_STATUS, STATUS_ORDER, nextUnwatchedEp } from '@/lib/anime'
 import { imgProxy } from '@/lib/img'
 import AnimeCard from '@/components/anime/AnimeCard.vue'
 import HeroBanner from '@/components/anime/HeroBanner.vue'
@@ -9,6 +9,9 @@ import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 
 const store = useAnimeStore()
+
+// Aura del hero: color dominante del banner activo, teñido sutilmente detrás del home.
+const heroTint = ref('rgb(77, 141, 255)')
 
 // Background sync (15s) — only refreshes while qBittorrent has active downloads,
 // matching the original app's _qbtSyncTimer behaviour.
@@ -56,10 +59,18 @@ const counts = computed(() => {
   for (const k of STATUS_ORDER) c[k] = store.library.filter(a => a.status === k).length
   return c
 })
+
+// "Ver" desde la tarjeta hover: reproduce el próximo episodio no visto, o abre el detalle.
+function playFromCard(a) {
+  const ep = nextUnwatchedEp(a)
+  if (ep) store.play(a, ep); else store.openDetail(a)
+}
 </script>
 
 <template>
   <div class="alib">
+    <div class="alib__aura" :style="{ '--tint-c': heroTint }" />
+
     <header class="hero stagger">
       <div style="--i:0">
         <p class="hero__eyebrow"><span class="hero__tick" /> TU ANIME</p>
@@ -70,7 +81,7 @@ const counts = computed(() => {
       </div>
     </header>
 
-    <HeroBanner />
+    <HeroBanner @tint="c => heroTint = c" />
 
     <!-- Continue watching -->
     <section v-if="store.continueWatching.length" class="cw">
@@ -125,13 +136,26 @@ const counts = computed(() => {
                 :title="store.library.length ? 'Sin resultados.' : 'Aún no has añadido anime.'"
                 :hint="store.library.length ? '' : 'Busca una serie y añádela para seguir sus episodios aquí.'" />
     <div v-else class="grid">
-      <AnimeCard v-for="a in filtered" :key="a.id" :anime="a" @open="store.openDetail($event)" />
+      <AnimeCard v-for="a in filtered" :key="a.id" :anime="a" @open="store.openDetail($event)" @play="playFromCard" />
     </div>
   </div>
 </template>
 
 <style scoped>
-.alib { max-width: var(--content-max); margin: 0 auto; padding: 0 var(--s-6); }
+.alib { position: relative; max-width: var(--content-max); margin: 0 auto; padding: 0 var(--s-6); }
+/* El contenido va por encima del aura */
+.alib > * { position: relative; z-index: 1; }
+
+/* Aura del hero — halo del color dominante del banner activo, detrás de todo el home.
+   @property permite que el color tween suavemente al rotar el carrusel (si no hay soporte,
+   cambia al instante). Muy sutil para no competir con la lectura. */
+@property --tint-c { syntax: '<color>'; inherits: false; initial-value: rgb(77, 141, 255); }
+.alib__aura {
+  position: absolute; z-index: 0; top: 0; left: 50%; transform: translateX(-50%);
+  width: 100%; height: 34rem; pointer-events: none;
+  background: radial-gradient(75% 60% at 50% 0%, color-mix(in srgb, var(--tint-c) 15%, transparent), transparent 72%);
+  transition: --tint-c var(--t-cine) var(--ease-silk);
+}
 .hero { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: var(--s-4); padding: var(--s-5) 0 var(--s-5); }
 .hero__eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
 .hero__tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }

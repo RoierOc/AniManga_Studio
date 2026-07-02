@@ -1899,6 +1899,14 @@ def anime_library_get():
             series_total = anime.get('total_episodes')
             series_total = series_total if isinstance(series_total, int) else 0
 
+            # Espacio en disco: tamaño real de cada archivo local (stat directo).
+            disk_size = 0
+            for ep in local_eps:
+                try:
+                    disk_size += _Path(ep['path']).stat().st_size
+                except OSError:
+                    pass
+
             # Add placeholder entries for episodes not yet downloaded
             if series_total > 0:
                 known_ep_nums = {e['num'] for e in episodes_out if e.get('ep_type', 'episode') == 'episode'}
@@ -1938,6 +1946,7 @@ def anime_library_get():
                 'status': anime.get('status', ''),
                 'episodes': episodes_out,
                 'downloaded_count': regular_count,
+                'disk_size': disk_size,
                 'is_local': True,
                 'added_at': anime.get('added_at', 0),
                 'last_watched_at': anime.get('last_watched_at', 0),
@@ -2036,6 +2045,15 @@ def anime_library_get():
             e['has_thumb'] = f'{anime_id}_{e["num"]}.jpg' in all_thumbs
 
         done_count = sum(1 for e in episodes_out if e.get('in_qbt') and e.get('num', 0) > 0)
+        # Espacio en disco de la serie: sumar el tamaño de cada torrent UNA sola vez
+        # (dedup por info_hash) — un batch comparte hash entre todos sus episodios, así
+        # que sumarlo por episodio inflaría el total.
+        _sizes = {}
+        for e in episodes_out:
+            _ih = e.get('info_hash')
+            if _ih and e.get('in_qbt') and e.get('size'):
+                _sizes[_ih] = e['size']
+        disk_size = sum(_sizes.values())
         # added_at fallback: earliest episode added_on (for entries created before this field existed)
         ep_times = [ep.get('added_on', 0) for ep in ep_map.values() if ep.get('added_on', 0) > 0]
         added_at_fallback = min(ep_times) if ep_times else 0
@@ -2060,6 +2078,7 @@ def anime_library_get():
             'status': anime.get('status', ''),
             'episodes': episodes_out,
             'downloaded_count': done_count,
+            'disk_size': disk_size,
             'added_at': anime.get('added_at', added_at_fallback),
             'last_watched_at': anime.get('last_watched_at', 0),
         })

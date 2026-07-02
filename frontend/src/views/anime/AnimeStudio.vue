@@ -7,6 +7,7 @@ import AnimeDetail from './AnimeDetail.vue'
 import Downloads from './Downloads.vue'
 import History from './History.vue'
 import Seasonal from './Seasonal.vue'
+import Schedule from './Schedule.vue'
 import Search from './Search.vue'
 import AutoplayModal from '@/components/anime/AutoplayModal.vue'
 import SubTrackModal from '@/components/anime/SubTrackModal.vue'
@@ -20,6 +21,7 @@ const TABS = [
   { id: 'library',   label: 'Mi Anime',  icon: 'film' },
   { id: 'search',    label: 'Buscar',    icon: 'search' },
   { id: 'seasonal',  label: 'Temporada', icon: 'spark' },
+  { id: 'schedule',  label: 'Estrenos',  icon: 'clock' },
   { id: 'downloads', label: 'Descargas', icon: 'download' },
   { id: 'history',   label: 'Historial', icon: 'heart' },
 ]
@@ -54,6 +56,7 @@ function selectTab(id) {
         <AnimeLibrary v-else-if="store.sub === 'library'" key="library" />
         <Search v-else-if="store.sub === 'search'" key="search" />
         <Seasonal v-else-if="store.sub === 'seasonal'" key="seasonal" />
+        <Schedule v-else-if="store.sub === 'schedule'" key="schedule" />
         <Downloads v-else-if="store.sub === 'downloads'" key="downloads" />
         <History v-else-if="store.sub === 'history'" key="history" />
         <PlaceholderView v-else :key="store.sub"
