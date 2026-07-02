@@ -69,12 +69,15 @@ function setup(sess) {
   duration.value = sess.duration || 0
   audioIndex.value = p.value.audio || 0
 
-  hls = new Hls({ maxBufferLength: 60, maxMaxBufferLength: 120 })
+  const resume = p.value?.startPos > 0 ? p.value.startPos : (sess.resume_pos || 0)
+  // startPosition explícito: el playlist es tipo EVENT (crece mientras ffmpeg
+  // remuxa) y sin esto hls.js lo trata como "live" y arranca por el final →
+  // el player se queda cargando sin imagen.
+  hls = new Hls({ maxBufferLength: 60, maxMaxBufferLength: 120,
+                  startPosition: resume > 5 ? resume : 0 })
   hls.loadSource(sess.playlist)
   hls.attachMedia(v)
   hls.on(Hls.Events.MANIFEST_PARSED, () => {
-    const resume = p.value?.startPos > 0 ? p.value.startPos : (sess.resume_pos || 0)
-    if (resume > 5) v.currentTime = resume
     v.volume = volume.value
     v.playbackRate = speed.value
     v.play().catch(() => {})

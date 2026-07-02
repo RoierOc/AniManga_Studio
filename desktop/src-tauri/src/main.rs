@@ -155,6 +155,11 @@ fn spawn_browser_app(browser: &PathBuf) -> Option<Child> {
         // Chromium en Linux/NVIDIA y deja la ventana en blanco/transparente.
         .arg("--enable-features=VaapiOnNvidiaGPUs,VaapiIgnoreDriverChecks,AcceleratedVideoDecodeLinuxGL,PlatformHEVCDecoderSupport")
         .arg("--enable-unsafe-webgpu")
+        // suprime el infobar "línea de comandos no admitida" que provocan los
+        // flags "unsafe"; sin efectos visibles para una app de un solo sitio
+        .arg("--test-type")
+        // el player arranca la reproducción por código, sin gesto del usuario
+        .arg("--autoplay-policy=no-user-gesture-required")
         .env("LIBVA_DRIVER_NAME", "nvidia")
         .env("NVD_BACKEND", "direct")
         .stdout(Stdio::null())
