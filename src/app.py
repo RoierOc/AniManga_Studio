@@ -116,6 +116,44 @@ def _try_start_suwayomi():
 _try_start_suwayomi()
 
 
+# ── Ciclo de vida (app de escritorio / sidecar) ───────────────────────────────
+# /health: readiness probe para el shell Tauri (splash → poll → cargar UI).
+# /shutdown: cierre limpio pedido por el shell al cerrar la ventana — apaga
+# Suwayomi y termina el proceso. Solo acepta peticiones desde localhost.
+
+@app.route('/health')
+def health_check():
+    from flask import jsonify
+    return jsonify({'ok': True, 'app': 'manga-upscaler', 'pid': os.getpid()})
+
+
+def _stop_suwayomi():
+    import subprocess
+    script = BASE_DIR.parent / 'suwayomi' / 'stop.sh'
+    if script.exists():
+        try:
+            subprocess.run(['bash', str(script)], timeout=15,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception as e:
+            print(f'[shutdown] Suwayomi stop failed: {e}', flush=True)
+
+
+@app.route('/shutdown', methods=['POST'])
+def shutdown_server():
+    from flask import request, jsonify, abort
+    if request.remote_addr not in ('127.0.0.1', '::1'):
+        abort(403)
+
+    def _die():
+        _stop_suwayomi()
+        print('[shutdown] bye', flush=True)
+        os._exit(0)
+
+    import threading
+    threading.Timer(0.3, _die).start()  # deja salir la respuesta HTTP antes de morir
+    return jsonify({'ok': True, 'stopping': True})
+
+
 @app.route('/library')
 def mobile_library():
     from flask import Response
