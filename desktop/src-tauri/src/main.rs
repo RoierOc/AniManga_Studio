@@ -1,8 +1,15 @@
 // AniManga Studio — shell de escritorio (Fase 1).
 // Responsabilidades: lanzar el backend Flask como sidecar si no está ya corriendo,
-// mostrar la UI (el webview carga el SPA servido por Flask en :5101) y apagar el
-// backend limpiamente al cerrar (POST /shutdown). Si el server ya estaba arriba
-// (modo desarrollo con watchdog), la app NO lo toca al salir.
+// mostrar la UI y apagar el backend limpiamente al cerrar (POST /shutdown). Si el
+// server ya estaba arriba (modo desarrollo con watchdog), la app NO lo toca al salir.
+//
+// Dos modos de UI (Linux):
+//  - "browser-app": si hay un navegador Chromium instalado (Brave/Chromium/Chrome),
+//    abre el SPA en una ventana --app con perfil propio. Render Chrome completo con
+//    GPU — evita el techo de WebKitGTK+NVIDIA (jitter/lentitud). Por defecto.
+//  - "webview": ventana Tauri con WebKitGTK (fallback, o ANIMANGA_WEBVIEW=1).
+// En Windows el webview de Tauri es WebView2 (Chromium): allí el modo webview es
+// el bueno y este workaround no aplica.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -90,13 +97,66 @@ fn stop_backend(child: &mut Child) {
     let _ = child.wait();
 }
 
+/// Navegador Chromium para el modo browser-app. ANIMANGA_BROWSER lo fija a dedo;
+/// ANIMANGA_WEBVIEW=1 desactiva este modo (fuerza el webview WebKitGTK).
+fn find_chromium() -> Option<PathBuf> {
+    if std::env::var_os("ANIMANGA_WEBVIEW").is_some() {
+        return None;
+    }
+    if let Ok(b) = std::env::var("ANIMANGA_BROWSER") {
+        return Some(PathBuf::from(b));
+    }
+    if cfg!(not(target_os = "linux")) {
+        return None; // Windows/macOS: WebView2/WKWebView ya rinden bien
+    }
+    for name in [
+        "brave", "chromium", "google-chrome-stable", "google-chrome",
+        "thorium-browser", "vivaldi", "microsoft-edge-stable",
+    ] {
+        if let Ok(out) = Command::new("which").arg(name).output() {
+            if out.status.success() {
+                let p = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !p.is_empty() {
+                    return Some(PathBuf::from(p));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Ventana --app de Chromium con perfil propio (imprescindible: sin él, --app se
+/// fusiona con una instancia del navegador ya abierta y el proceso retorna al
+/// instante, con lo que perderíamos el "cerrar ventana → apagar backend").
+fn spawn_browser_app(browser: &PathBuf) -> Option<Child> {
+    let profile = dirs_profile();
+    Command::new(browser)
+        .arg(format!("--app={BASE}/"))
+        .arg(format!("--user-data-dir={}", profile.display()))
+        .arg("--class=animanga-studio")
+        .arg("--no-first-run")
+        .arg("--no-default-browser-check")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()
+}
+
+fn dirs_profile() -> PathBuf {
+    let base = std::env::var("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".into()))
+                .join(".local/share")
+        });
+    base.join("animanga-webshell")
+}
+
 fn main() {
-    // WebKitGTK + NVIDIA propietario: el renderer DMA-BUF composita mal (jitter
-    // al hacer scroll, texturas en blanco) tanto en Wayland nativo como bajo
-    // XWayland — verificado en esta máquina (RTX 3050, driver 610). Config
-    // estable: DMA-BUF desactivado (pintado por CPU con Skia) + más hilos de
-    // raster para compensar la fluidez. ANIMANGA_X11=1 queda como experimento
-    // para re-probar la aceleración bajo XWayland con drivers futuros.
+    // Workarounds WebKitGTK+NVIDIA (solo aplican al modo webview): DMA-BUF
+    // composita mal (jitter/texturas en blanco) en Wayland y XWayland —
+    // verificado en esta máquina (RTX 3050, driver 610). ANIMANGA_X11=1 queda
+    // como experimento para re-probar aceleración con drivers futuros.
     if std::env::var_os("ANIMANGA_X11").is_some() {
         if std::env::var_os("GDK_BACKEND").is_none() {
             std::env::set_var("GDK_BACKEND", "x11");
@@ -111,59 +171,106 @@ fn main() {
         std::env::set_var("WEBKIT_SKIA_CPU_PAINTING_THREADS", threads.to_string());
     }
 
-    tauri::Builder::default()
+    let browser = find_chromium();
+    let use_browser = browser.is_some();
+
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
-            // Segunda instancia → traer la ventana existente al frente.
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
                 let _ = w.set_focus();
                 let _ = w.unminimize();
             }
-        }))
-        .setup(|app| {
-            let owned = if backend_alive() {
-                println!("[shell] backend ya corriendo — no se lanza sidecar (modo dev)");
-                None
-            } else {
-                spawn_backend()
-            };
-            app.manage(Sidecar(Mutex::new(owned)));
+        }));
 
-            // El splash NO puede sondear /health por fetch (tauri:// → http://127.0.0.1
-            // es cross-origin y el webview lo bloquea por CORS). Sondea Rust y navega.
+    builder = builder.setup(move |app| {
+        let owned = if backend_alive() {
+            println!("[shell] backend ya corriendo — no se lanza sidecar (modo dev)");
+            None
+        } else {
+            spawn_backend()
+        };
+        app.manage(Sidecar(Mutex::new(owned)));
+
+        if let Some(browser) = browser.clone() {
+            // ── Modo browser-app (Chromium) ──────────────────────────────────
+            // Sin ventana Tauri: esperamos /health, abrimos la ventana --app y
+            // cuando el usuario la cierra, salimos (Exit apaga el sidecar).
+            println!("[shell] modo browser-app: {}", browser.display());
             let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(90);
+                while !backend_alive() {
+                    if std::time::Instant::now() > deadline {
+                        eprintln!("[shell] backend no respondió en 90 s — saliendo");
+                        handle.exit(1);
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(400));
+                }
+                match spawn_browser_app(&browser) {
+                    Some(mut child) => {
+                        let _ = child.wait(); // ventana cerrada → fin de la app
+                        handle.exit(0);
+                    }
+                    None => {
+                        eprintln!("[shell] no se pudo abrir el navegador — saliendo");
+                        handle.exit(1);
+                    }
+                }
+            });
+        } else {
+            // ── Modo webview (WebKitGTK / WebView2) ──────────────────────────
+            let win = tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::App("splash.html".into()),
+            )
+            .title("AniManga Studio")
+            .inner_size(1500.0, 940.0)
+            .min_inner_size(900.0, 600.0)
+            .center()
+            .build()?;
+
+            // El splash NO puede sondear /health por fetch (tauri:// → http://
+            // es cross-origin y CORS lo bloquea). Sondea Rust y navega.
             std::thread::spawn(move || {
                 let deadline = std::time::Instant::now() + Duration::from_secs(60);
                 let mut warned = false;
                 loop {
                     if backend_alive() {
-                        if let Some(w) = handle.get_webview_window("main") {
-                            let _ = w.navigate(format!("{BASE}/").parse().unwrap());
-                        }
+                        let _ = win.navigate(format!("{BASE}/").parse().unwrap());
                         return;
                     }
-                    // Aviso a los 60 s pero seguimos sondeando: si el backend
-                    // aparece más tarde, la app entra sola igualmente.
                     if !warned && std::time::Instant::now() > deadline {
                         warned = true;
-                        if let Some(w) = handle.get_webview_window("main") {
-                            let _ = w.eval("window.showError && window.showError()");
-                        }
+                        let _ = win.eval("window.showError && window.showError()");
                     }
                     std::thread::sleep(Duration::from_millis(500));
                 }
             });
-            Ok(())
-        })
+        }
+        Ok(())
+    });
+
+    let app = builder
         .build(tauri::generate_context!())
-        .expect("error building tauri app")
-        .run(|app, event| {
-            if let RunEvent::Exit = event {
-                let state = app.state::<Sidecar>();
-                let owned = state.0.lock().unwrap().take();
-                if let Some(mut child) = owned {
-                    stop_backend(&mut child);
-                }
+        .expect("error building tauri app");
+
+    // En modo browser-app no hay ventanas Tauri: evita que el runtime salga solo
+    // al arrancar por "no quedan ventanas".
+    if use_browser {
+        // (Tauri solo auto-sale cuando se cierra la última ventana; sin ventanas
+        // creadas nunca dispara ese camino, así que no hace falta nada más.)
+    }
+
+    app.run(|app, event| {
+        if let RunEvent::Exit = event {
+            let state = app.state::<Sidecar>();
+            let owned = state.0.lock().unwrap().take();
+            if let Some(mut child) = owned {
+                stop_backend(&mut child);
             }
-        });
+        }
+    });
 }
