@@ -32,11 +32,105 @@ def _gql(query: str, variables: dict = None):
 
 
 def _suwayomi_online() -> bool:
+    # Socket puro a propósito: pasar por http_requests actualizaría last_use y el
+    # propio healthcheck impediría que el reaper de inactividad apague la JVM.
+    import socket
     try:
-        http_requests.get(SUWAYOMI_BASE, timeout=3, retries=1)  # health check: fail fast
-        return True
-    except Exception:
+        with socket.create_connection(("127.0.0.1", 4567), timeout=2):
+            return True
+    except OSError:
         return False
+
+
+# ── Ciclo de vida on-demand ───────────────────────────────────────────────────
+# La JVM de Suwayomi (~300-500 MB) solo corre cuando hace falta: cualquier uso
+# real la arranca (ensure_suwayomi) y un reaper la apaga tras N min sin tráfico.
+# El "uso" se mide en resilient_http.last_use — TODO el tráfico a :4567
+# (GraphQL, páginas de capítulo, thumbnails, descargas) pasa por ese cliente.
+
+import os as _os
+import time as _time
+import threading as _threading
+import subprocess as _subprocess
+
+_SUWAYOMI_SCRIPTS = Path(__file__).resolve().parents[2] / "suwayomi"
+_IDLE_SECS = max(1, int(_os.environ.get("SUWAYOMI_IDLE_MIN", "15"))) * 60
+_EAGER = _os.environ.get("SUWAYOMI_EAGER") == "1"
+_start_lock = _threading.Lock()
+_reaper_baseline = _time.monotonic()  # "último uso" implícito al arrancar Flask
+
+
+def _last_use() -> float:
+    lu = http_requests.last_use
+    return max(lu.get("localhost:4567", 0.0), lu.get("127.0.0.1:4567", 0.0),
+               _reaper_baseline)
+
+
+def ensure_suwayomi(timeout: float = 45.0) -> bool:
+    """Garantiza que Suwayomi responda: si no está arriba, lanza start.sh y espera
+    readiness (la JVM + KCEF tardan ~10-20 s). Devuelve False si no arrancó."""
+    if _suwayomi_online():
+        return True
+    with _start_lock:
+        if _suwayomi_online():
+            return True
+        script = _SUWAYOMI_SCRIPTS / "start.sh"
+        if not script.exists():
+            return False
+        print("[suwayomi] arranque bajo demanda…", flush=True)
+        try:
+            _subprocess.Popen(["bash", str(script)],
+                              stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL)
+        except Exception as e:
+            print(f"[suwayomi] start falló: {e}", flush=True)
+            return False
+        deadline = _time.monotonic() + timeout
+        while _time.monotonic() < deadline:
+            _time.sleep(1.5)
+            if _suwayomi_online():
+                print("[suwayomi] listo", flush=True)
+                # marca de uso: que el reaper no la mate recién nacida
+                http_requests.last_use["localhost:4567"] = _time.monotonic()
+                return True
+        print("[suwayomi] timeout esperando readiness", flush=True)
+        return False
+
+
+def stop_suwayomi():
+    script = _SUWAYOMI_SCRIPTS / "stop.sh"
+    if script.exists():
+        try:
+            _subprocess.run(["bash", str(script)], timeout=15,
+                            stdout=_subprocess.DEVNULL, stderr=_subprocess.DEVNULL)
+        except Exception as e:
+            print(f"[suwayomi] stop falló: {e}", flush=True)
+
+
+def _idle_reaper():
+    while True:
+        _time.sleep(60)
+        try:
+            if _EAGER or not _suwayomi_online():
+                continue
+            idle = _time.monotonic() - _last_use()
+            if idle >= _IDLE_SECS:
+                print(f"[suwayomi] {idle/60:.0f} min sin uso — apagando JVM", flush=True)
+                stop_suwayomi()
+        except Exception:
+            pass
+
+
+_threading.Thread(target=_idle_reaper, daemon=True, name="suwayomi-reaper").start()
+
+
+@sources_bp.before_request
+def _wake_suwayomi():
+    # /health solo informa (el frontend sondea estado); todo lo demás despierta la JVM.
+    if request.endpoint and request.endpoint.endswith(".health"):
+        return None
+    if not ensure_suwayomi():
+        return jsonify({"error": "Suwayomi no disponible (no arrancó)"}), 503
+    return None
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -44,6 +138,11 @@ def _suwayomi_online() -> bool:
 @sources_bp.route("/health", methods=["GET"])
 def health():
     online = _suwayomi_online()
+    # ?wake=1 (vista Fuentes): dispara el arranque en background y responde ya;
+    # el polling del frontend (6×5 s) recoge el online cuando la JVM esté lista.
+    if not online and request.args.get("wake") == "1":
+        _threading.Thread(target=ensure_suwayomi, daemon=True).start()
+        return jsonify({"online": False, "starting": True, "url": SUWAYOMI_BASE})
     return jsonify({"online": online, "url": SUWAYOMI_BASE})
 
 

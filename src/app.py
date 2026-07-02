@@ -101,19 +101,13 @@ app.register_blueprint(transplant_bp, url_prefix='/api/transplant')
 app.register_blueprint(import_bp, url_prefix='/api/import')
 
 
-def _try_start_suwayomi():
-    """Auto-start Suwayomi when Flask loads — safe to call multiple times (start.sh checks PID)."""
-    import subprocess
-    script = BASE_DIR.parent / 'suwayomi' / 'start.sh'
-    if script.exists():
-        try:
-            subprocess.Popen(['bash', str(script)],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            print('[startup] Suwayomi launch requested', flush=True)
-        except Exception as e:
-            print(f'[startup] Suwayomi start failed: {e}', flush=True)
-
-_try_start_suwayomi()
+# Suwayomi es on-demand (ver sources.py: ensure_suwayomi + reaper de inactividad).
+# SUWAYOMI_EAGER=1 restaura el comportamiento anterior: JVM siempre encendida.
+if os.environ.get('SUWAYOMI_EAGER') == '1':
+    from api.sources import ensure_suwayomi as _ensure_suwayomi
+    import threading as _threading
+    _threading.Thread(target=_ensure_suwayomi, daemon=True).start()
+    print('[startup] Suwayomi eager start requested', flush=True)
 
 
 # ── Ciclo de vida (app de escritorio / sidecar) ───────────────────────────────

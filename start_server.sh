@@ -94,8 +94,14 @@ fi
 # ─────────────────────────────────────────────────────────────────────────────
 
 # ── Suwayomi ─────────────────────────────────────────────────────────────────
-echo "[start] Iniciando Suwayomi..." >&2
-bash "$SCRIPT_DIR/suwayomi/start.sh" >&2
+# On-demand por defecto: el backend la arranca al usar Fuentes y la apaga tras
+# inactividad (sources.py). SUWAYOMI_EAGER=1 en .env la enciende aquí como antes.
+if [[ "${SUWAYOMI_EAGER:-}" == "1" ]]; then
+    echo "[start] Iniciando Suwayomi (eager)..." >&2
+    bash "$SCRIPT_DIR/suwayomi/start.sh" >&2
+else
+    echo "[start] Suwayomi en modo on-demand (arranca al usar Fuentes)" >&2
+fi
 
 # ── qBittorrent ────────────────────────────────────────────────────────────
 # Health-check is OS-agnostic (WebAPI). Auto-launch when absent is just a

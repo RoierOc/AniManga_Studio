@@ -6,6 +6,7 @@ import { useMangaStore } from './manga'
 export const useSourcesStore = defineStore('sources', {
   state: () => ({
     online: false,
+    starting: false,   // JVM on-demand arrancando (splash "arrancando fuentes…")
     checked: false,
     sources: [],
 
@@ -41,13 +42,21 @@ export const useSourcesStore = defineStore('sources', {
   },
 
   actions: {
-    async checkHealth(retries = 6) {
-      try { this.online = !!(await api.get('/api/sources/health'))?.online }
+    async checkHealth(retries = 9) {
+      // wake=1: Suwayomi es on-demand — entrar a Fuentes arranca la JVM en el
+      // backend y este polling recoge el online cuando esté lista (~10-20s).
+      let starting = false
+      try {
+        const h = await api.get('/api/sources/health?wake=1')
+        this.online = !!h?.online
+        starting = !!h?.starting
+      }
       catch (_) { this.online = false }
       finally { this.checked = true }
-      if (this.online) { if (!this.sources.length) this.loadSources(); return }
-      // Suwayomi (Java) takes ~15-30s to boot — retry quietly so Fuentes loads itself.
+      this.starting = starting
+      if (this.online) { this.starting = false; if (!this.sources.length) this.loadSources(); return }
       if (retries > 0) setTimeout(() => this.checkHealth(retries - 1), 5000)
+      else this.starting = false
     },
     async loadSources() {
       try { this.sources = await api.get('/api/sources/list') || [] } catch (_) {}

@@ -34,7 +34,7 @@ from api.resilient_http import http as http_requests  # retry + backoff + per-ho
 
 from api.runtime import (MANGA_DIR, UPSCALED_DIR, QA_DIR, normalize_chapter, build_task_id, push_sse_event,
                          cache_get, cache_set, cache_invalidate)
-from api.sources import _gql, SUWAYOMI_URL, SUWAYOMI_BASE, _suwayomi_online
+from api.sources import _gql, SUWAYOMI_URL, SUWAYOMI_BASE, ensure_suwayomi
 from api.download import _fetch_with_retry, _dl_semaphore, _chapter_file_prefix
 from api.anilist import title_variants
 
@@ -1218,7 +1218,7 @@ def discover():
     """Lanza el descubrimiento en segundo plano y devuelve task_id de inmediato; la
     UI sondea /status?task_id= para ver progreso en vivo y el resultado final.
     Body: {title, anilistId?, sourceIds?[]} — sourceIds restringe el barrido."""
-    if not _suwayomi_online():
+    if not ensure_suwayomi():
         return jsonify({"error": "Suwayomi offline"}), 503
     body = request.get_json(silent=True) or {}
     title = (body.get("title") or "").strip()
@@ -1320,7 +1320,7 @@ def versions():
     """Descubre y rankea TODAS las versiones del título por calidad de imagen,
     agrupadas por idioma (pestaña 'Versiones'). Devuelve task_id de inmediato; la UI
     sondea /status?task_id=. Body: {title, anilistId?, sourceIds?[], currentLang?}."""
-    if not _suwayomi_online():
+    if not ensure_suwayomi():
         return jsonify({"error": "Suwayomi offline"}), 503
     body = request.get_json(silent=True) or {}
     title = (body.get("title") or "").strip()
@@ -1372,7 +1372,7 @@ def _run_download_version(task_id: str, title: str, manga_id):
 def download_version():
     """Descarga los capítulos FALTANTES de una versión en la biblioteca (no sobrescribe lo
     que ya tienes). Devuelve task_id; la UI sondea /status. Body: {title, source:{mangaId}}."""
-    if not _suwayomi_online():
+    if not ensure_suwayomi():
         return jsonify({"error": "Suwayomi offline"}), 503
     body = request.get_json(silent=True) or {}
     title = (body.get("title") or "").strip()
@@ -1443,7 +1443,7 @@ def resolve_volumes():
     es = meta.get("es")
     if not es:
         return jsonify({"error": "no hay fuente ES elegida; ejecuta /discover primero"}), 400
-    if not _suwayomi_online():
+    if not ensure_suwayomi():
         return jsonify({"error": "Suwayomi offline"}), 503
     return jsonify(_resolve_pending_volumes(title, es["mangaId"]))
 
@@ -1494,7 +1494,7 @@ def list_chapters(title):
     pending = _pending_volumes(title)
     if not art or not es:
         return jsonify({"chapters": [], "needsDiscover": True, "pendingVolumes": pending})
-    if not _suwayomi_online():
+    if not ensure_suwayomi():
         return jsonify({"error": "Suwayomi offline"}), 503
     try:
         # Sin timeout corto aquí: el endpoint de capítulos NO está en el camino del
@@ -1533,7 +1533,7 @@ def preview_chapter(title, chapter):
     src = meta.get("es" if which == "es" else "art")
     if not src:
         return jsonify({"error": "no source chosen"}), 400
-    if not _suwayomi_online():
+    if not ensure_suwayomi():
         return jsonify({"error": "Suwayomi offline"}), 503
     try:
         cmap = _chapters_map(int(src["mangaId"]), timeout=_SAMPLE_TIMEOUT)
@@ -1559,7 +1559,7 @@ def preview_candidate():
     sid = request.args.get("sourceId") or ""
     cand = {"mangaId": manga_id, "sourceId": sid, "sourceLang": request.args.get("lang") or ""}
     # MangaDex/local no necesitan Suwayomi; solo exigimos Suwayomi online para fuentes Suwayomi.
-    if sid != "__mangadex__" and str(manga_id) != "__local__" and not _suwayomi_online():
+    if sid != "__mangadex__" and str(manga_id) != "__local__" and not ensure_suwayomi():
         return jsonify({"error": "Suwayomi offline"}), 503
     try:
         _, urls = _candidate_chapter_urls(cand, request.args.get("title") or "",
@@ -1784,7 +1784,7 @@ def cancel():
 @transplant_bp.route("/run", methods=["POST"])
 def run():
     """Trasplanta uno o más capítulos usando las fuentes ya elegidas (discover/confirm)."""
-    if not _suwayomi_online():
+    if not ensure_suwayomi():
         return jsonify({"error": "Suwayomi offline"}), 503
     body = request.get_json(silent=True) or {}
     title = (body.get("title") or "").strip()

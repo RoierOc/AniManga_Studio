@@ -6,7 +6,9 @@ import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useSourcesStore()
-onMounted(() => { if (!store.checked) store.checkHealth() })
+// Siempre re-chequear al entrar: con Suwayomi on-demand la JVM puede haberse
+// apagado por inactividad desde la última visita — el wake=1 la despierta.
+onMounted(() => { store.checkHealth() })
 
 function openManga(m) {
   store.openDetail(m)
@@ -29,12 +31,16 @@ function openMangaFromGroup(m, groupSource) {
         <p class="eyebrow"><span class="tick" /> EXTENSIONES MIHON / SUWAYOMI</p>
         <h1>Fuentes</h1>
       </div>
-      <span class="src__status" :class="{ 'is-on': store.online }">
-        <span class="dot" /> {{ store.online ? `${store.sources.length} fuentes` : 'Suwayomi offline' }}
+      <span class="src__status" :class="{ 'is-on': store.online, 'is-starting': store.starting }">
+        <span class="dot" /> {{ store.online ? `${store.sources.length} fuentes` : (store.starting ? 'Arrancando fuentes…' : 'Suwayomi offline') }}
       </span>
     </header>
 
-    <div v-if="store.checked && !store.online" class="offline">
+    <div v-if="store.checked && !store.online && store.starting" class="offline">
+      <Spinner :size="28" />
+      <p>Arrancando el servidor de fuentes… (~15 s la primera vez)</p>
+    </div>
+    <div v-else-if="store.checked && !store.online" class="offline">
       <Icon name="globe" :size="36" />
       <p>Suwayomi no está corriendo (puerto 4567).</p>
       <button class="btn" @click="store.checkHealth()">Reintentar</button>

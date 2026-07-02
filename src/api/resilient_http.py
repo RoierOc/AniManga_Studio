@@ -100,6 +100,8 @@ class ResilientHTTP:
         # Per-host pacing state: netloc -> (lock, last_request_monotonic).
         self._pace_lock = threading.Lock()
         self._pace = {}
+        # netloc -> monotonic del último request (escritura atómica por el GIL)
+        self.last_use = {}
 
     @property
     def session(self):
@@ -134,6 +136,9 @@ class ResilientHTTP:
 
     def request(self, method, url, *, retries=None, **kwargs):
         netloc = urlparse(url).netloc
+        # Actividad por host — sources.py lo lee para el auto-stop de Suwayomi:
+        # cualquier petición (GraphQL, páginas, thumbnails) cuenta como "en uso".
+        self.last_use[netloc] = time.monotonic()
         cfg = self._config_for(netloc)
         attempts = retries if retries is not None else cfg.retries
 
