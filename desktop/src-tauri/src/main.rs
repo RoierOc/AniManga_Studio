@@ -47,12 +47,16 @@ fn repo_root() -> PathBuf {
 
 fn spawn_backend() -> Option<Child> {
     let root = repo_root();
-    let script = root.join("start_server.sh");
+    let script = if cfg!(target_os = "windows") {
+        root.join("start_server.ps1")
+    } else {
+        root.join("start_server.sh")
+    };
     if !script.exists() {
         eprintln!("[shell] no existe {script:?} — ¿ANIMANGA_ROOT mal apuntada?");
         return None;
     }
-    let log = std::fs::File::create("/tmp/manga_server.log").ok();
+    let log = std::fs::File::create(std::env::temp_dir().join("manga_server.log")).ok();
     let (out, err) = match log {
         Some(f) => (
             Stdio::from(f.try_clone().expect("dup log fd")),
@@ -60,8 +64,17 @@ fn spawn_backend() -> Option<Child> {
         ),
         None => (Stdio::null(), Stdio::null()),
     };
-    match Command::new("bash")
-        .arg(script)
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut c = Command::new("powershell");
+        c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+            .arg(&script);
+        c
+    } else {
+        let mut c = Command::new("bash");
+        c.arg(&script);
+        c
+    };
+    match cmd
         .current_dir(&root)
         .env("MANGA_SERVER_FG", "1") // foreground: la app es dueña del árbol de procesos
         .stdout(out)

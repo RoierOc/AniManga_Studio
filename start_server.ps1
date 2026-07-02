@@ -51,7 +51,12 @@ try:
 except ImportError:
     app.run(port=5101, debug=False, threaded=True, host='127.0.0.1')
 "
-        Write-Host "[watchdog] El servidor se detuvo. Reiniciando en 5s... (Ctrl+C para salir)"
+        # Exit 0 = apagado limpio (POST /shutdown desde la app de escritorio): no resucitar.
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "[watchdog] Apagado limpio (exit 0). Fin."
+            break
+        }
+        Write-Host "[watchdog] El servidor se detuvo (exit $LASTEXITCODE). Reiniciando en 5s... (Ctrl+C para salir)"
         Start-Sleep -Seconds 5
     }
 }
