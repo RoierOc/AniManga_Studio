@@ -2786,6 +2786,53 @@ def anime_scan_unmatch():
 
 
 @anime_bp.route('/play', methods=['POST'])
+def resolve_episode_video(data: dict):
+    """Resuelve la ruta del archivo de vídeo de un episodio (carpeta local o
+    qBittorrent) — lógica compartida entre el lanzador de MPV (anime_play) y el
+    streaming del player web (api.stream). Devuelve (ruta|None, (msg, status)|None)."""
+    episode    = data.get('episode', -1)
+    local_path = (data.get('local_path') or '').strip()
+    anime_id   = data.get('anime_id', '')
+    ep_str     = str(episode)
+
+    if local_path:
+        video = _find_video(local_path, int(episode))
+        if not video:
+            return None, (f'no video found in: {local_path}', 404)
+        return video, None
+
+    info_hash = (data.get('info_hash') or '').lower()
+    if not info_hash:
+        return None, ('info_hash required', 400)
+    try:
+        torrents = _q('get', '/torrents/info', params={'hashes': info_hash}).json()
+    except Exception as e:
+        return None, (f'qBT error: {e}', 500)
+    if not torrents and anime_id:
+        lib = _lib_read()
+        batch_hash = (lib.get(anime_id) or {}).get('episodes', {}).get('0', {}).get('info_hash', '')
+        if batch_hash and batch_hash != info_hash:
+            try:
+                torrents = _q('get', '/torrents/info', params={'hashes': batch_hash}).json()
+            except Exception:
+                pass
+    if not torrents:
+        return None, ('torrent not found in qBittorrent', 404)
+    content_path = torrents[0].get('content_path') or torrents[0].get('save_path', '')
+    if not content_path:
+        return None, ('no content path from qBittorrent', 404)
+    ep_subpath = ''
+    if anime_id:
+        lib_ep = (_lib_read().get(anime_id) or {}).get('episodes', {}).get(ep_str, {})
+        if not lib_ep:
+            lib_ep = (_lib_read().get(anime_id) or {}).get('episodes', {}).get('0', {})
+        ep_subpath = lib_ep.get('subpath', '')
+    video = _find_video(content_path, int(episode), ep_subpath)
+    if not video:
+        return None, (f'no video file found in: {content_path}', 404)
+    return video, None
+
+
 def anime_play():
     try:
         data = request.get_json(silent=True) or {}
@@ -2815,44 +2862,9 @@ def anime_play():
                                  daemon=True).start()
             return True
 
-        if local_path:
-            video = _find_video(local_path, int(episode))
-            if not video:
-                return jsonify({'error': f'no video found in: {local_path}'}), 404
-            if not _launch_and_track(video):
-                return jsonify({'error': 'failed to launch mpv'}), 500
-            return jsonify({'ok': True, 'path': video, 'resume_pos': start_pos})
-
-        info_hash = (data.get('info_hash') or '').lower()
-        if not info_hash:
-            return jsonify({'error': 'info_hash required'}), 400
-        try:
-            torrents = _q('get', '/torrents/info', params={'hashes': info_hash}).json()
-        except Exception as e:
-            return jsonify({'error': f'qBT error: {e}'}), 500
-        if not torrents and anime_id:
-            lib = _lib_read()
-            batch_hash = (lib.get(anime_id) or {}).get('episodes', {}).get('0', {}).get('info_hash', '')
-            if batch_hash and batch_hash != info_hash:
-                try:
-                    torrents = _q('get', '/torrents/info', params={'hashes': batch_hash}).json()
-                except Exception:
-                    pass
-        if not torrents:
-            return jsonify({'error': 'torrent not found in qBittorrent'}), 404
-        content_path = torrents[0].get('content_path') or torrents[0].get('save_path', '')
-        if not content_path:
-            return jsonify({'error': 'no content path from qBittorrent'}), 404
-        # Read subpath from library episode record (set when linking multi-season batches)
-        ep_subpath = ''
-        if anime_id:
-            lib_ep = (_lib_read().get(anime_id) or {}).get('episodes', {}).get(ep_str, {})
-            if not lib_ep:  # fallback to batch ep record
-                lib_ep = (_lib_read().get(anime_id) or {}).get('episodes', {}).get('0', {})
-            ep_subpath = lib_ep.get('subpath', '')
-        video = _find_video(content_path, int(episode), ep_subpath)
-        if not video:
-            return jsonify({'error': f'no video file found in: {content_path}'}), 404
+        video, err = resolve_episode_video(data)
+        if err:
+            return jsonify({'error': err[0]}), err[1]
         if not _launch_and_track(video):
             return jsonify({'error': 'failed to launch mpv — is mpv.exe in PATH?'}), 500
         return jsonify({'ok': True, 'path': video, 'resume_pos': start_pos})

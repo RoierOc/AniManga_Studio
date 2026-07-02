@@ -8,6 +8,12 @@ importers:
 
   .:
     dependencies:
+      hls.js:
+        specifier: ^1.6.16
+        version: 1.6.16
+      jassub:
+        specifier: ^2.5.6
+        version: 2.5.6
       pinia:
         specifier: ^2.2.6
         version: 2.3.1(vue@3.5.35)
@@ -471,6 +477,9 @@ packages:
   '@vue/shared@3.5.35':
     resolution: {integrity: sha512-zSbjL7gRXwks2ZQLRGCajBtBXEOXW9Ddhn/HvSdrGkE2dqGnumzW8XtusRrxrE9LvqtiqDXQ+A60Hp6mvdYxfA==}
 
+  abslink@1.2.2:
+    resolution: {integrity: sha512-HCOItvzORPjMzddCmEpbH8+W1VM3yjH+CR7DLtxlxFKX/jz5twJbm7KLfblO7eKLnXINLah8Hk2ZAJqxXeSkOg==}
+
   chokidar@5.0.0:
     resolution: {integrity: sha512-TQMmc3w+5AxjpL8iIiwebF73dRDF4fBIieAqGn9RGCWaEVwQ6Fb2cGe31Yns0RRIzii5goJ1Y7xbMwo1TxMplw==}
     engines: {node: '>= 20.19.0'}
@@ -508,6 +517,9 @@ packages:
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
 
+  hls.js@1.6.16:
+    resolution: {integrity: sha512-VSIRpLfRwlAAdGL4wiTucx2ScRipo0ed1FBatWkyt832jC4CReKstga6yIhYVwGu9LOBjuX9wzmRMeQdBJtzEA==}
+
   immutable@5.1.5:
     resolution: {integrity: sha512-t7xcm2siw+hlUM68I+UEOK+z84RzmN59as9DZ7P1l0994DKUWV7UXBMQZVxaoMSRQ+PBZbHCOoBt7a2wxOMt+A==}
 
@@ -518,6 +530,12 @@ packages:
   is-glob@4.0.3:
     resolution: {integrity: sha512-xelSayHH36ZgE7ZWhli7pW34hNbNl8Ojv5KVmkJD4hBdD3th8Tfk9vYasLM+mXWOZhFkgZfxhLSnrwRr4elSSg==}
     engines: {node: '>=0.10.0'}
+
+  jassub@2.5.6:
+    resolution: {integrity: sha512-jsbEPVR+JvcOcGa8PbyVvHmFol+rQtAfty7JDp1WWrS3GEfThitjI5sXT0VLfG6/BLuyIuv1+2qykWdWyLkpQw==}
+
+  lfa-ponyfill@1.1.0:
+    resolution: {integrity: sha512-YS3/DmyDdywWwoEu1ZacAudqkJ4q7WtKE9+bWlaSuEoVrXva7ChIJHMJYs19zyVc1H198pzqAreQU0r/+YNeew==}
 
   magic-string@0.30.21:
     resolution: {integrity: sha512-vd2F4YUyEXKGcLHoq+TEyCjxueSeHnFxyyjNp80yg0XV4vUhnDer/lvvlqM/arB5bXQN5K2/3oinyCRyx8T2CQ==}
@@ -559,6 +577,9 @@ packages:
     engines: {node: '>=18.0.0', npm: '>=8.0.0'}
     hasBin: true
 
+  rvfc-polyfill@1.0.8:
+    resolution: {integrity: sha512-uA+0wwTkZ4OT8v45pfDfH+7Yq8mY6MvNngiF5Sq6VBgjJsvsfgt7Q18cyZqZjfAhW9rhkgXPX0cW0R9uw7yElA==}
+
   sass@1.100.0:
     resolution: {integrity: sha512-B5j0rYMlinhhOo9tjQebMVVn0TfyXAF+wB3b2ggZUuJ/is/Y+7+JGjirAMxHZ9Z3hIP98NPfamlAkBHa1lAaXQ==}
     engines: {node: '>=20.19.0'}
@@ -567,6 +588,9 @@ packages:
   source-map-js@1.2.1:
     resolution: {integrity: sha512-UXWMKhLOwVKb728IUtQPXxfYU+usdybtUrK/8uGE8CQMvrhOpwvzDBwj0QhSL7MQc7vIsISBG8VQ8+IDQxpfQA==}
     engines: {node: '>=0.10.0'}
+
+  throughput@1.0.2:
+    resolution: {integrity: sha512-jvK1ZXuhsggjb3qYQjMiU/AVYYiTeqT5thWvYR2yuy2LGM84P5MSSyAinwHahGsdBYKR9m9HncVR/3f3nFKkxg==}
 
   tinyglobby@0.2.16:
     resolution: {integrity: sha512-pn99VhoACYR8nFHhxqix+uvsbXineAasWm5ojXoN8xEwK5Kd3/TrhNn1wByuD52UxWRLy8pu+kRMniEi6Eq9Zg==}
@@ -925,6 +949,8 @@ snapshots:
 
   '@vue/shared@3.5.35': {}
 
+  abslink@1.2.2: {}
+
   chokidar@5.0.0:
     dependencies:
       readdirp: 5.0.0
@@ -974,6 +1000,8 @@ snapshots:
   fsevents@2.3.3:
     optional: true
 
+  hls.js@1.6.16: {}
+
   immutable@5.1.5: {}
 
   is-extglob@2.1.1:
@@ -983,6 +1011,15 @@ snapshots:
     dependencies:
       is-extglob: 2.1.1
     optional: true
+
+  jassub@2.5.6:
+    dependencies:
+      abslink: 1.2.2
+      lfa-ponyfill: 1.1.0
+      rvfc-polyfill: 1.0.8
+      throughput: 1.0.2
+
+  lfa-ponyfill@1.1.0: {}
 
   magic-string@0.30.21:
     dependencies:
@@ -1044,6 +1081,8 @@ snapshots:
       '@rollup/rollup-win32-x64-msvc': 4.60.4
       fsevents: 2.3.3
 
+  rvfc-polyfill@1.0.8: {}
+
   sass@1.100.0:
     dependencies:
       chokidar: 5.0.0
@@ -1053,6 +1092,8 @@ snapshots:
       '@parcel/watcher': 2.5.6
 
   source-map-js@1.2.1: {}
+
+  throughput@1.0.2: {}
 
   tinyglobby@0.2.16:
     dependencies:

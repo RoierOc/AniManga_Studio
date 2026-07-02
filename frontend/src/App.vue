@@ -10,6 +10,7 @@ import ActivityDrawer from '@/components/ui/ActivityDrawer.vue'
 import ShortcutsModal from '@/components/ui/ShortcutsModal.vue'
 import MangaModal from '@/components/manga/MangaModal.vue'
 import Reader from '@/components/manga/Reader.vue'
+import PlayerOverlay from '@/components/anime/PlayerOverlay.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 
 // Views are code-split into their own chunks (loaded on demand) to shrink the initial
@@ -97,6 +98,7 @@ watch(() => ui.currentView, () => { crash.value = null })
 
     <MangaModal />
     <Reader />
+    <PlayerOverlay />
     <ActivityDrawer />
     <ShortcutsModal />
     <Toaster />

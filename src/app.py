@@ -99,6 +99,8 @@ app.register_blueprint(imgproxy_bp, url_prefix='/api/img')
 app.register_blueprint(backup_bp, url_prefix='/api/backup')
 app.register_blueprint(transplant_bp, url_prefix='/api/transplant')
 app.register_blueprint(import_bp, url_prefix='/api/import')
+from api.stream import stream_bp
+app.register_blueprint(stream_bp, url_prefix='/api/stream')
 
 
 # Suwayomi es on-demand (ver sources.py: ensure_suwayomi + reaper de inactividad).

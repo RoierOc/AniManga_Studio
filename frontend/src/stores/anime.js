@@ -99,6 +99,10 @@ export const useAnimeStore = defineStore('anime', {
     epFetch: {},                 // per-episode deep-fetch state: epNum → 'loading' | 'done'
     addingHashes: [],            // keys currently being added to qbt
     addedHashes: [],             // keys just added (transient ✓)
+
+    // ── Player web embebido (estilo Crunchyroll) ─────────────────────────
+    playerMode: localStorage.getItem('anime-player-mode') || 'web', // 'web' | 'mpv'
+    player: null,                // {anime, ep, sess, loading, error} — overlay abierto si != null
   }),
 
   getters: {
@@ -563,6 +567,11 @@ export const useAnimeStore = defineStore('anime', {
     },
 
     async play(anime, ep, subFile = '', startPos = 0) {
+      // Player web embebido por defecto; MPV externo si el modo lo pide o si se
+      // pasa un subtítulo externo (subs traducidos — flujo aún exclusivo de MPV).
+      if (this.playerMode === 'web' && !subFile) {
+        return this.openPlayer(anime, ep, startPos)
+      }
       const base = ep.in_local
         ? { anime_id: anime.id, episode: ep.num, local_path: ep.local_path, sub_file: subFile }
         : { anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash, sub_file: subFile }
@@ -573,6 +582,46 @@ export const useAnimeStore = defineStore('anime', {
       } catch (_) {
         useUiStore().toast('No se pudo iniciar MPV', 'error')
       }
+    },
+
+    setPlayerMode(mode) {
+      this.playerMode = mode
+      localStorage.setItem('anime-player-mode', mode)
+    },
+
+    /* ── Player web embebido ────────────────────────────────────────────── */
+    async openPlayer(anime, ep, startPos = 0, audio = 0) {
+      this.dismissAutoplay?.()
+      this.player = { anime, ep, sess: null, loading: true, error: '', startPos, audio }
+      const base = ep.in_local
+        ? { anime_id: anime.id, episode: ep.num, local_path: ep.local_path }
+        : { anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash }
+      try {
+        const sess = await api.post('/api/stream/open', { ...base, audio })
+        if (!this.player) return           // cerrado mientras abría
+        this.player.sess = sess
+        this.player.loading = false
+      } catch (e) {
+        if (!this.player) return
+        this.player.error = e?.message || 'No se pudo preparar el stream'
+        this.player.loading = false
+      }
+    },
+
+    closePlayer() {
+      api.post('/api/stream/close').catch(() => {})
+      this.player = null
+    },
+
+    /* Siguiente episodio reproducible tras el actual (para el botón/auto-next). */
+    playerNext() {
+      const p = this.player
+      if (!p) return null
+      const a = this.library.find(x => x.id === p.anime.id) || p.anime
+      const eps = (a.episodes || []).filter(e => e.num > p.ep.num && e.ep_type !== 'special'
+        && (e.in_local || (e.in_qbt && e.progress >= 100)))
+      eps.sort((x, y) => x.num - y.num)
+      return eps.length ? { anime: a, ep: eps[0] } : null
     },
 
     async toggleWatched(anime, ep) {

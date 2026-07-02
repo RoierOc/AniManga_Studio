@@ -22,6 +22,11 @@ export default defineConfig({
       '/sw.js': { target: BACKEND, changeOrigin: true },
     },
   },
+  worker: {
+    // jassub (subtítulos ASS del player) instancia un Worker; con code-splitting
+    // Vite exige formato ES para los workers.
+    format: 'es',
+  },
   build: {
     // Flask serves this in production (see app.py serve_spa route).
     outDir: 'dist',
