@@ -596,8 +596,13 @@ export const useAnimeStore = defineStore('anime', {
       const base = ep.in_local
         ? { anime_id: anime.id, episode: ep.num, local_path: ep.local_path }
         : { anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash }
+      // ¿Puede este navegador decodificar HEVC (Main10)? Si sí, el backend COPIA
+      // el stream sin recodificar (cero pérdida) en vez de transcodificar.
+      const hevcOk = typeof MediaSource !== 'undefined'
+        && (MediaSource.isTypeSupported('video/mp4; codecs="hvc1.2.4.L153.B0"')
+         || MediaSource.isTypeSupported('video/mp4; codecs="hev1.2.4.L153.B0"'))
       try {
-        const sess = await api.post('/api/stream/open', { ...base, audio })
+        const sess = await api.post('/api/stream/open', { ...base, audio, hevc_ok: hevcOk })
         if (!this.player) return           // cerrado mientras abría
         this.player.sess = sess
         this.player.loading = false

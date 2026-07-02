@@ -23,6 +23,8 @@ from flask import Blueprint, jsonify, request, send_from_directory
 stream_bp = Blueprint('stream', __name__)
 
 _SESS_ROOT = Path(tempfile.gettempdir()) / 'animanga_stream'
+# Sesiones huérfanas de arranques anteriores (el server murió con streams vivos)
+shutil.rmtree(_SESS_ROOT, ignore_errors=True)
 _lock = threading.Lock()
 _current = {'sid': None, 'proc': None}
 
@@ -90,67 +92,96 @@ def stream_open():
 
     vcodec = vstreams[0].get('codec_name', '')
     acodec = astreams[audio_idx].get('codec_name', '') if astreams else ''
-    v_copy = vcodec in _VIDEO_COPY
+    # HEVC se COPIA (cero pérdida) si el navegador declara que puede decodificarlo
+    # (hevc_ok, sondeado con MediaSource.isTypeSupported — real con el driver
+    # VAAPI de NVIDIA + flags del shell). Si no, transcode de respaldo.
+    v_copy = vcodec in _VIDEO_COPY or (vcodec == 'hevc' and bool(data.get('hevc_ok')))
     a_copy = acodec in _AUDIO_COPY
 
     sid = uuid.uuid4().hex[:12]
     sess = _SESS_ROOT / sid
     sess.mkdir(parents=True, exist_ok=True)
 
-    cmd = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'warning', '-y',
-           '-i', video, '-map', '0:v:0']
-    if astreams:
-        cmd += ['-map', f'0:a:{audio_idx}']
+    def _cmd(video_args, pre_input=()):
+        c = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'warning', '-y',
+             *pre_input, '-i', video, '-map', '0:v:0']
+        if astreams:
+            c += ['-map', f'0:a:{audio_idx}']
+        c += video_args
+        if astreams:
+            c += (['-c:a', 'copy'] if a_copy else ['-c:a', 'aac', '-b:a', '192k', '-ac', '2'])
+        # playlist_type EVENT: ffmpeg añade cada segmento al playlist al cerrarlo
+        # (VOD lo escribe SOLO al terminar → un transcode largo nunca publicaba
+        # el playlist y el open moría en 504). Al acabar escribe ENDLIST igual.
+        c += ['-sn', '-dn',
+              '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'event',
+              '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', 'init.mp4',
+              '-hls_segment_filename', str(sess / 'seg_%05d.m4s'),
+              str(sess / 'index.m3u8')]
+        return c
+
     if v_copy:
-        cmd += ['-c:v', 'copy']
+        # MSE exige el sample entry hvc1 (los MKV traen hev1) — sin el retag el
+        # navegador rechaza el stream HEVC aunque sepa decodificarlo.
+        vargs = ['-c:v', 'copy'] + (['-tag:v', 'hvc1'] if vcodec == 'hevc' else [])
+        attempts = [_cmd(vargs)]
     else:
-        # HEVC u otro no soportado → NVENC (la 3050 codifica sin tocar el
-        # límite de VRAM del upscaler); si no hay NVENC, libx264 veryfast.
-        cmd += ['-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '21']
-    if astreams:
-        cmd += (['-c:a', 'copy'] if a_copy else ['-c:a', 'aac', '-b:a', '192k', '-ac', '2'])
-    cmd += ['-sn', '-dn',
-            '-f', 'hls', '-hls_time', '6', '-hls_playlist_type', 'vod',
-            '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', 'init.mp4',
-            '-hls_segment_filename', str(sess / 'seg_%05d.m4s'),
-            str(sess / 'index.m3u8')]
+        # El anime HEVC suele ser 10-bit y h264_nvenc solo codifica 8-bit →
+        # SIEMPRE convertir a yuv420p antes del encoder (los navegadores tampoco
+        # reproducen H.264 High10). Cadena de intentos:
+        #  1) GPU completa: NVDEC decodifica + NVENC codifica (el decode 10-bit
+        #     por CPU era el cuello: el primer segmento tardaba >30 s → 504).
+        #  2) decode CPU + NVENC   3) todo CPU (libx264).
+        attempts = [
+            _cmd(['-vf', 'scale_cuda=format=yuv420p',
+                  '-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '21'],
+                 pre_input=('-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda')),
+            _cmd(['-vf', 'format=yuv420p', '-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '21']),
+            _cmd(['-vf', 'format=yuv420p', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21']),
+        ]
 
-    with _lock:
-        _kill_current()
-        try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.PIPE, text=True)
-        except Exception as e:
-            return jsonify({'error': f'ffmpeg: {e}'}), 500
-        _current['sid'] = sid
-        _current['proc'] = proc
-
-    # Espera a que el playlist tenga el primer segmento (remux copy: <1 s)
     playlist = sess / 'index.m3u8'
-    deadline = time.monotonic() + 20
-    while time.monotonic() < deadline:
-        if playlist.exists() and 'seg_' in playlist.read_text(errors='ignore'):
+    proc = None
+    last_err = ''
+    for cmd in attempts:
+        with _lock:
+            _kill_current()
+            _current['sid'] = sid  # _kill_current borra la sesión: recrear dir
+            sess.mkdir(parents=True, exist_ok=True)
+            # stderr a archivo, NUNCA a PIPE sin lector: archivos con muchos
+            # warnings llenan el buffer de 64 KB y ffmpeg se congela (504).
+            errlog = open(sess / 'ffmpeg.log', 'w')
+            try:
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=errlog)
+            except Exception as e:
+                return jsonify({'error': f'ffmpeg: {e}'}), 500
+            finally:
+                errlog.close()
+            _current['proc'] = proc
+        deadline = time.monotonic() + 30
+        ok = False
+        while time.monotonic() < deadline:
+            if playlist.exists() and 'seg_' in playlist.read_text(errors='ignore'):
+                ok = True
+                break
+            if proc.poll() is not None:   # murió — prueba el siguiente intento
+                try:
+                    last_err = (sess / 'ffmpeg.log').read_text(errors='ignore')[-400:]
+                except OSError:
+                    last_err = ''
+                print(f'[stream] ffmpeg murió: {last_err[-200:]}', flush=True)
+                break
+            time.sleep(0.15)
+        if ok:
             break
-        if proc.poll() is not None:  # ffmpeg murió — NVENC ausente u otro error
-            tail = (proc.stderr.read() or '')[-400:] if proc.stderr else ''
-            if not v_copy and 'h264_nvenc' in ' '.join(cmd):
-                # reintento único con libx264
-                cmd[cmd.index('h264_nvenc')] = 'libx264'
-                cmd[cmd.index('-preset') + 1] = 'veryfast'
-                with _lock:
-                    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
-                                            stderr=subprocess.PIPE, text=True)
-                    _current['proc'] = proc
-                v_copy = True  # no volver a reintentar
-                continue
+        if proc.poll() is None:           # sigue vivo pero sin segmento: timeout real
             with _lock:
                 _kill_current()
-            return jsonify({'error': f'ffmpeg falló: {tail}'}), 500
-        time.sleep(0.2)
+            return jsonify({'error': 'timeout preparando el stream'}), 504
     else:
         with _lock:
             _kill_current()
-        return jsonify({'error': 'timeout preparando el stream'}), 504
+        return jsonify({'error': f'ffmpeg falló: {last_err}'}), 500
 
     anime_id = data.get('anime_id', '')
     ep_str = str(data.get('episode', ''))

@@ -149,6 +149,12 @@ fn spawn_browser_app(browser: &PathBuf) -> Option<Child> {
         .arg("--class=animanga-studio")
         .arg("--no-first-run")
         .arg("--no-default-browser-check")
+        // Player embebido: HEVC por hardware (NVDEC vía driver VAAPI de NVIDIA
+        // → HEVC se copia sin recodificar = cero pérdida) y WebGPU (Anime4K).
+        .arg("--enable-features=VaapiOnNvidiaGPUs,VaapiIgnoreDriverChecks,AcceleratedVideoDecodeLinuxGL,PlatformHEVCDecoderSupport,Vulkan")
+        .arg("--enable-unsafe-webgpu")
+        .env("LIBVA_DRIVER_NAME", "nvidia")
+        .env("NVD_BACKEND", "direct")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
