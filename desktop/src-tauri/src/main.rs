@@ -108,6 +108,31 @@ fn main() {
                 spawn_backend()
             };
             app.manage(Sidecar(Mutex::new(owned)));
+
+            // El splash NO puede sondear /health por fetch (tauri:// → http://127.0.0.1
+            // es cross-origin y el webview lo bloquea por CORS). Sondea Rust y navega.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let deadline = std::time::Instant::now() + Duration::from_secs(60);
+                let mut warned = false;
+                loop {
+                    if backend_alive() {
+                        if let Some(w) = handle.get_webview_window("main") {
+                            let _ = w.navigate(format!("{BASE}/").parse().unwrap());
+                        }
+                        return;
+                    }
+                    // Aviso a los 60 s pero seguimos sondeando: si el backend
+                    // aparece más tarde, la app entra sola igualmente.
+                    if !warned && std::time::Instant::now() > deadline {
+                        warned = true;
+                        if let Some(w) = handle.get_webview_window("main") {
+                            let _ = w.eval("window.showError && window.showError()");
+                        }
+                    }
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            });
             Ok(())
         })
         .build(tauri::generate_context!())

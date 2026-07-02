@@ -45,28 +45,19 @@
     <button id="retry" onclick="location.reload()">Reintentar</button>
   </div>
 <script>
-  // El shell Rust lanza el backend; aquí solo esperamos a que /health responda
-  // y saltamos a la UI real (Flask sirve el SPA en el 5101, same-origin).
-  const BASE = 'http://127.0.0.1:5101';
-  const DEADLINE = Date.now() + 60_000;
-  const msg = document.getElementById('msg');
-
-  async function poll() {
-    try {
-      const r = await fetch(BASE + '/health', { cache: 'no-store' });
-      if (r.ok) { location.replace(BASE + '/'); return; }
-    } catch (_) {}
-    if (Date.now() > DEADLINE) {
-      document.getElementById('ring').style.display = 'none';
-      msg.className = 'msg err';
-      msg.textContent = 'El servidor no respondió en 60 s — revisa /tmp/manga_server.log';
-      document.getElementById('retry').style.display = 'inline-block';
-      return;
-    }
-    if (Date.now() % 10000 < 600) msg.textContent = 'Iniciando el servidor… (primer arranque tarda más)';
-    setTimeout(poll, 500);
-  }
-  poll();
+  // El polling de /health lo hace el shell Rust (fetch desde tauri:// sería
+  // cross-origin y CORS lo bloquea). Rust navega la ventana al SPA cuando el
+  // backend responde, o llama a showError() si agota el timeout.
+  window.showError = () => {
+    document.getElementById('ring').style.display = 'none';
+    const msg = document.getElementById('msg');
+    msg.className = 'msg err';
+    msg.textContent = 'El servidor no respondió en 60 s — revisa /tmp/manga_server.log';
+    document.getElementById('retry').style.display = 'inline-block';
+  };
+  // "Reintentar" recarga el splash; Rust sigue vivo pero su poller murió, así
+  // que el retry relanza el sondeo desde JS no — simplemente reinicia la app.
+  document.getElementById('retry').onclick = () => location.reload();
 </script>
 </body>
 </html>
