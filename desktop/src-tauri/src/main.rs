@@ -91,6 +91,14 @@ fn stop_backend(child: &mut Child) {
 }
 
 fn main() {
+    // WebKitGTK + driver NVIDIA propietario: el renderer DMA-BUF composita mal
+    // (jitter de imágenes/iconos al hacer scroll, texturas en blanco, portadas
+    // que no pintan). Desactivarlo cae al camino de memoria compartida, estable
+    // en NVIDIA. Respetamos el valor si el usuario ya lo fijó en su entorno.
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             // Segunda instancia → traer la ventana existente al frente.
