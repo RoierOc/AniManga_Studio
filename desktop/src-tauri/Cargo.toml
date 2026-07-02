@@ -1,0 +1,20 @@
+[package]
+name = "animanga-desktop"
+version = "0.1.0"
+description = "AniManga Studio — app de escritorio (shell Tauri sobre el backend Flask)"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ureq = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

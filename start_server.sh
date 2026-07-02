@@ -161,7 +161,14 @@ try:
     serve(app, host='0.0.0.0', port=5101, threads=8)
 except ImportError:
     app.run(port=5101, debug=False, threaded=True, host='0.0.0.0')
-" || true
-    echo "[watchdog] El servidor se detuvo. Reiniciando en 5s..." >&2
+"
+    code=$?
+    # Exit 0 = apagado limpio pedido (POST /shutdown desde la app de escritorio):
+    # no resucitar. Cualquier otro código (crash, OOM, kill) sí reinicia.
+    if [[ $code -eq 0 ]]; then
+        echo "[watchdog] Apagado limpio (exit 0). Fin." >&2
+        exit 0
+    fi
+    echo "[watchdog] El servidor se detuvo (exit $code). Reiniciando en 5s..." >&2
     sleep 5
 done
