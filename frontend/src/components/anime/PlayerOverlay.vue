@@ -15,6 +15,7 @@ import jassubWorkerUrl from 'jassub/dist/worker/worker.js?worker&url'
 import jassubWasmUrl from 'jassub/dist/wasm/jassub-worker.wasm?url'
 import jassubModernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url'
 import { useAnimeStore } from '@/stores/anime'
+import { useUiStore } from '@/stores/ui'
 import { Anime4KRenderer, A4K_MODES } from '@/lib/anime4k'
 import { animeEpLabel } from '@/lib/anime'
 import { api } from '@/lib/api'
@@ -136,6 +137,18 @@ async function applyA4k() {
   if (wasPlaying) {
     setTimeout(() => { if (p.value && v.paused && !v.ended) v.play().catch(() => {}) }, 400)
     setTimeout(() => { if (p.value && v.paused && !v.ended) v.play().catch(() => {}) }, 1500)
+  }
+  // Medidor honesto: si el tier elegido no da ni 12 fps en esta GPU, avisar
+  // (los CNN pueden con una dedicada, la iGPU necesita el modo Ligero).
+  if (a4kActive.value) {
+    const f0 = a4k.frames
+    setTimeout(() => {
+      if (!a4kActive.value || !p.value || videoEl.value?.paused) return
+      const fps = (a4k.frames - f0) / 6
+      if (fps < 12) {
+        useUiStore().toast(`Anime4K ${a4kMode.value} va a ${fps.toFixed(0)} fps en tu GPU — prueba el modo Ligero`, 'warn', 5000)
+      }
+    }, 6000)
   }
 }
 

@@ -10,19 +10,20 @@
 // Import dinámico: los pesos CNN pesan ~4 MB — solo se descargan la primera
 // vez que se activa un tier, no en la carga de la app.
 export const A4K_MODES = [
-  { id: 'off', label: 'Desactivado' },
-  { id: 'A',   label: 'A — Rápido (restaura + x2)' },
-  { id: 'B',   label: 'B — Rápido (suave)' },
-  { id: 'C',   label: 'C — Rápido (denoise)' },
-  { id: 'AA',  label: 'A+A — Alta calidad' },
-  { id: 'BB',  label: 'B+B — Alta calidad' },
-  { id: 'CA',  label: 'C+A — Alta calidad' },
+  { id: 'off',  label: 'Desactivado' },
+  { id: 'LITE', label: 'Ligero — Deblur DoG (ideal iGPU)' },
+  { id: 'A',    label: 'A — CNN (restaura + x2)' },
+  { id: 'B',    label: 'B — CNN (suave)' },
+  { id: 'C',    label: 'C — CNN (denoise)' },
+  { id: 'AA',   label: 'A+A — CNN alta calidad' },
+  { id: 'BB',   label: 'B+B — CNN alta calidad' },
+  { id: 'CA',   label: 'C+A — CNN alta calidad' },
 ]
 let _mod = null
 async function presets() {
   if (!_mod) _mod = await import('anime4k-webgpu')
   const m = _mod
-  return { A: m.ModeA, B: m.ModeB, C: m.ModeC, AA: m.ModeAA, BB: m.ModeBB, CA: m.ModeCA }
+  return { LITE: m.DoG, A: m.ModeA, B: m.ModeB, C: m.ModeC, AA: m.ModeAA, BB: m.ModeBB, CA: m.ModeCA }
 }
 
 const BLIT_WGSL = /* wgsl */ `
@@ -35,6 +36,21 @@ const BLIT_WGSL = /* wgsl */ `
 @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
   let dims = vec2f(textureDimensions(t));
   return textureSample(t, s, p.xy / dims);
+}`
+
+// Pre-pase: textura EXTERNA del vídeo (importExternalTexture, la vía del
+// compositor — la única que puede leer frames decodificados por hardware/VAAPI)
+// → textura rgba8 normal que las pipelines de Anime4K sí aceptan.
+const INGEST_WGSL = /* wgsl */ `
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+  var pos = array(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  return vec4f(pos[i], 0.0, 1.0);
+}
+@group(0) @binding(0) var t: texture_external;
+@group(0) @binding(1) var s: sampler;
+@group(0) @binding(2) var<uniform> dims: vec2f;
+@fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+  return textureSampleBaseClampToEdge(t, s, p.xy / dims);
 }`
 
 export class Anime4KRenderer {
@@ -57,12 +73,10 @@ export class Anime4KRenderer {
     if (!Preset) return false
 
     if (!this.device) {
-      // high-performance = la GPU dedicada (medido: 24fps 0 drops vs ~13% de
-      // drops en la iGPU). El import cross-GPU de VideoFrames REQUIERE que
-      // TODOS los ICD Vulkan estén instalados (vulkan-intel incluido) — sin
-      // eso el proceso GPU segfaultea o congela el decoder.
-      // Override: localStorage 'anime-a4k-gpu' = 'low-power' (iGPU).
-      const pref = localStorage.getItem('anime-a4k-gpu') || 'high-performance'
+      // low-power = la iGPU que decodifica el vídeo. La dedicada (NVIDIA)
+      // computa más rápido pero SIEMPRE produce negro: los frames VAAPI no
+      // cruzan de GPU por ninguna vía. Override: 'anime-a4k-gpu'.
+      const pref = localStorage.getItem('anime-a4k-gpu') || 'low-power'
       const adapter = await navigator.gpu.requestAdapter({ powerPreference: pref })
         || await navigator.gpu.requestAdapter()
       if (!adapter) return false
@@ -116,11 +130,14 @@ export class Anime4KRenderer {
 
     this.running = true
     let errCount = 0
+    // Ingesta por VideoFrame en el MISMO device que decodifica (Intel):
+    // única combinación que renderiza contenido real en este híbrido.
+    // Matriz probada (2026-07-02): NVIDIA = negro siempre (cross-GPU);
+    // canvas2D/getImageData = negro (frames VAAPI ilegibles);
+    // importExternalTexture = negro en NVIDIA y cuelga el renderer en Intel.
     const frame = () => {
       if (!this.running) return
       try {
-        // copyExternalImageToTexture NO acepta HTMLVideoElement (spec): hay que
-        // envolver el frame actual en un VideoFrame (WebCodecs, zero-copy).
         const vf = new VideoFrame(video)
         try {
           device.queue.copyExternalImageToTexture(
