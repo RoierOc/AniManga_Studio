@@ -54,7 +54,11 @@ export class Anime4KRenderer {
     if (!Preset) return false
 
     if (!this.device) {
-      const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })
+      // low-power = la iGPU Intel, la MISMA que decodifica el vídeo (VAAPI):
+      // los VideoFrame se importan zero-copy. Con high-performance (NVIDIA)
+      // el import cross-GPU congela el decoder (vídeo clavado, canvas negro).
+      const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'low-power' })
+        || await navigator.gpu.requestAdapter()
       if (!adapter) return false
       this.device = await adapter.requestDevice()
       this.device.lost.then(() => { this.device = null; this.stop() })
@@ -97,11 +101,19 @@ export class Anime4KRenderer {
     })
 
     this.running = true
+    let errCount = 0
     const frame = () => {
       if (!this.running) return
       try {
-        device.queue.copyExternalImageToTexture(
-          { source: video }, { texture: inputTexture }, [vw, vh])
+        // copyExternalImageToTexture NO acepta HTMLVideoElement (spec): hay que
+        // envolver el frame actual en un VideoFrame (WebCodecs, zero-copy).
+        const vf = new VideoFrame(video)
+        try {
+          device.queue.copyExternalImageToTexture(
+            { source: vf }, { texture: inputTexture }, [vw, vh])
+        } finally {
+          vf.close()
+        }
         const encoder = device.createCommandEncoder()
         pipeline.pass(encoder)
         const rp = encoder.beginRenderPass({
@@ -115,7 +127,18 @@ export class Anime4KRenderer {
         rp.draw(3)
         rp.end()
         device.queue.submit([encoder.finish()])
-      } catch (_) { /* frame perdido (seek/cambio de pista) — seguir */ }
+        errCount = 0
+      } catch (e) {
+        // frames sueltos pueden fallar en seeks; errores SOSTENIDOS = pipeline
+        // rota → apagar el shader y avisar (nunca dejar el canvas en negro)
+        if (++errCount === 1) console.warn('[a4k] error de frame:', e)
+        if (errCount > 30) {
+          console.error('[a4k] errores sostenidos — apagando shader:', e)
+          this.stop()
+          this.onFatal?.(e)
+          return
+        }
+      }
       this._vfcHandle = video.requestVideoFrameCallback(frame)
     }
     this._video = video

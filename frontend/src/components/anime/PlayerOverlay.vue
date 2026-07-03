@@ -6,11 +6,13 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import Hls from 'hls.js'
 import JASSUB from 'jassub'
-import jassubWorkerUrl from 'jassub/dist/wasm/jassub-worker.js?worker&url'
+// OJO con las rutas: el worker REAL es dist/worker/worker.js (módulo ES que
+// jassub lanza con type:'module'); dist/wasm/jassub-worker.js es solo el
+// pegamento emscripten (cargado como worker muere en silencio: espera llamarse
+// 'em-pthread'). Y sin modernWasmUrl los navegadores SIMD piden una variante
+// por una ruta que no existe en el bundle.
+import jassubWorkerUrl from 'jassub/dist/worker/worker.js?worker&url'
 import jassubWasmUrl from 'jassub/dist/wasm/jassub-worker.wasm?url'
-// SIN modernWasmUrl los navegadores con SIMD intentan cargar la variante
-// "modern" desde una ruta por defecto que no existe en el bundle → los
-// subtítulos fallan en silencio.
 import jassubModernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url'
 import { useAnimeStore } from '@/stores/anime'
 import { Anime4KRenderer, A4K_MODES } from '@/lib/anime4k'
@@ -85,6 +87,7 @@ const a4kMode = ref(localStorage.getItem('anime-a4k') || 'off')
 const a4kActive = ref(false)          // pipeline corriendo (canvas visible)
 const a4kAvailable = Anime4KRenderer.supported()
 const a4k = new Anime4KRenderer()
+a4k.onFatal = () => { a4kActive.value = false }   // canvas fuera, vídeo visible
 const canvasRect = ref({ left: 0, top: 0, width: 0, height: 0 })
 
 async function setA4kMode(id) {
@@ -114,8 +117,23 @@ async function applyA4k() {
     return
   }
   updateCanvasRect()
-  const ok = await a4k.start(v, a4kCanvas.value, a4kMode.value)
-  a4kActive.value = ok
+  const wasPlaying = !v.paused
+  try {
+    const ok = await a4k.start(v, a4kCanvas.value, a4kMode.value)
+    a4kActive.value = ok
+    if (!ok) console.warn('[a4k] no arrancó (adapter/preset no disponible)')
+  } catch (e) {
+    a4kActive.value = false
+    console.error('[a4k] error al arrancar:', e)
+    api.post('/api/stream/caps', { a4k_error: String(e?.message || e) }).catch(() => {})
+  }
+  // Chromium pausa el vídeo internamente (una vez) al crear el device WebGPU
+  // sobre él — reanudar si estaba reproduciendo. Un pequeño delay porque la
+  // pausa llega asíncrona tras el arranque del pipeline.
+  if (wasPlaying) {
+    setTimeout(() => { if (p.value && v.paused && !v.ended) v.play().catch(() => {}) }, 400)
+    setTimeout(() => { if (p.value && v.paused && !v.ended) v.play().catch(() => {}) }, 1500)
+  }
 }
 
 const title = computed(() => p.value ? animeEpLabel(p.value.anime, p.value.ep) : '')
@@ -187,6 +205,21 @@ async function setSubTrack(idx) {
         modernWasmUrl: jassubModernWasmUrl,
         fonts: r.fonts || [],
       })
+      // El worker de jassub muere en silencio si algo falla (wasm, fuentes…):
+      // vigilar el handshake y dejar rastro en consola + log del backend.
+      window.__jassub = jassub   // gancho de depuración (app local)
+      const jsRef = jassub
+      Promise.race([
+        jsRef.ready,
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout 10s')), 10000)),
+      ]).then(
+        () => console.log('[subs] jassub listo'),
+        (e) => {
+          if (jassub !== jsRef) return   // ya se cambió de pista
+          console.error('[subs] jassub falló:', e)
+          api.post('/api/stream/caps', { jassub_error: String(e?.message || e) }).catch(() => {})
+        },
+      )
     } else {
       // vtt (el backend convierte srt→vtt) → pista nativa del <video>
       const track = document.createElement('track')
@@ -530,9 +563,11 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 .wp.is-idle { cursor: none; }
 .wp__video { width: 100%; height: 100%; object-fit: contain; background: #000; }
-/* Con Anime4K activo el vídeo sigue reproduciendo (audio/subs/timing) pero se
- * muestra el canvas WebGPU; visibility mantiene el layout para el cálculo del rect */
-.wp__video.is-shaded { visibility: hidden; }
+/* Con Anime4K activo el vídeo sigue reproduciendo debajo del canvas WebGPU
+ * (que lo tapa por completo, alphaMode opaque). OJO: NO usar visibility:hidden
+ * ni opacity:0 — la intervención de ahorro de Chromium PAUSA los vídeos
+ * ocultos (el "se queda trabado"). Se deja visible y simplemente tapado. */
+.wp__video.is-shaded { /* intencionadamente sin ocultar */ }
 .wp__a4k { position: absolute; z-index: 1; }
 /* subtítulos (JASSUB) siempre por encima del canvas Anime4K */
 .wp :deep(canvas.JASSUB) { z-index: 2; }

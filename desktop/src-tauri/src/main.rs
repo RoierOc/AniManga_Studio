@@ -161,6 +161,9 @@ fn spawn_browser_app(browser: &PathBuf) -> Option<Child> {
         // en esta máquina (dos veces comprobado). Config estable actual: la UI
         // renderiza bien; HEVC cae al panel Convertir/MPV del player (watchdog).
         .arg("--enable-features=VaapiVideoDecoder,VaapiIgnoreDriverChecks,AcceleratedVideoDecodeLinuxGL,PlatformHEVCDecoderSupport")
+        // Chromium 145+ pausa vídeos "poco visibles" — el canvas de Anime4K
+        // ocluye el <video> al 100% y lo pausaba a los pocos segundos.
+        .arg("--disable-features=MediaVideoVisibilityTracker,PauseMutedVideos")
         .arg("--ignore-gpu-blocklist")
         .arg("--enable-unsafe-webgpu")
         // suprime el infobar "línea de comandos no admitida" que provocan los

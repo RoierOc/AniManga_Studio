@@ -219,6 +219,7 @@ export const useAnimeStore = defineStore('anime', {
 
       // 4 — seasonal popular (library empty or nothing aired)
       if (this.seasonal.length) {
+        const libIds = new Set(this.library.flatMap(a => [a.al_id, a.mal_id].filter(Boolean)))
         return this.seasonal
           .filter(a => !libIds.has(a.al_id) && !libIds.has(a.mal_id))
           .sort((x, y) => (y.popularity || 0) - (x.popularity || 0))

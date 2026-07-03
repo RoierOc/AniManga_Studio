@@ -39,7 +39,11 @@ onMounted(() => {
   ui.initNav()   // capture the landing view as the first history entry (before any nav),
                  // so browser back/forward traverses the whole app, not just details.
   manga.init()
-  useAnimeStore().reportCaps()  // qué códecs decodifica este navegador → log backend
+  const anime = useAnimeStore()
+  anime.reportCaps()  // qué códecs decodifica este navegador → log backend
+  // gancho de depuración local (app 100% local): permite drivear los stores
+  // desde CDP/consola para diagnosticar el player sin tocar la UI
+  window.__stores = { anime, manga, ui }
   window.addEventListener('keydown', onGlobalKey)
 })
 onUnmounted(() => window.removeEventListener('keydown', onGlobalKey))
