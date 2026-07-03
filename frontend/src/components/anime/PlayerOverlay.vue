@@ -18,6 +18,7 @@ import { useAnimeStore } from '@/stores/anime'
 import { useUiStore } from '@/stores/ui'
 import { Anime4KRenderer, A4K_MODES } from '@/lib/anime4k'
 import { animeEpLabel } from '@/lib/anime'
+import { imgProxy } from '@/lib/img'
 import { api } from '@/lib/api'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -44,6 +45,25 @@ const uiVisible = ref(true)
 const menuOpen = ref('')        // '' | 'subs' | 'audio' | 'speed'
 let hideTimer = null
 
+/* ── panel de episodios (drawer lateral, cambiar sin salir del player) ── */
+const epPanel = ref(false)
+const panelEps = computed(() => {
+  const eps = (p.value?.anime?.episodes || []).filter(e => e.num > 0 && e.ep_type !== 'special')
+  return [...eps].sort((a, b) => a.num - b.num)
+})
+const isPlayable = (e) => e.in_local || (e.in_qbt && e.progress >= 100)
+function playFromPanel(e) {
+  if (!isPlayable(e) || e.num === p.value.ep.num) return
+  sendProgress(false, true)
+  store.openPlayer(p.value.anime, e)
+}
+// al abrir, centrar el episodio actual en la lista
+watch(epPanel, async (open) => {
+  if (!open) return
+  await nextTick()
+  document.querySelector('.wp__ep.is-cur')?.scrollIntoView({ block: 'center' })
+})
+
 /* ── subs ── */
 const subTracks = computed(() => p.value?.sess?.sub_tracks || [])
 const audioTracks = computed(() => p.value?.sess?.audio_tracks || [])
@@ -51,10 +71,15 @@ const subIndex = ref(-1)        // -1 = sin subtítulos
 const audioIndex = ref(0)
 const SKIP_SECS = 88
 
-/* ── next-episode countdown ── */
-const nextCd = ref(0)
+/* ── next-episode countdown (tarjeta con miniatura + anillo, como Crunchyroll) ── */
+const NEXT_CD_SECS = 5
+const nextCd = ref(0)            // segundos restantes (float: el anillo es suave)
+const nextEp = ref(null)         // { anime, ep } del episodio que viene
+const nextThumbFailed = ref(false)
 let nextTimer = null
 const tcDismissed = ref(false)
+// anillo SVG: r=17 → circunferencia ≈ 106.8; el offset crece al agotarse el tiempo
+const ringOff = computed(() => 106.8 * (1 - Math.max(0, nextCd.value) / NEXT_CD_SECS))
 
 // Watchdog de decodificación: el navegador puede ACEPTAR un códec (MSE) y aun
 // así no poder decodificarlo (HEVC sin decode por hardware) → se quedaría
@@ -302,18 +327,22 @@ function onEnded() {
   sendProgress(true)
   const nxt = store.playerNext()
   if (!nxt) return
-  nextCd.value = 5
+  nextEp.value = nxt
+  nextThumbFailed.value = false
+  nextCd.value = NEXT_CD_SECS
   nextTimer = setInterval(() => {
-    nextCd.value--
+    nextCd.value -= 0.1
     if (nextCd.value <= 0) {
       clearInterval(nextTimer); nextTimer = null
+      nextCd.value = 0
       store.openPlayer(nxt.anime, nxt.ep)
     }
-  }, 1000)
+  }, 100)
 }
 function cancelNext() {
   if (nextTimer) { clearInterval(nextTimer); nextTimer = null }
   nextCd.value = 0
+  nextEp.value = null
 }
 function goNext() {
   cancelNext()
@@ -322,10 +351,30 @@ function goNext() {
 }
 
 /* ═══ controles ═══ */
+/* Feedback central efímero (icono play/pausa que se expande y desvanece) y
+ * burbujas laterales de seek — los micro-gestos estándar de un player web. */
+const ripple = ref('')
+const rippleKey = ref(0)
+let rippleTimer = null
+function showRipple(icon) {
+  ripple.value = icon
+  rippleKey.value++
+  clearTimeout(rippleTimer)
+  rippleTimer = setTimeout(() => { ripple.value = '' }, 550)
+}
+const seekBubble = ref(null)     // { side: 'left'|'right', secs, key }
+let bubbleTimer = null
+function showSeekBubble(secs) {
+  seekBubble.value = { side: secs < 0 ? 'left' : 'right', secs, key: (seekBubble.value?.key || 0) + 1 }
+  clearTimeout(bubbleTimer)
+  bubbleTimer = setTimeout(() => { seekBubble.value = null }, 650)
+}
+
 function togglePlay() {
   const v = videoEl.value
   if (!v) return
-  v.paused ? v.play().catch(() => {}) : v.pause()
+  if (v.paused) { v.play().catch(() => {}); showRipple('play') }
+  else { v.pause(); showRipple('pause') }
 }
 function seekTo(ev) {
   const v = videoEl.value
@@ -335,9 +384,32 @@ function seekTo(ev) {
   v.currentTime = frac * duration.value
   poke()
 }
+
+/* ── preview de la timeline (miniatura + tiempo al hacer hover) ── */
+const tlHover = ref(-1)          // segundos bajo el cursor; -1 = sin hover
+const tlLeft = ref(0)            // posición X del preview dentro de la barra
+const thumbOk = ref(false)       // la miniatura del índice actual cargó
+function onTlHover(ev) {
+  if (!duration.value) return
+  const r = ev.currentTarget.getBoundingClientRect()
+  const frac = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width))
+  tlHover.value = frac * duration.value
+  // clamp para que la tarjeta (≈10rem) no se salga de la barra
+  const half = 88
+  tlLeft.value = Math.min(r.width - half, Math.max(half, ev.clientX - r.left))
+}
+const thumbUrl = computed(() => {
+  const t = p.value?.sess?.thumbs
+  if (!t || tlHover.value < 0) return ''
+  const idx = Math.max(1, Math.floor(tlHover.value / t.interval) + 1)
+  return `${t.url}/t_${String(idx).padStart(5, '0')}.jpg`
+})
+// las miniaturas se generan en segundo plano: si aún no existe, solo el tiempo
+watch(thumbUrl, () => { thumbOk.value = false })
 function skip(secs) {
   const v = videoEl.value
   if (v) v.currentTime = Math.min(Math.max(0, v.currentTime + secs), duration.value || 1e9)
+  showSeekBubble(secs)
   poke()
 }
 function setVolume(ev) {
@@ -385,7 +457,7 @@ function poke() {
   uiVisible.value = true
   clearTimeout(hideTimer)
   hideTimer = setTimeout(() => {
-    if (playing.value && !menuOpen.value) uiVisible.value = false
+    if (playing.value && !menuOpen.value && !epPanel.value) uiVisible.value = false
   }, 3000)
 }
 function onWheel(ev) {
@@ -401,13 +473,16 @@ function onKey(ev) {
   const v = videoEl.value
   switch (ev.key) {
     case ' ': ev.preventDefault(); togglePlay(); break
-    case 'ArrowLeft': skip(-5); break
-    case 'ArrowRight': skip(5); break
+    case 'ArrowLeft': skip(-10); break
+    case 'ArrowRight': skip(10); break
     case 'ArrowUp': ev.preventDefault(); onWheel({ deltaY: -1 }); break
     case 'ArrowDown': ev.preventDefault(); onWheel({ deltaY: 1 }); break
     case 'f': toggleFs(); break
     case 'm': toggleMute(); break
-    case 'Escape': if (!document.fullscreenElement) close(); break
+    case 'Escape':
+      if (epPanel.value) epPanel.value = false
+      else if (!document.fullscreenElement) close()
+      break
   }
   poke()
 }
@@ -467,6 +542,16 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
         <Icon name="play" :size="34" />
       </button>
 
+      <!-- feedback central de play/pausa (se expande y desvanece) -->
+      <div v-if="ripple" :key="rippleKey" class="wp__ripple">
+        <Icon :name="ripple" :size="30" />
+      </div>
+
+      <!-- burbuja lateral de seek (±10 s / Saltar OP) -->
+      <div v-if="seekBubble" :key="seekBubble.key" class="wp__seekbub" :class="`is-${seekBubble.side}`">
+        <span>{{ seekBubble.secs > 0 ? '+' : '−' }}{{ Math.abs(seekBubble.secs) }} s</span>
+      </div>
+
       <!-- el navegador no pudo decodificar el códec (HEVC sin hardware) -->
       <div v-if="decodeFailed" class="wp__tc">
         <p><strong>Tu navegador no pudo decodificar este vídeo ({{ p.sess?.video_codec?.toUpperCase() }})</strong>
@@ -487,12 +572,26 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
         </div>
       </div>
 
-      <!-- siguiente episodio -->
-      <div v-if="nextCd > 0" class="wp__next">
-        <p>Siguiente episodio en <strong>{{ nextCd }}</strong>…</p>
+      <!-- siguiente episodio: tarjeta con miniatura + anillo de cuenta atrás -->
+      <div v-if="nextCd > 0 && nextEp" class="wp__next">
+        <span class="wp__next-eyebrow">Siguiente episodio</span>
+        <div class="wp__next-thumb" @click="goNext">
+          <img v-if="!nextThumbFailed" :src="`/api/anime/thumb/${nextEp.anime.id}/${nextEp.ep.num}`"
+               alt="" @error="nextThumbFailed = true" />
+          <img v-else-if="nextEp.anime.cover" :src="imgProxy(nextEp.anime.cover)" alt="" />
+          <div class="wp__next-scrim" />
+          <span class="wp__next-play">
+            <svg class="wp__ring" viewBox="0 0 40 40">
+              <circle class="wp__ring-bg" cx="20" cy="20" r="17" />
+              <circle class="wp__ring-fg" cx="20" cy="20" r="17" :style="{ strokeDashoffset: ringOff }" />
+            </svg>
+            <Icon name="play" :size="16" />
+          </span>
+        </div>
+        <p class="wp__next-title">{{ animeEpLabel(nextEp.anime, nextEp.ep) }}</p>
         <div class="wp__nextacts">
           <button class="wp__btnalt" @click="cancelNext">Cancelar</button>
-          <button class="wp__btnmain" @click="goNext"><Icon name="play" :size="14" /> Reproducir ya</button>
+          <button class="wp__btnmain" @click="goNext"><Icon name="play" :size="14" /> Reproducir ({{ Math.ceil(nextCd) }})</button>
         </div>
       </div>
 
@@ -509,10 +608,17 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
       <!-- barra de controles -->
       <footer class="wp__bar">
         <!-- timeline -->
-        <div class="wp__timeline" @click="seekTo">
+        <div class="wp__timeline" @click="seekTo" @mousemove="onTlHover" @mouseleave="tlHover = -1">
           <div class="wp__tl-buf" :style="{ width: bufPct + '%' }" />
           <div class="wp__tl-cur" :style="{ width: pct + '%' }" />
           <div class="wp__tl-knob" :style="{ left: pct + '%' }" />
+
+          <!-- preview flotante: miniatura del vídeo + tiempo (estilo Crunchyroll) -->
+          <div v-if="tlHover >= 0" class="wp__preview" :style="{ left: tlLeft + 'px' }">
+            <img v-if="thumbUrl" v-show="thumbOk" :src="thumbUrl" alt=""
+                 @load="thumbOk = true" @error="thumbOk = false" />
+            <span class="wp__preview-t">{{ fmt(tlHover) }}</span>
+          </div>
         </div>
 
         <div class="wp__row">
@@ -568,11 +674,44 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
           <button v-if="store.playerNext()" class="wp__ctl" title="Siguiente episodio" @click="goNext">
             Siguiente <Icon name="chevron" :size="14" style="transform: rotate(-90deg)" />
           </button>
+          <button v-if="panelEps.length > 1" class="wp__ctl" :class="{ 'is-on': epPanel }"
+                  title="Lista de episodios" @click="epPanel = !epPanel">
+            <Icon name="menu" :size="14" /> Episodios
+          </button>
           <button class="wp__ic" :title="isFs ? 'Salir de pantalla completa' : 'Pantalla completa'" @click="toggleFs">
             <Icon name="external" :size="18" />
           </button>
         </div>
       </footer>
+
+      <!-- panel de episodios: cambiar de episodio sin salir del player -->
+      <Transition name="wp-eps">
+        <aside v-if="epPanel" class="wp__eps" @mousemove.stop="poke">
+          <header class="wp__eps-head">
+            <h3>{{ p.anime.title }}</h3>
+            <button class="wp__ic" title="Cerrar" @click="epPanel = false"><Icon name="close" :size="16" /></button>
+          </header>
+          <div class="wp__eps-list">
+            <button v-for="e in panelEps" :key="e.num" class="wp__ep"
+                    :class="{ 'is-cur': e.num === p.ep.num, 'is-off': !isPlayable(e) }"
+                    @click="playFromPanel(e)">
+              <div class="wp__ep-th">
+                <img v-if="isPlayable(e)" :src="`/api/anime/thumb/${p.anime.id}/${e.num}`"
+                     alt="" loading="lazy" @error="$event.target.style.display = 'none'" />
+                <span v-if="e.num === p.ep.num" class="wp__ep-now"><Icon name="play" :size="12" /></span>
+                <span v-if="e.resume_pos > 0 && e.duration" class="wp__ep-pr">
+                  <i :style="{ width: Math.min(100, e.resume_pos / e.duration * 100) + '%' }" />
+                </span>
+              </div>
+              <div class="wp__ep-info">
+                <span class="wp__ep-num">Episodio {{ e.num }}</span>
+                <span class="wp__ep-meta">{{ e.num === p.ep.num ? 'Reproduciendo' : (isPlayable(e) ? (e.watched ? 'Visto' : '') : 'No descargado') }}</span>
+              </div>
+              <Icon v-if="e.watched" name="check" :size="14" class="wp__ep-check" />
+            </button>
+          </div>
+        </aside>
+      </Transition>
     </div>
   </Teleport>
 </template>
@@ -609,11 +748,57 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 .wp__bigplay:hover { transform: scale(1.08); background: var(--azure-bright); }
 
-.wp__next {
-  position: absolute; right: var(--s-6); bottom: 7rem; padding: var(--s-4);
-  background: rgba(10,14,24,.92); border: 1px solid var(--line); border-radius: var(--r-md);
-  color: var(--ink); backdrop-filter: blur(8px);
+/* icono central que se expande y desvanece al pausar/reproducir */
+.wp__ripple {
+  position: absolute; inset: 0; margin: auto; width: 5rem; height: 5rem;
+  display: grid; place-items: center; color: #fff; border-radius: 50%;
+  background: rgba(7,10,18,.55); pointer-events: none;
+  animation: wp-ripple .55s var(--ease-silk) forwards;
 }
+@keyframes wp-ripple {
+  from { opacity: .95; transform: scale(.7); }
+  to   { opacity: 0;   transform: scale(1.45); }
+}
+/* burbuja de seek: aparece en el lado hacia el que se salta */
+.wp__seekbub {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  padding: var(--s-2) var(--s-4); border-radius: var(--r-pill);
+  background: rgba(7,10,18,.65); color: #fff; pointer-events: none;
+  font-family: var(--font-mono); font-size: var(--fs-md); font-weight: 700;
+  animation: wp-bubble .65s var(--ease-silk) forwards;
+}
+.wp__seekbub.is-left { left: 12%; }
+.wp__seekbub.is-right { right: 12%; }
+@keyframes wp-bubble {
+  from { opacity: .95; transform: translateY(-50%) scale(.85); }
+  60%  { opacity: .95; }
+  to   { opacity: 0;   transform: translateY(-50%) scale(1.1); }
+}
+
+.wp__next {
+  position: absolute; right: var(--s-6); bottom: 7rem; width: 19rem; padding: var(--s-3);
+  background: rgba(10,14,24,.92); border: 1px solid var(--line); border-radius: var(--r-md);
+  color: var(--ink); backdrop-filter: blur(8px); box-shadow: var(--shadow-lg);
+}
+.wp__next-eyebrow { display: block; margin-bottom: var(--s-2); font-family: var(--font-mono);
+  font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--cyan); }
+.wp__next-thumb { position: relative; aspect-ratio: 16 / 9; border-radius: var(--r-sm);
+  overflow: hidden; cursor: pointer; background: #000; }
+.wp__next-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.wp__next-scrim { position: absolute; inset: 0; background: rgba(0,0,0,.35); transition: background var(--t-fast); }
+.wp__next-thumb:hover .wp__next-scrim { background: rgba(0,0,0,.15); }
+.wp__next-play {
+  position: absolute; inset: 0; margin: auto; width: 3.5rem; height: 3.5rem;
+  display: grid; place-items: center; color: #fff;
+}
+.wp__ring { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+.wp__ring-bg, .wp__ring-fg { fill: rgba(7,10,18,.55); stroke-width: 3; }
+.wp__ring-bg { stroke: rgba(255,255,255,.25); }
+.wp__ring-fg { fill: none; stroke: var(--azure-bright); stroke-linecap: round;
+  stroke-dasharray: 106.8; transition: stroke-dashoffset .1s linear; }
+.wp__next-play :deep(svg:not(.wp__ring)) { position: relative; filter: drop-shadow(0 1px 4px rgba(0,0,0,.7)); }
+.wp__next-title { margin-top: var(--s-2); font-size: var(--fs-sm); font-weight: 600; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wp__tc {
   position: absolute; top: 5.5rem; left: 50%; transform: translateX(-50%);
   max-width: 34rem; padding: var(--s-4); text-align: center;
@@ -671,6 +856,22 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 .wp__timeline:hover .wp__tl-knob { opacity: 1; }
 
+.wp__preview {
+  position: absolute; bottom: calc(100% + var(--s-3)); transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: var(--s-1);
+  pointer-events: none; z-index: 3;
+}
+.wp__preview img {
+  width: 10rem; aspect-ratio: 16 / 9; object-fit: cover; border-radius: var(--r-sm);
+  border: 1px solid rgba(255,255,255,.35); box-shadow: 0 6px 24px rgba(0,0,0,.6);
+  background: #000;
+}
+.wp__preview-t {
+  font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 700; color: #fff;
+  padding: 2px 8px; border-radius: var(--r-pill); background: rgba(7,10,18,.85);
+  border: 1px solid rgba(255,255,255,.2);
+}
+
 .wp__row { display: flex; align-items: center; gap: var(--s-2); }
 .wp__ic {
   display: grid; place-items: center; width: 2.75rem; height: 2.75rem;
@@ -716,4 +917,43 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 .wp__menu button:hover { background: var(--azure-haze); color: #fff; }
 .wp__menu button.is-sel { color: var(--azure-bright); font-weight: 700; }
+
+/* panel de episodios */
+.wp__eps {
+  position: absolute; top: 0; right: 0; bottom: 0; width: min(21rem, 86vw);
+  display: flex; flex-direction: column; z-index: 4;
+  background: rgba(10,14,24,.94); border-left: 1px solid var(--line);
+  backdrop-filter: blur(12px); box-shadow: var(--shadow-xl);
+}
+.wp-eps-enter-active, .wp-eps-leave-active { transition: transform var(--t-base) var(--ease-silk), opacity var(--t-base); }
+.wp-eps-enter-from, .wp-eps-leave-to { transform: translateX(2rem); opacity: 0; }
+.wp__eps-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--s-2);
+  padding: var(--s-3) var(--s-3) var(--s-3) var(--s-4); border-bottom: 1px solid var(--line);
+}
+.wp__eps-head h3 { font-size: var(--fs-sm); font-weight: 600; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp__eps-list { flex: 1; overflow-y: auto; padding: var(--s-2); display: flex; flex-direction: column; gap: var(--s-1); }
+.wp__ep {
+  display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2);
+  border: none; background: transparent; border-radius: var(--r-sm); cursor: pointer;
+  text-align: left; transition: background var(--t-fast);
+}
+.wp__ep:hover, .wp__ep:focus-visible { background: rgba(255,255,255,.08); }
+.wp__ep.is-cur { background: color-mix(in srgb, var(--azure) 22%, transparent); }
+.wp__ep.is-off { opacity: .45; cursor: default; }
+.wp__ep.is-off:hover { background: transparent; }
+.wp__ep-th {
+  position: relative; flex-shrink: 0; width: 6.5rem; aspect-ratio: 16 / 9;
+  border-radius: var(--r-xs); overflow: hidden; background: rgba(255,255,255,.06);
+}
+.wp__ep-th img { width: 100%; height: 100%; object-fit: cover; }
+.wp__ep-now { position: absolute; inset: 0; display: grid; place-items: center;
+  color: #fff; background: rgba(7,10,18,.45); }
+.wp__ep-pr { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.5); }
+.wp__ep-pr i { display: block; height: 100%; background: var(--azure-bright); }
+.wp__ep-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.wp__ep-num { font-size: var(--fs-sm); font-weight: 600; color: #fff; }
+.wp__ep-meta { font-size: var(--fs-2xs); color: var(--ink-soft); }
+.wp__ep-check { flex-shrink: 0; color: var(--jade); }
 </style>

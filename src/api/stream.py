@@ -26,7 +26,29 @@ _SESS_ROOT = Path(tempfile.gettempdir()) / 'animanga_stream'
 # Sesiones huérfanas de arranques anteriores (el server murió con streams vivos)
 shutil.rmtree(_SESS_ROOT, ignore_errors=True)
 _lock = threading.Lock()
-_current = {'sid': None, 'proc': None}
+_current = {'sid': None, 'proc': None, 'thumb_proc': None}
+
+# Miniaturas de la barra de progreso (preview al hacer hover, como Crunchyroll):
+# 1 frame cada N segundos, generadas en segundo plano al abrir la sesión.
+_THUMB_IV = 10
+
+
+def _gen_thumbs(video: str, sess: Path):
+    """Genera thumbs/t_00001.jpg… en la sesión. Decode solo-keyframes: barato
+    incluso en episodios largos; el player las va pidiendo según existan."""
+    tdir = sess / 'thumbs'
+    try:
+        tdir.mkdir(exist_ok=True)
+        proc = subprocess.Popen(
+            ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
+             '-skip_frame', 'nokey', '-i', video,
+             '-vf', f'fps=1/{_THUMB_IV},scale=240:-2', '-q:v', '5',
+             str(tdir / 't_%05d.jpg')],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _current['thumb_proc'] = proc
+        proc.wait()
+    except Exception:
+        pass
 
 # Códecs que Chromium reproduce en fMP4/MSE sin recodificar
 _VIDEO_COPY = {'h264', 'av1', 'vp9'}
@@ -43,13 +65,15 @@ def _ffprobe(path: str) -> dict:
 
 def _kill_current():
     """Mata la sesión ffmpeg activa y borra sus segmentos. Llamar con _lock."""
-    proc = _current.get('proc')
-    if proc and proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
+    for key in ('proc', 'thumb_proc'):
+        proc = _current.get(key)
+        if proc and proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        _current[key] = None
     sid = _current.get('sid')
     if sid:
         shutil.rmtree(_SESS_ROOT / sid, ignore_errors=True)
@@ -196,9 +220,12 @@ def stream_open():
         resume = float((_lib_read().get(anime_id) or {})
                        .get('positions', {}).get(ep_str, 0))
 
+    threading.Thread(target=_gen_thumbs, args=(video, sess), daemon=True).start()
+
     return jsonify({
         'ok': True, 'sid': sid,
         'playlist': f'/api/stream/hls/{sid}/index.m3u8',
+        'thumbs': {'url': f'/api/stream/hls/{sid}/thumbs', 'interval': _THUMB_IV},
         'duration': duration,
         'resume_pos': resume,
         'path': video,
