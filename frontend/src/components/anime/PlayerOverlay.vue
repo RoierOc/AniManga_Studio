@@ -6,8 +6,12 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import Hls from 'hls.js'
 import JASSUB from 'jassub'
-import jassubWorkerUrl from 'jassub/dist/wasm/jassub-worker.js?url'
+import jassubWorkerUrl from 'jassub/dist/wasm/jassub-worker.js?worker&url'
 import jassubWasmUrl from 'jassub/dist/wasm/jassub-worker.wasm?url'
+// SIN modernWasmUrl los navegadores con SIMD intentan cargar la variante
+// "modern" desde una ruta por defecto que no existe en el bundle → los
+// subtítulos fallan en silencio.
+import jassubModernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url'
 import { useAnimeStore } from '@/stores/anime'
 import { animeEpLabel } from '@/lib/anime'
 import { api } from '@/lib/api'
@@ -136,6 +140,7 @@ async function setSubTrack(idx) {
         subUrl: r.url,
         workerUrl: jassubWorkerUrl,
         wasmUrl: jassubWasmUrl,
+        modernWasmUrl: jassubModernWasmUrl,
         fonts: r.fonts || [],
       })
     } else {
