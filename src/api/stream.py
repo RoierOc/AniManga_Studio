@@ -245,6 +245,31 @@ def stream_hls(sid, fn):
     return send_from_directory(str(sess), fn, max_age=max_age)
 
 
+def _fallback_font():
+    """Una fuente sans ESTÁTICA TrueType para .ass sin fuentes adjuntas.
+    OJO: libass (wasm de jassub) no abre fuentes variables NI OpenType-CFF
+    ("Error opening memory font") — solo TTF con contornos glyf. La del
+    proyecto va primero (portátil al PC principal); fc-match se filtra."""
+    for c in (str(Path(__file__).resolve().parents[1] / 'assets' / 'fonts'
+                  / 'NotoSans-Regular.ttf'),
+              '/usr/share/fonts/liberation/LiberationSans-Regular.ttf',
+              '/usr/share/fonts/TTF/DejaVuSans.ttf',
+              '/usr/share/fonts/noto/NotoSans-Regular.ttf',
+              'C:/Windows/Fonts/arial.ttf'):
+        if Path(c).is_file():
+            return c
+    try:
+        r = subprocess.run(['fc-match', '-f', '%{file}', 'sans-serif'],
+                           capture_output=True, text=True, timeout=5)
+        f = (r.stdout or '').strip()
+        if (f and Path(f).is_file() and 'variable' not in Path(f).name.lower()
+                and Path(f).suffix.lower() == '.ttf'):
+            return f
+    except Exception:
+        pass
+    return None
+
+
 @stream_bp.route('/subs', methods=['POST'])
 def stream_subs():
     """Extrae una pista de subtítulos (y las fuentes adjuntas del MKV) para
@@ -290,6 +315,16 @@ def stream_subs():
             ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
              '-dump_attachment:t', '', '-i', video],
             cwd=str(fontdir), capture_output=True, timeout=60)
+        # Fallback SIEMPRE: si el archivo no trae fuentes (o el estilo usa una
+        # familia que no viene adjunta), libass sin fuentes no dibuja NADA — los
+        # subs quedan "seleccionados pero invisibles". El paquete jassub tampoco
+        # incluye su default.woff2, así que la fuente de respaldo la pone el server.
+        fb = _fallback_font()
+        if fb:
+            try:
+                shutil.copyfile(fb, fontdir / f'_fallback{Path(fb).suffix.lower()}')
+            except OSError:
+                pass
     fonts = [f'/api/stream/hls/{sid}/fonts/{f.name}' for f in fontdir.iterdir()
              if f.suffix.lower() in ('.ttf', '.otf', '.ttc')]
 
