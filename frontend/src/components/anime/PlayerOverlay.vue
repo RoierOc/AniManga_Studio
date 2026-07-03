@@ -88,6 +88,7 @@ const a4kActive = ref(false)          // pipeline corriendo (canvas visible)
 const a4kAvailable = Anime4KRenderer.supported()
 const a4k = new Anime4KRenderer()
 a4k.onFatal = () => { a4kActive.value = false }   // canvas fuera, vídeo visible
+window.__a4kr = a4k   // gancho de depuración (frames renderizados, device)
 const canvasRect = ref({ left: 0, top: 0, width: 0, height: 0 })
 
 async function setA4kMode(id) {
