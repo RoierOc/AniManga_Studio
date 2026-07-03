@@ -3,12 +3,19 @@ import { computed } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { ANIME_STATUS, animeFormatLabel, fmtCountdown } from '@/lib/anime'
 import { imgProxy } from '@/lib/img'
+import { vtTag } from '@/lib/vt'
 import Icon from '@/components/ui/Icon.vue'
 
 const props = defineProps({ anime: { type: Object, required: true } })
-defineEmits(['open', 'play'])
+const emit = defineEmits(['open', 'play'])
 
 const store = useAnimeStore()
+
+// El póster clickeado "vuela" hasta el hero del detalle (View Transition).
+function openCard(ev) {
+  vtTag(ev.currentTarget?.closest?.('.acard') || ev.currentTarget, '.acard__img')
+  emit('open', props.anime)
+}
 
 const total = computed(() => props.anime.total_episodes || 0)
 const done = computed(() => props.anime.downloaded_count || 0)
@@ -57,7 +64,7 @@ const dots = computed(() =>
 </script>
 
 <template>
-  <article class="acard" tabindex="0" @click="$emit('open', anime)" @keydown.enter="$emit('open', anime)">
+  <article class="acard" tabindex="0" @click="openCard" @keydown.enter="openCard">
     <div class="acard__poster">
       <img v-if="anime.cover" :src="imgProxy(anime.cover)" :alt="anime.title" loading="lazy" class="acard__img"
            @load="$event.target.classList.add('is-loaded')" />
@@ -90,7 +97,7 @@ const dots = computed(() =>
           <p v-if="synopsis" class="acard__syn">{{ synopsis }}</p>
           <div class="acard__acts">
             <button class="acard__act acard__act--play" @click.stop="$emit('play', anime)"><Icon name="play" :size="14" /> Ver</button>
-            <button class="acard__act" @click.stop="$emit('open', anime)"><Icon name="spark" :size="13" /> Info</button>
+            <button class="acard__act" @click.stop="openCard"><Icon name="spark" :size="13" /> Info</button>
           </div>
         </div>
       </div>

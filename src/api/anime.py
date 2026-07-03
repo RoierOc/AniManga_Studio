@@ -160,6 +160,30 @@ def _anilist_enrich(al_id):
     return (r.json().get('data') or {}).get('Media') or {} if r is not None else {}
 
 
+_syn_cache: dict = {}   # al_id → sinopsis completa
+
+
+@anime_bp.route('/synopsis/<int:al_id>')
+def anime_synopsis(al_id):
+    """Sinopsis COMPLETA para la pestaña Detalles — la que guarda library está
+    recortada a 320 chars (_clean_synopsis) para las cards. Aquí se conservan
+    los saltos de párrafo (el CSS del detalle usa white-space: pre-line)."""
+    if al_id in _syn_cache:
+        return jsonify({'synopsis': _syn_cache[al_id]})
+    q = 'query($id:Int){Media(id:$id,type:ANIME){description(asHtml:false)}}'
+    r = _anilist_post(q, {'id': int(al_id)})
+    desc = ((((r.json().get('data') or {}).get('Media') or {}).get('description'))
+            if r is not None else '') or ''
+    t = re.sub(r'<br\s*/?>', '\n', desc)
+    t = re.sub(r'<[^>]+>', '', t)
+    t = re.sub(r'\(Source:.*?\)', '', t, flags=re.I | re.S)
+    t = re.sub(r'[ \t]+', ' ', t)
+    t = re.sub(r'\n{3,}', '\n\n', t).strip()
+    if t:
+        _syn_cache[al_id] = t
+    return jsonify({'synopsis': t})
+
+
 def _tmdb_images(tmdb_id, media_type='tv'):
     """For a known TMDB tv/movie id pick the best text-free wide backdrop, the
     best English logo (transparent PNG title treatment, Crunchyroll-style), and

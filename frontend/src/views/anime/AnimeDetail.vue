@@ -105,6 +105,9 @@ const TABS = computed(() => [
   { key: 'rel', label: 'Relacionados', badge: recs.value.length + stacks.value.length },
 ])
 
+// Sinopsis completa (endpoint /synopsis) con la recortada de library como fallback
+const synopsis = computed(() => store.fullSyn[alId.value] || anime.value?.synopsis || '')
+
 const PICKER_TABS = [
   { key: 'cover', label: 'Portada' },
   { key: 'banner_detail', label: 'Fondo de esta página' },
@@ -260,7 +263,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
       <section class="dinfo">
         <div class="dinfo__main">
           <h3 class="disc__title">Sinopsis</h3>
-          <p v-if="anime.synopsis" class="dinfo__syn">{{ anime.synopsis }}</p>
+          <p v-if="synopsis" class="dinfo__syn">{{ synopsis }}</p>
           <p v-else class="dinfo__none">Sin sinopsis disponible.</p>
 
           <template v-if="tags.length">
@@ -422,7 +425,8 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .dhero__inner { position: relative; z-index: 1; height: 100%; display: flex; align-items: flex-end;
   gap: var(--s-5); max-width: 900px; padding: var(--s-6) var(--s-7); }
 /* natural aspect (height auto) + flex-shrink:0 → poster shown whole, not cropped or squeezed. */
-.dhero__poster { width: 168px; height: auto; border-radius: var(--r-md); box-shadow: var(--shadow-lg); border: 1px solid rgba(255,255,255,.16); flex-shrink: 0; }
+.dhero__poster { width: 168px; height: auto; border-radius: var(--r-md); box-shadow: var(--shadow-lg); border: 1px solid rgba(255,255,255,.16); flex-shrink: 0;
+  view-transition-name: detail-poster;   /* destino del morph desde la card (lib/vt.js) */ }
 .dhero__col { display: flex; flex-direction: column; gap: var(--s-3); min-width: 0; }
 .dhero__fmt { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--cyan); }
 .dhero__title { font-family: var(--font-display); font-weight: 700; color: #fff; font-size: clamp(2rem, 4vw, 3.4rem);

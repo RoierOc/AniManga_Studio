@@ -114,6 +114,18 @@ ul, ol { list-style: none; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
+/* View Transitions (lib/vt.js): crossfade de vistas + morph del póster
+   card → hero del detalle. El grupo con nombre lleva su propia curva. */
+::view-transition-group(detail-poster) {
+  animation-duration: .38s;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) { animation: none !important; }
+}
+
 /* Staggered page-load reveal — children rise in sequence.
    Set --i on each child (0,1,2,…) to cascade.                              */
 .stagger > * {

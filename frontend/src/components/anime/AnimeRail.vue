@@ -1,4 +1,5 @@
 <script setup>
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { imgProxy } from '@/lib/img'
 import { animeFormatLabel } from '@/lib/anime'
 import Icon from '@/components/ui/Icon.vue'
@@ -17,14 +18,41 @@ defineEmits(['select'])
 
 const epThumb = (it) => `/api/anime/thumb/${it.anime.id}/${it.ep?.num}`
 const scoreOf = (a) => (a?.score && a.score > 0 ? Math.round(a.score) : null)
+
+/* ── flechas de paginación (estilo Crunchyroll) ── */
+const row = ref(null)
+const canL = ref(false)
+const canR = ref(false)
+function updateArrows() {
+  const el = row.value
+  if (!el) { canL.value = false; canR.value = false; return }
+  canL.value = el.scrollLeft > 8
+  canR.value = el.scrollLeft + el.clientWidth < el.scrollWidth - 8
+}
+function page(dir) {
+  row.value?.scrollBy({ left: dir * row.value.clientWidth * 0.9, behavior: 'smooth' })
+}
+onMounted(() => { updateArrows(); window.addEventListener('resize', updateArrows) })
+onBeforeUnmount(() => window.removeEventListener('resize', updateArrows))
+watch(() => props.items.length, async () => { await nextTick(); updateArrows() })
 </script>
 
 <template>
   <section v-if="items.length" class="rail">
-    <h3 class="rail__title">{{ title }}</h3>
+    <div class="rail__head">
+      <h3 class="rail__title">{{ title }}</h3>
+      <div v-if="canL || canR" class="rail__nav">
+        <button class="rail__arrow" :disabled="!canL" title="Anterior" @click="page(-1)">
+          <Icon name="chevron" :size="16" :style="{ transform: 'rotate(180deg)' }" />
+        </button>
+        <button class="rail__arrow" :disabled="!canR" title="Siguiente" @click="page(1)">
+          <Icon name="chevron" :size="16" />
+        </button>
+      </div>
+    </div>
 
     <!-- Episode thumbnails (16:9) -->
-    <div v-if="variant === 'episode'" class="rail__row">
+    <div v-if="variant === 'episode'" ref="row" class="rail__row" @scroll.passive="updateArrows">
       <article v-for="it in items" :key="it.anime.id + '-' + (it.ep?.num ?? '')" class="ecard"
                @click="$emit('select', it)">
         <div class="ecard__thumb">
@@ -45,7 +73,7 @@ const scoreOf = (a) => (a?.score && a.score > 0 ? Math.round(a.score) : null)
     </div>
 
     <!-- Poster cards (2:3) -->
-    <div v-else class="rail__row">
+    <div v-else ref="row" class="rail__row" @scroll.passive="updateArrows">
       <article v-for="it in items" :key="it.anime.id || it.anime.al_id" class="pcard"
                @click="$emit('select', it)">
         <div class="pcard__poster">
@@ -65,8 +93,17 @@ const scoreOf = (a) => (a?.score && a.score > 0 ? Math.round(a.score) : null)
 
 <style scoped>
 .rail { margin-bottom: var(--s-7); }
-.rail__title { font-family: var(--font-display); font-size: var(--fs-xl); margin-bottom: var(--s-4); }
-.rail__row { display: flex; gap: var(--s-4); overflow-x: auto; padding-bottom: var(--s-3); scroll-snap-type: x proximity; }
+.rail__head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin-bottom: var(--s-4); }
+.rail__title { font-family: var(--font-display); font-size: var(--fs-xl); }
+.rail__nav { display: flex; gap: var(--s-1); }
+.rail__arrow {
+  width: 2.25rem; height: 2.25rem; display: grid; place-items: center;
+  border-radius: var(--r-sm); border: 1px solid var(--line); color: var(--ink-soft);
+  background: var(--surface); transition: all var(--t-fast);
+}
+.rail__arrow:hover:not(:disabled) { color: var(--ink); border-color: var(--azure); background: var(--azure-haze); }
+.rail__arrow:disabled { opacity: .3; cursor: default; }
+.rail__row { display: flex; gap: var(--s-4); overflow-x: auto; padding-bottom: var(--s-3); scroll-snap-type: x mandatory; scroll-behavior: smooth; }
 .rail__row::-webkit-scrollbar { height: 6px; }
 .rail__row::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: var(--r-pill); }
 

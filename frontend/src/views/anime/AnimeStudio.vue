@@ -1,7 +1,8 @@
 <script setup>
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useUiStore } from '@/stores/ui'
 import { useAnimeStore } from '@/stores/anime'
+import { supportsVT, vtGo } from '@/lib/vt'
 import AnimeLibrary from './AnimeLibrary.vue'
 import AnimeDetail from './AnimeDetail.vue'
 import Downloads from './Downloads.vue'
@@ -32,12 +33,27 @@ onMounted(() => {
 })
 
 function selectTab(id) {
-  store.closeDetail()
-  store.closeTorrents()
-  store.sub = id
-  store.persist()
-  useUiStore().pushNav()
+  vtGo(() => {
+    store._resetDetail()
+    store.closeTorrents()
+    store.sub = id
+    store.persist()
+    useUiStore().pushNav()
+  })
 }
+
+// Con View Transitions el swap lo anima el navegador (crossfade + morph del
+// póster); la <Transition out-in> de Vue retrasaría el montaje del DOM nuevo
+// y la captura del "después" saldría vacía. Sin soporte, swap Vue como antes.
+const VIEW_MAP = { library: AnimeLibrary, search: Search, seasonal: Seasonal,
+                   schedule: Schedule, downloads: Downloads, history: History }
+const current = computed(() => {
+  if (store.detail) return { c: AnimeDetail, key: 'detail', props: {} }
+  const c = VIEW_MAP[store.sub]
+  if (c) return { c, key: store.sub, props: {} }
+  const t = TABS.find(x => x.id === store.sub)
+  return { c: PlaceholderView, key: store.sub, props: { label: t?.label, icon: t?.icon } }
+})
 </script>
 
 <template>
@@ -51,17 +67,9 @@ function selectTab(id) {
     </nav>
 
     <div class="studio__body">
-      <Transition name="swap" mode="out-in">
-        <AnimeDetail v-if="store.detail" key="detail" />
-        <AnimeLibrary v-else-if="store.sub === 'library'" key="library" />
-        <Search v-else-if="store.sub === 'search'" key="search" />
-        <Seasonal v-else-if="store.sub === 'seasonal'" key="seasonal" />
-        <Schedule v-else-if="store.sub === 'schedule'" key="schedule" />
-        <Downloads v-else-if="store.sub === 'downloads'" key="downloads" />
-        <History v-else-if="store.sub === 'history'" key="history" />
-        <PlaceholderView v-else :key="store.sub"
-                         :label="TABS.find(t => t.id === store.sub)?.label"
-                         :icon="TABS.find(t => t.id === store.sub)?.icon" />
+      <component v-if="supportsVT" :is="current.c" :key="current.key" v-bind="current.props" />
+      <Transition v-else name="swap" mode="out-in">
+        <component :is="current.c" :key="current.key" v-bind="current.props" />
       </Transition>
     </div>
 

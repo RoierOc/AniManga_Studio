@@ -3,6 +3,7 @@ import { api } from '@/lib/api'
 import { onSSE } from '@/lib/sse'
 import { useUiStore } from './ui'
 import { nextUnwatchedEp, isSpanishOrMulti, isEnglishSub } from '@/lib/anime'
+import { vtGo } from '@/lib/vt'
 
 let autoplayTimer = null
 let nowTimer = null
@@ -35,6 +36,7 @@ export const useAnimeStore = defineStore('anime', {
     recs: {}, recsState: {},
     stacks: {}, stacksState: {},
     tags: {}, malUrls: {},
+    fullSyn: {},               // al_id -> sinopsis completa (la de library viene recortada a 320)
     // browse overlays
     stackBrowse: null, stackBrowseMeta: null, stackBrowseAnime: [], stackBrowseState: 'idle',
     tagBrowse: null, tagBrowseAnime: [], tagBrowseState: 'idle',
@@ -365,13 +367,16 @@ export const useAnimeStore = defineStore('anime', {
     hidePreview() { this.preview = null },
 
     openDetail(anime) {
-      this.hidePreview()
-      this.previewAnime = null
-      this.detailId = anime.id
-      this.epInfoOpen = null
-      this.linkTorrent = { show: false, list: [], loading: false, subpath: '' }
-      if (anime.al_id) { this.loadTags(anime); this.loadRecs(anime) }
-      useUiStore().pushNav()
+      // vtGo = View Transition (el póster de la card "vuela" al hero del detalle)
+      vtGo(() => {
+        this.hidePreview()
+        this.previewAnime = null
+        this.detailId = anime.id
+        this.epInfoOpen = null
+        this.linkTorrent = { show: false, list: [], loading: false, subpath: '' }
+        if (anime.al_id) { this.loadTags(anime); this.loadRecs(anime); this.loadSynopsis(anime) }
+        useUiStore().pushNav()
+      })
     },
     // Eagerly enriches a non-library anime with TMDB/AniList HD data and caches the
     // result in enrichedPreviews so heroItems reacts and updates the hero slider too.
@@ -387,6 +392,9 @@ export const useAnimeStore = defineStore('anime', {
     // Opens a non-library anime (recommendation / seasonal) in the detail panel.
     // Uses cached enrichment if already available; triggers enrichment otherwise.
     openPreview(anime) {
+      vtGo(() => this._openPreview(anime))
+    },
+    _openPreview(anime) {
       this.hidePreview()
       this.detailId = null
       const cached = this.enrichedPreviews[anime.al_id] || {}
@@ -403,6 +411,7 @@ export const useAnimeStore = defineStore('anime', {
       if (anime.al_id) {
         this.loadTags(anime)
         this.loadRecs(anime)
+        this.loadSynopsis(anime)
         // enrichPreview caches result → also updates previewAnime via watcher below
         this.enrichPreview(anime.al_id).then(() => {
           const enriched = this.enrichedPreviews[anime.al_id]
@@ -416,8 +425,21 @@ export const useAnimeStore = defineStore('anime', {
     // Pure reset for programmatic callers (tab switches, openRec). The "Volver"
     // button uses ui.back() so forward can reopen the detail.
     closeDetail() {
+      vtGo(() => this._resetDetail())
+    },
+    _resetDetail() {
       this.detailId = null
       this.previewAnime = null
+    },
+
+    async loadSynopsis(anime) {
+      const id = anime.al_id
+      if (!id || this.fullSyn[id] !== undefined) return
+      this.fullSyn[id] = ''    // marca en curso (evita peticiones duplicadas)
+      try {
+        const d = await api.get(`/api/anime/synopsis/${id}`)
+        if (d?.synopsis) this.fullSyn[id] = d.synopsis
+      } catch (_) {}
     },
 
     async loadTags(anime) {
