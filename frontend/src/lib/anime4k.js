@@ -73,10 +73,13 @@ export class Anime4KRenderer {
     if (!Preset) return false
 
     if (!this.device) {
-      // low-power = la iGPU que decodifica el vídeo. La dedicada (NVIDIA)
-      // computa más rápido pero SIEMPRE produce negro: los frames VAAPI no
-      // cruzan de GPU por ninguna vía. Override: 'anime-a4k-gpu'.
-      const pref = localStorage.getItem('anime-a4k-gpu') || 'low-power'
+      // Linux híbrido: low-power = la iGPU que decodifica el vídeo (VAAPI). La
+      // dedicada computa más rápido pero SIEMPRE produce negro: los frames no
+      // cruzan de GPU por ninguna vía. En Windows el decode va por D3D11 en la
+      // GPU principal → high-performance (la dedicada, p.ej. 5070 junto a la
+      // iGPU del Ryzen). Override manual: 'anime-a4k-gpu'.
+      const pref = localStorage.getItem('anime-a4k-gpu')
+        || (navigator.platform.includes('Linux') ? 'low-power' : 'high-performance')
       const adapter = await navigator.gpu.requestAdapter({ powerPreference: pref })
         || await navigator.gpu.requestAdapter()
       if (!adapter) return false

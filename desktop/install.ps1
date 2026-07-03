@@ -15,6 +15,11 @@ Set-Location $Root
 function Say($m) { Write-Host "[install] $m" -ForegroundColor Cyan }
 
 # ── 1. Backend Python ─────────────────────────────────────────────────────────
+# Un .venv copiado desde Linux/WSL no sirve en Windows nativo: recrear.
+if ((Test-Path ".venv") -and -not (Test-Path ".venv\Scripts\python.exe")) {
+    Say "venv de otra plataforma detectado - recreando..."
+    Remove-Item -Recurse -Force ".venv"
+}
 if (-not (Test-Path ".venv\Scripts\python.exe")) {
     Say "Creando venv..."
     python -m venv .venv

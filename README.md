@@ -228,7 +228,18 @@ bash desktop/install.sh
 Después busca **AniManga Studio** en tu lanzador de aplicaciones. Para actualizar:
 `git pull` y re-ejecuta el instalador (es idempotente).
 
-**Windows (nativo):**
+**Windows (backend en WSL — recomendado):**
+
+```bash
+# dentro de tu distro WSL, en la carpeta del proyecto:
+bash desktop/install.sh
+```
+
+El instalador detecta WSL y crea el acceso directo **AniManga Studio** en el Menú
+Inicio de Windows: el backend corre en WSL (CUDA, ffmpeg, todo lo que ya tienes)
+y la ventana en un Chromium de Windows — HEVC por hardware y Anime4K a plena GPU.
+
+**Windows (nativo, sin WSL — experimental):**
 
 ```powershell
 winget install Python.Python.3.12 OpenJS.NodeJS pnpm.pnpm Rustlang.Rustup Git.Git
@@ -236,9 +247,6 @@ rustup default stable-msvc
 git clone <this-repo> animanga; cd animanga
 powershell -ExecutionPolicy Bypass -File desktop\install.ps1
 ```
-
-Crea el acceso directo **AniManga Studio** en el Menú Inicio (usa WebView2/Chromium,
-incluido en Windows 11).
 
 Detalles, dependencias opcionales y cómo funciona el ciclo de vida:
 **[docs/INSTALL_DESKTOP.md](docs/INSTALL_DESKTOP.md)**.

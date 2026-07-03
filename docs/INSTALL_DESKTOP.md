@@ -25,9 +25,36 @@ desde tu lanzador de aplicaciones.
   `ffmpeg`/`mkvtoolnix-cli` (subtítulos), modelos en `models/` (upscaling — docs/MODELS.md).
 - **Secretos**: copia `.env.example` a `.env` (MangaDex OAuth, TMDB…).
 
-## Windows (nativo)
+## Windows con backend en WSL (recomendado para el PC principal)
 
-> Pendiente de validación completa — el desarrollo se hace en Arch.
+El backend (Python/CUDA, ffmpeg, Suwayomi) vive en tu distro WSL — donde ya
+funciona todo — y la ventana corre en Windows nativo: un Chromium de Windows en
+modo `--app` (D3D11 → HEVC por hardware y Anime4K WebGPU a plena GPU, sin el
+problema cross-GPU de los híbridos Linux).
+
+```bash
+# DENTRO de WSL, en la carpeta del proyecto:
+bash desktop/install.sh
+```
+
+El instalador detecta WSL automáticamente: prepara venv + frontend (recreándolos
+si la carpeta se copió de otra máquina), copia el lanzador a
+`%LOCALAPPDATA%\AniMangaStudio` y crea **AniManga Studio** en el Menú Inicio de
+Windows. No compila nada de Rust: el lanzador es PowerShell puro.
+
+- **Ciclo de vida**: abrir → arranca `start_server.sh` en WSL (watchdog incluido) →
+  espera `/health` → ventana `--app`. Cerrar la ventana → `POST /shutdown`.
+  Si el server ya estaba corriendo (lo levantaste a mano), lo usa y no lo apaga.
+- **Navegador**: Brave → Chrome → Edge, el primero instalado en Windows
+  (Edge viene con Windows 11, siempre hay fallback). Override: campo `"browser"`
+  en `%LOCALAPPDATA%\AniMangaStudio\config.json` (ruta al .exe).
+- **qBittorrent/mpv de Windows**: se lanzan solos vía interop, igual que siempre
+  (`QBT_WIN_PATH` en `.env` si tu ruta es distinta).
+- Para actualizar: reemplaza/actualiza la carpeta en WSL y re-ejecuta el instalador.
+
+## Windows (nativo, sin WSL)
+
+> Alternativa experimental — pendiente de validación completa.
 
 Requisitos una vez:
 ```powershell
