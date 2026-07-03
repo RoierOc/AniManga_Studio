@@ -118,8 +118,10 @@ async function applyA4k() {
   }
   updateCanvasRect()
   const wasPlaying = !v.paused
+  const dpr = window.devicePixelRatio || 1
   try {
-    const ok = await a4k.start(v, a4kCanvas.value, a4kMode.value)
+    const ok = await a4k.start(v, a4kCanvas.value, a4kMode.value,
+      canvasRect.value.width * dpr, canvasRect.value.height * dpr)
     a4kActive.value = ok
     if (!ok) console.warn('[a4k] no arrancó (adapter/preset no disponible)')
   } catch (e) {
@@ -347,7 +349,12 @@ function toggleFs() {
 }
 function onFsChange() {
   isFs.value = !!document.fullscreenElement
-  requestAnimationFrame(updateCanvasRect)
+  requestAnimationFrame(() => {
+    updateCanvasRect()
+    // el pipeline computa a la resolución visible: al cambiar fullscreen hay
+    // que rearmarlo con el nuevo tamaño (si no, se vería borroso o sobra GPU)
+    if (a4kActive.value) applyA4k()
+  })
 }
 
 function openInMpv() {

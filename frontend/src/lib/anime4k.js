@@ -46,18 +46,24 @@ export class Anime4KRenderer {
 
   static supported() { return !!navigator.gpu }
 
-  /** Arranca (o re-arma) el pipeline para video→canvas con el tier dado. */
-  async start(video, canvas, modeId) {
+  /** Arranca (o re-arma) el pipeline para video→canvas con el tier dado.
+   * targetW/H: resolución REAL de salida (rect visible × devicePixelRatio) —
+   * computar a 2× nativo fijo (4K) desperdicia ~4× de GPU cuando el canvas se
+   * muestra más pequeño; en la iGPU eso es la diferencia entre fluido y tirones. */
+  async start(video, canvas, modeId, targetW = 0, targetH = 0) {
     this.stop()
     if (!navigator.gpu || !video.videoWidth) return false
     const Preset = (await presets())[modeId]
     if (!Preset) return false
 
     if (!this.device) {
-      // low-power = la iGPU Intel, la MISMA que decodifica el vídeo (VAAPI):
-      // los VideoFrame se importan zero-copy. Con high-performance (NVIDIA)
-      // el import cross-GPU congela el decoder (vídeo clavado, canvas negro).
-      const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'low-power' })
+      // high-performance = la GPU dedicada (medido: 24fps 0 drops vs ~13% de
+      // drops en la iGPU). El import cross-GPU de VideoFrames REQUIERE que
+      // TODOS los ICD Vulkan estén instalados (vulkan-intel incluido) — sin
+      // eso el proceso GPU segfaultea o congela el decoder.
+      // Override: localStorage 'anime-a4k-gpu' = 'low-power' (iGPU).
+      const pref = localStorage.getItem('anime-a4k-gpu') || 'high-performance'
+      const adapter = await navigator.gpu.requestAdapter({ powerPreference: pref })
         || await navigator.gpu.requestAdapter()
       if (!adapter) return false
       this.device = await adapter.requestDevice()
@@ -70,7 +76,10 @@ export class Anime4KRenderer {
     }
     const device = this.device
     const vw = video.videoWidth, vh = video.videoHeight
-    const tw = vw * 2, th = vh * 2               // Anime4K = upscale x2
+    // tope: 2× nativo (más no aporta); suelo: nativo (menos sería downscale)
+    const tw = Math.round(Math.min(Math.max(targetW || vw * 2, vw), vw * 2))
+    const th = Math.round(Math.min(Math.max(targetH || vh * 2, vh), vh * 2))
+    this.frames = 0                              // contador para diagnóstico
 
     canvas.width = tw
     canvas.height = th
@@ -132,6 +141,7 @@ export class Anime4KRenderer {
         rp.draw(3)
         rp.end()
         device.queue.submit([encoder.finish()])
+        this.frames++
         errCount = 0
       } catch (e) {
         // frames sueltos pueden fallar en seeks; errores SOSTENIDOS = pipeline
