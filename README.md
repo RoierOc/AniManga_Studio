@@ -211,7 +211,41 @@ listo para ver en MPV con skip-intro y subtítulos sincronizados.
 
 ---
 
-## 🚀 Quick start
+## 🖥️ App de escritorio (recomendado)
+
+La forma principal de usar AniManga Studio: una app instalable que arranca el
+backend al abrirla y lo apaga al cerrar la ventana — sin encender servers a mano.
+Reproductor de anime embebido estilo Crunchyroll (streaming sin pérdida, subtítulos
+ASS fieles, Anime4K por WebGPU) y Suwayomi bajo demanda.
+
+**Linux (Arch/Manjaro/EndeavourOS):**
+
+```bash
+git clone <this-repo> animanga && cd animanga
+bash desktop/install.sh
+```
+
+Después busca **AniManga Studio** en tu lanzador de aplicaciones. Para actualizar:
+`git pull` y re-ejecuta el instalador (es idempotente).
+
+**Windows (nativo):**
+
+```powershell
+winget install Python.Python.3.12 OpenJS.NodeJS pnpm.pnpm Rustlang.Rustup Git.Git
+rustup default stable-msvc
+git clone <this-repo> animanga; cd animanga
+powershell -ExecutionPolicy Bypass -File desktop\install.ps1
+```
+
+Crea el acceso directo **AniManga Studio** en el Menú Inicio (usa WebView2/Chromium,
+incluido en Windows 11).
+
+Detalles, dependencias opcionales y cómo funciona el ciclo de vida:
+**[docs/INSTALL_DESKTOP.md](docs/INSTALL_DESKTOP.md)**.
+
+---
+
+## 🚀 Quick start (modo server, sin app)
 
 ```bash
 git clone <this-repo>
