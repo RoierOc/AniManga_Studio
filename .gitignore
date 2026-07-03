@@ -57,6 +57,7 @@ archive/
 
 # README screenshot/gif inbox — unprocessed drops, never committed
 docs/img/raw/
+hevc_test.mp4
 
 # Local configuration and public repository metadata.
 /.*/

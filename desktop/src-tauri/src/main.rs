@@ -151,15 +151,13 @@ fn spawn_browser_app(browser: &PathBuf) -> Option<Child> {
         .arg("--no-default-browser-check")
         // Player embebido: HEVC por hardware (NVDEC vía driver VAAPI de NVIDIA
         // → HEVC se copia sin recodificar = cero pérdida) y WebGPU (Anime4K).
-        // OJO: NO añadir el feature "Vulkan" aquí — rompe el init de GPU de
-        // Chromium en Linux/NVIDIA y deja la ventana en blanco/transparente.
-        .arg("--enable-features=VaapiOnNvidiaGPUs,VaapiIgnoreDriverChecks,AcceleratedVideoDecodeLinuxGL,PlatformHEVCDecoderSupport")
-        // La decodificación VAAPI/NVDEC en Chromium NO composita bajo Wayland
-        // (vídeo congelado con la página viva); bajo XWayland es el camino
-        // probado de nvidia-vaapi-driver. Solo afecta a esta ventana.
-        .arg("--ozone-platform=x11")
-        // NVIDIA está en la blocklist de VAAPI de Chromium: sin esto el vídeo
-        // se decodifica por CPU aunque el driver funcione (NVDEC a 0 %).
+        // Combinación VALIDADA empíricamente (combo H del banco static/hevc_test.html):
+        // HEVC Main10 decodifica por hardware en la iGPU Intel (QuickSync/iHD)
+        // con ANGLE sobre Vulkan. La vía NVIDIA (nvidia-vaapi-driver) falla con
+        // "failed Initializing the frame pool" (driver 610 > lo que soporta el
+        // paquete 0.0.17). "Vulkan" a secas SIN DefaultANGLEVulkan+VulkanFromANGLE
+        // deja la ventana en blanco — deben ir los tres juntos.
+        .arg("--enable-features=VaapiVideoDecoder,VaapiIgnoreDriverChecks,Vulkan,DefaultANGLEVulkan,VulkanFromANGLE,PlatformHEVCDecoderSupport")
         .arg("--ignore-gpu-blocklist")
         .arg("--enable-unsafe-webgpu")
         // suprime el infobar "línea de comandos no admitida" que provocan los
@@ -167,8 +165,10 @@ fn spawn_browser_app(browser: &PathBuf) -> Option<Child> {
         .arg("--test-type")
         // el player arranca la reproducción por código, sin gesto del usuario
         .arg("--autoplay-policy=no-user-gesture-required")
-        .env("LIBVA_DRIVER_NAME", "nvidia")
-        .env("NVD_BACKEND", "direct")
+        // iHD = driver Intel QuickSync (la iGPU decodifica el vídeo del navegador;
+        // la NVIDIA queda libre para upscaler/mpv). Respetamos override del entorno.
+        .env("LIBVA_DRIVER_NAME",
+             std::env::var("ANIMANGA_LIBVA").unwrap_or_else(|_| "iHD".into()))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()

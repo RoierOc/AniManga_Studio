@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>HEVCTEST</title></head>
+<body style="background:#111;color:#eee;font-family:monospace">
+<p id="s">probando HEVC Main10…</p>
+<video id="v" src="/static/hevc_test.mp4" muted autoplay playsinline style="width:640px"></video>
+<script>
+// Prueba empírica: ¿este navegador DECODIFICA HEVC Main10 de verdad?
+// Reporta al backend (queda en /tmp/flask.log) — sin depender de isTypeSupported.
+const v = document.getElementById('v')
+const report = { kind: 'hevc_play_test', flags: location.search.slice(1) }
+const done = (why) => {
+  report.why = why
+  report.currentTime = +v.currentTime.toFixed(2)
+  report.videoWidth = v.videoWidth
+  report.readyState = v.readyState
+  report.error = v.error ? (v.error.code + ':' + (v.error.message || '')) : null
+  report.decoded = v.currentTime > 0.3 && v.videoWidth > 0
+  document.getElementById('s').textContent = JSON.stringify(report)
+  fetch('/api/stream/caps', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(report) }).catch(() => {})
+}
+navigator.mediaCapabilities.decodingInfo({ type: 'media-source',
+  video: { contentType: 'video/mp4; codecs="hvc1.2.4.L153.B0"', width: 1920, height: 1080,
+           bitrate: 3000000, framerate: 24 } })
+  .then(r => { report.mc_supported = r.supported; report.mc_powerEfficient = r.powerEfficient })
+  .catch(e => { report.mc_error = String(e) })
+v.addEventListener('error', () => done('error'))
+setTimeout(() => done('timeout6s'), 6000)
+v.play().catch(e => { report.play_rejected = String(e) })
+</script>
+</body></html>
