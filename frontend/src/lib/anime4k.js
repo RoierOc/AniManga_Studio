@@ -61,7 +61,12 @@ export class Anime4KRenderer {
         || await navigator.gpu.requestAdapter()
       if (!adapter) return false
       this.device = await adapter.requestDevice()
-      this.device.lost.then(() => { this.device = null; this.stop() })
+      this.device.lost.then((info) => {
+        console.warn('[a4k] device WebGPU perdido:', info?.message)
+        this.device = null
+        this.stop()
+        this.onFatal?.(info)   // canvas fuera, vídeo visible
+      })
     }
     const device = this.device
     const vw = video.videoWidth, vh = video.videoHeight
