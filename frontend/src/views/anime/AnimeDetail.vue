@@ -34,7 +34,10 @@ function onHeroError() { if (heroIdx.value < heroTiers.value.length - 1) heroIdx
 const logoFailed = ref(false)
 const hasLogo = computed(() => !!anime.value?.logo && !logoFailed.value)
 const posterFailed = ref(false)
-watch(() => anime.value?.id, () => { heroIdx.value = 0; logoFailed.value = false; posterFailed.value = false })
+watch(() => anime.value?.id, () => { heroIdx.value = 0; logoFailed.value = false; posterFailed.value = false; tab.value = 'eps' })
+
+// Pestañas estilo Crunchyroll bajo el hero
+const tab = ref('eps')
 
 // openDetail() always pushes one history entry, so back consumes it and runs the
 // guarded restore. Fall back to a direct close if there's no app history.
@@ -95,6 +98,12 @@ const recs = computed(() => store.recs[alId.value] || [])
 const tags = computed(() => store.tags[alId.value] || [])
 const stacks = computed(() => store.stacks[alId.value] || [])
 const malUrl = computed(() => store.malUrls[alId.value])
+
+const TABS = computed(() => [
+  { key: 'eps', label: 'Episodios' },
+  { key: 'info', label: 'Detalles' },
+  { key: 'rel', label: 'Relacionados', badge: recs.value.length + stacks.value.length },
+])
 
 const PICKER_TABS = [
   { key: 'cover', label: 'Portada' },
@@ -194,6 +203,14 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
       </div>
     </div>
 
+    <!-- Pestañas bajo el hero (estilo Crunchyroll) -->
+    <nav class="dtabs">
+      <button v-for="t in TABS" :key="t.key" class="dtab" :class="{ 'is-on': tab === t.key }" @click="tab = t.key">
+        {{ t.label }}<span v-if="t.badge" class="dtab__badge">{{ t.badge }}</span>
+      </button>
+    </nav>
+
+    <template v-if="tab === 'eps'">
     <!-- Continuar viendo: salta directo al próximo episodio sin bajar a la lista -->
     <section v-if="resumeEp" class="dresume" @click="store.play(anime, resumeEp)">
       <div class="dresume__thumb">
@@ -213,7 +230,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
     </section>
 
     <div class="eptoolbar">
-      <span class="eptoolbar__lbl">Episodios</span>
+      <span class="eptoolbar__lbl">{{ mainEps.length }} episodios</span>
       <div class="epseg">
         <button :class="{ 'is-on': epView === 'grid' }" title="Cuadrícula" @click="setEpView('grid')"><Icon name="library" :size="15" /></button>
         <button :class="{ 'is-on': epView === 'list' }" title="Lista" @click="setEpView('list')"><Icon name="menu" :size="15" /></button>
@@ -236,40 +253,76 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
         <EpisodeCard v-for="ep in specials" :key="'sp-' + ep.num" :anime="anime" :ep="ep" :batch="batch" />
       </div>
     </template>
+    </template><!-- /tab eps -->
 
-    <!-- Tags -->
-    <section v-if="tags.length" class="disc">
-      <h3 class="disc__title">Tags</h3>
-      <div class="chips">
-        <button v-for="t in tags.slice(0, 18)" :key="t.name" class="chip" @click="store.browseByTag(t.name, alId)">
-          {{ t.name }}<span v-if="t.rank" class="chip__rank">{{ t.rank }}%</span>
-        </button>
-      </div>
-    </section>
+    <!-- Pestaña Detalles: sinopsis + ficha + tags -->
+    <template v-else-if="tab === 'info'">
+      <section class="dinfo">
+        <div class="dinfo__main">
+          <h3 class="disc__title">Sinopsis</h3>
+          <p v-if="anime.synopsis" class="dinfo__syn">{{ anime.synopsis }}</p>
+          <p v-else class="dinfo__none">Sin sinopsis disponible.</p>
 
-    <!-- MAL Stacks -->
-    <section v-if="stacks.length" class="disc">
-      <h3 class="disc__title">Listas de interés (MAL)</h3>
-      <div class="chips">
-        <button v-for="st in stacks" :key="st.id" class="chip chip--stack" @click="store.browseStack(st)">{{ st.name }}</button>
-      </div>
-    </section>
+          <template v-if="tags.length">
+            <h3 class="disc__title" style="margin-top: var(--s-6)">Tags</h3>
+            <div class="chips">
+              <button v-for="t in tags.slice(0, 18)" :key="t.name" class="chip" @click="store.browseByTag(t.name, alId)">
+                {{ t.name }}<span v-if="t.rank" class="chip__rank">{{ t.rank }}%</span>
+              </button>
+            </div>
+          </template>
+        </div>
 
-    <!-- AniList recommendations -->
-    <section v-if="recs.length" class="disc">
-      <h3 class="disc__title">Recomendaciones</h3>
-      <div class="recgrid">
-        <article v-for="r in recs" :key="r.al_id" class="rec" @click="store.openRec(r)">
-          <div class="rec__poster">
-            <img v-if="r.cover" :src="imgProxy(r.cover)" :alt="r.title" loading="lazy" />
-            <div class="rec__scrim" />
-            <span v-if="r.score" class="rec__score">★ {{ (r.score / 10).toFixed(1) }}</span>
-            <span v-if="store.isInLibrary(r)" class="rec__in"><Icon name="check" :size="10" /></span>
-            <div class="rec__ov"><span class="rec__t">{{ r.title }}</span></div>
+        <aside class="dinfo__side">
+          <div v-if="anime.genres?.length" class="dinfo__row">
+            <span class="dinfo__k">Géneros</span>
+            <span class="dinfo__v">{{ anime.genres.join(', ') }}</span>
           </div>
-        </article>
-      </div>
-    </section>
+          <div class="dinfo__row">
+            <span class="dinfo__k">Formato</span>
+            <span class="dinfo__v">{{ animeFormatLabel(anime.format) }}</span>
+          </div>
+          <div v-if="total" class="dinfo__row">
+            <span class="dinfo__k">Episodios</span>
+            <span class="dinfo__v">{{ total }}</span>
+          </div>
+          <div v-if="anime.score" class="dinfo__row">
+            <span class="dinfo__k">Puntuación</span>
+            <span class="dinfo__v">★ {{ (anime.score / 10).toFixed(1) }}</span>
+          </div>
+          <div v-if="diskSize" class="dinfo__row">
+            <span class="dinfo__k">En disco</span>
+            <span class="dinfo__v">{{ formatBytes(diskSize) }}</span>
+          </div>
+        </aside>
+      </section>
+    </template>
+
+    <!-- Pestaña Relacionados: recomendaciones + listas MAL -->
+    <template v-else>
+      <section v-if="stacks.length" class="disc" style="margin-top: 0">
+        <h3 class="disc__title">Listas de interés (MAL)</h3>
+        <div class="chips">
+          <button v-for="st in stacks" :key="st.id" class="chip chip--stack" @click="store.browseStack(st)">{{ st.name }}</button>
+        </div>
+      </section>
+
+      <section v-if="recs.length" class="disc" :style="stacks.length ? {} : { marginTop: 0 }">
+        <h3 class="disc__title">Recomendaciones</h3>
+        <div class="recgrid">
+          <article v-for="r in recs" :key="r.al_id" class="rec" @click="store.openRec(r)">
+            <div class="rec__poster">
+              <img v-if="r.cover" :src="imgProxy(r.cover)" :alt="r.title" loading="lazy" />
+              <div class="rec__scrim" />
+              <span v-if="r.score" class="rec__score">★ {{ (r.score / 10).toFixed(1) }}</span>
+              <span v-if="store.isInLibrary(r)" class="rec__in"><Icon name="check" :size="10" /></span>
+              <div class="rec__ov"><span class="rec__t">{{ r.title }}</span></div>
+            </div>
+          </article>
+        </div>
+      </section>
+      <p v-if="!recs.length && !stacks.length" class="dinfo__none">Sin relacionados todavía.</p>
+    </template>
 
     <!-- Stack browse overlay -->
     <Teleport to="body">
@@ -399,6 +452,35 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .dhero__link { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: rgba(255,255,255,.12);
   border: 1px solid rgba(255,255,255,.16); backdrop-filter: blur(8px); color: var(--ink); font-size: var(--fs-sm); transition: all var(--t-fast); }
 .dhero__link:hover { color: #fff; border-color: var(--azure); background: rgba(255,255,255,.2); }
+
+/* Pestañas bajo el hero — subrayado estilo Crunchyroll */
+.dtabs { display: flex; gap: var(--s-5); margin: 0 0 var(--s-6); border-bottom: 1px solid var(--line); }
+.dtab {
+  position: relative; padding: var(--s-3) var(--s-1); font-family: var(--font-display);
+  font-size: var(--fs-md); font-weight: 600; color: var(--ink-faint);
+  border: none; background: transparent; cursor: pointer; transition: color var(--t-fast);
+}
+.dtab:hover { color: var(--ink); }
+.dtab.is-on { color: var(--ink); }
+.dtab.is-on::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px;
+  border-radius: var(--r-pill); background: var(--azure-bright); box-shadow: 0 0 8px var(--azure-glow);
+}
+.dtab__badge { margin-left: 7px; padding: 1px 7px; border-radius: var(--r-pill);
+  font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700;
+  color: var(--ink-soft); background: var(--surface-2); border: 1px solid var(--line); }
+
+/* Pestaña Detalles */
+.dinfo { display: grid; grid-template-columns: 1fr minmax(15rem, 20rem); gap: var(--s-7); align-items: start; }
+.dinfo__syn { font-size: var(--fs-md); line-height: var(--lh-relaxed, 1.7); color: var(--ink-soft);
+  max-width: 62ch; white-space: pre-line; }
+.dinfo__none { color: var(--ink-faint); font-size: var(--fs-sm); }
+.dinfo__side { display: flex; flex-direction: column; gap: var(--s-3); padding: var(--s-4);
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); }
+.dinfo__row { display: flex; flex-direction: column; gap: 2px; }
+.dinfo__k { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--ink-faint); }
+.dinfo__v { font-size: var(--fs-sm); color: var(--ink); }
+@media (max-width: 640px) { .dinfo { grid-template-columns: 1fr; } }
 
 /* Continuar viendo — franja horizontal antes de la lista de episodios */
 .dresume {

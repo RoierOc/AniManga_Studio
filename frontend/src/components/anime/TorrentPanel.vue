@@ -127,7 +127,9 @@ const keyOf = (t) => t.info_hash || t.torrent_url
       <label class="chk"><input type="checkbox" v-model="store.flt.hideDead" /> Con seeds</label>
     </div>
 
-    <div v-if="store.torrentsLoading" class="center"><Spinner /></div>
+    <div v-if="store.torrentsLoading" class="tp__groups">
+      <div v-for="n in 6" :key="n" class="tp__skel" />
+    </div>
     <div v-else-if="!store.groupedEpisodes.length" class="empty"><Icon name="search" :size="34" /><p>Sin torrents para estos filtros.</p></div>
 
     <div v-else class="tp__groups">
@@ -222,6 +224,9 @@ const keyOf = (t) => t.info_hash || t.torrent_url
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-8) 0; color: var(--ink-faint); }
 
 .tp__groups { display: flex; flex-direction: column; gap: var(--s-2); }
+.tp__skel { height: 2.6rem; border-radius: var(--r-md);
+  background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%);
+  background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 .egrp { border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; background: var(--surface); }
 .egrp__head { display: flex; align-items: center; gap: var(--s-2); width: 100%; padding: var(--s-3) var(--s-4); color: var(--ink); font-weight: 600; font-size: var(--fs-sm); transition: background var(--t-fast); }
 .egrp__head:hover { background: var(--surface-2); }

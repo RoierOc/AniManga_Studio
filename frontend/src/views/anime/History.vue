@@ -4,7 +4,6 @@ import { useAnimeStore } from '@/stores/anime'
 import { relativeTime } from '@/lib/format'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
-import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 
 const store = useAnimeStore()
@@ -28,7 +27,12 @@ function open(item) {
       </button>
     </header>
 
-    <div v-if="!store.historyLoaded" class="center"><Spinner /></div>
+    <div v-if="!store.historyLoaded" class="hist__list">
+      <div v-for="n in 8" :key="n" class="hrow hrow--skel">
+        <div class="hrow__cover skel" />
+        <div class="hrow__meta"><div class="skel skel--t" /><div class="skel skel--s" /></div>
+      </div>
+    </div>
     <EmptyState v-else-if="!store.history.length" icon="heart" title="Aún no has visto nada." />
 
     <div v-else class="hist__list">
@@ -55,8 +59,13 @@ function open(item) {
 .clear { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line); color: var(--ink-faint); font-size: var(--fs-xs); transition: all var(--t-fast); }
 .clear:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
 
-.center { display: grid; place-items: center; padding: var(--s-8); }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-8) 0; color: var(--ink-faint); }
+
+.hrow--skel { pointer-events: none; }
+.skel { background: linear-gradient(100deg, var(--surface-2) 30%, var(--surface-3) 50%, var(--surface-2) 70%);
+  background-size: 200% 100%; animation: shimmer 1.4s linear infinite; border-radius: var(--r-sm); }
+.skel--t { height: 0.9rem; width: 45%; margin-bottom: 6px; }
+.skel--s { height: 0.7rem; width: 28%; }
 
 .hist__list { display: flex; flex-direction: column; gap: var(--s-2); }
 .hrow { display: flex; align-items: center; gap: var(--s-4); padding: var(--s-2) var(--s-3); border-radius: var(--r-md); border: 1px solid var(--line); background: var(--surface); text-align: left; transition: all var(--t-fast); }

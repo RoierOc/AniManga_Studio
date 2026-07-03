@@ -899,6 +899,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 .wp__ctl {
   padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); cursor: pointer;
   border: none; background: transparent; color: #fff; font-size: var(--fs-xs); font-weight: 600;
+  min-height: 2.75rem;   /* target 10-foot: mando/teclado a distancia */
   display: inline-flex; align-items: center; gap: 4px; transition: background var(--t-fast);
 }
 .wp__ctl:hover, .wp__ctl.is-on, .wp__ctl:focus-visible { background: rgba(255,255,255,.14); }
@@ -913,7 +914,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 .wp__menu button {
   display: block; width: 100%; text-align: left; padding: var(--s-2) var(--s-3);
   border: none; background: transparent; color: var(--ink); font-size: var(--fs-xs);
-  border-radius: var(--r-xs); cursor: pointer;
+  border-radius: var(--r-xs); cursor: pointer; min-height: 2.5rem;
 }
 .wp__menu button:hover { background: var(--azure-haze); color: #fff; }
 .wp__menu button.is-sel { color: var(--azure-bright); font-weight: 700; }
