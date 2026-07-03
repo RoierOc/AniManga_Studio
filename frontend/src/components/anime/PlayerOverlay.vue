@@ -13,6 +13,7 @@ import jassubWasmUrl from 'jassub/dist/wasm/jassub-worker.wasm?url'
 // subtítulos fallan en silencio.
 import jassubModernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url'
 import { useAnimeStore } from '@/stores/anime'
+import { Anime4KRenderer, A4K_MODES } from '@/lib/anime4k'
 import { animeEpLabel } from '@/lib/anime'
 import { api } from '@/lib/api'
 import Icon from '@/components/ui/Icon.vue'
@@ -78,6 +79,45 @@ let jassub = null
 let progressTimer = null
 let lastSentPos = -1
 
+/* ── Anime4K (WebGPU) ── */
+const a4kCanvas = ref(null)
+const a4kMode = ref(localStorage.getItem('anime-a4k') || 'off')
+const a4kActive = ref(false)          // pipeline corriendo (canvas visible)
+const a4kAvailable = Anime4KRenderer.supported()
+const a4k = new Anime4KRenderer()
+const canvasRect = ref({ left: 0, top: 0, width: 0, height: 0 })
+
+async function setA4kMode(id) {
+  a4kMode.value = id
+  localStorage.setItem('anime-a4k', id)
+  menuOpen.value = ''
+  await applyA4k()
+}
+
+/* El canvas debe calcar el rectángulo REAL del vídeo (object-fit: contain
+ * deja franjas) — se recalcula en metadata/resize/fullscreen. */
+function updateCanvasRect() {
+  const v = videoEl.value
+  if (!v || !v.videoWidth) return
+  const cw = v.clientWidth, ch = v.clientHeight
+  const scale = Math.min(cw / v.videoWidth, ch / v.videoHeight)
+  const w = v.videoWidth * scale, h = v.videoHeight * scale
+  canvasRect.value = { left: (cw - w) / 2, top: (ch - h) / 2, width: w, height: h }
+}
+
+async function applyA4k() {
+  const v = videoEl.value
+  if (!v || !a4kCanvas.value) return
+  if (a4kMode.value === 'off' || !a4kAvailable || !v.videoWidth) {
+    a4k.stop()
+    a4kActive.value = false
+    return
+  }
+  updateCanvasRect()
+  const ok = await a4k.start(v, a4kCanvas.value, a4kMode.value)
+  a4kActive.value = ok
+}
+
 const title = computed(() => p.value ? animeEpLabel(p.value.anime, p.value.ep) : '')
 
 /* ═══ ciclo de vida de la sesión ═══ */
@@ -121,6 +161,10 @@ function setup(sess) {
 
   progressTimer = setInterval(() => sendProgress(false), 10000)
   armDecodeWatchdog()
+
+  // Anime4K: arranca cuando se conocen las dimensiones del vídeo
+  v.addEventListener('loadedmetadata', () => { updateCanvasRect(); applyA4k() }, { once: true })
+  window.addEventListener('resize', updateCanvasRect)
   poke()
 }
 
@@ -163,6 +207,9 @@ async function setAudioTrack(idx) {
 }
 
 function teardownMedia() {
+  a4k.stop()
+  a4kActive.value = false
+  window.removeEventListener('resize', updateCanvasRect)
   if (decodeTimer) { clearTimeout(decodeTimer); decodeTimer = null }
   if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
   if (nextTimer) { clearInterval(nextTimer); nextTimer = null; nextCd.value = 0 }
@@ -265,7 +312,10 @@ function toggleFs() {
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
   else wrap.value?.requestFullscreen().catch(() => {})
 }
-function onFsChange() { isFs.value = !!document.fullscreenElement }
+function onFsChange() {
+  isFs.value = !!document.fullscreenElement
+  requestAnimationFrame(updateCanvasRect)
+}
 
 function openInMpv() {
   const { anime, ep } = p.value
@@ -336,11 +386,17 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
          @mousemove="poke" @wheel.prevent="onWheel">
 
       <!-- vídeo -->
-      <video ref="videoEl" class="wp__video" crossorigin="anonymous"
+      <video ref="videoEl" class="wp__video" :class="{ 'is-shaded': a4kActive }" crossorigin="anonymous"
              @click="togglePlay" @dblclick="toggleFs"
              @play="playing = true; poke()" @pause="playing = false; poke()"
              @timeupdate="onTime" @ended="onEnded"
              @waiting="waiting = true" @playing="waiting = false" />
+
+      <!-- salida Anime4K (WebGPU) calcada al rectángulo real del vídeo -->
+      <canvas ref="a4kCanvas" v-show="a4kActive" class="wp__a4k"
+              :style="{ left: canvasRect.left + 'px', top: canvasRect.top + 'px',
+                        width: canvasRect.width + 'px', height: canvasRect.height + 'px' }"
+              @click="togglePlay" @dblclick="toggleFs" />
 
       <!-- estados -->
       <div v-if="p.loading" class="wp__center">
@@ -437,6 +493,17 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
               <button v-for="(t, i) in subTracks" :key="'s' + i" :class="{ 'is-sel': i === subIndex }" @click="setSubTrack(i)">{{ trackLabel(t, i) }}</button>
             </div>
           </div>
+          <div class="wp__menuwrap" v-if="a4kAvailable">
+            <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'a4k', 'is-glow': a4kActive }"
+                    title="Anime4K (mejora de imagen por GPU)"
+                    @click="menuOpen = menuOpen === 'a4k' ? '' : 'a4k'">
+              <Icon name="spark" :size="13" /> {{ a4kMode === 'off' ? 'Anime4K' : 'A4K·' + a4kMode }}
+            </button>
+            <div v-if="menuOpen === 'a4k'" class="wp__menu">
+              <button v-for="m in A4K_MODES" :key="m.id" :class="{ 'is-sel': m.id === a4kMode }"
+                      @click="setA4kMode(m.id)">{{ m.label }}</button>
+            </div>
+          </div>
           <div class="wp__menuwrap">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'speed' }" @click="menuOpen = menuOpen === 'speed' ? '' : 'speed'">{{ speed }}×</button>
             <div v-if="menuOpen === 'speed'" class="wp__menu">
@@ -463,6 +530,13 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 .wp.is-idle { cursor: none; }
 .wp__video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+/* Con Anime4K activo el vídeo sigue reproduciendo (audio/subs/timing) pero se
+ * muestra el canvas WebGPU; visibility mantiene el layout para el cálculo del rect */
+.wp__video.is-shaded { visibility: hidden; }
+.wp__a4k { position: absolute; z-index: 1; }
+/* subtítulos (JASSUB) siempre por encima del canvas Anime4K */
+.wp :deep(canvas.JASSUB) { z-index: 2; }
+.wp__ctl.is-glow { color: var(--cyan); text-shadow: 0 0 8px var(--cyan-glow); }
 
 .wp__center {
   position: absolute; inset: 0; display: flex; flex-direction: column; gap: var(--s-3);

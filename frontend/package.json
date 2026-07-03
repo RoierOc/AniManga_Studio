@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "anime4k-webgpu": "^1.0.0",
     "hls.js": "^1.6.16",
     "jassub": "^2.5.6",
     "pinia": "^2.2.6",
