@@ -157,7 +157,10 @@ fn spawn_browser_app(browser: &PathBuf) -> Option<Child> {
         // "failed Initializing the frame pool" (driver 610 > lo que soporta el
         // paquete 0.0.17). "Vulkan" a secas SIN DefaultANGLEVulkan+VulkanFromANGLE
         // deja la ventana en blanco — deben ir los tres juntos.
-        .arg("--enable-features=VaapiVideoDecoder,VaapiIgnoreDriverChecks,Vulkan,DefaultANGLEVulkan,VulkanFromANGLE,PlatformHEVCDecoderSupport")
+        // Sin el trío Vulkan: decodifica HEVC pero deja la VENTANA transparente
+        // en esta máquina (dos veces comprobado). Config estable actual: la UI
+        // renderiza bien; HEVC cae al panel Convertir/MPV del player (watchdog).
+        .arg("--enable-features=VaapiVideoDecoder,VaapiIgnoreDriverChecks,AcceleratedVideoDecodeLinuxGL,PlatformHEVCDecoderSupport")
         .arg("--ignore-gpu-blocklist")
         .arg("--enable-unsafe-webgpu")
         // suprime el infobar "línea de comandos no admitida" que provocan los
