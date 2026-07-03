@@ -48,6 +48,27 @@ const nextCd = ref(0)
 let nextTimer = null
 const tcDismissed = ref(false)
 
+// Watchdog de decodificación: el navegador puede ACEPTAR un códec (MSE) y aun
+// así no poder decodificarlo (HEVC sin decode por hardware) → se quedaría
+// "cargando" para siempre. Si en 8 s no llega ni un frame, ofrecemos salidas.
+const decodeFailed = ref(false)
+let decodeTimer = null
+function armDecodeWatchdog() {
+  clearTimeout(decodeTimer)
+  decodeFailed.value = false
+  decodeTimer = setTimeout(() => {
+    const v = videoEl.value
+    if (v && p.value && !p.value.error && v.currentTime < 0.2 && v.readyState < 2) {
+      decodeFailed.value = true
+      try { v.pause() } catch (_) {}
+    }
+  }, 8000)
+}
+function retryTranscode() {
+  const { anime, ep } = p.value
+  store.openPlayer(anime, ep, 0, audioIndex.value, true)
+}
+
 let hls = null
 let jassub = null
 let progressTimer = null
@@ -95,6 +116,7 @@ function setup(sess) {
   setSubTrack(esIdx >= 0 ? esIdx : (subs.length ? 0 : -1))
 
   progressTimer = setInterval(() => sendProgress(false), 10000)
+  armDecodeWatchdog()
   poke()
 }
 
@@ -136,6 +158,7 @@ async function setAudioTrack(idx) {
 }
 
 function teardownMedia() {
+  if (decodeTimer) { clearTimeout(decodeTimer); decodeTimer = null }
   if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
   if (nextTimer) { clearInterval(nextTimer); nextTimer = null; nextCd.value = 0 }
   if (jassub) { try { jassub.destroy() } catch (_) {} jassub = null }
@@ -165,6 +188,7 @@ function sendProgress(ended, flush = false) {
 function onTime() {
   const v = videoEl.value
   if (!v) return
+  if (v.currentTime > 0.2 && decodeTimer) { clearTimeout(decodeTimer); decodeTimer = null; decodeFailed.value = false }
   time.value = v.currentTime
   if (v.duration && isFinite(v.duration)) duration.value = v.duration
   try {
@@ -327,6 +351,16 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
       <button v-if="!playing && !p.loading && !p.error && !nextCd" class="wp__bigplay" @click="togglePlay">
         <Icon name="play" :size="34" />
       </button>
+
+      <!-- el navegador no pudo decodificar el códec (HEVC sin hardware) -->
+      <div v-if="decodeFailed" class="wp__tc">
+        <p><strong>Tu navegador no pudo decodificar este vídeo ({{ p.sess?.video_codec?.toUpperCase() }})</strong>
+          — elige cómo verlo:</p>
+        <div class="wp__nextacts">
+          <button class="wp__btnalt" @click="retryTranscode">Convertir aquí (pierde algo de calidad)</button>
+          <button class="wp__btnmain" @click="openInMpv"><Icon name="play" :size="14" /> Ver original en MPV</button>
+        </div>
+      </div>
 
       <!-- aviso de transcode: la calidad NO es la original — ofrecer MPV -->
       <div v-if="p.sess?.transcode && !tcDismissed" class="wp__tc">

@@ -96,6 +96,10 @@ def stream_open():
     # (hevc_ok, sondeado con MediaSource.isTypeSupported — real con el driver
     # VAAPI de NVIDIA + flags del shell). Si no, transcode de respaldo.
     v_copy = vcodec in _VIDEO_COPY or (vcodec == 'hevc' and bool(data.get('hevc_ok')))
+    # El player lo pide cuando el navegador ACEPTÓ el códec pero no logró
+    # decodificar ni un frame (p.ej. HEVC sin NVDEC): reabrir transcodificando.
+    if data.get('force_transcode'):
+        v_copy = False
     a_copy = acodec in _AUDIO_COPY
 
     sid = uuid.uuid4().hex[:12]

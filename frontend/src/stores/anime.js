@@ -606,9 +606,9 @@ export const useAnimeStore = defineStore('anime', {
     },
 
     /* ── Player web embebido ────────────────────────────────────────────── */
-    async openPlayer(anime, ep, startPos = 0, audio = 0) {
+    async openPlayer(anime, ep, startPos = 0, audio = 0, forceTranscode = false) {
       this.dismissAutoplay?.()
-      this.player = { anime, ep, sess: null, loading: true, error: '', startPos, audio }
+      this.player = { anime, ep, sess: null, loading: true, error: '', startPos, audio, forceTranscode }
       const base = ep.in_local
         ? { anime_id: anime.id, episode: ep.num, local_path: ep.local_path }
         : { anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash }
@@ -618,7 +618,8 @@ export const useAnimeStore = defineStore('anime', {
         && (MediaSource.isTypeSupported('video/mp4; codecs="hvc1.2.4.L153.B0"')
          || MediaSource.isTypeSupported('video/mp4; codecs="hev1.2.4.L153.B0"'))
       try {
-        const sess = await api.post('/api/stream/open', { ...base, audio, hevc_ok: hevcOk })
+        const sess = await api.post('/api/stream/open',
+          { ...base, audio, hevc_ok: hevcOk, force_transcode: forceTranscode })
         if (!this.player) return           // cerrado mientras abría
         this.player.sess = sess
         this.player.loading = false
