@@ -158,6 +158,9 @@ fn spawn_browser_app(browser: &PathBuf) -> Option<Child> {
         // (vídeo congelado con la página viva); bajo XWayland es el camino
         // probado de nvidia-vaapi-driver. Solo afecta a esta ventana.
         .arg("--ozone-platform=x11")
+        // NVIDIA está en la blocklist de VAAPI de Chromium: sin esto el vídeo
+        // se decodifica por CPU aunque el driver funcione (NVDEC a 0 %).
+        .arg("--ignore-gpu-blocklist")
         .arg("--enable-unsafe-webgpu")
         // suprime el infobar "línea de comandos no admitida" que provocan los
         // flags "unsafe"; sin efectos visibles para una app de un solo sitio

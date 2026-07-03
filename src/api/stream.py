@@ -173,6 +173,8 @@ def stream_open():
                 break
             time.sleep(0.15)
         if ok:
+            # cosecha el proceso al terminar el remux (evita zombies <defunct>)
+            threading.Thread(target=proc.wait, daemon=True).start()
             break
         if proc.poll() is None:           # sigue vivo pero sin segmento: timeout real
             with _lock:
