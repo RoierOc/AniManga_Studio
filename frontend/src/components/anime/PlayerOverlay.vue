@@ -71,6 +71,52 @@ const subIndex = ref(-1)        // -1 = sin subtítulos
 const audioIndex = ref(0)
 const SKIP_SECS = 88
 
+/* ── Saltar intro/ending inteligente ──
+ * Prioridad: tiempos reales de AniSkip (store.skipTimes, por mal_id+ep) →
+ * memoria del salto manual por serie (localStorage) → botón fijo de 88 s.
+ * El botón contextual solo aparece DENTRO de la ventana del OP/ED. */
+const OP_MEM_KEY = 'anime-op-manual'
+const manualOpMem = ref(null)   // inicio del OP aprendido del salto manual (esta serie)
+const skipInfo = computed(() =>
+  (p.value && store.skipTimes[`${p.value.anime.id}_${p.value.ep.num}`]) || {})
+const activeSkip = computed(() => {
+  const s = skipInfo.value
+  const t = time.value
+  if (s.op_start != null && s.op_end
+      && t >= Math.max(0, s.op_start - 1) && t < s.op_end - 2)
+    return { to: s.op_end, label: 'Saltar intro' }
+  if (s.ed_start != null && s.ed_end
+      && t >= s.ed_start - 1 && t < s.ed_end - 2)
+    return { to: s.ed_end, label: 'Saltar ending' }
+  if (s.op_start == null && manualOpMem.value != null) {
+    const m = manualOpMem.value
+    if (t >= Math.max(0, m - 3) && t < m + SKIP_SECS - 10)
+      return { to: m + SKIP_SECS, label: 'Saltar intro' }
+  }
+  return null
+})
+function doActiveSkip() {
+  const v = videoEl.value
+  const a = activeSkip.value
+  if (!v || !a) return
+  v.currentTime = a.to
+  poke()
+}
+/* El botón "Saltar OP" fijo además APRENDE: recuerda dónde lo pulsaste para
+ * mostrar el contextual en los siguientes episodios de la serie. */
+function skipOpManual() {
+  const v = videoEl.value
+  if (v && p.value) {
+    try {
+      const m = JSON.parse(localStorage.getItem(OP_MEM_KEY) || '{}')
+      m[p.value.anime.id] = Math.round(v.currentTime)
+      localStorage.setItem(OP_MEM_KEY, JSON.stringify(m))
+      manualOpMem.value = m[p.value.anime.id]
+    } catch (_) {}
+  }
+  skip(SKIP_SECS)
+}
+
 /* ── next-episode countdown (tarjeta con miniatura + anillo, como Crunchyroll) ── */
 const NEXT_CD_SECS = 5
 const nextCd = ref(0)            // segundos restantes (float: el anillo es suave)
@@ -221,6 +267,11 @@ function setup(sess) {
   progressTimer = setInterval(() => sendProgress(false), 10000)
   armDecodeWatchdog()
 
+  // Saltar intro inteligente: tiempos de AniSkip + memoria manual de la serie
+  store.loadSkip(p.value.anime, p.value.ep)
+  try { manualOpMem.value = JSON.parse(localStorage.getItem(OP_MEM_KEY) || '{}')[p.value.anime.id] ?? null }
+  catch (_) { manualOpMem.value = null }
+
   // Anime4K: arranca cuando se conocen las dimensiones del vídeo
   v.addEventListener('loadedmetadata', () => { updateCanvasRect(); applyA4k() }, { once: true })
   window.addEventListener('resize', updateCanvasRect)
@@ -275,6 +326,12 @@ async function setSubTrack(idx) {
 async function setAudioTrack(idx) {
   if (idx === audioIndex.value || !p.value) return
   menuOpen.value = ''
+  // recordar la pista elegida para esta serie (los siguientes episodios la usan)
+  try {
+    const m = JSON.parse(localStorage.getItem('anime-audio-pref') || '{}')
+    m[p.value.anime.id] = idx
+    localStorage.setItem('anime-audio-pref', JSON.stringify(m))
+  } catch (_) {}
   const pos = videoEl.value?.currentTime || 0
   const { anime, ep } = p.value
   await store.openPlayer(anime, ep, pos, idx)
@@ -552,6 +609,12 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
         <span>{{ seekBubble.secs > 0 ? '+' : '−' }}{{ Math.abs(seekBubble.secs) }} s</span>
       </div>
 
+      <!-- Saltar intro/ending contextual: aparece solo dentro de la ventana del
+           OP/ED (AniSkip o salto manual aprendido), incluso con controles ocultos -->
+      <button v-if="activeSkip && !p.loading && !nextCd" class="wp__skipfab" @click="doActiveSkip">
+        <Icon name="spark" :size="14" /> {{ activeSkip.label }}
+      </button>
+
       <!-- el navegador no pudo decodificar el códec (HEVC sin hardware) -->
       <div v-if="decodeFailed" class="wp__tc">
         <p><strong>Tu navegador no pudo decodificar este vídeo ({{ p.sess?.video_codec?.toUpperCase() }})</strong>
@@ -627,7 +690,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
           </button>
           <button class="wp__ic" title="-10 s" @click="skip(-10)"><span class="wp__sk">-10</span></button>
           <button class="wp__ic" title="+10 s" @click="skip(10)"><span class="wp__sk">+10</span></button>
-          <button class="wp__skipop" title="Saltar opening" @click="skip(SKIP_SECS)">
+          <button class="wp__skipop" title="Saltar opening (recuerda dónde empieza para la próxima)" @click="skipOpManual">
             <Icon name="spark" :size="13" /> Saltar OP
           </button>
 
@@ -880,6 +943,19 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 .wp__ic:hover, .wp__ic:focus-visible { background: rgba(255,255,255,.14); }
 .wp__sk { font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 700; }
+/* botón contextual de intro/ending — visible aunque los controles estén ocultos */
+.wp__skipfab {
+  position: absolute; right: var(--s-6); bottom: 6.5rem; z-index: 3;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: var(--s-3) var(--s-5); border-radius: var(--r-sm);
+  border: 1px solid rgba(255,255,255,.45); background: rgba(10,14,24,.82);
+  color: #fff; font-size: var(--fs-sm); font-weight: 700; cursor: pointer;
+  backdrop-filter: blur(8px); box-shadow: var(--shadow-lg);
+  animation: fade var(--t-base) var(--ease-silk);
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.wp__skipfab:hover { background: var(--azure); border-color: transparent; }
+
 .wp__skipop {
   display: inline-flex; align-items: center; gap: 5px; padding: var(--s-2) var(--s-3);
   border-radius: var(--r-pill); border: 1px solid rgba(255,255,255,.25);

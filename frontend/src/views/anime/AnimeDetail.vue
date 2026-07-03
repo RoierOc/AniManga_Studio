@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { useUiStore } from '@/stores/ui'
+import { api } from '@/lib/api'
 import { ANIME_STATUS, animeFormatLabel, animeEpLabel, batchInfo, fmtCountdown, nextUnwatchedEp } from '@/lib/anime'
 import { imgProxy } from '@/lib/img'
 import { formatBytes } from '@/lib/format'
@@ -108,6 +109,43 @@ const TABS = computed(() => [
 // Sinopsis completa (endpoint /synopsis) con la recortada de library como fallback
 const synopsis = computed(() => store.fullSyn[alId.value] || anime.value?.synopsis || '')
 
+/* ── Preview mudo del hero (estilo Netflix, clip local generado por el backend) ── */
+const previewUrl = ref('')
+const previewOn = ref(false)       // el vídeo ya reproduce → fade-in sobre el arte
+const previewRef = ref(null)
+let previewTimer = null
+function schedulePreview() {
+  clearTimeout(previewTimer)
+  previewUrl.value = ''
+  previewOn.value = false
+  if (isPreview.value) return      // sin episodios descargados no hay clip
+  if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+  previewTimer = setTimeout(loadHeroPreview, 2500)
+}
+async function loadHeroPreview() {
+  const a = anime.value
+  const e = (a?.episodes || []).find(x => x.num > 0 && x.ep_type !== 'special'
+    && (x.in_local || (x.in_qbt && x.progress >= 100)))
+  if (!a || !e) return
+  const base = e.in_local
+    ? { anime_id: a.id, episode: e.num, local_path: e.local_path }
+    : { anime_id: a.id, episode: e.num, info_hash: e.info_hash }
+  try {
+    const d = await api.post('/api/anime/preview', base)
+    if (d?.url && anime.value?.id === a.id) previewUrl.value = d.url
+  } catch (_) {}
+}
+// pausar el clip mientras el player está abierto (misma vista debajo)
+watch(() => store.player, (open) => {
+  const v = previewRef.value
+  if (!v) return
+  if (open) v.pause()
+  else v.play().catch(() => {})
+})
+onMounted(schedulePreview)
+watch(() => anime.value?.id, schedulePreview)
+onBeforeUnmount(() => clearTimeout(previewTimer))
+
 const PICKER_TABS = [
   { key: 'cover', label: 'Portada' },
   { key: 'banner_detail', label: 'Fondo de esta página' },
@@ -128,6 +166,10 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
         <div class="dhero__img" :style="heroImg ? { backgroundImage: `url('${heroImg}')` } : {}" />
         <!-- invisible probe: detects a broken/blocked URL and advances to the next tier -->
         <img v-if="heroImg" :key="heroImg" :src="heroImg" alt="" class="dhero__probe" @error="onHeroError" />
+        <!-- preview mudo en loop sobre el arte (fade-in cuando ya reproduce) -->
+        <video v-if="previewUrl" ref="previewRef" class="dhero__video" :class="{ 'is-on': previewOn }"
+               :src="previewUrl" autoplay muted loop playsinline
+               @playing="previewOn = true" @error="previewUrl = ''" />
         <div class="dhero__shade" />
       </div>
 
@@ -417,6 +459,9 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 /* No wide banner cached yet → fall back to the (vertical) cover, blurred to fill the frame. */
 .dhero.is-cover .dhero__img { filter: blur(28px) saturate(1.15) brightness(.85); transform: scale(1.18); }
 .dhero__probe { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.dhero__video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
+  object-position: center 18%; opacity: 0; transition: opacity 1.2s var(--ease-silk); }
+.dhero__video.is-on { opacity: 1; }
 .dhero__shade { position: absolute; inset: 0;
   background:
     linear-gradient(90deg, rgba(7,10,18,.92) 0%, rgba(7,10,18,.62) 38%, rgba(7,10,18,.15) 70%, transparent 100%),

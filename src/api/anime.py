@@ -184,6 +184,58 @@ def anime_synopsis(al_id):
     return jsonify({'synopsis': t})
 
 
+# ── Preview del hero (clip mudo estilo Netflix, 100% local) ──────────────────
+from api.runtime import DATA_ROOT as _DATA_ROOT
+_PREVIEW_DIR = _DATA_ROOT / '_previews'
+_preview_lock = threading.Lock()
+
+
+@anime_bp.route('/preview', methods=['POST'])
+def anime_preview():
+    """Genera (una vez) un clip corto sin audio de un episodio para reproducirlo
+    en mute en el hero del detalle. Body: como /play ({anime_id, episode,
+    local_path?/info_hash?}). Devuelve {url} servible por <video src>."""
+    data = request.get_json(silent=True) or {}
+    video, err = resolve_episode_video(data)
+    if err:
+        return jsonify({'error': err[0]}), err[1]
+    key = re.sub(r'[^\w.-]', '_', f"{data.get('anime_id', 'x')}_{data.get('episode', 0)}")
+    out = _PREVIEW_DIR / f'{key}.mp4'
+    if not out.exists():
+        _PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            pr = subprocess.run(['ffprobe', '-v', 'error', '-print_format', 'json',
+                                 '-show_format', video], capture_output=True, text=True, timeout=20)
+            dur = float((json.loads(pr.stdout or '{}').get('format') or {}).get('duration') or 0)
+        except Exception:
+            dur = 0
+        # arrancar pasado el OP (~30%), acotado; episodios cortos → desde el inicio
+        start = min(max(dur * 0.3, 60), 360) if dur > 120 else 5
+        with _preview_lock:
+            if not out.exists():
+                tmp = out.with_suffix('.tmp.mp4')
+                r = subprocess.run(
+                    ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+                     '-ss', str(int(start)), '-t', '14', '-i', video,
+                     '-an', '-sn', '-dn', '-map', '0:v:0',
+                     '-vf', 'scale=640:-2,format=yuv420p',
+                     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26',
+                     '-movflags', '+faststart', str(tmp)],
+                    capture_output=True, timeout=90)
+                if r.returncode != 0 or not tmp.exists():
+                    return jsonify({'error': 'no se pudo generar el preview'}), 500
+                tmp.rename(out)
+    return jsonify({'ok': True, 'url': f'/api/anime/preview_file/{out.name}'})
+
+
+@anime_bp.route('/preview_file/<fn>')
+def anime_preview_file(fn):
+    f = (_PREVIEW_DIR / fn).resolve()
+    if not str(f).startswith(str(_PREVIEW_DIR.resolve())) or not f.is_file():
+        return 'not found', 404
+    return send_file(str(f), max_age=86400)
+
+
 def _tmdb_images(tmdb_id, media_type='tv'):
     """For a known TMDB tv/movie id pick the best text-free wide backdrop, the
     best English logo (transparent PNG title treatment, Crunchyroll-style), and

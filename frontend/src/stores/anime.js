@@ -629,8 +629,13 @@ export const useAnimeStore = defineStore('anime', {
     },
 
     /* ── Player web embebido ────────────────────────────────────────────── */
-    async openPlayer(anime, ep, startPos = 0, audio = 0, forceTranscode = false) {
+    async openPlayer(anime, ep, startPos = 0, audio = null, forceTranscode = false) {
       this.dismissAutoplay?.()
+      // sin pista explícita → la última que el usuario eligió para ESTA serie
+      if (audio == null) {
+        try { audio = JSON.parse(localStorage.getItem('anime-audio-pref') || '{}')[anime.id] ?? 0 }
+        catch (_) { audio = 0 }
+      }
       this.player = { anime, ep, sess: null, loading: true, error: '', startPos, audio, forceTranscode }
       const base = ep.in_local
         ? { anime_id: anime.id, episode: ep.num, local_path: ep.local_path }
