@@ -109,9 +109,13 @@ const dots = computed(() =>
 }
 .acard:hover .acard__poster { border-color: var(--azure-glow); box-shadow: var(--shadow-lg), 0 0 0 1px var(--azure-glow); }
 
-.acard__img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-slow), transform var(--t-cine) var(--ease-silk); }
+.acard__img { width: 100%; height: 100%; object-fit: cover; opacity: 0;
+  transition: opacity var(--t-slow), transform var(--t-cine) var(--ease-silk), filter var(--t-base) var(--ease-silk); }
 .acard__img.is-loaded { opacity: 1; }
-.acard:hover .acard__img { transform: scale(1.07); }
+/* Al expandir la info, el póster se difumina y oscurece (estilo Crunchyroll):
+   la sinopsis/título quedan legibles sobre CUALQUIER portada, no solo las oscuras. */
+.acard:hover .acard__img, .acard:focus-within .acard__img {
+  transform: scale(1.07); filter: blur(9px) brightness(.45) saturate(1.15); }
 .acard__scrim { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7,10,18,.4) 0%, transparent 26%, transparent 48%, rgba(5,7,13,.95) 100%); }
 .acard__shine {
   position: absolute; inset: 0; pointer-events: none;
