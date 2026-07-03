@@ -270,6 +270,44 @@ def _fallback_font():
     return None
 
 
+def _dump_fonts(video, fontdir):
+    """Extrae las fuentes adjuntas del contenedor a `fontdir`.
+
+    OJO: `ffmpeg -dump_attachment` ABORTA en cuanto encuentra una adjunta con
+    nombre "inseguro" (p.ej. 'Garamond Bold font.ttf' con espacios) y NO
+    extrae ninguna de las siguientes → faltan justo Trebuchet/Times y los subs
+    quedan invisibles (Wistoria: 65 adjuntas, ffmpeg solo sacaba 28). Para
+    Matroska usamos mkvextract (robusto, no aborta); libass matchea por el
+    nombre INTERNO de la fuente, así que el nombre de archivo da igual (se usa
+    el id de la adjunta). ffmpeg queda solo de respaldo para no-MKV."""
+    fontdir = Path(fontdir)
+    if str(video).lower().endswith(('.mkv', '.mka', '.mks', '.webm')):
+        try:
+            j = subprocess.run(['mkvmerge', '-J', video],
+                               capture_output=True, text=True, timeout=30)
+            data = json.loads(j.stdout or '{}')
+            fonts = [a for a in data.get('attachments', [])
+                     if 'font' in (a.get('content_type', '') or '').lower()
+                     or (a.get('file_name', '') or '').lower().endswith(
+                         ('.ttf', '.otf', '.ttc'))]
+            if fonts:
+                specs = []
+                for a in fonts:
+                    ext = Path(a.get('file_name', 'f')).suffix.lower()
+                    if ext not in ('.ttf', '.otf', '.ttc'):
+                        ext = '.ttf'
+                    specs.append(f"{a['id']}:{fontdir / (str(a['id']) + ext)}")
+                subprocess.run(['mkvextract', video, 'attachments', *specs],
+                               capture_output=True, timeout=120)
+                return
+        except Exception:
+            pass   # cae al respaldo ffmpeg
+    subprocess.run(
+        ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
+         '-dump_attachment:t', '', '-i', video],
+        cwd=str(fontdir), capture_output=True, timeout=60)
+
+
 @stream_bp.route('/subs', methods=['POST'])
 def stream_subs():
     """Extrae una pista de subtítulos (y las fuentes adjuntas del MKV) para
@@ -311,10 +349,7 @@ def stream_subs():
     fontdir = sess / 'fonts'
     if not fontdir.exists():
         fontdir.mkdir()
-        subprocess.run(
-            ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
-             '-dump_attachment:t', '', '-i', video],
-            cwd=str(fontdir), capture_output=True, timeout=60)
+        _dump_fonts(video, fontdir)
         # Fallback SIEMPRE: si el archivo no trae fuentes (o el estilo usa una
         # familia que no viene adjunta), libass sin fuentes no dibuja NADA — los
         # subs quedan "seleccionados pero invisibles". El paquete jassub tampoco

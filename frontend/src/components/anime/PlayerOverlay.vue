@@ -322,6 +322,11 @@ async function setSubTrack(idx) {
         wasmUrl: jassubWasmUrl,
         modernWasmUrl: jassubModernWasmUrl,
         fonts: r.fonts || [],
+        // Respaldo garantizado: si el .ass pide una familia que no viene
+        // adjunta (o el archivo no trae fuentes), libass la sustituye por
+        // Noto Sans (la _fallback.ttf que el server incluye siempre) en vez
+        // de no dibujar nada.
+        defaultFont: 'Noto Sans',
       })
       // El worker de jassub muere en silencio si algo falla (wasm, fuentes…):
       // vigilar el handshake y dejar rastro en consola + log del backend.
