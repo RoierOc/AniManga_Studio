@@ -71,6 +71,32 @@ const subIndex = ref(-1)        // -1 = sin subtítulos
 const audioIndex = ref(0)
 const SKIP_SECS = 88
 
+/* Tamaño de subtítulos: preferencia global (todas las series), 50%–200%.
+ * .ass → reescala los estilos del track en el worker de jassub (en vivo);
+ * vtt → font-size del ::cue nativo (v-bind en el CSS de abajo). */
+const SUB_SCALE_KEY = 'anime-sub-scale'
+const subScale = ref(1)
+try { subScale.value = Math.min(2, Math.max(0.5, parseFloat(localStorage.getItem(SUB_SCALE_KEY)) || 1)) } catch (_) {}
+const cueFs = computed(() => (5 * subScale.value).toFixed(2) + 'vh')
+let subBaseStyles = null        // estilos originales del .ass cargado (escala sin acumular)
+
+async function applySubScale() {
+  const js = jassub
+  if (!js || !subBaseStyles) return
+  const s = subScale.value
+  try {
+    await Promise.all(subBaseStyles.map((st, i) => js.renderer.setStyle(
+      s === 1 ? st : { ...st, FontSize: st.FontSize * s, Outline: st.Outline * s, Shadow: st.Shadow * s }, i)))
+    if (js === jassub) js.resize(true)   // repaint inmediato aunque esté en pausa
+  } catch (_) {}
+}
+
+function bumpSubScale(d) {
+  subScale.value = Math.min(2, Math.max(0.5, Math.round((subScale.value + d) * 10) / 10))
+  try { localStorage.setItem(SUB_SCALE_KEY, String(subScale.value)) } catch (_) {}
+  applySubScale()
+}
+
 /* ── Saltar intro/ending inteligente ──
  * Prioridad: tiempos reales de AniSkip (store.skipTimes, por mal_id+ep) →
  * memoria del salto manual por serie (localStorage) → botón fijo de 88 s.
@@ -281,7 +307,7 @@ function setup(sess) {
 async function setSubTrack(idx) {
   subIndex.value = idx
   menuOpen.value = ''
-  if (jassub) { try { jassub.destroy() } catch (_) {} jassub = null }
+  if (jassub) { try { jassub.destroy() } catch (_) {} jassub = null; subBaseStyles = null }
   const v = videoEl.value
   if (v) [...v.querySelectorAll('track')].forEach(t => t.remove())
   if (idx < 0 || !p.value?.sess) return
@@ -305,7 +331,15 @@ async function setSubTrack(idx) {
         jsRef.ready,
         new Promise((_, rej) => setTimeout(() => rej(new Error('timeout 10s')), 10000)),
       ]).then(
-        () => console.log('[subs] jassub listo'),
+        async () => {
+          console.log('[subs] jassub listo')
+          // estilos originales del track → base para el tamaño configurable
+          try {
+            const st = await jsRef.renderer.getStyles()
+            if (jassub === jsRef) subBaseStyles = st
+          } catch (_) {}
+          if (jassub === jsRef && subScale.value !== 1) applySubScale()
+        },
         (e) => {
           if (jassub !== jsRef) return   // ya se cambió de pista
           console.error('[subs] jassub falló:', e)
@@ -344,7 +378,7 @@ function teardownMedia() {
   if (decodeTimer) { clearTimeout(decodeTimer); decodeTimer = null }
   if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
   if (nextTimer) { clearInterval(nextTimer); nextTimer = null; nextCd.value = 0 }
-  if (jassub) { try { jassub.destroy() } catch (_) {} jassub = null }
+  if (jassub) { try { jassub.destroy() } catch (_) {} jassub = null; subBaseStyles = null }
   if (hls) { try { hls.destroy() } catch (_) {} hls = null }
 }
 
@@ -712,6 +746,12 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
           <div class="wp__menuwrap" v-if="subTracks.length">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'subs' }" @click="menuOpen = menuOpen === 'subs' ? '' : 'subs'">Subtítulos</button>
             <div v-if="menuOpen === 'subs'" class="wp__menu">
+              <div v-if="subIndex >= 0" class="wp__subsize" @click.stop>
+                <span>Tamaño</span>
+                <button :disabled="subScale <= 0.5" aria-label="Subtítulos más pequeños" @click="bumpSubScale(-0.1)">−</button>
+                <b>{{ Math.round(subScale * 100) }}%</b>
+                <button :disabled="subScale >= 2" aria-label="Subtítulos más grandes" @click="bumpSubScale(0.1)">+</button>
+              </div>
               <button :class="{ 'is-sel': subIndex === -1 }" @click="setSubTrack(-1)">Sin subtítulos</button>
               <button v-for="(t, i) in subTracks" :key="'s' + i" :class="{ 'is-sel': i === subIndex }" @click="setSubTrack(i)">{{ trackLabel(t, i) }}</button>
             </div>
@@ -994,6 +1034,27 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 .wp__menu button:hover { background: var(--azure-haze); color: #fff; }
 .wp__menu button.is-sel { color: var(--azure-bright); font-weight: 700; }
+
+/* tamaño de subtítulos (stepper fijo arriba del menú; las pistas scrollean debajo) */
+.wp__subsize {
+  position: sticky; top: calc(-1 * var(--s-1)); z-index: 1;
+  display: flex; align-items: center; gap: var(--s-2);
+  margin: calc(-1 * var(--s-1)) calc(-1 * var(--s-1)) var(--s-1);
+  padding: var(--s-2) var(--s-3);
+  background: rgba(10,14,24,.96); border-bottom: 1px solid var(--line);
+}
+.wp__subsize span { font-size: var(--fs-xs); color: var(--ink-dim); margin-right: auto; }
+.wp__subsize b { font-size: var(--fs-xs); color: var(--ink); min-width: 2.6rem; text-align: center; }
+.wp__subsize button {
+  display: grid; place-items: center; width: 1.8rem; min-height: 1.8rem; padding: 0;
+  border-radius: var(--r-xs); font-size: var(--fs-sm); line-height: 1;
+  background: rgba(255,255,255,.08);
+}
+.wp__subsize button:disabled { opacity: .35; cursor: default; background: rgba(255,255,255,.08); color: var(--ink); }
+
+/* pistas vtt nativas (srt convertido): tamaño vía ::cue; 5vh = tamaño por
+ * defecto de Chromium, escalado por la misma preferencia que los .ass */
+.wp__video::cue { font-size: v-bind(cueFs); }
 
 /* panel de episodios */
 .wp__eps {
