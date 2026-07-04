@@ -2,7 +2,9 @@
 import { computed, ref, watch } from 'vue'
 import { useMangaStore } from '@/stores/manga'
 import { formatChapter, MANGA_STATUS } from '@/lib/manga'
+import { formatBytes } from '@/lib/format'
 import { imgProxy } from '@/lib/img'
+import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -16,6 +18,27 @@ const ui = useUiStore()
 function closeModal() { store.close(); ui.replaceNav() }
 const m = computed(() => store.current)
 const upState = (ch) => store.upscaled[ch]          // true | 'partial' | undefined
+
+// Tamaño en disco de esta serie (original vs 4K) — se muestra en el panel Gestionar.
+const seriesSize = ref(null)
+watch(() => store.current?.id, async (id) => {
+  seriesSize.value = null
+  if (!id) return
+  try { seriesSize.value = await api.get(`/api/storage/series?title=${encodeURIComponent(id)}`) } catch (_) {}
+}, { immediate: true })
+
+// Cobertura de escalado: cuántos capítulos están en 4K / parciales / sin escalar.
+const coverage = computed(() => {
+  const chs = store.chapters || []
+  if (!chs.length) return null
+  let full = 0, partial = 0
+  for (const c of chs) {
+    const st = store.upscaled[c.chapter]
+    if (st === true) full++
+    else if (st === 'partial') partial++
+  }
+  return { total: chs.length, full, partial, plain: chs.length - full - partial }
+})
 
 const LANG_FLAG = { en: '🇬🇧', es: '🇪🇸', 'es-la': '🇲🇽', ja: '🇯🇵', 'pt-br': '🇧🇷', fr: '🇫🇷', ko: '🇰🇷', zh: '🇨🇳', 'zh-hk': '🇭🇰', it: '🇮🇹', de: '🇩🇪', ru: '🇷🇺' }
 const flag = (l) => LANG_FLAG[l] || l
@@ -210,6 +233,17 @@ async function doExport(toDrive = false) {
                 <span><span class="lg lg--part" /> parcial</span>
                 <span><span class="lg lg--orig" /> original</span>
               </div>
+              <!-- Cobertura de escalado: dónde está disponible el comparador original/4K -->
+              <div v-if="coverage && (coverage.full || coverage.partial)" class="modal__cov" title="Capítulos escalados a 4K (disponibles para comparar original/4K)">
+                <div class="modal__covbar">
+                  <span class="modal__covseg modal__covseg--4k" :style="{ flexGrow: coverage.full || 0.0001 }" />
+                  <span class="modal__covseg modal__covseg--part" :style="{ flexGrow: coverage.partial || 0.0001 }" />
+                  <span class="modal__covseg modal__covseg--plain" :style="{ flexGrow: coverage.plain || 0.0001 }" />
+                </div>
+                <span class="modal__covn">
+                  {{ coverage.full }}/{{ coverage.total }} en 4K<template v-if="coverage.partial"> · {{ coverage.partial }} parcial(es)</template>
+                </span>
+              </div>
               <div class="modal__hacts">
                 <button class="hbtn hbtn--accent" @click="store.upscaleAll(m.source_meta?.imported ? { excludePages: store.excludedPages } : {})"><Icon name="spark" :size="13" /> Escalar todo 4K</button>
                 <span class="rangebox">
@@ -228,6 +262,12 @@ async function doExport(toDrive = false) {
             <div v-if="showManage" class="manage">
               <section class="manage__sect">
                 <span class="manage__label">Información del manga</span>
+                <div v-if="seriesSize" class="manage__size">
+                  <Icon name="folder" :size="13" />
+                  <span><b>{{ formatBytes(seriesSize.original_bytes) }}</b> original</span>
+                  <span v-if="seriesSize.upscaled_bytes" class="manage__size-4k">· <b>{{ formatBytes(seriesSize.upscaled_bytes) }}</b> 4K</span>
+                  <span class="manage__size-tot">· {{ formatBytes(seriesSize.original_bytes + seriesSize.upscaled_bytes) }} en total · {{ seriesSize.original_chapters }} cap.</span>
+                </div>
                 <div class="manage__row">
                   <label class="mf"><span>Renombrar</span><input v-model="renameVal" type="text" /></label>
                   <label class="mf"><span>Portada (URL)</span><input v-model="coverUrlVal" type="text" placeholder="https://…" /></label>
@@ -741,25 +781,12 @@ async function doExport(toDrive = false) {
                   </div>
                   <template v-else>
                     <button class="ib" :class="{ 'ib--read': store.isChapterRead(c.chapter) }" :title="store.isChapterRead(c.chapter) ? 'Marcar no leído' : 'Marcar leído'" @click="store.toggleChapterRead(c.chapter)"><Icon name="check" :size="14" /></button>
-                    <button class="ib" title="Comparar versiones (scanlations)" :class="{ 'ib--accent': store.scanCmp.open && store.scanCmp.chapter === c.chapter }" @click="store.openComparePanel(c.chapter)"><Icon name="globe" :size="14" /></button>
                     <button class="ib" title="Leer original" @click="store.read(c.chapter, 'original')"><Icon name="library" :size="14" /></button>
                     <button v-if="upState(c.chapter) === 'partial'" class="ib ib--warn" title="Reparar upscale" @click="store.repairChapter(c.chapter)"><Icon name="spark" :size="14" /></button>
                     <button v-else-if="upState(c.chapter) !== true" class="ib ib--accent" title="Escalar a 4K" @click="store.upscaleChapter(c.chapter, m.source_meta?.imported ? { excludePages: store.excludedPages } : {})"><Icon name="spark" :size="14" /></button>
                     <button class="ib ib--danger" title="Borrar capítulo" @click="store.deleteChapter(c.chapter)"><Icon name="close" :size="14" /></button>
                   </template>
                   </template>
-                </div>
-
-                <!-- scanlation variants compare panel -->
-                <div v-if="store.scanCmp.open && store.scanCmp.chapter === c.chapter" class="cmpvar">
-                  <div v-if="store.scanCmp.loading" class="cmpvar__load"><Spinner :size="14" /></div>
-                  <template v-else-if="store.scanCmp.variants.length">
-                    <span class="cmpvar__lbl">Comparar con variante descargada:</span>
-                    <button v-for="v in store.scanCmp.variants" :key="v.dir" class="cmpvar__item" @click="store.readCompareSources(c.chapter, v.dir)">
-                      {{ v.group }} <em>{{ v.lang }}</em> · {{ v.page_count }} pág.
-                    </button>
-                  </template>
-                  <span v-else class="cmpvar__none">No hay variantes descargadas en <code>_compare/</code> para este capítulo.</span>
                 </div>
               </li>
               </template>
@@ -798,6 +825,13 @@ async function doExport(toDrive = false) {
 .modal__legend span { display: inline-flex; align-items: center; gap: 5px; }
 .lg { width: 8px; height: 8px; border-radius: 2px; }
 .lg--4k { background: var(--cyan); } .lg--part { background: var(--gold); } .lg--orig { background: var(--ink-ghost); }
+.modal__cov { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-2); max-width: 20rem; }
+.modal__covbar { display: flex; flex: 1; height: 5px; border-radius: var(--r-pill); overflow: hidden; background: var(--surface-2); }
+.modal__covseg { min-width: 0; }
+.modal__covseg--4k { background: var(--cyan); }
+.modal__covseg--part { background: var(--gold); }
+.modal__covseg--plain { background: var(--ink-ghost); opacity: .5; }
+.modal__covn { font-size: var(--fs-2xs); color: var(--ink-faint); font-family: var(--font-mono); white-space: nowrap; }
 
 .modal__hacts { display: flex; gap: var(--s-2); margin-top: var(--s-3); }
 .hbtn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); }
@@ -816,6 +850,11 @@ async function doExport(toDrive = false) {
 .manage__sect + .manage__sect { margin-top: var(--s-3); padding-top: var(--s-3); border-top: 1px solid var(--line); }
 .manage__label { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--ink-faint); }
 .manage__label em { font-style: normal; text-transform: none; letter-spacing: 0; color: var(--ink-ghost); }
+.manage__size { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: var(--fs-xs); color: var(--ink-faint); }
+.manage__size :deep(svg) { color: var(--ink-ghost); }
+.manage__size b { color: var(--ink); font-weight: 600; }
+.manage__size-4k b { color: var(--cyan); }
+.manage__size-tot { color: var(--ink-ghost); }
 .manage__sect--up .manage__label { color: var(--cyan); }
 .mf em { font-style: normal; color: var(--ink-ghost); }
 .manage__row { display: flex; gap: var(--s-3); }
@@ -1114,14 +1153,6 @@ async function doExport(toDrive = false) {
 .chap__prog-bar { width: 80px; height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
 .chap__prog-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--azure)); transition: width var(--t-base); }
 .chap__prog-n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--cyan); }
-.cmpvar { width: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); margin-top: 2px; border-radius: var(--r-sm); background: var(--base); border: 1px solid var(--line); }
-.cmpvar__load { padding: var(--s-1); }
-.cmpvar__lbl { font-size: var(--fs-2xs); color: var(--ink-faint); }
-.cmpvar__item { padding: 4px 10px; border-radius: var(--r-pill); font-size: var(--fs-2xs); color: var(--violet); border: 1px solid color-mix(in srgb, var(--violet) 30%, transparent); }
-.cmpvar__item em { font-style: normal; color: var(--ink-faint); }
-.cmpvar__item:hover { background: color-mix(in srgb, var(--violet) 14%, transparent); }
-.cmpvar__none { font-size: var(--fs-2xs); color: var(--ink-faint); }
-.cmpvar__none code { font-family: var(--font-mono); }
 
 .modal-enter-active, .modal-leave-active { transition: opacity var(--t-base); }
 .modal-enter-active .modal { transition: transform var(--t-base) var(--ease-snap); }

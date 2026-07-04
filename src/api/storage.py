@@ -153,6 +153,13 @@ def summary():
     stream_cache = _tree_bytes(str(_stream_cache_root()))
     qa = _tree_bytes(str(QA_DIR))
 
+    disk = {}
+    try:
+        du = shutil.disk_usage(str(manga_root if manga_root.exists() else Path(MANGA_DIR).parent))
+        disk = {"disk_total": du.total, "disk_free": du.free, "disk_used": du.used}
+    except Exception:
+        pass
+
     return jsonify({
         "series": rows,
         "totals": {
@@ -161,16 +168,34 @@ def summary():
             "stream_cache": stream_cache,
             "qa": qa,
             "total": total_original + total_upscaled + stream_cache + qa,
+            **disk,
         },
+    })
+
+
+@storage_bp.route("/series", methods=["GET"])
+def series_size():
+    """Desglose de disco de UNA serie (para el modal de la serie). ?title=<nombre>."""
+    title = (request.args.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "falta title"}), 400
+    orig = _safe_child(Path(MANGA_DIR), title)
+    up = _safe_child(Path(UPSCALED_DIR), title)
+    ob, oc = _measure_series(orig) if (orig and orig.is_dir()) else (0, 0)
+    ub, uc = _measure_series(up) if (up and up.is_dir()) else (0, 0)
+    return jsonify({
+        "name": title,
+        "original_bytes": ob, "original_chapters": oc,
+        "upscaled_bytes": ub, "upscaled_chapters": uc,
+        "translated_chapters": _translated_count(title),
     })
 
 
 @storage_bp.route("/purge", methods=["POST"])
 def purge():
-    """Limpiezas seguras. Body: {target, series?}.
-      target='stream_cache' → vacía la caché de streaming (efímera).
-      target='upscaled'     → borra la copia 4x (regenerable). series=<nombre>
-                              para una sola, o omitido para TODAS."""
+    """Limpieza segura. Body: {target='stream_cache'} → vacía la caché de
+    streaming (efímera, se regenera al reproducir). NO se ofrece borrar el
+    escalado 4K: es imprescindible para el comparador original/4K."""
     body = request.get_json(silent=True) or {}
     target = (body.get("target") or "").strip()
 
@@ -180,24 +205,6 @@ def purge():
         if root.is_dir():
             for child in root.iterdir():
                 shutil.rmtree(child, ignore_errors=True) if child.is_dir() else child.unlink(missing_ok=True)
-        return jsonify({"ok": True, "freed": freed})
-
-    if target == "upscaled":
-        up_root = Path(UPSCALED_DIR)
-        series = (body.get("series") or "").strip()
-        if series:
-            path = _safe_child(up_root, series)
-            if path is None or not path.is_dir():
-                return jsonify({"error": "serie no encontrada"}), 404
-            freed = _tree_bytes(str(path))
-            shutil.rmtree(path, ignore_errors=True)
-            return jsonify({"ok": True, "freed": freed})
-        # todas
-        freed = _tree_bytes(str(up_root))
-        if up_root.is_dir():
-            for child in up_root.iterdir():
-                if child.is_dir() and not child.name.startswith("."):
-                    shutil.rmtree(child, ignore_errors=True)
         return jsonify({"ok": True, "freed": freed})
 
     return jsonify({"error": "target inválido"}), 400

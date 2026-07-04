@@ -33,24 +33,14 @@ async function loadStorage() {
   catch (_) { storage.value = null }
   finally { storageLoading.value = false }
 }
-async function purge(target, series = null) {
-  const key = series ? `up:${series}` : target
-  storageBusy.value = key
+async function purgeStreamCache() {
+  storageBusy.value = 'stream_cache'
   try {
-    const res = await api.post('/api/storage/purge', { target, ...(series ? { series } : {}) })
+    const res = await api.post('/api/storage/purge', { target: 'stream_cache' })
     ui.toast(`Liberado ${formatBytes(res.freed || 0)}`, 'ok')
     await loadStorage()
   } catch (_) { ui.toast('No se pudo liberar espacio', 'error') }
   finally { storageBusy.value = '' }
-}
-function purgeStreamCache() { purge('stream_cache') }
-function purgeAllUpscaled() {
-  if (!confirm('¿Borrar TODAS las copias escaladas 4K? Se pueden regenerar volviendo a escalar (los originales no se tocan).')) return
-  purge('upscaled')
-}
-function purgeSeriesUpscaled(s) {
-  if (!confirm(`¿Borrar la copia 4K de "${s.name}"? Se puede regenerar volviendo a escalar.`)) return
-  purge('upscaled', s.name)
 }
 
 onMounted(() => {
@@ -217,18 +207,24 @@ async function onImportFile(e) {
           <span><i class="stg__dot stg__dot--cache" /> Cachés <b>{{ formatBytes(storage.totals.stream_cache + storage.totals.qa) }}</b></span>
         </div>
 
-        <!-- Acciones globales -->
+        <!-- Espacio del disco -->
+        <div v-if="storage.totals.disk_total" class="stg__disk">
+          <div class="stg__diskbar">
+            <span class="stg__diskfill" :style="{ width: (100 * storage.totals.disk_used / storage.totals.disk_total) + '%' }" />
+          </div>
+          <span class="stg__diskn">
+            {{ formatBytes(storage.totals.disk_used) }} usados · <b>{{ formatBytes(storage.totals.disk_free) }} libres</b><em>&nbsp;de {{ formatBytes(storage.totals.disk_total) }}</em>
+          </span>
+        </div>
+
+        <!-- Limpieza segura -->
         <div class="row stg__actions">
           <button class="btn" :disabled="storageBusy === 'stream_cache' || !storage.totals.stream_cache" @click="purgeStreamCache">
             <Icon name="close" :size="13" /> Vaciar caché de streaming
             <span class="stg__free">{{ formatBytes(storage.totals.stream_cache) }}</span>
           </button>
-          <button class="btn btn--danger" :disabled="storageBusy === 'upscaled' || !storage.totals.upscaled" @click="purgeAllUpscaled">
-            <Icon name="spark" :size="13" /> Borrar todo el escalado 4K
-            <span class="stg__free">{{ formatBytes(storage.totals.upscaled) }}</span>
-          </button>
         </div>
-        <p class="hint">El escalado 4K es regenerable (se puede volver a escalar) y la caché de streaming es efímera. Los originales descargados nunca se borran desde aquí.</p>
+        <p class="hint">El escalado 4K y los originales no se borran desde aquí: ambos son necesarios para el comparador original/4K del lector. Solo la caché de streaming es prescindible (se regenera al reproducir).</p>
 
         <!-- Series que más ocupan -->
         <div v-if="storage.series.length" class="sep" />
@@ -242,10 +238,7 @@ async function onImportFile(e) {
                 <template v-if="s.translated_chapters"> · <span class="stg__tr">ES {{ s.translated_chapters }}</span></template>
               </span>
             </div>
-            <button v-if="s.upscaled_bytes" class="btn btn--danger btn--xs" :disabled="storageBusy === `up:${s.name}`"
-                    @click="purgeSeriesUpscaled(s)" :title="`Borrar la copia 4K de ${s.name}`">
-              <Icon name="close" :size="12" /> 4K
-            </button>
+            <span class="stg__rowsize">{{ formatBytes(s.original_bytes + s.upscaled_bytes) }}</span>
           </div>
         </div>
       </template>
@@ -337,8 +330,15 @@ async function onImportFile(e) {
 .stg__dot--orig { background: var(--azure); }
 .stg__dot--up { background: var(--cyan); }
 .stg__dot--cache { background: var(--ink-ghost); }
+.stg__disk { display: flex; flex-direction: column; gap: 5px; margin-bottom: var(--s-4); }
+.stg__diskbar { height: 8px; border-radius: var(--r-pill); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
+.stg__diskfill { display: block; height: 100%; background: linear-gradient(90deg, var(--azure), var(--cyan)); border-radius: var(--r-pill); }
+.stg__diskn { font-size: var(--fs-xs); color: var(--ink-faint); }
+.stg__diskn b { color: var(--jade); font-weight: 600; }
+.stg__diskn em { font-style: normal; color: var(--ink-ghost); }
 .stg__actions { margin-bottom: var(--s-2); }
 .stg__free { font-family: var(--font-mono); font-size: var(--fs-2xs); opacity: .7; margin-left: 4px; }
+.stg__rowsize { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink-soft); flex-shrink: 0; }
 .stg__list { display: flex; flex-direction: column; gap: 2px; }
 .stg__row { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-2); border-radius: var(--r-sm); }
 .stg__row:hover { background: var(--surface-2); }

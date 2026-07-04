@@ -22,7 +22,6 @@ const total = computed(() => props.anime.total_episodes || 0)
 const done = computed(() => props.anime.downloaded_count || 0)
 const status = computed(() => ANIME_STATUS[props.anime.status] || null)
 const genres = computed(() => (props.anime.genres || []).slice(0, 3))
-const synopsis = computed(() => props.anime.synopsis || '')
 
 // Airing awareness — usa el mismo snapshot que el hero (store.airing keyed por al_id).
 const airInfo = computed(() => store.airing[props.anime.al_id] || null)
@@ -96,7 +95,6 @@ const dots = computed(() =>
           <div v-if="genres.length" class="acard__genres">
             <span v-for="g in genres" :key="g" class="acard__g">{{ g }}</span>
           </div>
-          <p v-if="synopsis" class="acard__syn">{{ synopsis }}</p>
           <div class="acard__acts">
             <button class="acard__act acard__act--play" @click.stop="$emit('play', anime)"><Icon name="play" :size="14" /> Ver</button>
             <button class="acard__act" @click.stop="openCard"><Icon name="spark" :size="13" /> Info</button>
@@ -181,13 +179,10 @@ const dots = computed(() =>
   max-height: 0; opacity: 0; overflow: hidden;
   transition: max-height var(--t-base) var(--ease-silk), opacity var(--t-base) var(--ease-silk), margin-top var(--t-base) var(--ease-silk);
 }
-.acard:hover .acard__extra, .acard:focus-within .acard__extra { max-height: 15rem; opacity: 1; margin-top: var(--s-2); }
-.acard__genres { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: var(--s-2); }
+.acard:hover .acard__extra, .acard:focus-within .acard__extra { max-height: 8rem; opacity: 1; margin-top: var(--s-2); }
+.acard__genres { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: var(--s-3); }
 .acard__g { font-size: var(--fs-2xs); padding: 2px 8px; border-radius: var(--r-pill);
   background: color-mix(in srgb, var(--azure) 28%, rgba(7,10,18,.5)); color: var(--ice); backdrop-filter: blur(4px); }
-.acard__syn { font-size: var(--fs-xs); color: var(--ice); line-height: var(--lh-snug); margin-bottom: var(--s-3);
-  text-shadow: 0 1px 4px rgba(0,0,0,.7);
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .acard__acts { display: flex; gap: var(--s-2); }
 .acard__act { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
   padding: var(--s-2); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600;
