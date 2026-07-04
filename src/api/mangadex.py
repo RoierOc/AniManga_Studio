@@ -43,12 +43,11 @@ def _load_env_file():
 _env = _load_env_file()
 
 def _credential(key):
-    return os.environ.get(key) or _env.get(key, "")
-
-CLIENT_ID     = _credential("MANGADEX_CLIENT_ID")
-CLIENT_SECRET = _credential("MANGADEX_CLIENT_SECRET")
-USERNAME      = _credential("MANGADEX_USERNAME")
-PASSWORD      = _credential("MANGADEX_PASSWORD")
+    # Reads from the runtime config store (Ajustes) → env → .env, so credentials
+    # saved from the UI apply immediately without a restart. Resolved at call
+    # time, never cached at import.
+    from api.config_store import get_secret
+    return get_secret(key) or os.environ.get(key) or _env.get(key, "")
 
 # Token cache
 _token_cache = {
@@ -147,8 +146,8 @@ def get_access_token():
                 data={
                     "grant_type": "refresh_token",
                     "refresh_token": _token_cache["refresh_token"],
-                    "client_id": CLIENT_ID,
-                    "client_secret": CLIENT_SECRET
+                    "client_id": _credential("MANGADEX_CLIENT_ID"),
+                    "client_secret": _credential("MANGADEX_CLIENT_SECRET")
                 }
             )
             if r.status_code == 200:
@@ -163,10 +162,10 @@ def get_access_token():
             "https://auth.mangadex.org/realms/mangadex/protocol/openid-connect/token",
             data={
                 "grant_type": "password",
-                "username": USERNAME,
-                "password": PASSWORD,
-                "client_id": CLIENT_ID,
-                "client_secret": CLIENT_SECRET
+                "username": _credential("MANGADEX_USERNAME"),
+                "password": _credential("MANGADEX_PASSWORD"),
+                "client_id": _credential("MANGADEX_CLIENT_ID"),
+                "client_secret": _credential("MANGADEX_CLIENT_SECRET")
             }
         )
         

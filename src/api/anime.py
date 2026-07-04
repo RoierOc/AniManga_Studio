@@ -25,6 +25,7 @@ from flask import Blueprint, jsonify, request, send_file
 
 from api.imgproxy import warm as _warm_img
 from api.platform import is_wsl as _is_wsl, is_macos as _is_macos
+from api.config_store import get_secret, set_secrets  # runtime-editable API keys (Ajustes)
 
 anime_bp = Blueprint('anime', __name__)
 
@@ -116,7 +117,9 @@ def _find_subtitles(video_path: str) -> list:
 
 _backfill_done = False
 
-_TMDB_KEY = os.environ.get('TMDB_API_KEY', '')
+def _tmdb_key():
+    from api.config_store import get_secret
+    return get_secret('TMDB_API_KEY')
 
 
 def _norm_title(s):
@@ -247,7 +250,7 @@ def _tmdb_images(tmdb_id, media_type='tv'):
     try:
         imgs = _http.get(
             f"https://api.themoviedb.org/3/{media_type}/{tmdb_id}/images",
-            params={'api_key': _TMDB_KEY, 'include_image_language': 'en,null'}, timeout=8).json()
+            params={'api_key': _tmdb_key(), 'include_image_language': 'en,null'}, timeout=8).json()
         backdrops = imgs.get('backdrops') or []
         textless = [b for b in backdrops if b.get('iso_639_1') is None]
         pool = textless or backdrops
@@ -324,7 +327,7 @@ def _tmdb_season_by_year(tmdb_id, year):
         return None, None
     try:
         r = _http.get(f"https://api.themoviedb.org/3/tv/{tmdb_id}",
-                      params={'api_key': _TMDB_KEY}, timeout=8).json()
+                      params={'api_key': _tmdb_key()}, timeout=8).json()
         seasons = [s for s in (r.get('seasons') or [])
                    if (s.get('season_number') or 0) >= 1 and s.get('air_date')]
         if not seasons:
@@ -378,7 +381,7 @@ def _tmdb_search_one(media_type, name, year):
     orig_field = 'original_name' if media_type == 'tv' else 'original_title'
     try:
         r = _http.get(f'https://api.themoviedb.org/3/search/{media_type}',
-                      params={'api_key': _TMDB_KEY, 'query': name, 'include_adult': 'false'}, timeout=8)
+                      params={'api_key': _tmdb_key(), 'query': name, 'include_adult': 'false'}, timeout=8)
         target = _norm_title(name)
         for res in ((r.json() or {}).get('results') or [])[:5]:
             cand = _norm_title(res.get(title_field))
@@ -407,7 +410,7 @@ def _tmdb_art(title_en, title_romaji, year, known_id=None, known_type='tv', fmt=
     `is_base_title`) over a looser/stripped-suffix match — TMDB keeps only one
     backdrop per show, generally art from the season it was catalogued with, so
     only a season-1/standalone match is trusted for it."""
-    if not _TMDB_KEY:
+    if not _tmdb_key():
         return None
     # Title-text season markers ("2nd Season", "Part 2"...) only catch sequels
     # that are *named* that way — plenty aren't ("Attack on Titan: The Final
@@ -607,7 +610,7 @@ def _backfill_anime_metadata():
         # TMDB art — wide backdrop + logo PNG (Crunchyroll-style). First pass searches
         # by title; a second pass backfills the logo for entries matched before logos
         # were fetched (tmdb_id known, logo still missing).
-        if _TMDB_KEY:
+        if _tmdb_key():
             first_try = not v.get('_tmdb_tried')
             relogo = (not first_try) and v.get('tmdb_id') and not v.get('logo') and not v.get('_logo_tried')
             # Backfill a higher-res poster for entries matched before poster-fetching
@@ -1508,11 +1511,11 @@ def _nyaa_search(query: str, category: str = '1_2', filter_code: str = '0') -> l
 
 def _qbt_login():
     global _qbt_ok, _qbt_url
-    _qbt_url = os.environ.get('QBT_URL', 'http://localhost:8080').rstrip('/')
+    _qbt_url = get_secret('QBT_URL', 'http://localhost:8080').rstrip('/')
     try:
         r = _qbt.post(f'{_qbt_url}/api/v2/auth/login',
-                      data={'username': os.environ.get('QBT_USERNAME', 'admin'),
-                            'password': os.environ.get('QBT_PASSWORD', 'adminadmin')},
+                      data={'username': get_secret('QBT_USERNAME', 'admin'),
+                            'password': get_secret('QBT_PASSWORD', 'adminadmin')},
                       timeout=4)
         _qbt_ok = r.text.strip() in ('Ok.', '') and r.status_code in (200, 204)
     except Exception:
@@ -1730,15 +1733,17 @@ def qbt_status():
     if ok:
         try: ver = _q('get', '/app/version').text.strip()
         except Exception: pass
-    return jsonify({'connected': ok, 'url': os.environ.get('QBT_URL','http://localhost:8080'), 'version': ver})
+    return jsonify({'connected': ok, 'url': get_secret('QBT_URL', 'http://localhost:8080'), 'version': ver})
 
 
 @anime_bp.route('/qbt/configure', methods=['POST'])
 def qbt_configure():
     data = request.get_json(silent=True) or {}
-    if data.get('url'):      os.environ['QBT_URL']      = data['url'].rstrip('/')
-    if data.get('username'): os.environ['QBT_USERNAME'] = data['username']
-    if data.get('password'): os.environ['QBT_PASSWORD'] = data['password']
+    creds = {}
+    if data.get('url'):      creds['QBT_URL']      = data['url'].rstrip('/')
+    if data.get('username'): creds['QBT_USERNAME'] = data['username']
+    if data.get('password'): creds['QBT_PASSWORD'] = data['password']
+    if creds: set_secrets(creds)
     global _qbt_ok
     _qbt_ok = False
     return jsonify({'connected': _qbt_login()})
@@ -2347,10 +2352,10 @@ def _cover_candidates(v: dict) -> list:
     add(v.get('cover_xl'), 'anilist', 'AniList')
 
     tmdb_id, tmdb_type = v.get('tmdb_id'), v.get('tmdb_type', 'tv')
-    if tmdb_id and _TMDB_KEY:
+    if tmdb_id and _tmdb_key():
         try:
             imgs = _http.get(f"https://api.themoviedb.org/3/{tmdb_type}/{tmdb_id}/images",
-                              params={'api_key': _TMDB_KEY, 'include_image_language': 'en,null'}, timeout=8).json()
+                              params={'api_key': _tmdb_key(), 'include_image_language': 'en,null'}, timeout=8).json()
             posters = sorted(imgs.get('posters') or [], key=lambda p: -(p.get('vote_average') or 0))
             for p in posters[:12]:
                 add(f"https://image.tmdb.org/t/p/w780{p['file_path']}", 'tmdb', 'TMDB')
@@ -2359,7 +2364,7 @@ def _cover_candidates(v: dict) -> list:
         if tmdb_type == 'tv':
             try:
                 r = _http.get(f"https://api.themoviedb.org/3/tv/{tmdb_id}",
-                              params={'api_key': _TMDB_KEY}, timeout=8).json()
+                              params={'api_key': _tmdb_key()}, timeout=8).json()
                 for s in r.get('seasons') or []:
                     if s.get('poster_path'):
                         label = f"TMDB · {s.get('name') or ('Temporada ' + str(s.get('season_number')))}"
@@ -2439,10 +2444,10 @@ def _backdrop_candidates(v: dict) -> list:
             pass
 
     tmdb_id, tmdb_type = v.get('tmdb_id'), v.get('tmdb_type', 'tv')
-    if tmdb_id and _TMDB_KEY:
+    if tmdb_id and _tmdb_key():
         try:
             imgs = _http.get(f"https://api.themoviedb.org/3/{tmdb_type}/{tmdb_id}/images",
-                              params={'api_key': _TMDB_KEY, 'include_image_language': 'en,null'}, timeout=8).json()
+                              params={'api_key': _tmdb_key(), 'include_image_language': 'en,null'}, timeout=8).json()
             backdrops = sorted(imgs.get('backdrops') or [], key=lambda b: -(b.get('vote_average') or 0))
             for b in backdrops[:12]:
                 add(f"https://image.tmdb.org/t/p/w1280{b['file_path']}", 'tmdb', 'TMDB')

@@ -4,6 +4,7 @@ import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
 import { useAnimeStore } from '@/stores/anime'
+import { useSettingsStore } from '@/stores/settings'
 import { formatBytes } from '@/lib/format'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -12,6 +13,7 @@ import FolderPicker from '@/components/anime/FolderPicker.vue'
 const ui = useUiStore()
 const manga = useMangaStore()
 const anime = useAnimeStore()
+const settings = useSettingsStore()
 
 const dlPath = ref('')
 watch(() => anime.dlSettings.download_path, (v) => { dlPath.value = v || '' }, { immediate: true })
@@ -50,7 +52,67 @@ onMounted(() => {
   anime.checkQbt()
   loadQa()
   loadStorage()
+  settings.loadKeys()
+  settings.loadSyncStatus()
 })
+
+// ── API keys ──────────────────────────────────────────────────────────────
+const keyEdits = ref({})   // { KEY: typedValue } — only typed fields are sent
+const envInput = ref(null)
+function triggerEnvImport() { envInput.value?.click() }
+async function onEnvFile(e) {
+  const file = e.target.files?.[0]
+  e.target.value = ''
+  if (!file) return
+  try {
+    const res = await settings.importEnv(await file.text())
+    ui.toast(res.detected?.length ? `Importadas ${res.detected.length} clave(s): ${res.detected.join(', ')}` : 'No se detectaron claves conocidas en el .env', res.detected?.length ? 'ok' : 'error', 5000)
+  } catch (_) { ui.toast('No se pudo leer el .env', 'error') }
+}
+async function saveGroup(fields) {
+  const values = {}
+  for (const f of fields) if (keyEdits.value[f.key] != null && keyEdits.value[f.key] !== '') values[f.key] = keyEdits.value[f.key]
+  if (!Object.keys(values).length) { ui.toast('Nada que guardar en este grupo', 'error'); return }
+  try {
+    await settings.saveKeys(values)
+    for (const k of Object.keys(values)) delete keyEdits.value[k]
+    ui.toast('Claves guardadas · se aplican al instante', 'ok')
+  } catch (_) { ui.toast('No se pudieron guardar las claves', 'error') }
+}
+
+// ── Sync (Guardar / Recuperar biblioteca) ─────────────────────────────────
+const remoteUrl = ref('')
+const patInput = ref('')
+watch(() => settings.sync, (s) => { if (s?.remote_set && !remoteUrl.value) remoteUrl.value = '' }, { deep: true })
+
+function relTime(ts) {
+  if (!ts) return 'nunca'
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - ts))
+  if (s < 60) return 'hace segundos'
+  if (s < 3600) return `hace ${Math.floor(s / 60)} min`
+  if (s < 86400) return `hace ${Math.floor(s / 3600)} h`
+  return `hace ${Math.floor(s / 86400)} d`
+}
+async function configureSync() {
+  try {
+    await settings.configureSync(remoteUrl.value.trim(), patInput.value.trim())
+    patInput.value = ''
+    ui.toast('Remoto configurado', 'ok')
+  } catch (e) { ui.toast(e?.message || 'No se pudo configurar', 'error', 5000) }
+}
+async function saveLib() {
+  const r = await settings.saveLibrary()
+  if (r.error) return ui.toast(r.error, 'error', 6000)
+  ui.toast(r.changed ? 'Biblioteca guardada en la nube ✓' : 'Sin cambios · ya estaba al día', 'ok')
+}
+async function restoreLib() {
+  if (!confirm('¿Recuperar la biblioteca desde la nube? Se fusiona con lo local (no borra tu progreso actual).')) return
+  const r = await settings.restoreLibrary()
+  if (r.error) return ui.toast(r.error, 'error', 6000)
+  const m = r.manga || { added: 0, merged: 0 }, a = r.anime || { added: 0, merged: 0 }
+  ui.toast(`Recuperado: ${m.added + m.merged} manga (${m.added} nuevos), ${a.added + a.merged} anime (${a.added} nuevos). Recargá Biblioteca/Mi Anime.`, 'ok', 6000)
+  anime.loadLibrary(true)
+}
 
 const phoneCopied = ref(false)
 function copyPhoneUrl() {
@@ -244,9 +306,95 @@ async function onImportFile(e) {
       </template>
     </section>
 
+    <!-- Conexiones y claves API -->
+    <section class="card">
+      <div class="card__title">
+        <Icon name="settings" :size="16" /> Conexiones y claves API
+        <button class="btn btn--xs stg__refresh" @click="triggerEnvImport" title="Importar un archivo .env">
+          <Icon name="upload" :size="13" /> Importar .env
+        </button>
+        <input ref="envInput" type="file" accept=".env,text/plain" hidden @change="onEnvFile" />
+      </div>
+      <p class="hint">Configura aquí las claves de cada servicio. Se aplican al instante, sin reiniciar. Las claves nunca se muestran completas ni se incluyen en la copia a la nube.</p>
+
+      <div v-if="settings.keysLoading && !settings.keyGroups.length" class="stg__loading"><Spinner :size="20" /> Cargando…</div>
+
+      <div v-for="grp in settings.keyGroups" :key="grp.group" class="keygrp">
+        <div class="keygrp__head">
+          <span class="keygrp__name">{{ grp.group }}</span>
+          <span class="keygrp__state" :class="{ 'is-on': grp.fields.some(f => f.set) }">
+            <span class="dot" /> {{ grp.fields.filter(f => f.set).length }}/{{ grp.fields.length }}
+          </span>
+        </div>
+        <div class="keygrp__fields">
+          <label v-for="f in grp.fields" :key="f.key" class="fld">
+            <span>{{ f.label }} <em v-if="f.set && f.secret" class="keygrp__hint">· configurada {{ f.hint }}</em></span>
+            <input
+              v-if="f.secret"
+              type="password"
+              :placeholder="f.set ? '•••••••• (dejar en blanco para conservar)' : (f.placeholder || '')"
+              v-model="keyEdits[f.key]"
+              autocomplete="off" spellcheck="false" class="mono"
+            />
+            <input
+              v-else
+              type="text"
+              :placeholder="f.placeholder || ''"
+              :value="keyEdits[f.key] != null ? keyEdits[f.key] : (f.value || '')"
+              @input="keyEdits[f.key] = $event.target.value"
+              spellcheck="false" class="mono"
+            />
+          </label>
+        </div>
+        <div class="keygrp__foot">
+          <button class="btn btn--accent btn--xs" :disabled="settings.keysSaving" @click="saveGroup(grp.fields)">Guardar {{ grp.group }}</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Copia y sincronización -->
+    <section class="card">
+      <div class="card__title"><Icon name="refresh" :size="16" /> Copia y sincronización</div>
+      <p class="hint">
+        Guarda tu perfil (progreso de manga y anime, favoritos, historial y ajustes) en un
+        <b>repositorio Git privado</b> para no perderlo nunca al cambiar de equipo o reinstalar.
+        No incluye archivos descargados ni claves API.
+      </p>
+
+      <label class="fld">
+        <span>Repositorio remoto (URL git) <em>· usa un repo privado dedicado</em></span>
+        <input v-model="remoteUrl" class="mono" placeholder="https://github.com/usuario/mi-perfil.git" spellcheck="false" />
+      </label>
+      <label class="fld">
+        <span>Token de acceso (PAT) <em v-if="settings.sync.pat_set">· ya configurado, deja en blanco para conservarlo</em></span>
+        <input v-model="patInput" type="password" class="mono" placeholder="github_pat_…" autocomplete="off" spellcheck="false" />
+      </label>
+      <div class="row">
+        <button class="btn" :disabled="settings.syncBusy === 'configure'" @click="configureSync">Configurar remoto</button>
+      </div>
+
+      <div class="sep" />
+      <div class="sync__foot">
+        <span class="sync__status" :class="{ 'is-on': settings.sync.remote_set }">
+          <span class="dot" />
+          <template v-if="settings.sync.remote_set">Remoto configurado · última copia {{ relTime(settings.sync.last_saved_at) }}</template>
+          <template v-else>Sin remoto configurado</template>
+        </span>
+        <div class="inline">
+          <button class="btn btn--accent" :disabled="!settings.sync.remote_set || settings.syncBusy === 'save'" @click="saveLib">
+            <Icon name="upload" :size="14" /> {{ settings.syncBusy === 'save' ? 'Guardando…' : 'Guardar biblioteca' }}
+          </button>
+          <button class="btn" :disabled="!settings.sync.remote_set || settings.syncBusy === 'restore'" @click="restoreLib">
+            <Icon name="download" :size="14" /> {{ settings.syncBusy === 'restore' ? 'Recuperando…' : 'Recuperar biblioteca' }}
+          </button>
+        </div>
+      </div>
+      <p v-if="settings.sync.identity" class="hint">Los commits se firman como <code>{{ settings.sync.identity }}</code>.</p>
+    </section>
+
     <!-- Backup de biblioteca -->
     <section class="card">
-      <div class="card__title"><Icon name="download" :size="16" /> Respaldo de biblioteca</div>
+      <div class="card__title"><Icon name="download" :size="16" /> Respaldo de biblioteca (archivo)</div>
       <p class="hint">
         Exportá tu lista de manga y anime (series seguidas, estado y progreso de
         lectura/visto) para llevarla a otra PC — no incluye los archivos descargados.
@@ -347,6 +495,28 @@ async function onImportFile(e) {
 .stg__meta { font-size: var(--fs-2xs); color: var(--ink-faint); font-family: var(--font-mono); }
 .stg__up { color: var(--cyan); font-weight: 600; }
 .stg__tr { color: var(--jade); }
+
+/* password inputs share the text-input styling */
+.fld input[type=password] { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--base); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); font-family: var(--font-mono); }
+.fld input[type=password]:focus { outline: none; border-color: var(--azure); }
+
+/* API keys */
+.keygrp { padding: var(--s-3) 0; border-top: 1px solid var(--line); }
+.keygrp:first-of-type { border-top: none; }
+.keygrp__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s-2); }
+.keygrp__name { font-size: var(--fs-sm); font-weight: 600; color: var(--ink); }
+.keygrp__state { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
+.keygrp__state.is-on { color: var(--jade); }
+.keygrp__state.is-on .dot { background: var(--jade); box-shadow: 0 0 8px color-mix(in srgb, var(--jade) 60%, transparent); }
+.keygrp__hint { color: var(--jade) !important; font-family: var(--font-mono); font-size: var(--fs-2xs); }
+.keygrp__fields { display: flex; flex-wrap: wrap; gap: var(--s-3); }
+.keygrp__foot { margin-top: var(--s-2); }
+
+/* Sync */
+.sync__foot { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; }
+.sync__status { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); color: var(--ink-faint); }
+.sync__status.is-on { color: var(--jade); }
+.sync__status.is-on .dot { background: var(--jade); box-shadow: 0 0 8px color-mix(in srgb, var(--jade) 60%, transparent); }
 
 @media (max-width: 560px) { .set { padding: 0 var(--s-4) var(--s-8); } }
 </style>

@@ -12,6 +12,8 @@ import urllib.parse as _up
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from flask import Blueprint, request, jsonify
 
+from api.config_store import get_secret  # runtime-editable API keys (Ajustes)
+
 subtitle_bp = Blueprint('subtitle', __name__)
 
 _tasks: dict = {}
@@ -20,14 +22,16 @@ BATCH_SIZE = 60
 OLLAMA_BATCH_SIZE = 80          # 80 lines/batch → 25% fewer round trips; fits in 3200-token ctx
 # Inter-batch pause — 0 by default (max speed). Set OLLAMA_BATCH_PAUSE_SECS=3 if MPV lags.
 _OLLAMA_BATCH_PAUSE = float(os.environ.get('OLLAMA_BATCH_PAUSE_SECS', '0'))
-GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY', '')
-_OLLAMA_URL    = os.environ.get('OLLAMA_URL',   'http://localhost:11434')
-_OLLAMA_MODEL  = os.environ.get('OLLAMA_MODEL', 'qwen2.5:14b')
 _OLLAMA_TIMEOUT = 300           # seconds per batch (generous for 60 lines)
+
+# Translation credentials/config are resolved at call time from the config store
+# (Ajustes) → env → .env, so keys saved from the UI apply without a restart.
 # 'ollama' → Qwen local first, Gemini fallback if Ollama fails
 # 'gemini' → Gemini first, Qwen fallback on quota exhaustion
-# 'auto'   → same as gemini (kept for compatibility)
-_ENGINE = os.environ.get('TRANSLATION_ENGINE', 'ollama')
+def _gemini_key():   from api.config_store import get_secret; return get_secret('_gemini_key()')
+def _ollama_url():   from api.config_store import get_secret; return get_secret('OLLAMA_URL', 'http://localhost:11434')
+def _ollama_model(): from api.config_store import get_secret; return get_secret('OLLAMA_MODEL', 'qwen2.5:14b')
+def _engine():       from api.config_store import get_secret; return get_secret('TRANSLATION_ENGINE', 'ollama')
 
 # Reference counter — model is only unloaded when the LAST concurrent task finishes
 _OLLAMA_TASK_COUNT = 0
@@ -152,7 +156,7 @@ def _ffprobe_tracks(path: str) -> list:
 def _ext_search_jimaku(al_id: str, titles: list, episode: int) -> list:
     """Search Jimaku CC by AniList ID (only reliable search method — title search returns full catalog).
     Requires JIMAKU_API_KEY env var (free account at jimaku.cc)."""
-    key = os.environ.get('JIMAKU_API_KEY', '')
+    key = get_secret('JIMAKU_API_KEY')
     if not key:
         print('[subtitle] Jimaku: sin JIMAKU_API_KEY — saltando')
         return []
@@ -195,7 +199,7 @@ def _ext_search_opensubtitles(titles: list, episode: int, languages: str = '') -
     """Search OpenSubtitles v3. Tries each title variant and filters by title similarity.
     Requires OPENSUBTITLES_API_KEY env var (free account at opensubtitles.com).
     Pass languages='es' to search for Spanish subtitles specifically."""
-    key = os.environ.get('OPENSUBTITLES_API_KEY', '')
+    key = get_secret('OPENSUBTITLES_API_KEY')
     if not key:
         print('[subtitle] OpenSubtitles: sin OPENSUBTITLES_API_KEY — saltando')
         return []
@@ -313,7 +317,7 @@ def _ext_search_nyaa(titles: list, episode: int) -> list:
 def _ext_search_subdl(titles: list, episode: int, season: int = 1) -> list:
     """Search Subdl.com for Spanish/LatAm subtitles. Requires SUBDL_API_KEY env var.
     Free account at subdl.com — returns ZIP archives containing .srt/.ass files."""
-    key = os.environ.get('SUBDL_API_KEY', '')
+    key = get_secret('SUBDL_API_KEY')
     if not key:
         print('[subtitle] Subdl: sin SUBDL_API_KEY — saltando')
         return []
@@ -430,9 +434,9 @@ def _opensubtitles_login() -> str:
     """Login to OpenSubtitles and return JWT token. Caches for 23h.
     Requires OPENSUBTITLES_USERNAME + OPENSUBTITLES_PASSWORD + OPENSUBTITLES_API_KEY."""
     import time
-    username = os.environ.get('OPENSUBTITLES_USERNAME', '')
-    password = os.environ.get('OPENSUBTITLES_PASSWORD', '')
-    key      = os.environ.get('OPENSUBTITLES_API_KEY', '')
+    username = get_secret('OPENSUBTITLES_USERNAME')
+    password = get_secret('OPENSUBTITLES_PASSWORD')
+    key      = get_secret('OPENSUBTITLES_API_KEY')
     if not (username and password and key):
         return ''
     with _OST_TOKEN_LOCK:
@@ -466,7 +470,7 @@ def _ext_download_sub(sub_info: dict, tmpdir: str) -> str:
     source = sub_info.get('source', '')
 
     if source == 'opensubtitles':
-        key   = os.environ.get('OPENSUBTITLES_API_KEY', '')
+        key   = get_secret('OPENSUBTITLES_API_KEY')
         token = _opensubtitles_login()
         headers = {
             'Api-Key':      key,
@@ -918,7 +922,7 @@ def _is_quota_error(exc: Exception) -> bool:
 def _ollama_available() -> bool:
     import urllib.request as _ur
     try:
-        _ur.urlopen(f'{_OLLAMA_URL}/', timeout=3)
+        _ur.urlopen(f'{_ollama_url()}/', timeout=3)
         return True
     except Exception:
         return False
@@ -930,18 +934,18 @@ def _ollama_preload():
     if not os.environ.get('OLLAMA_FLASH_ATTENTION'):
         print('[subtitle] TIP: inicia Ollama con OLLAMA_FLASH_ATTENTION=1 para ~20-30% más velocidad')
     payload = json.dumps({
-        'model': _OLLAMA_MODEL,
+        'model': _ollama_model(),
         'messages': [{'role': 'user', 'content': '1|ok'}],
         'stream': False,
         'keep_alive': '30m',
         'options': {'num_predict': 3},
     }).encode()
-    req = _ur.Request(f'{_OLLAMA_URL}/api/chat', data=payload,
+    req = _ur.Request(f'{_ollama_url()}/api/chat', data=payload,
                       headers={'Content-Type': 'application/json'}, method='POST')
     try:
         _ur.urlopen(req, timeout=90)
     except Exception as e:
-        raise RuntimeError(f'No se pudo cargar {_OLLAMA_MODEL} en VRAM: {e}') from e
+        raise RuntimeError(f'No se pudo cargar {_ollama_model()} en VRAM: {e}') from e
 
 
 def _ollama_unload():
@@ -951,14 +955,14 @@ def _ollama_unload():
     import urllib.request as _ur
     try:
         payload = json.dumps({
-            'model': _OLLAMA_MODEL,
+            'model': _ollama_model(),
             'messages': [],
             'keep_alive': 0,
         }).encode()
-        req = _ur.Request(f'{_OLLAMA_URL}/api/chat', data=payload,
+        req = _ur.Request(f'{_ollama_url()}/api/chat', data=payload,
                           headers={'Content-Type': 'application/json'}, method='POST')
         _ur.urlopen(req, timeout=15)
-        print(f'[subtitle] {_OLLAMA_MODEL} descargado de VRAM')
+        print(f'[subtitle] {_ollama_model()} descargado de VRAM')
     except Exception as e:
         print(f'[subtitle] _ollama_unload error: {e}')
 
@@ -984,7 +988,7 @@ def _translate_batch_ollama(texts: list, src_lang: str = 'eng') -> list:
     def _call() -> tuple[list, int]:
         numbered = '\n'.join(f'{i+1}|{t}' for i, t in enumerate(texts))
         payload = json.dumps({
-            'model': _OLLAMA_MODEL,
+            'model': _ollama_model(),
             'messages': [
                 {'role': 'system', 'content': system_prompt},
                 {'role': 'user',   'content': f'Traduce estas {n} líneas:\n\n{numbered}'},
@@ -999,7 +1003,7 @@ def _translate_batch_ollama(texts: list, src_lang: str = 'eng') -> list:
                 'f16_kv':      True,    # FP16 KV cache: ~2x less VRAM, faster attention
             },
         }).encode()
-        req = _ur.Request(f'{_OLLAMA_URL}/api/chat', data=payload,
+        req = _ur.Request(f'{_ollama_url()}/api/chat', data=payload,
                           headers={'Content-Type': 'application/json'}, method='POST')
         try:
             with _ur.urlopen(req, timeout=_OLLAMA_TIMEOUT) as resp:
@@ -1028,7 +1032,7 @@ def _translate_batch_ollama(texts: list, src_lang: str = 'eng') -> list:
             # Log raw response to help diagnose model format failures
             numbered = '\n'.join(f'{i+1}|{t}' for i, t in enumerate(texts))
             payload_debug = json.dumps({
-                'model': _OLLAMA_MODEL,
+                'model': _ollama_model(),
                 'messages': [
                     {'role': 'system', 'content': system_prompt},
                     {'role': 'user',   'content': f'Traduce estas {n} líneas:\n\n{numbered}'},
@@ -1037,7 +1041,7 @@ def _translate_batch_ollama(texts: list, src_lang: str = 'eng') -> list:
                 'options': {'temperature': 0.01, 'num_predict': 200, 'num_ctx': num_ctx, 'num_gpu': -1},
             }).encode()
             try:
-                req2 = _ur.Request(f'{_OLLAMA_URL}/api/chat', data=payload_debug,
+                req2 = _ur.Request(f'{_ollama_url()}/api/chat', data=payload_debug,
                                    headers={'Content-Type': 'application/json'}, method='POST')
                 with _ur.urlopen(req2, timeout=30) as resp2:
                     debug_raw = ((json.loads(resp2.read()).get('message') or {}).get('content') or '').strip()
@@ -1139,11 +1143,11 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
             dedup_tm: dict[int, str] = {}
 
             # ── Phase 1: Gemini (parallel) — only when engine != 'ollama' ────────
-            key = GEMINI_API_KEY or os.environ.get('GEMINI_API_KEY', '')
+            key = _gemini_key() or os.environ.get('_gemini_key()', '')
             quota_hit  = False
             _cancelled = False
 
-            if key and _ENGINE != 'ollama':
+            if key and _engine() != 'ollama':
                 g_batches = [texts[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
                 n_g = len(g_batches)
                 try:
@@ -1207,7 +1211,7 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
 
             if missing_positions:
                 ollama_used[0] = True
-                if _ENGINE == 'ollama':
+                if _engine() == 'ollama':
                     reason = 'motor local'
                 elif not key:
                     reason = 'sin clave Gemini'
@@ -1216,9 +1220,9 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
 
                 if not _ollama_available():
                     raise RuntimeError(
-                        f'Ollama no disponible en {_OLLAMA_URL}. '
+                        f'Ollama no disponible en {_ollama_url()}. '
                         'Instala Ollama (ollama.com) y ejecuta: '
-                        f'ollama pull {_OLLAMA_MODEL}'
+                        f'ollama pull {_ollama_model()}'
                     )
 
                 # Increment reference counter before loading model into VRAM
@@ -1226,7 +1230,7 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                     _OLLAMA_TASK_COUNT += 1
 
                 upd('translating', 10 + int(78 * len(dedup_tm) / total),
-                    f'Cargando {_OLLAMA_MODEL} en VRAM ({reason})…', engine='ollama')
+                    f'Cargando {_ollama_model()} en VRAM ({reason})…', engine='ollama')
                 _ollama_preload()
 
                 lang_label = _LANG_NAMES.get((src_lang or 'eng').lower(), src_lang or 'inglés')
@@ -1368,7 +1372,7 @@ def subtitle_tracks():
     # Specials/OVAs are not indexed by episode number — search by title only
     effective_episode = 0 if ep_type == 'special' else episode
 
-    if not os.environ.get('OPENSUBTITLES_API_KEY'):
+    if not get_secret('OPENSUBTITLES_API_KEY'):
         sources_missing_key.append('opensubtitles')
     else:
         # Always search for pre-made Spanish subs (no GPU needed)
@@ -1376,7 +1380,7 @@ def subtitle_tracks():
 
     if not tracks:
         # No internal text tracks — also search English external sources for translation
-        if not os.environ.get('JIMAKU_API_KEY'):
+        if not get_secret('JIMAKU_API_KEY'):
             sources_missing_key.append('jimaku')
         print(f'[subtitle] No text tracks in {os.path.basename(path)} — searching external sources')
         external_tracks = _ext_find_subs(anime_id, titles, effective_episode)

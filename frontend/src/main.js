@@ -1,6 +1,7 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import App from './App.vue'
+import { hydratePrefs, startPrefSync } from '@/lib/prefs'
 
 import './styles/tokens.css'
 import './styles/base.css'
@@ -14,4 +15,9 @@ app.config.errorHandler = (err, _instance, info) => {
   console.error('[app error]', info, err)
 }
 
-app.mount('#app')
+// Seed portable UI prefs from the backend (synced profile) before mounting so
+// components read the restored values; then keep them mirrored back.
+hydratePrefs().finally(() => {
+  app.mount('#app')
+  startPrefSync()
+})

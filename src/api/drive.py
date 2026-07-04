@@ -29,8 +29,9 @@ _pending_flows: dict = {}
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _client_config():
-    client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
-    client_secret = os.environ.get("GOOGLE_CLIENT_SECRET", "")
+    from api.config_store import get_secret  # runtime-editable keys (Ajustes)
+    client_id = get_secret("GOOGLE_CLIENT_ID")
+    client_secret = get_secret("GOOGLE_CLIENT_SECRET")
     if CREDS_FILE.exists():
         try:
             raw = json.loads(CREDS_FILE.read_text())

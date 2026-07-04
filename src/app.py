@@ -103,6 +103,10 @@ from api.stream import stream_bp
 app.register_blueprint(stream_bp, url_prefix='/api/stream')
 from api.storage import storage_bp
 app.register_blueprint(storage_bp, url_prefix='/api/storage')
+from api.config_store import config_bp
+app.register_blueprint(config_bp, url_prefix='/api/config')
+from api.sync import sync_bp
+app.register_blueprint(sync_bp, url_prefix='/api/sync')
 
 
 # Suwayomi es on-demand (ver sources.py: ensure_suwayomi + reaper de inactividad).

@@ -33,8 +33,9 @@ def _progress_value(ch):
         return -1.0
 
 
-@backup_bp.route('/export')
-def export_backup():
+def build_payload():
+    """Assemble the portable profile (manga + anime tracking/progress). Shared by
+    the file-download route and the Git sync backend (sync.py)."""
     manga = load_local_library()
 
     anime_lib = _lib_read()
@@ -44,15 +45,40 @@ def export_backup():
         trimmed['id'] = anime_id
         anime.append(trimmed)
 
-    payload = {
+    return {
         'format': _FORMAT,
         'exported_at': datetime.now(timezone.utc).isoformat(),
         'manga': manga,
         'anime': anime,
     }
 
+
+def apply_payload(data):
+    """Merge an incoming profile into the local state (additive, never destroys).
+    Returns per-domain counts. Shared by the file-import route and sync.restore."""
+    manga_in = data.get('manga')
+    anime_in = data.get('anime')
+    counts = {'manga': {'added': 0, 'merged': 0}, 'anime': {'added': 0, 'merged': 0}}
+
+    if isinstance(manga_in, list):
+        local_lib = load_local_library()
+        a, m = _merge_manga(local_lib, manga_in)
+        save_local_library(local_lib)
+        counts['manga'] = {'added': a, 'merged': m}
+
+    if isinstance(anime_in, list):
+        lib = _lib_read()
+        a, m = _merge_anime(lib, anime_in)
+        _lib_write(lib)
+        counts['anime'] = {'added': a, 'merged': m}
+
+    return counts
+
+
+@backup_bp.route('/export')
+def export_backup():
     filename = f"animanga-studio-backup-{time.strftime('%Y-%m-%d')}.json"
-    resp = jsonify(payload)
+    resp = jsonify(build_payload())
     resp.headers['Content-Disposition'] = f'attachment; filename="{filename}"'
     return resp
 
@@ -146,26 +172,8 @@ def _merge_anime(lib, incoming):
 @backup_bp.route('/import', methods=['POST'])
 def import_backup():
     data = request.get_json(silent=True) or {}
-    manga_in = data.get('manga')
-    anime_in = data.get('anime')
-
-    if manga_in is None and anime_in is None:
+    if data.get('manga') is None and data.get('anime') is None:
         return jsonify({'error': 'Archivo inválido: falta "manga" o "anime"'}), 400
 
-    manga_added = manga_merged = anime_added = anime_merged = 0
-
-    if isinstance(manga_in, list):
-        local_lib = load_local_library()
-        manga_added, manga_merged = _merge_manga(local_lib, manga_in)
-        save_local_library(local_lib)
-
-    if isinstance(anime_in, list):
-        lib = _lib_read()
-        anime_added, anime_merged = _merge_anime(lib, anime_in)
-        _lib_write(lib)
-
-    return jsonify({
-        'ok': True,
-        'manga': {'added': manga_added, 'merged': manga_merged},
-        'anime': {'added': anime_added, 'merged': anime_merged},
-    })
+    counts = apply_payload(data)
+    return jsonify({'ok': True, **counts})
