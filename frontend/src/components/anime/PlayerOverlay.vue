@@ -105,6 +105,22 @@ function bumpSubScale(d) {
   applySubScale()
 }
 
+/* Sincronía de subtítulos: desfase en segundos (positivo = subs MÁS TARDE) para
+ * cuadrar fansubs desincronizados. Por sesión (se resetea al cambiar de episodio;
+ * el problema suele ser del archivo). jassub dibuja en (currentTime + timeOffset);
+ * el offset efectivo = streamBase − subSync, así que restar el desfase = retrasar. */
+const subSync = ref(0)
+function applySubOffset() {
+  if (jassub) {
+    jassub.timeOffset = streamBase.value - subSync.value
+    try { jassub.resize(true) } catch (_) {}   // repaint aunque esté en pausa
+  }
+}
+function bumpSubSync(d) {
+  subSync.value = Math.round((subSync.value + d) * 10) / 10
+  applySubOffset()
+}
+
 /* ── Saltar intro/ending inteligente ──
  * Prioridad: tiempos reales de AniSkip (store.skipTimes, por mal_id+ep) →
  * memoria del salto manual por serie (localStorage) → botón fijo de 88 s.
@@ -113,6 +129,18 @@ const OP_MEM_KEY = 'anime-op-manual'
 const manualOpMem = ref(null)   // inicio del OP aprendido del salto manual (esta serie)
 const skipInfo = computed(() =>
   (p.value && store.skipTimes[`${p.value.anime.id}_${p.value.ep.num}`]) || {})
+/* Marcadores de intro/ending en la barra (bandas tintadas estilo Crunchyroll),
+ * a partir de los tiempos reales de AniSkip. */
+const skipMarks = computed(() => {
+  const s = skipInfo.value, d = duration.value
+  if (!d) return []
+  const out = []
+  if (s.op_start != null && s.op_end > s.op_start)
+    out.push({ left: (s.op_start / d) * 100, width: ((s.op_end - s.op_start) / d) * 100, label: 'Intro' })
+  if (s.ed_start != null && s.ed_end > s.ed_start)
+    out.push({ left: (s.ed_start / d) * 100, width: ((s.ed_end - s.ed_start) / d) * 100, label: 'Ending' })
+  return out
+})
 const activeSkip = computed(() => {
   const s = skipInfo.value
   const t = time.value
@@ -304,6 +332,7 @@ function setup(sess) {
   audioIndex.value = p.value.audio || 0
   streamBase.value = sess.start_offset || 0
   time.value = streamBase.value
+  subSync.value = 0            // la sincronía es por archivo → arranca en 0
 
   loadHls(sess.playlist)
 
@@ -350,7 +379,8 @@ async function setSubTrack(idx) {
         defaultFont: 'Noto Sans',
         // Los .ass van en tiempo absoluto; la sesión corre relativa a
         // streamBase → jassub busca el subtítulo en (currentTime + timeOffset).
-        timeOffset: streamBase.value,
+        // Menos subSync = desfase de sincronía manual (positivo retrasa los subs).
+        timeOffset: streamBase.value - subSync.value,
       })
       // El worker de jassub muere en silencio si algo falla (wasm, fuentes…):
       // vigilar el handshake y dejar rastro en consola + log del backend.
@@ -464,7 +494,7 @@ function restartAt(absT) {
       const r = await api.post('/api/stream/seek', { start_at: absT })
       if (!p.value || my !== restartToken) return   // cerrado o superado por otro salto
       streamBase.value = r.start_offset ?? absT
-      if (jassub) jassub.timeOffset = streamBase.value
+      applySubOffset()   // reaplica base + sincronía al nuevo offset de sesión
       loadHls(r.playlist)
     } catch (_) {
       if (my === restartToken) waiting.value = false
@@ -779,6 +809,9 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
         <div class="wp__timeline" @click="seekTo" @mousemove="onTlHover" @mouseleave="tlHover = -1">
           <div class="wp__tl-buf" :style="{ width: bufPct + '%' }" />
           <div class="wp__tl-cur" :style="{ width: pct + '%' }" />
+          <!-- bandas de intro/ending (AniSkip), siempre visibles sobre el progreso -->
+          <div v-for="(m, i) in skipMarks" :key="'sm' + i" class="wp__tl-mark"
+               :style="{ left: m.left + '%', width: m.width + '%' }" :title="m.label" />
           <div class="wp__tl-knob" :style="{ left: pct + '%' }" />
 
           <!-- preview flotante: miniatura del vídeo + tiempo (estilo Crunchyroll) -->
@@ -822,6 +855,12 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
                 <button :disabled="subScale <= 0.5" aria-label="Subtítulos más pequeños" @click="bumpSubScale(-0.1)">−</button>
                 <b>{{ Math.round(subScale * 100) }}%</b>
                 <button :disabled="subScale >= 2" aria-label="Subtítulos más grandes" @click="bumpSubScale(0.1)">+</button>
+              </div>
+              <div v-if="subIndex >= 0" class="wp__subsize" @click.stop>
+                <span>Sincronía</span>
+                <button aria-label="Adelantar subtítulos" @click="bumpSubSync(-0.1)">−</button>
+                <b :class="{ 'is-zero': subSync === 0 }" @dblclick="bumpSubSync(-subSync)">{{ subSync > 0 ? '+' : '' }}{{ subSync.toFixed(1) }}s</b>
+                <button aria-label="Retrasar subtítulos" @click="bumpSubSync(0.1)">+</button>
               </div>
               <button :class="{ 'is-sel': subIndex === -1 }" @click="setSubTrack(-1)">Sin subtítulos</button>
               <button v-for="(t, i) in subTracks" :key="'s' + i" :class="{ 'is-sel': i === subIndex }" @click="setSubTrack(i)">{{ trackLabel(t, i) }}</button>
@@ -1022,6 +1061,13 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 .wp__timeline:hover { height: 8px; }
 .wp__tl-buf { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: rgba(255,255,255,.28); }
+/* bandas de intro/ending: franja tenue bajo el progreso (como Crunchyroll) */
+.wp__tl-mark {
+  position: absolute; top: 0; bottom: 0; border-radius: 3px;
+  background: repeating-linear-gradient(-45deg,
+    rgba(122,162,247,.55) 0 4px, rgba(122,162,247,.28) 4px 8px);
+  pointer-events: none;
+}
 .wp__tl-cur { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--azure-bright); }
 .wp__tl-knob {
   position: absolute; top: 50%; width: 14px; height: 14px; border-radius: 50%;
@@ -1116,6 +1162,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 .wp__subsize span { font-size: var(--fs-xs); color: var(--ink-dim); margin-right: auto; }
 .wp__subsize b { font-size: var(--fs-xs); color: var(--ink); min-width: 2.6rem; text-align: center; }
+.wp__subsize b.is-zero { color: var(--ink-dim); }        /* sincronía en 0 = sin ajuste */
 .wp__subsize button {
   display: grid; place-items: center; width: 1.8rem; min-height: 1.8rem; padding: 0;
   border-radius: var(--r-xs); font-size: var(--fs-sm); line-height: 1;
