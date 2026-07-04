@@ -41,9 +41,12 @@ const current = computed(() => (tab.value === 'local' ? LocalView : LibraryView)
 </template>
 
 <style scoped>
-.libhub { display: flex; flex-direction: column; }
+/* block (NO flex column): la vista interna centra con max-width + margin auto y
+ * así llena el ancho como bloque; en flex column se encogía al contenido. */
+.libhub { display: block; }
 .libhub__bar {
   display: flex; align-items: center; gap: var(--s-3);
+  max-width: var(--content-max); margin: 0 auto;   /* alineado con la vista de abajo */
   padding: var(--s-5) var(--s-6) 0;
 }
 .libtabs { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: var(--surface-2); }

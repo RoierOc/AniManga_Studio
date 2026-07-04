@@ -38,10 +38,14 @@ const current = computed(() => (tab.value === 'sources' ? SourcesView : MangaDex
 </template>
 
 <style scoped>
-.explore { display: flex; flex-direction: column; }
-/* selector de fuente: dos cajas grandes y diferenciadas (no una pestaña sutil) */
+/* block (NO flex column): así la vista interna, que centra con max-width +
+ * margin auto, llena el ancho como bloque; en flex column se encogía al contenido. */
+.explore { display: block; }
+/* selector de fuente: dos cajas grandes y diferenciadas (no una pestaña sutil);
+ * mismo ancho/centrado que la vista de abajo para que quede alineado */
 .srcpick {
   display: flex; gap: var(--s-3); flex-wrap: wrap;
+  max-width: var(--content-max); margin: 0 auto;
   padding: var(--s-5) var(--s-6) 0;
 }
 .srcpick__opt {
