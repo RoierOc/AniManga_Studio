@@ -17,10 +17,11 @@ import PlaceholderView from '@/views/PlaceholderView.vue'
 // Views are code-split into their own chunks (loaded on demand) to shrink the initial
 // bundle — the Anime Studio especially pulls in a lot. LibraryView stays eager since it
 // is the most common landing view.
-import LibraryView from '@/views/LibraryView.vue'
-const MangaDexView = defineAsyncComponent(() => import('@/views/MangaDexView.vue'))
-const SourcesView  = defineAsyncComponent(() => import('@/views/SourcesView.vue'))
-const LocalView    = defineAsyncComponent(() => import('@/views/LocalView.vue'))
+// LibraryHub (Biblioteca: pestañas Descargados/Locales + Importar) es la vista de
+// aterrizaje → eager; contiene LibraryView. Explorar (MangaDex/Fuentes) y el resto
+// van lazy.
+import LibraryHub from '@/views/LibraryHub.vue'
+const ExploreView  = defineAsyncComponent(() => import('@/views/ExploreView.vue'))
 const WorkshopView = defineAsyncComponent(() => import('@/views/WorkshopView.vue'))
 const ActivityView = defineAsyncComponent(() => import('@/views/ActivityView.vue'))
 const AnimeStudio  = defineAsyncComponent(() => import('@/views/anime/AnimeStudio.vue'))
@@ -52,7 +53,7 @@ onUnmounted(() => window.removeEventListener('keydown', onGlobalKey))
 // defensive fallback and should never render in normal use.
 const meta = computed(() => VIEWS.flatMap(g => g.items).find(i => i.id === ui.currentView))
 
-const VIEW_COMPONENTS = { library: LibraryView, mangadex: MangaDexView, sources: SourcesView, local: LocalView, workshop: WorkshopView, activity: ActivityView, anime: AnimeStudio, settings: SettingsView }
+const VIEW_COMPONENTS = { library: LibraryHub, explore: ExploreView, workshop: WorkshopView, activity: ActivityView, anime: AnimeStudio, settings: SettingsView }
 const activeComponent = computed(() => VIEW_COMPONENTS[ui.currentView] || null)
 
 // Error boundary: a render error in any view/modal shows a recoverable panel instead of

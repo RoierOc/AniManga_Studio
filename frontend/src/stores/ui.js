@@ -11,16 +11,15 @@ function loadSession() {
 }
 
 // Anime items map to currentView 'anime' + an anime sub-view (like the original sidebar).
+// Manga se agrupa por intención (como el anime): 'library' = tu contenido
+// (Descargados/Locales + Importar), 'explore' = buscar online (MangaDex/Fuentes
+// en pestañas). 'activity' es transversal (manga+anime) → grupo General.
 export const VIEWS = [
   {
     group: 'Manga',
     items: [
-      { id: 'library',  label: 'Biblioteca', icon: 'library' },
-      { id: 'mangadex', label: 'MangaDex',   icon: 'search' },
-      { id: 'sources',  label: 'Fuentes',    icon: 'globe' },
-      { id: 'local',    label: 'Local',      icon: 'folder' },
-      { id: 'workshop', label: 'Taller',     icon: 'upload' },
-      { id: 'activity', label: 'Actividad',  icon: 'spark' },
+      { id: 'library', label: 'Biblioteca', icon: 'library' },
+      { id: 'explore', label: 'Explorar',   icon: 'globe' },
     ],
   },
   {
@@ -32,16 +31,27 @@ export const VIEWS = [
       { id: 'anime', sub: 'downloads', label: 'Descargas',    icon: 'download' },
     ],
   },
+  {
+    group: 'General',
+    items: [
+      { id: 'activity', label: 'Actividad', icon: 'spark' },
+    ],
+  },
 ]
 
-// 'settings' is a top-level view reachable from the TopBar gear (not a sidebar item).
-const VALID = new Set([...VIEWS.flatMap(g => g.items.map(i => i.id)), 'settings'])
+// Vistas alcanzables SIN ítem propio en el sidebar: 'settings' (engranaje) y
+// 'workshop' (botón Importar dentro de Biblioteca).
+const EXTRA_VIEWS = ['settings', 'workshop']
+// Compatibilidad: sesiones/deep-links anteriores a la fusión de secciones.
+const LEGACY_VIEWS = { mangadex: 'explore', sources: 'explore', local: 'library' }
+const VALID = new Set([...VIEWS.flatMap(g => g.items.map(i => i.id)), ...EXTRA_VIEWS])
+function _normView(v) { v = LEGACY_VIEWS[v] || v; return VALID.has(v) ? v : 'library' }
 
 export const useUiStore = defineStore('ui', {
   state: () => {
     const s = loadSession()
     return {
-      currentView: VALID.has(s.view) ? s.view : 'library',
+      currentView: _normView(s.view),
       sidebarCollapsed: s.sidebarCollapsed ?? false,
       sidebarMobileOpen: false,
       showShortcuts: false,
@@ -80,7 +90,7 @@ export const useUiStore = defineStore('ui', {
     _apply(st) {
       _applying = true
       try {
-        this.currentView = VALID.has(st.view) ? st.view : 'library'
+        this.currentView = _normView(st.view)
         try {
           const a = useAnimeStore()
           if (st.sub) a.sub = st.sub
@@ -118,7 +128,8 @@ export const useUiStore = defineStore('ui', {
     back() { try { window.history.back() } catch {} },
 
     goto(view) {
-      if (VALID.has(view)) this.currentView = view
+      const v = LEGACY_VIEWS[view] || view
+      if (VALID.has(v)) this.currentView = v
       this.sidebarMobileOpen = false
       this.activityOpen = false   // navigating away closes the activity drawer
       // switching to a top-level view closes any open detail/modal

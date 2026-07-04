@@ -9,6 +9,7 @@ const ui = useUiStore()
 const anime = useAnimeStore()
 const current = computed(() => {
   if (ui.currentView === 'settings') return { label: 'Ajustes', icon: 'settings' }
+  if (ui.currentView === 'workshop') return { label: 'Importar', icon: 'upload' }   // se abre desde Biblioteca
   const items = VIEWS.flatMap(g => g.items)
   if (ui.currentView === 'anime') return items.find(i => i.id === 'anime' && i.sub === anime.sub) || items.find(i => i.id === 'anime')
   return items.find(i => i.id === ui.currentView)
