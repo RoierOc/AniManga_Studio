@@ -34,6 +34,7 @@ export const useAnimeStore = defineStore('anime', {
 
     // discovery in detail (keyed by al_id)
     recs: {}, recsState: {},
+    franchise: {}, franchiseState: {},   // orden de estreno de la franquicia por al_id
     stacks: {}, stacksState: {},
     tags: {}, malUrls: {},
     fullSyn: {},               // al_id -> sinopsis completa (la de library viene recortada a 320)
@@ -374,7 +375,7 @@ export const useAnimeStore = defineStore('anime', {
         this.detailId = anime.id
         this.epInfoOpen = null
         this.linkTorrent = { show: false, list: [], loading: false, subpath: '' }
-        if (anime.al_id) { this.loadTags(anime); this.loadRecs(anime); this.loadSynopsis(anime) }
+        if (anime.al_id) { this.loadTags(anime); this.loadRecs(anime); this.loadSynopsis(anime); this.loadFranchise(anime) }
         useUiStore().pushNav()
       })
     },
@@ -412,6 +413,7 @@ export const useAnimeStore = defineStore('anime', {
         this.loadTags(anime)
         this.loadRecs(anime)
         this.loadSynopsis(anime)
+        this.loadFranchise(anime)
         // enrichPreview caches result → also updates previewAnime via watcher below
         this.enrichPreview(anime.al_id).then(() => {
           const enriched = this.enrichedPreviews[anime.al_id]
@@ -471,6 +473,25 @@ export const useAnimeStore = defineStore('anime', {
       const lib = this.library.find(a => (rec.al_id && a.al_id === rec.al_id) || (rec.mal_id && a.mal_id === rec.mal_id) || (rec.title && a.title === rec.title))
       if (lib) this.openDetail(lib)
       else this.openTorrents(rec)   // navigates to search + opens torrents
+    },
+
+    async loadFranchise(anime) {
+      const id = anime.al_id
+      if (!id || this.franchiseState[id]) return
+      this.franchiseState[id] = 'loading'
+      try {
+        const d = await api.get(`/api/anime/franchise/${id}`)
+        const items = (d && d.items) || []
+        this.franchise[id] = items
+        // solo tiene sentido mostrarla si hay más de una entrega
+        this.franchiseState[id] = items.length > 1 ? 'done' : 'none'
+      } catch (_) { this.franchiseState[id] = 'error' }
+    },
+    openFranchiseItem(item) {
+      if (item.is_current) return
+      const lib = this.library.find(a => a.al_id === item.al_id)
+      if (lib) this.openDetail(lib)
+      else this.openTorrents({ al_id: item.al_id, title: item.title, cover: item.cover })
     },
 
     async loadStacks(alId, malId) {

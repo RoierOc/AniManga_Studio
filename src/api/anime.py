@@ -3511,6 +3511,78 @@ def anime_recommendations(al_id):
         return jsonify({'error': str(e)}), 500
 
 
+# ── Orden de franquicia (temporadas/OVAs/películas en orden de estreno) ─────────
+# Relaciones "fuertes" que forman una franquicia (se ignoran ADAPTATION/CHARACTER/
+# OTHER/SOURCE… que llevan a manga o crossovers sueltos).
+_FRANCHISE_REL = {'PREQUEL', 'SEQUEL', 'PARENT', 'SIDE_STORY', 'ALTERNATIVE', 'SPIN_OFF'}
+_FRANCHISE_Q = '''query($id:Int){Media(id:$id,type:ANIME){
+  id format status episodes seasonYear
+  startDate{year month day}
+  title{romaji english}
+  coverImage{large medium}
+  relations{edges{relationType node{id type}}}
+}}'''
+
+
+@anime_bp.route('/franchise/<int:al_id>')
+def anime_franchise(al_id):
+    """Todas las entregas de la franquicia (recorriendo relaciones de AniList)
+    en ORDEN DE ESTRENO, marcando las que tienes en la biblioteca. Cache 24h."""
+    cached = _al_cache_get('franchise', al_id)
+    if cached is not None:
+        return jsonify(cached)
+
+    nodes, visited, queue = {}, set(), [al_id]
+    queries, MAX_NODES, MAX_QUERIES = 0, 40, 25
+    while queue and queries < MAX_QUERIES and len(nodes) < MAX_NODES:
+        cur = queue.pop(0)
+        if cur in visited:
+            continue
+        visited.add(cur)
+        try:
+            r = _anilist_post(_FRANCHISE_Q, {'id': int(cur)})
+            queries += 1
+            m = (r.json().get('data') or {}).get('Media') if r is not None else None
+        except Exception:
+            m = None
+        if not m:
+            continue
+        nodes[m['id']] = m
+        for e in ((m.get('relations') or {}).get('edges') or []):
+            n = e.get('node') or {}
+            if (e.get('relationType') in _FRANCHISE_REL
+                    and n.get('type') == 'ANIME' and n.get('id') not in visited):
+                queue.append(n['id'])
+
+    owned = {int(v['al_id']) for v in _lib_read().values() if v.get('al_id')}
+
+    def _sortkey(m):
+        d = m.get('startDate') or {}
+        return (d.get('year') or m.get('seasonYear') or 9999,
+                d.get('month') or 13, d.get('day') or 32)
+
+    items = []
+    for m in sorted(nodes.values(), key=_sortkey):
+        d = m.get('startDate') or {}
+        items.append({
+            'al_id': m['id'],
+            'title': (m['title'].get('english') or m['title'].get('romaji') or ''),
+            'title_romaji': m['title'].get('romaji', ''),
+            'cover': (m.get('coverImage') or {}).get('large')
+                     or (m.get('coverImage') or {}).get('medium', ''),
+            'format': m.get('format', ''),
+            'episodes': m.get('episodes') or 0,
+            'status': m.get('status', ''),
+            'year': d.get('year') or m.get('seasonYear'),
+            'in_library': m['id'] in owned,
+            'is_current': m['id'] == al_id,
+        })
+    result = {'items': items, 'truncated': bool(queue)}
+    if al_id in nodes:   # solo cachear si al menos se resolvió la raíz
+        threading.Thread(target=_al_cache_set, args=('franchise', al_id, result), daemon=True).start()
+    return jsonify(result)
+
+
 # ── AniList tags ───────────────────────────────────────────────────────────────
 
 _TAGS_QUERY = """

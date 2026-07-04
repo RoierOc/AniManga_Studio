@@ -98,12 +98,16 @@ const alId = computed(() => anime.value?.al_id)
 const recs = computed(() => store.recs[alId.value] || [])
 const tags = computed(() => store.tags[alId.value] || [])
 const stacks = computed(() => store.stacks[alId.value] || [])
+const franchise = computed(() => store.franchise[alId.value] || [])
 const malUrl = computed(() => store.malUrls[alId.value])
+
+const FMT_LABEL = { TV: 'TV', TV_SHORT: 'TV', MOVIE: 'Película', OVA: 'OVA', ONA: 'ONA', SPECIAL: 'Especial', MUSIC: 'Música' }
+const fmtLabel = (f) => FMT_LABEL[f] || f || ''
 
 const TABS = computed(() => [
   { key: 'eps', label: 'Episodios' },
   { key: 'info', label: 'Detalles' },
-  { key: 'rel', label: 'Relacionados', badge: recs.value.length + stacks.value.length },
+  { key: 'rel', label: 'Relacionados', badge: recs.value.length + stacks.value.length + (franchise.value.length > 1 ? franchise.value.length : 0) },
 ])
 
 // Sinopsis completa (endpoint /synopsis) con la recortada de library como fallback
@@ -343,9 +347,31 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
       </section>
     </template>
 
-    <!-- Pestaña Relacionados: recomendaciones + listas MAL -->
+    <!-- Pestaña Relacionados: orden de franquicia + recomendaciones + listas MAL -->
     <template v-else>
-      <section v-if="stacks.length" class="disc" style="margin-top: 0">
+      <section v-if="franchise.length > 1" class="disc" style="margin-top: 0">
+        <h3 class="disc__title">Orden de la franquicia <small class="disc__sub">por estreno</small></h3>
+        <ol class="fran">
+          <li v-for="(f, i) in franchise" :key="f.al_id"
+              class="fran__row" :class="{ 'is-cur': f.is_current, 'is-own': f.in_library }"
+              @click="store.openFranchiseItem(f)">
+            <span class="fran__n">{{ i + 1 }}</span>
+            <img v-if="f.cover" class="fran__cover" :src="imgProxy(f.cover)" :alt="f.title" loading="lazy" />
+            <div class="fran__meta">
+              <span class="fran__t">{{ f.title }}</span>
+              <span class="fran__sub">
+                <em v-if="f.year">{{ f.year }}</em>
+                <span class="fran__badge">{{ fmtLabel(f.format) }}</span>
+                <span v-if="f.episodes">{{ f.episodes }} ep</span>
+              </span>
+            </div>
+            <span v-if="f.is_current" class="fran__tag fran__tag--cur">Estás aquí</span>
+            <span v-else-if="f.in_library" class="fran__tag fran__tag--own"><Icon name="check" :size="11" /> En tu biblioteca</span>
+          </li>
+        </ol>
+      </section>
+
+      <section v-if="stacks.length" class="disc" :style="franchise.length > 1 ? {} : { marginTop: 0 }">
         <h3 class="disc__title">Listas de interés (MAL)</h3>
         <div class="chips">
           <button v-for="st in stacks" :key="st.id" class="chip chip--stack" @click="store.browseStack(st)">{{ st.name }}</button>
@@ -366,7 +392,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
           </article>
         </div>
       </section>
-      <p v-if="!recs.length && !stacks.length" class="dinfo__none">Sin relacionados todavía.</p>
+      <p v-if="!recs.length && !stacks.length && franchise.length <= 1" class="dinfo__none">Sin relacionados todavía.</p>
     </template>
 
     <!-- Stack browse overlay -->
@@ -595,6 +621,27 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 /* discovery sections */
 .disc { margin-top: var(--s-7); }
 .disc__title { font-family: var(--font-display); font-size: var(--fs-lg); margin-bottom: var(--s-3); }
+.disc__sub { font-family: var(--font-body); font-size: var(--fs-xs); font-weight: 400; color: var(--ink-faint); margin-left: var(--s-2); }
+
+/* orden de franquicia: timeline vertical de entregas */
+.fran { list-style: none; display: flex; flex-direction: column; gap: var(--s-2); }
+.fran__row {
+  display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--line); border-radius: var(--r-md); cursor: pointer;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+.fran__row:hover { border-color: var(--azure); background: color-mix(in srgb, var(--azure) 7%, transparent); }
+.fran__row.is-cur { cursor: default; border-color: var(--azure); background: color-mix(in srgb, var(--azure) 12%, transparent); }
+.fran__n { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink-faint); width: 1.4rem; text-align: center; flex: none; }
+.fran__cover { width: 2.6rem; height: 3.7rem; object-fit: cover; border-radius: var(--r-sm); flex: none; background: var(--surface-2); }
+.fran__meta { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.fran__t { font-size: var(--fs-sm); font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fran__sub { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-soft); }
+.fran__sub em { font-style: normal; font-family: var(--font-mono); color: var(--ink-faint); }
+.fran__badge { padding: 1px 7px; border-radius: var(--r-pill); border: 1px solid var(--line); font-size: var(--fs-2xs); color: var(--ink-soft); }
+.fran__tag { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-2xs); font-weight: 700; white-space: nowrap; flex: none; }
+.fran__tag--cur { color: var(--azure-bright); }
+.fran__tag--own { color: var(--mint, #46d4a0); }
 .chips { display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .chip { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .chip:hover { color: var(--ink); border-color: var(--azure); }
