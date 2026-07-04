@@ -10,8 +10,10 @@ anterior. Los segmentos viven en <tmp>/animanga_stream/<sid>/ y se limpian al
 cerrar o al abrir la siguiente.
 """
 import json
+import os
 import shutil
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -23,9 +25,29 @@ from api.runtime import DATA_ROOT
 
 stream_bp = Blueprint('stream', __name__)
 
-# En DISCO (no /tmp, que suele ser tmpfs=RAM): remuxar una película entera son
-# varios GB y en RAM competiría con el upscaler/MPV. En SSD va sobrado y rápido.
-_SESS_ROOT = DATA_ROOT / '_stream_cache'
+
+def _pick_cache_root():
+    """Dónde guardar los segmentos HLS (una peli entera son varios GB).
+    Prioridad:
+      1) STREAM_CACHE_DIR (override manual).
+      2) DATA_ROOT/_stream_cache — en DISCO, no /tmp (que suele ser tmpfs=RAM):
+         remuxar GBs en RAM competiría con el upscaler/MPV.
+      3) …salvo que DATA_ROOT caiga en un drive de Windows montado en WSL
+         (/mnt/...): drvfs escribe a decenas de MB/s → mataría el streaming.
+         En ese caso, un temp local ext4 del propio WSL (rápido, en disco)."""
+    override = os.environ.get('STREAM_CACHE_DIR')
+    if override:
+        return Path(override).expanduser() / 'animanga_stream'
+    if str(DATA_ROOT).startswith(('/mnt/', '\\\\')):   # WSL drvfs o UNC de Windows
+        # /var/tmp = ext4 del propio WSL (disco, rápido) y NO tmpfs como /tmp
+        # (con systemd /tmp suele ser RAM). Si no se puede, cae a gettempdir.
+        for cand in (Path('/var/tmp'), Path(tempfile.gettempdir())):
+            if cand.is_dir() and os.access(cand, os.W_OK):
+                return cand / 'animanga_stream'
+    return DATA_ROOT / '_stream_cache'
+
+
+_SESS_ROOT = _pick_cache_root()
 # Sesiones huérfanas de arranques anteriores (el server murió con streams vivos)
 shutil.rmtree(_SESS_ROOT, ignore_errors=True)
 _lock = threading.Lock()
