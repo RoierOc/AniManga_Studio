@@ -24,9 +24,6 @@ const resumePct = computed(() => {
   return Math.min(100, (props.ep.resume_pos / props.ep.duration) * 100)
 })
 
-const skipKey = computed(() => `${props.anime.id}_${props.ep.num}`)
-const opEnd = computed(() => store.skipTimes[skipKey.value]?.op_end)
-
 const infoKey = computed(() => `${props.anime.mal_id}_${props.ep.num}`)
 const infoOpen = computed(() => store.epInfoOpen === infoKey.value)
 const info = computed(() => store.epInfo[infoKey.value])
@@ -78,10 +75,6 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 
       <div class="eprow__acts">
         <template v-if="playable">
-          <button v-if="opEnd" class="eprow__icon eprow__icon--skip" :title="`Saltar OP → ${Math.floor(opEnd)}s`"
-                  @click.stop="store.play(anime, ep, '', opEnd)">
-            <Icon name="play" :size="13" /><span class="eprow__icon-lbl">OP</span>
-          </button>
           <button v-if="!subRunning && subTask?.status !== 'done'" class="eprow__icon eprow__icon--sub" :disabled="subFetching"
                   :title="subFetching ? 'Buscando…' : 'Subtítulos en español'" @click.stop="store.translateSubs(anime, ep)">
             <span v-if="subFetching" class="eprow__mini-spin" /><span v-else class="eprow__sub-lbl">ES</span>
@@ -178,9 +171,6 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
   border-radius: var(--r-xs); border: 1px solid var(--line); color: var(--ink-faint); transition: all var(--t-fast) var(--ease-silk); }
 .eprow__icon:hover { color: var(--ink); border-color: var(--line-strong); background: var(--surface-2); }
 .eprow__icon.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
-.eprow__icon--skip { width: auto; padding: 0 8px; color: var(--gold); border-color: color-mix(in srgb, var(--gold) 25%, transparent); }
-.eprow__icon--skip:hover { background: color-mix(in srgb, var(--gold) 12%, transparent); border-color: color-mix(in srgb, var(--gold) 50%, transparent); }
-.eprow__icon-lbl { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600; }
 .eprow__icon--danger:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
 .eprow__icon--sub { width: auto; padding: 0 8px; color: var(--jade); border-color: color-mix(in srgb, var(--jade) 25%, transparent); }
 .eprow__icon--sub:hover { background: color-mix(in srgb, var(--jade) 12%, transparent); border-color: color-mix(in srgb, var(--jade) 50%, transparent); }

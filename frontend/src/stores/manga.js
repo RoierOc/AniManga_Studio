@@ -177,6 +177,9 @@ export const useMangaStore = defineStore('manga', {
     readerLoading: false,
     onlineLoadingId: null,    // chapter id currently resolving pages for "Leer" (online), for button spinners
     mode: localStorage.getItem('reader-mode') || 'paged',   // paged | webtoon
+    // Override manual de modo por serie (título → 'paged'|'webtoon'). Si existe, gana
+    // sobre la auto-detección webtoon vs manga; si no, se detecta por aspect-ratio.
+    readerModeOverride: JSON.parse(localStorage.getItem('reader-mode-series') || '{}'),
     fit: localStorage.getItem('reader-fit') || 'width',     // width | height | original
     dir: localStorage.getItem('reader-dir') || 'rtl',       // rtl | ltr
     spread: localStorage.getItem('reader-spread') === '1',  // two-page spread (paged manga only)
@@ -1535,6 +1538,7 @@ export const useMangaStore = defineStore('manga', {
         const d = await api.post('/api/reader/read_chapter', { title, chapter, source })
         this.pages = d.pages || []
         if (this.reader) this.reader.source = d.source
+        this._autoMode(title)   // webtoon vs manga (respeta override manual por serie)
         // restore last-read page for this chapter
         const pr = this.progress[title]
         if (pr && String(pr.lastChapter) === String(chapter) && pr.lastPage > 0 && pr.lastPage < this.pages.length)
@@ -1558,9 +1562,13 @@ export const useMangaStore = defineStore('manga', {
       this.reader = { title, chapter, source: 'online', kind: 'manga', sourceLabel: label, onlineMeta: meta, cover: cover || this.current?.cover || '' }
       this.pages = pages
       this.page = 0
+      this._autoMode(title)   // webtoon vs manga (respeta override manual por serie)
       const pr = this.progress[title]
       if (pr && String(pr.lastChapter) === String(chapter) && pr.lastPage > 0 && pr.lastPage < this.pages.length)
         this.page = pr.lastPage
+      // Graba la fuente online YA (sin esperar a que cambie de página) para que
+      // "Continuar" pueda reanudar un capítulo no descargado re-resolviendo sus páginas.
+      this._saveProgress()
     },
     // Read a not-yet-downloaded chapter (MangaModal) directly from its source, online.
     async readOnline(ch) {
@@ -1592,7 +1600,53 @@ export const useMangaStore = defineStore('manga', {
     nextPage() { const step = this.spreadActive ? 2 : 1; this.setPage(Math.min(this.page + step, this.pages.length - 1)) },
     prevPage() { const step = this.spreadActive ? 2 : 1; this.setPage(Math.max(this.page - step, 0)) },
 
-    setMode(m) { this.mode = m; localStorage.setItem('reader-mode', m); this._resetView() },
+    setMode(m) {
+      this.mode = m
+      localStorage.setItem('reader-mode', m)
+      // Cambiar de modo manualmente fija la preferencia para ESTA serie, para que
+      // la auto-detección no la vuelva a sobreescribir en próximas aperturas.
+      const t = this.reader?.title
+      if (t) {
+        this.readerModeOverride[t] = m
+        try { localStorage.setItem('reader-mode-series', JSON.stringify(this.readerModeOverride)) } catch (_) {}
+      }
+      this._resetView()
+    },
+
+    // Auto-detección webtoon vs manga por relación de aspecto de las páginas.
+    // Se salta si la serie tiene override manual. No persiste (la detección es barata).
+    _applyAutoMode(m) { this.mode = m },
+    _pageImgUrl(p) { return (/^(https?:)?\/\//.test(p) || p.startsWith('/')) ? p : '/uploads/' + p },
+    _imgAspect(url) {
+      return new Promise((resolve) => {
+        const im = new Image()
+        im.onload = () => resolve(im.naturalWidth ? im.naturalHeight / im.naturalWidth : 0)
+        im.onerror = () => resolve(0)
+        im.src = url
+      })
+    },
+    async _autoMode(title) {
+      // Override manual → respétalo y no detectes.
+      const ov = this.readerModeOverride[title]
+      if (ov === 'paged' || ov === 'webtoon') { this.mode = ov; return }
+      const pages = this.pages
+      if (!pages || !pages.length) return
+      // Muestrea SOLO la primera página (la que el lector ya está cargando para
+      // mostrarla) → medir su aspecto no añade NINGUNA petición. Muestrear medio/final
+      // forzaba fetches on-demand carísimos en fuentes online (Suwayomi) que competían
+      // con la página visible y la dejaban "en blanco". La portada basta para distinguir
+      // webtoon (tira muy alta) de manga (~1.4); el modo manual por serie sigue mandando.
+      const idxs = [0]
+      const token = title + '|' + pages.length
+      this._autoModeToken = token
+      const ratios = await Promise.all(idxs.map((i) => this._imgAspect(this._pageImgUrl(pages[i]))))
+      if (this._autoModeToken !== token) return   // cambió de capítulo mientras medía
+      const valid = ratios.filter((r) => r > 0).sort((a, b) => a - b)
+      if (!valid.length) return
+      const median = valid[Math.floor(valid.length / 2)]
+      // Webtoons son tiras muy altas (h/w ≫ 2); el manga ronda 1.4-1.5.
+      this._applyAutoMode(median >= 2.0 ? 'webtoon' : 'paged')
+    },
     cycleFit() { const M = ['width', 'height', 'original']; this.fit = M[(M.indexOf(this.fit) + 1) % 3]; localStorage.setItem('reader-fit', this.fit) },
     toggleDir() { this.dir = this.dir === 'rtl' ? 'ltr' : 'rtl'; localStorage.setItem('reader-dir', this.dir) },
     // Spread on: snap to an even page so pairs stay aligned (0-1, 2-3, …).
@@ -1631,6 +1685,15 @@ export const useMangaStore = defineStore('manga', {
       e.lastChapter = String(this.reader.chapter); e.lastPage = this.page
       e.lastTotal = this.pages.length || e.lastTotal || 0
       e.ts = Date.now()   // recencia → "Continuar leyendo"
+      // Fuente del último capítulo, para poder REANUDAR uno NO descargado (leído
+      // online): las URLs at-home son de un solo uso → guardamos kind+ref y se
+      // re-resuelven al reanudar. Leído del disco (onlineMeta null) → limpiamos.
+      const meta = this.reader.onlineMeta
+      if (meta?.kind && meta.kind !== 'local' && meta.chapterRef != null) {
+        e.lastKind = meta.kind; e.lastRef = meta.chapterRef
+      } else {
+        delete e.lastKind; delete e.lastRef
+      }
       this._persistProgress()
     },
     markRead(chapter) {
@@ -1670,7 +1733,19 @@ export const useMangaStore = defineStore('manga', {
     },
     resumeCurrent() {
       const info = this.continueInfo()
-      if (info) this.read(info.chapter, this.upscaled[info.chapter] ? 'upscaled' : 'auto')
+      if (!info) return
+      const pr = this.progress[this.current?.id]
+      const downloaded = this.chapters?.some(c => String(c.chapter) === String(info.chapter))
+      // Capítulo NO descargado leído online → reanuda re-resolviendo sus páginas
+      // frescas (mismo camino que el historial), en vez de leer del disco (vacío).
+      if (!downloaded && pr?.lastKind && pr?.lastRef) {
+        this.continueHistory({
+          kind: pr.lastKind, chapter: info.chapter, chapter_ref: pr.lastRef,
+          title: this.current.id, cover: this.current?.cover || '',
+        })
+        return
+      }
+      this.read(info.chapter, this.upscaled[info.chapter] ? 'upscaled' : 'auto')
     },
     // Desde el rail "Continuar leyendo": abre el manga y reanuda donde se quedó.
     async resumeManga(item) {

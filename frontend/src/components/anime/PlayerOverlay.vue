@@ -1044,13 +1044,13 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 
 .wp__center {
   position: absolute; inset: 0; display: flex; flex-direction: column; gap: var(--s-3);
-  align-items: center; justify-content: center; color: var(--ink); pointer-events: none;
+  align-items: center; justify-content: center; color: var(--ink); pointer-events: none; z-index: 3;
 }
 .wp__center button, .wp__center p { pointer-events: auto; }
 .wp__center--soft { background: rgba(0,0,0,.25); }
 
 .wp__bigplay {
-  position: absolute; width: 5rem; height: 5rem; border-radius: 50%;
+  position: absolute; z-index: 3; width: 5rem; height: 5rem; border-radius: 50%;
   display: grid; place-items: center; color: #fff;
   background: color-mix(in srgb, var(--azure) 80%, transparent);
   border: none; cursor: pointer; transition: transform var(--t-fast), background var(--t-fast);
@@ -1129,7 +1129,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 
 .wp__head {
-  position: absolute; top: 0; left: 0; right: 0; display: flex; align-items: center;
+  position: absolute; z-index: 5; top: 0; left: 0; right: 0; display: flex; align-items: center;
   gap: var(--s-3); padding: var(--s-4) var(--s-5);
   background: linear-gradient(180deg, rgba(0,0,0,.75), transparent);
   transition: opacity var(--t-base), transform var(--t-base) var(--ease-silk);
@@ -1145,7 +1145,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 
 .wp__bar {
-  position: absolute; left: 0; right: 0; bottom: 0; padding: 0 var(--s-5) var(--s-3);
+  position: absolute; z-index: 5; left: 0; right: 0; bottom: 0; padding: 0 var(--s-5) var(--s-3);
   background: linear-gradient(0deg, rgba(0,0,0,.85), transparent);
   transition: opacity var(--t-base), transform var(--t-base) var(--ease-silk);
 }
@@ -1280,7 +1280,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 /* panel de episodios */
 .wp__eps {
   position: absolute; top: 0; right: 0; bottom: 0; width: min(21rem, 86vw);
-  display: flex; flex-direction: column; z-index: 4;
+  display: flex; flex-direction: column; z-index: 6;
   background: rgba(10,14,24,.94); border-left: 1px solid var(--line);
   backdrop-filter: blur(12px); box-shadow: var(--shadow-xl);
 }

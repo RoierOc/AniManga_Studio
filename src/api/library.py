@@ -12,6 +12,24 @@ from api.resilient_http import http as _http  # retry + backoff + per-host rate 
 import threading
 
 from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter, cache_get, cache_set
+from api.index_db import cached_measure, prune
+
+
+def _count_pages(path):
+    """(nº de páginas, nº de capítulos, {}) de una carpeta de serie. Capítulo = prefijo
+    chXXXX distinto entre archivos ch####_###.ext. Cacheado por mtime en index_db."""
+    p = Path(path)
+    images = list(p.glob('*.png')) + list(p.glob('*.jpg')) + list(p.glob('*.webp'))
+    chapters = set()
+    for img in images:
+        parts = img.stem.split('_')
+        if parts and parts[0].startswith('ch'):
+            chapters.add(parts[0])
+    return len(images), len(chapters), {}
+
+
+def _count_upscaled(path):
+    return len(list(Path(path).glob('*.jpg'))), 0, {}
 
 _COVER_CACHE_FILE = Path(MANGA_DIR) / '.cover_cache.json'
 
@@ -82,18 +100,11 @@ def get_library():
         if not f.is_dir() or f.name.startswith('.'):
             continue   # salta carpetas internas: .cache, .import_staging, etc.
 
-        images = list(f.glob('*.png')) + list(f.glob('*.jpg')) + list(f.glob('*.webp'))
-        upscaled = list(Path(UPSCALED_DIR).joinpath(f.name).glob('*.jpg'))
-
-        # Count chapters, not pages
-        chapters_count = 0
-        if images:
-            chapters = set()
-            for img in images:
-                parts = img.stem.split('_')
-                if parts and parts[0].startswith('ch'):
-                    chapters.add(parts[0])
-            chapters_count = len(chapters)
+        # Per-folder page/chapter counts are cached by mtime (index_db) so the whole
+        # library listing stays instant instead of globbing every folder each call.
+        image_count, chapters_count, _ = cached_measure('libcount', f.name, str(f), _count_pages)
+        upscaled_count, _, _ = cached_measure(
+            'libup', f.name, str(Path(UPSCALED_DIR) / f.name), _count_upscaled)
 
         source_meta = None
         meta_path = f / '.source_meta.json'
@@ -128,14 +139,16 @@ def get_library():
             'id': f.name,
             'name': f.name,
             'chapter_count': chapters_count,
-            'image_count': len(images),
-            'page_count': sum(1 for img in images if img.suffix in ('.jpg', '.png', '.webp')),
-            'upscaled': len(upscaled),
+            'image_count': image_count,
+            'page_count': image_count,
+            'upscaled': upscaled_count,
             'cover': cover,
             'source_meta': source_meta,
             'translated_count': translated_count,
         })
 
+    prune('libcount', [x['name'] for x in folders])
+    prune('libup', [x['name'] for x in folders])
     folders.sort(key=lambda x: x['name'].lower())
     return jsonify(folders)
 

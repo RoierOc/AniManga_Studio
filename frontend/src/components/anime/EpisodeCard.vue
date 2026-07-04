@@ -19,9 +19,6 @@ const downloading = computed(() =>
 )
 const dlPct = computed(() => props.batch.hasBatch ? (props.batch.batchEp?.progress || 0) : props.ep.progress)
 
-const skipKey = computed(() => `${props.anime.id}_${props.ep.num}`)
-const opEnd = computed(() => store.skipTimes[skipKey.value]?.op_end)
-
 const infoKey = computed(() => `${props.anime.mal_id}_${props.ep.num}`)
 const infoOpen = computed(() => store.epInfoOpen === infoKey.value)
 const info = computed(() => store.epInfo[infoKey.value])
@@ -75,10 +72,6 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
       </div>
 
       <div class="ep__actions" v-if="playable">
-        <button v-if="opEnd" class="ep__icon ep__icon--skip" :title="`Saltar OP → ${Math.floor(opEnd)}s`"
-                @click.stop="store.play(anime, ep, '', opEnd)">
-          <Icon name="play" :size="13" /><span class="ep__icon-lbl">OP</span>
-        </button>
         <button v-if="!subRunning && subTask?.status !== 'done'" class="ep__icon ep__icon--sub" :disabled="subFetching"
                 :title="subFetching ? 'Buscando…' : 'Subtítulos en español'" @click.stop="store.translateSubs(anime, ep)">
           <span v-if="subFetching" class="ep__mini-spin" /><span v-else class="ep__sub-lbl">ES</span>
@@ -179,9 +172,6 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
   transition: all var(--t-fast) var(--ease-silk); }
 .ep__icon:hover { color: var(--ink); border-color: var(--line-strong); background: var(--surface-2); }
 .ep__icon.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
-.ep__icon--skip { width: auto; padding: 0 8px; color: var(--gold); border-color: color-mix(in srgb, var(--gold) 25%, transparent); }
-.ep__icon--skip:hover { background: color-mix(in srgb, var(--gold) 12%, transparent); border-color: color-mix(in srgb, var(--gold) 50%, transparent); }
-.ep__icon-lbl { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600; }
 .ep__icon--danger:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
 .ep__i { font-family: var(--font-display); font-style: italic; font-weight: 600; font-size: .95rem; }
 .ep__status { font-size: var(--fs-xs); color: var(--cyan); font-family: var(--font-mono); }

@@ -29,9 +29,11 @@ const current = computed(() => (tab.value === 'local' ? LocalView : LibraryView)
           <Icon name="folder" :size="16" /> Locales
         </button>
       </div>
-      <button class="libhub__import" title="Importar un CBZ/CBR y trocearlo en capítulos" @click="ui.goto('workshop')">
-        <Icon name="upload" :size="16" /> Importar
-      </button>
+      <div class="libhub__right">
+        <button class="libhub__import" title="Importar un CBZ/CBR y trocearlo en capítulos" @click="ui.goto('workshop')">
+          <Icon name="upload" :size="16" /> Importar
+        </button>
+      </div>
     </div>
 
     <KeepAlive>
@@ -59,8 +61,9 @@ const current = computed(() => (tab.value === 'local' ? LocalView : LibraryView)
 .libtabs__t:hover { color: var(--ink); }
 .libtabs__t.is-on { color: var(--ink); background: var(--surface); box-shadow: var(--shadow-sm); }
 .libtabs__t.is-on :deep(svg) { color: var(--azure-bright); }
+.libhub__right { margin-left: auto; display: flex; align-items: center; gap: var(--s-2); }
 .libhub__import {
-  margin-left: auto; display: flex; align-items: center; gap: var(--s-2);
+  display: flex; align-items: center; gap: var(--s-2);
   padding: var(--s-2) var(--s-4); border-radius: var(--r-sm);
   border: 1px solid var(--line); color: var(--ink-soft); cursor: pointer;
   transition: color var(--t-fast), border-color var(--t-fast);

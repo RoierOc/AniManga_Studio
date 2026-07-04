@@ -4,12 +4,13 @@ MangaDex API Integration
 Full authentication and library management
 """
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, Response
 import requests
 import time
 import json
 from pathlib import Path
 import os
+from urllib.parse import urlparse, quote
 
 from api.runtime import MANGA_DIR, normalize_chapter
 
@@ -748,10 +749,46 @@ def chapter_pages(chapter_id):
         base = data["baseUrl"]
         hash_val = data["chapter"]["hash"]
         pages = data["chapter"].get("data", [])
-        urls = [f"{base}/data/{hash_val}/{p}" for p in pages]
+        # Serve pages THROUGH the backend (page_proxy): MangaDex@Home nodes return 404 to
+        # browser <img> loads (cold-cache + hotlink) even though the same URL works
+        # server-side. Proxying makes the fetch server-side (warms the node, retries 404,
+        # no cross-origin Referer) and the browser only ever loads a same-origin URL.
+        urls = [f"/api/mangadex/page_proxy?u={quote(f'{base}/data/{hash_val}/{p}', safe='')}" for p in pages]
         return jsonify({"pages": urls, "count": len(urls)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@auth_bp.route('/page_proxy')
+def page_proxy():
+    """Stream a MangaDex@Home page image server-side. Fixes browser-direct 404s
+    (cold @home node + hotlink protection). Retries 404 because a cold node returns
+    404 while it fetches the image from MangaDex's backend, then serves it."""
+    url = request.args.get('u', '')
+    p = urlparse(url)
+    if p.scheme != 'https' or not p.netloc.lower().endswith('.mangadex.network'):
+        return ('', 400)
+    last = 502
+    for attempt in range(4):
+        try:
+            r = requests.get(url, timeout=20, stream=True)
+            if r.status_code == 200:
+                return Response(
+                    r.iter_content(65536),
+                    content_type=r.headers.get('Content-Type', 'image/jpeg'),
+                    headers={'Cache-Control': 'public, max-age=86400'},
+                )
+            last = r.status_code
+            r.close()
+            if r.status_code in (404, 429, 502, 503) and attempt < 3:
+                time.sleep(0.6)
+                continue
+            break
+        except Exception:
+            last = 502
+            if attempt < 3:
+                time.sleep(0.4)
+    return ('', last)
 
 @auth_bp.route('/local_library/update', methods=['POST'])
 def update_manga_data():

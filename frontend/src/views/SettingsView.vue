@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, ref, watch, computed } from 'vue'
 import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
@@ -15,6 +15,17 @@ const manga = useMangaStore()
 const anime = useAnimeStore()
 const settings = useSettingsStore()
 
+// Settings categories (left rail). Persisted so you land where you left off.
+const TABS = [
+  { id: 'general', label: 'General', icon: 'spark' },
+  { id: 'anime', label: 'Anime', icon: 'film' },
+  { id: 'conexiones', label: 'Conexiones', icon: 'globe' },
+  { id: 'almacenamiento', label: 'Almacenamiento', icon: 'folder' },
+  { id: 'copia', label: 'Copia y sync', icon: 'refresh' },
+]
+const tab = ref(localStorage.getItem('set-tab') || 'general')
+watch(tab, (v) => { try { localStorage.setItem('set-tab', v) } catch {} })
+
 const dlPath = ref('')
 watch(() => anime.dlSettings.download_path, (v) => { dlPath.value = v || '' }, { immediate: true })
 
@@ -29,12 +40,26 @@ async function clearQa() {
 const storage = ref(null)
 const storageLoading = ref(false)
 const storageBusy = ref('')
+const stgFilter = ref('all')   // 'all' | 'manga' | 'anime'
 async function loadStorage() {
   storageLoading.value = true
   try { storage.value = await api.get('/api/storage/summary') }
   catch (_) { storage.value = null }
   finally { storageLoading.value = false }
 }
+// Series filtradas por tipo + subtotales por sección, para ver junto o por separado.
+const stgSeries = computed(() => {
+  const list = storage.value?.series || []
+  const f = stgFilter.value
+  return f === 'all' ? list : list.filter((s) => (s.kind || 'manga') === f)
+})
+const stgCounts = computed(() => {
+  const list = storage.value?.series || []
+  return {
+    manga: list.filter((s) => (s.kind || 'manga') === 'manga').length,
+    anime: list.filter((s) => s.kind === 'anime').length,
+  }
+})
 async function purgeStreamCache() {
   storageBusy.value = 'stream_cache'
   try {
@@ -152,7 +177,21 @@ async function onImportFile(e) {
       <h1>Ajustes</h1>
     </header>
 
-    <!-- Upscaling -->
+    <div class="set__shell">
+      <nav class="set__rail">
+        <button v-for="t in TABS" :key="t.id" type="button" class="set__tab" :class="{ 'is-active': tab === t.id }" @click="tab = t.id">
+          <Icon :name="t.icon" :size="16" /><span>{{ t.label }}</span>
+        </button>
+      </nav>
+
+      <div class="set__pane">
+        <!-- General -->
+        <div v-show="tab === 'general'" class="set__cat">
+          <div class="set__cathead">
+            <span class="set__catic"><Icon name="spark" :size="18" /></span>
+            <div><h2>General</h2><p>Escalado 4K de manga y herramientas de traducción.</p></div>
+          </div>
+<!-- Upscaling -->
     <section class="card">
       <div class="card__title"><Icon name="spark" :size="16" /> Escalado 4K (manga)</div>
       <div class="row">
@@ -169,7 +208,35 @@ async function onImportFile(e) {
       </div>
     </section>
 
-    <!-- Anime downloads -->
+    
+
+<!-- Modo QA de traducción (testing) -->
+    <section class="card">
+      <div class="card__title"><Icon name="spark" :size="16" /> Modo QA de traducción <span class="tag">testing</span></div>
+      <label class="fld fld--chk">
+        <span>Activar modo QA <em>· conserva artefactos de debug al traducir y habilita el botón ⚑ en el lector para marcar páginas mal traducidas</em></span>
+        <input type="checkbox" :checked="manga.qaMode" @change="manga.toggleQa()" />
+      </label>
+      <div class="sep" />
+      <div class="qa-foot">
+        <span class="hint">{{ qaInfo.flags }} página(s) marcada(s) · {{ formatBytes(qaInfo.bytes) }} en disco</span>
+        <button class="btn btn--danger" :disabled="!qaInfo.bytes && !qaInfo.flags" @click="clearQa">
+          <Icon name="close" :size="14" /> Borrar datos QA
+        </button>
+      </div>
+      <p class="hint">Los casos se guardan en <code>data/_translation_qa/</code> (salida + arte EN + ES emparejada + overlay + diagnóstico) para afinar el algoritmo. Apagar el modo no borra lo ya guardado.</p>
+    </section>
+
+    
+        </div>
+
+        <!-- Anime -->
+        <div v-show="tab === 'anime'" class="set__cat">
+          <div class="set__cathead">
+            <span class="set__catic"><Icon name="film" :size="18" /></span>
+            <div><h2>Anime</h2><p>Carpeta de descargas y conexión con qBittorrent.</p></div>
+          </div>
+<!-- Anime downloads -->
     <section class="card">
       <div class="card__title"><Icon name="download" :size="16" /> Descargas de anime</div>
       <label class="fld">
@@ -199,114 +266,16 @@ async function onImportFile(e) {
       </div>
     </section>
 
-    <!-- Export destinations -->
-    <section class="card">
-      <div class="card__title"><Icon name="globe" :size="16" /> Exportar tomos</div>
-      <div class="dests">
-        <div class="dest">
-          <span class="dest__lbl">Google Drive</span>
-          <template v-if="manga.drive.connected">
-            <span class="dest__ok">Conectado <template v-if="manga.drive.email">· {{ manga.drive.email }}</template></span>
-            <button class="btn" @click="manga.disconnectDrive()">Desconectar</button>
-          </template>
-          <button v-else class="btn btn--accent" @click="manga.connectDrive()">Conectar Drive</button>
+    
         </div>
-        <div class="dest dest--col">
-          <span class="dest__lbl">Biblioteca móvil</span>
-          <div v-if="manga.webdav.localUrl" class="dest__row">
-            <a :href="manga.webdav.localUrl" target="_blank" rel="noopener" class="dest__link">Abrir en este PC ↗</a>
-            <span class="dest__hint">— funciona desde este navegador</span>
+
+        <!-- Conexiones -->
+        <div v-show="tab === 'conexiones'" class="set__cat">
+          <div class="set__cathead">
+            <span class="set__catic"><Icon name="globe" :size="18" /></span>
+            <div><h2>Conexiones</h2><p>Claves API de cada servicio. Se aplican al instante, sin reiniciar.</p></div>
           </div>
-          <div v-if="manga.webdav.phoneUrl" class="dest__row">
-            <code class="dest__url">{{ manga.webdav.phoneUrl }}</code>
-            <button class="btn btn--xs" @click="copyPhoneUrl">{{ phoneCopied ? '✓ Copiado' : 'Copiar' }}</button>
-            <span class="dest__hint">— pega esta URL en el móvil (debe estar en el mismo WiFi)</span>
-          </div>
-          <span v-if="!manga.webdav.localUrl && !manga.webdav.phoneUrl" class="dest__muted">No configurado</span>
-        </div>
-      </div>
-    </section>
-
-    <!-- Modo QA de traducción (testing) -->
-    <section class="card">
-      <div class="card__title"><Icon name="spark" :size="16" /> Modo QA de traducción <span class="tag">testing</span></div>
-      <label class="fld fld--chk">
-        <span>Activar modo QA <em>· conserva artefactos de debug al traducir y habilita el botón ⚑ en el lector para marcar páginas mal traducidas</em></span>
-        <input type="checkbox" :checked="manga.qaMode" @change="manga.toggleQa()" />
-      </label>
-      <div class="sep" />
-      <div class="qa-foot">
-        <span class="hint">{{ qaInfo.flags }} página(s) marcada(s) · {{ formatBytes(qaInfo.bytes) }} en disco</span>
-        <button class="btn btn--danger" :disabled="!qaInfo.bytes && !qaInfo.flags" @click="clearQa">
-          <Icon name="close" :size="14" /> Borrar datos QA
-        </button>
-      </div>
-      <p class="hint">Los casos se guardan en <code>data/_translation_qa/</code> (salida + arte EN + ES emparejada + overlay + diagnóstico) para afinar el algoritmo. Apagar el modo no borra lo ya guardado.</p>
-    </section>
-
-    <!-- Almacenamiento -->
-    <section class="card">
-      <div class="card__title">
-        <Icon name="folder" :size="16" /> Almacenamiento
-        <span v-if="storage" class="stg__total">{{ formatBytes(storage.totals.total) }}</span>
-        <button class="btn btn--xs stg__refresh" :disabled="storageLoading" @click="loadStorage" title="Recalcular">
-          <Icon name="refresh" :size="13" />
-        </button>
-      </div>
-
-      <div v-if="storageLoading && !storage" class="stg__loading"><Spinner :size="22" /> Calculando uso de disco…</div>
-
-      <template v-else-if="storage">
-        <!-- Desglose por tipo -->
-        <div class="stg__bar" :aria-label="'Uso de disco'">
-          <span class="stg__seg stg__seg--orig" :style="{ flexGrow: storage.totals.original || 0.0001 }" title="Originales descargados" />
-          <span class="stg__seg stg__seg--up" :style="{ flexGrow: storage.totals.upscaled || 0.0001 }" title="Escalado 4K" />
-          <span class="stg__seg stg__seg--cache" :style="{ flexGrow: (storage.totals.stream_cache + storage.totals.qa) || 0.0001 }" title="Cachés" />
-        </div>
-        <div class="stg__legend">
-          <span><i class="stg__dot stg__dot--orig" /> Originales <b>{{ formatBytes(storage.totals.original) }}</b></span>
-          <span><i class="stg__dot stg__dot--up" /> Escalado 4K <b>{{ formatBytes(storage.totals.upscaled) }}</b></span>
-          <span><i class="stg__dot stg__dot--cache" /> Cachés <b>{{ formatBytes(storage.totals.stream_cache + storage.totals.qa) }}</b></span>
-        </div>
-
-        <!-- Espacio del disco -->
-        <div v-if="storage.totals.disk_total" class="stg__disk">
-          <div class="stg__diskbar">
-            <span class="stg__diskfill" :style="{ width: (100 * storage.totals.disk_used / storage.totals.disk_total) + '%' }" />
-          </div>
-          <span class="stg__diskn">
-            {{ formatBytes(storage.totals.disk_used) }} usados · <b>{{ formatBytes(storage.totals.disk_free) }} libres</b><em>&nbsp;de {{ formatBytes(storage.totals.disk_total) }}</em>
-          </span>
-        </div>
-
-        <!-- Limpieza segura -->
-        <div class="row stg__actions">
-          <button class="btn" :disabled="storageBusy === 'stream_cache' || !storage.totals.stream_cache" @click="purgeStreamCache">
-            <Icon name="close" :size="13" /> Vaciar caché de streaming
-            <span class="stg__free">{{ formatBytes(storage.totals.stream_cache) }}</span>
-          </button>
-        </div>
-        <p class="hint">El escalado 4K y los originales no se borran desde aquí: ambos son necesarios para el comparador original/4K del lector. Solo la caché de streaming es prescindible (se regenera al reproducir).</p>
-
-        <!-- Series que más ocupan -->
-        <div v-if="storage.series.length" class="sep" />
-        <div class="stg__list">
-          <div v-for="s in storage.series.slice(0, 12)" :key="s.name" class="stg__row">
-            <div class="stg__row-main">
-              <span class="stg__name" :title="s.name">{{ s.name }}</span>
-              <span class="stg__meta">
-                {{ formatBytes(s.original_bytes) }} orig.
-                <template v-if="s.upscaled_bytes"> · <b class="stg__up">{{ formatBytes(s.upscaled_bytes) }} 4K</b></template>
-                <template v-if="s.translated_chapters"> · <span class="stg__tr">ES {{ s.translated_chapters }}</span></template>
-              </span>
-            </div>
-            <span class="stg__rowsize">{{ formatBytes(s.original_bytes + s.upscaled_bytes) }}</span>
-          </div>
-        </div>
-      </template>
-    </section>
-
-    <!-- Conexiones y claves API -->
+<!-- Conexiones y claves API -->
     <section class="card">
       <div class="card__title">
         <Icon name="settings" :size="16" /> Conexiones y claves API
@@ -352,7 +321,108 @@ async function onImportFile(e) {
       </div>
     </section>
 
-    <!-- Copia y sincronización -->
+    
+        </div>
+
+        <!-- Almacenamiento -->
+        <div v-show="tab === 'almacenamiento'" class="set__cat">
+          <div class="set__cathead">
+            <span class="set__catic"><Icon name="folder" :size="18" /></span>
+            <div><h2>Almacenamiento</h2><p>Uso de disco por serie y limpieza de cachés prescindibles.</p></div>
+          </div>
+<!-- Almacenamiento -->
+    <section class="card">
+      <div class="card__title">
+        <Icon name="folder" :size="16" /> Almacenamiento
+        <span v-if="storage" class="stg__total">{{ formatBytes(storage.totals.total) }}</span>
+        <button class="btn btn--xs stg__refresh" :disabled="storageLoading" @click="loadStorage" title="Recalcular">
+          <Icon name="refresh" :size="13" />
+        </button>
+      </div>
+
+      <div v-if="storageLoading && !storage" class="stg__loading"><Spinner :size="22" /> Calculando uso de disco…</div>
+
+      <template v-else-if="storage">
+        <!-- Desglose por tipo -->
+        <div class="stg__bar" :aria-label="'Uso de disco'">
+          <span class="stg__seg stg__seg--orig" :style="{ flexGrow: storage.totals.original || 0.0001 }" title="Originales descargados" />
+          <span class="stg__seg stg__seg--up" :style="{ flexGrow: storage.totals.upscaled || 0.0001 }" title="Escalado 4K" />
+          <span class="stg__seg stg__seg--anime" :style="{ flexGrow: storage.totals.anime || 0.0001 }" title="Anime (vídeo)" />
+          <span class="stg__seg stg__seg--cache" :style="{ flexGrow: (storage.totals.stream_cache + storage.totals.qa) || 0.0001 }" title="Cachés" />
+        </div>
+        <div class="stg__legend">
+          <span><i class="stg__dot stg__dot--orig" /> Manga <b>{{ formatBytes(storage.totals.original) }}</b></span>
+          <span><i class="stg__dot stg__dot--up" /> Escalado 4K <b>{{ formatBytes(storage.totals.upscaled) }}</b></span>
+          <span v-if="storage.totals.anime"><i class="stg__dot stg__dot--anime" /> Anime <b>{{ formatBytes(storage.totals.anime) }}</b></span>
+          <span><i class="stg__dot stg__dot--cache" /> Cachés <b>{{ formatBytes(storage.totals.stream_cache + storage.totals.qa) }}</b></span>
+        </div>
+
+        <!-- Espacio del disco -->
+        <div v-if="storage.totals.disk_total" class="stg__disk">
+          <div class="stg__diskbar">
+            <span class="stg__diskfill" :style="{ width: (100 * storage.totals.disk_used / storage.totals.disk_total) + '%' }" />
+          </div>
+          <span class="stg__diskn">
+            {{ formatBytes(storage.totals.disk_used) }} usados · <b>{{ formatBytes(storage.totals.disk_free) }} libres</b><em>&nbsp;de {{ formatBytes(storage.totals.disk_total) }}</em>
+          </span>
+        </div>
+
+        <!-- Limpieza segura -->
+        <div class="row stg__actions">
+          <button class="btn" :disabled="storageBusy === 'stream_cache' || !storage.totals.stream_cache" @click="purgeStreamCache">
+            <Icon name="close" :size="13" /> Vaciar caché de streaming
+            <span class="stg__free">{{ formatBytes(storage.totals.stream_cache) }}</span>
+          </button>
+        </div>
+        <p class="hint">El escalado 4K y los originales no se borran desde aquí: ambos son necesarios para el comparador original/4K del lector. Solo la caché de streaming es prescindible (se regenera al reproducir).</p>
+
+        <!-- Series que más ocupan — con filtros por tipo (junto / por separado) -->
+        <div v-if="storage.series.length" class="sep" />
+        <div v-if="storage.series.length" class="stg__filters">
+          <button type="button" class="stg__chip" :class="{ 'is-on': stgFilter === 'all' }" @click="stgFilter = 'all'">
+            Todo <span class="stg__chipn">{{ formatBytes(storage.totals.original + storage.totals.upscaled + storage.totals.anime) }}</span>
+          </button>
+          <button type="button" class="stg__chip" :class="{ 'is-on': stgFilter === 'manga' }" @click="stgFilter = 'manga'">
+            <i class="stg__dot stg__dot--orig" /> Manga
+            <span class="stg__chipn">{{ formatBytes(storage.totals.original + storage.totals.upscaled) }}</span>
+            <em class="stg__chipc">{{ stgCounts.manga }}</em>
+          </button>
+          <button v-if="storage.totals.anime" type="button" class="stg__chip" :class="{ 'is-on': stgFilter === 'anime' }" @click="stgFilter = 'anime'">
+            <i class="stg__dot stg__dot--anime" /> Anime
+            <span class="stg__chipn">{{ formatBytes(storage.totals.anime) }}</span>
+            <em class="stg__chipc">{{ stgCounts.anime }}</em>
+          </button>
+        </div>
+        <div class="stg__list">
+          <div v-for="s in stgSeries.slice(0, 20)" :key="(s.kind || 'manga') + s.name" class="stg__row">
+            <div class="stg__row-main">
+              <span class="stg__name" :title="s.name">{{ s.name }}</span>
+              <span class="stg__meta">
+                <template v-if="s.kind === 'anime'">{{ s.episodes }} episodio(s) · <span class="stg__an">anime</span></template>
+                <template v-else>
+                  {{ formatBytes(s.original_bytes) }} orig.
+                  <template v-if="s.upscaled_bytes"> · <b class="stg__up">{{ formatBytes(s.upscaled_bytes) }} 4K</b></template>
+                  <template v-if="s.translated_chapters"> · <span class="stg__tr">ES {{ s.translated_chapters }}</span></template>
+                </template>
+              </span>
+            </div>
+            <span class="stg__rowsize">{{ formatBytes(s.original_bytes + s.upscaled_bytes) }}</span>
+          </div>
+          <p v-if="!stgSeries.length" class="hint">No hay series de este tipo.</p>
+        </div>
+      </template>
+    </section>
+
+    
+        </div>
+
+        <!-- Copia y sincronización -->
+        <div v-show="tab === 'copia'" class="set__cat">
+          <div class="set__cathead">
+            <span class="set__catic"><Icon name="refresh" :size="18" /></span>
+            <div><h2>Copia y sincronización</h2><p>Guarda tu perfil en la nube, expórtalo a un archivo o a un tomo.</p></div>
+          </div>
+<!-- Copia y sincronización -->
     <section class="card">
       <div class="card__title"><Icon name="refresh" :size="16" /> Copia y sincronización</div>
       <p class="hint">
@@ -392,7 +462,9 @@ async function onImportFile(e) {
       <p v-if="settings.sync.identity" class="hint">Los commits se firman como <code>{{ settings.sync.identity }}</code>.</p>
     </section>
 
-    <!-- Backup de biblioteca -->
+    
+
+<!-- Backup de biblioteca -->
     <section class="card">
       <div class="card__title"><Icon name="download" :size="16" /> Respaldo de biblioteca (archivo)</div>
       <p class="hint">
@@ -408,17 +480,69 @@ async function onImportFile(e) {
       </div>
     </section>
 
+    
+
+<!-- Export destinations -->
+    <section class="card">
+      <div class="card__title"><Icon name="globe" :size="16" /> Exportar tomos</div>
+      <div class="dests">
+        <div class="dest">
+          <span class="dest__lbl">Google Drive</span>
+          <template v-if="manga.drive.connected">
+            <span class="dest__ok">Conectado <template v-if="manga.drive.email">· {{ manga.drive.email }}</template></span>
+            <button class="btn" @click="manga.disconnectDrive()">Desconectar</button>
+          </template>
+          <button v-else class="btn btn--accent" @click="manga.connectDrive()">Conectar Drive</button>
+        </div>
+        <div class="dest dest--col">
+          <span class="dest__lbl">Biblioteca móvil</span>
+          <div v-if="manga.webdav.localUrl" class="dest__row">
+            <a :href="manga.webdav.localUrl" target="_blank" rel="noopener" class="dest__link">Abrir en este PC ↗</a>
+            <span class="dest__hint">— funciona desde este navegador</span>
+          </div>
+          <div v-if="manga.webdav.phoneUrl" class="dest__row">
+            <code class="dest__url">{{ manga.webdav.phoneUrl }}</code>
+            <button class="btn btn--xs" @click="copyPhoneUrl">{{ phoneCopied ? '✓ Copiado' : 'Copiar' }}</button>
+            <span class="dest__hint">— pega esta URL en el móvil (debe estar en el mismo WiFi)</span>
+          </div>
+          <span v-if="!manga.webdav.localUrl && !manga.webdav.phoneUrl" class="dest__muted">No configurado</span>
+        </div>
+      </div>
+    </section>
+
+    
+        </div>
+      </div>
+    </div>
+
     <FolderPicker />
   </div>
 </template>
 
 <style scoped>
-.set { max-width: 860px; margin: 0 auto; padding: 0 var(--s-6) var(--s-8); }
-.set__head { padding: var(--s-5) 0 var(--s-6); }
+.set { max-width: var(--content-max); margin: 0 auto; padding: 0 var(--s-6) var(--s-8); }
+.set__head { padding: var(--s-5) 0 var(--s-5); }
 .eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
 .tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
 
-.card { margin-bottom: var(--s-4); padding: var(--s-5); border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--surface); }
+/* ── two-pane shell: sticky category rail + content ─────────────────────── */
+.set__shell { display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: var(--s-6); align-items: start; }
+.set__rail { position: sticky; top: var(--s-4); display: flex; flex-direction: column; gap: 3px; padding: var(--s-2); border: 1px solid var(--line); border-radius: var(--r-lg); background: color-mix(in srgb, var(--surface) 70%, transparent); backdrop-filter: blur(8px); }
+.set__tab { display: flex; align-items: center; gap: var(--s-2); width: 100%; padding: var(--s-2) var(--s-3); border: 1px solid transparent; border-radius: var(--r-md); background: transparent; color: var(--ink-faint); font-family: var(--font-body); font-size: var(--fs-sm); font-weight: 500; text-align: left; cursor: pointer; transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast); }
+.set__tab :deep(svg) { color: currentColor; opacity: .8; flex-shrink: 0; }
+.set__tab:hover { background: var(--surface-2); color: var(--ink-soft); }
+.set__tab.is-active { color: var(--ink); background: color-mix(in srgb, var(--azure) 14%, transparent); border-color: color-mix(in srgb, var(--azure) 30%, transparent); box-shadow: inset 2px 0 0 var(--azure), 0 0 12px -4px var(--azure-glow); }
+.set__tab.is-active :deep(svg) { color: var(--azure); opacity: 1; }
+
+.set__pane { min-width: 0; display: flex; flex-direction: column; }
+.set__cat { display: flex; flex-direction: column; gap: var(--s-4); }
+.set__cathead { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-1); }
+.set__catic { display: grid; place-items: center; width: 40px; height: 40px; flex-shrink: 0; border-radius: var(--r-md); background: linear-gradient(140deg, color-mix(in srgb, var(--azure) 26%, transparent), color-mix(in srgb, var(--cyan) 18%, transparent)); border: 1px solid color-mix(in srgb, var(--azure) 30%, transparent); }
+.set__catic :deep(svg) { color: var(--azure); }
+.set__cathead h2 { font-family: var(--font-display); font-size: var(--fs-lg); font-weight: 600; color: var(--ink); line-height: 1.1; }
+.set__cathead p { font-size: var(--fs-xs); color: var(--ink-faint); margin-top: 2px; }
+
+.card { margin-bottom: 0; padding: var(--s-5); border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--surface); }
 .card__title { display: flex; align-items: center; gap: var(--s-2); font-weight: 600; color: var(--ink); margin-bottom: var(--s-4); }
 .card__title :deep(svg) { color: var(--azure); }
 
@@ -471,13 +595,26 @@ async function onImportFile(e) {
 .stg__seg { min-width: 2px; transition: flex-grow var(--t-base); }
 .stg__seg--orig { background: var(--azure); }
 .stg__seg--up { background: var(--cyan); }
+.stg__seg--anime { background: var(--violet); }
 .stg__seg--cache { background: var(--ink-ghost); }
 .stg__legend { display: flex; gap: var(--s-4); flex-wrap: wrap; font-size: var(--fs-xs); color: var(--ink-faint); margin-bottom: var(--s-4); }
 .stg__legend b { color: var(--ink); font-weight: 600; margin-left: 3px; }
 .stg__dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: baseline; }
 .stg__dot--orig { background: var(--azure); }
 .stg__dot--up { background: var(--cyan); }
+.stg__dot--anime { background: var(--violet); }
 .stg__dot--cache { background: var(--ink-ghost); }
+.stg__an { color: var(--violet); }
+
+/* filtros por tipo de contenido (junto / por separado) */
+.stg__filters { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-3); }
+.stg__chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px var(--s-3); border-radius: var(--r-pill); border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink-faint); font-size: var(--fs-xs); font-weight: 500; cursor: pointer; transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast); }
+.stg__chip:hover { color: var(--ink-soft); border-color: var(--line); }
+.stg__chip.is-on { color: var(--ink); background: color-mix(in srgb, var(--azure) 14%, transparent); border-color: color-mix(in srgb, var(--azure) 32%, transparent); }
+.stg__chip .stg__dot { width: 8px; height: 8px; border-radius: 2px; }
+.stg__chipn { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-soft); }
+.stg__chip.is-on .stg__chipn { color: var(--ink); }
+.stg__chipc { font-style: normal; font-size: var(--fs-2xs); color: var(--ink-ghost); background: var(--base); border-radius: var(--r-pill); padding: 1px 6px; }
 .stg__disk { display: flex; flex-direction: column; gap: 5px; margin-bottom: var(--s-4); }
 .stg__diskbar { height: 8px; border-radius: var(--r-pill); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
 .stg__diskfill { display: block; height: 100%; background: linear-gradient(90deg, var(--azure), var(--cyan)); border-radius: var(--r-pill); }
@@ -518,5 +655,12 @@ async function onImportFile(e) {
 .sync__status.is-on { color: var(--jade); }
 .sync__status.is-on .dot { background: var(--jade); box-shadow: 0 0 8px color-mix(in srgb, var(--jade) 60%, transparent); }
 
+@media (max-width: 820px) {
+  .set__shell { grid-template-columns: 1fr; gap: var(--s-4); }
+  .set__rail { position: sticky; top: 0; z-index: 4; flex-direction: row; overflow-x: auto; gap: var(--s-1); scrollbar-width: none; }
+  .set__rail::-webkit-scrollbar { display: none; }
+  .set__tab { width: auto; white-space: nowrap; flex-shrink: 0; }
+  .set__tab.is-active { box-shadow: inset 0 -2px 0 var(--azure), 0 0 12px -4px var(--azure-glow); }
+}
 @media (max-width: 560px) { .set { padding: 0 var(--s-4) var(--s-8); } }
 </style>
