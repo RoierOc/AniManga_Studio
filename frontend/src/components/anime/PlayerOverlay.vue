@@ -44,6 +44,49 @@ let restartToken = 0            // invalida reinicios de salto obsoletos
 let restartTimer = null
 const volume = ref(parseFloat(localStorage.getItem('anime-player-vol') ?? '1'))
 const muted = ref(false)
+// Aumento de volumen (como MPV): el <video> corta en 100%, así que para subir
+// por encima se enruta por un GainNode de Web Audio. Hasta 300% para series
+// bajas de volumen; el nivel se recuerda POR SERIE (una serie floja se reabre
+// ya aumentada) con base global normal.
+const VOL_MAX = 3
+let audioCtx = null, gainNode = null, mediaSrc = null
+
+function ensureAudioGraph(v) {
+  if (gainNode || !v) return
+  const AC = window.AudioContext || window.webkitAudioContext
+  if (!AC) return   // sin Web Audio: el boost no aplica, el slider queda a 100%
+  try {
+    audioCtx = new AC()
+    mediaSrc = audioCtx.createMediaElementSource(v)   // 1 sola vez por elemento
+    gainNode = audioCtx.createGain()
+    mediaSrc.connect(gainNode).connect(audioCtx.destination)
+    window.__audioGain = gainNode   // gancho de depuración (app local)
+  } catch (_) { audioCtx = gainNode = mediaSrc = null }
+}
+
+function applyVolume() {
+  const v = videoEl.value
+  if (!v) return
+  const eff = muted.value ? 0 : volume.value
+  if (gainNode) {
+    v.volume = 1; v.muted = false          // el gain hace TODO (incluido >100%)
+    gainNode.gain.value = eff
+    if (audioCtx?.state === 'suspended') audioCtx.resume().catch(() => {})
+  } else {
+    v.volume = Math.min(1, eff); v.muted = muted.value   // sin boost disponible
+  }
+}
+
+function _saveVol(val) {
+  try {
+    localStorage.setItem('anime-player-vol', String(Math.min(1, val)))   // base normal
+    if (p.value) {
+      const m = JSON.parse(localStorage.getItem('anime-vol-pref') || '{}')
+      m[p.value.anime.id] = val
+      localStorage.setItem('anime-vol-pref', JSON.stringify(m))
+    }
+  } catch (_) {}
+}
 const speed = ref(1)
 const isFs = ref(false)
 const waiting = ref(false)      // buffering spinner
@@ -307,7 +350,7 @@ function loadHls(playlist) {
   hls.loadSource(playlist)
   hls.attachMedia(v)
   hls.on(Hls.Events.MANIFEST_PARSED, () => {
-    v.volume = volume.value
+    applyVolume()
     v.playbackRate = speed.value
     v.play().catch(() => {})
     waiting.value = false
@@ -333,6 +376,14 @@ function setup(sess) {
   streamBase.value = sess.start_offset || 0
   time.value = streamBase.value
   subSync.value = 0            // la sincronía es por archivo → arranca en 0
+  // volumen: nivel recordado de ESTA serie (una serie floja se reabre aumentada)
+  // o la base global. El grafo de Web Audio se crea una vez por elemento <video>.
+  try {
+    const per = JSON.parse(localStorage.getItem('anime-vol-pref') || '{}')[p.value.anime.id]
+    volume.value = per != null ? per : parseFloat(localStorage.getItem('anime-player-vol') ?? '1')
+  } catch (_) {}
+  muted.value = volume.value === 0
+  ensureAudioGraph(v)
 
   loadHls(sess.playlist)
 
@@ -443,6 +494,9 @@ function teardownMedia() {
   if (nextTimer) { clearInterval(nextTimer); nextTimer = null; nextCd.value = 0 }
   if (jassub) { try { jassub.destroy() } catch (_) {} jassub = null; subBaseStyles = null }
   if (hls) { try { hls.destroy() } catch (_) {} hls = null }
+  // el MediaElementSource se ata al <video>; al recrearse el elemento hay que
+  // soltar el grafo (createMediaElementSource solo se puede llamar una vez)
+  if (audioCtx) { try { audioCtx.close() } catch (_) {} audioCtx = gainNode = mediaSrc = null }
 }
 
 function close() {
@@ -605,16 +659,15 @@ function skip(secs) {
   poke()
 }
 function setVolume(ev) {
-  const val = parseFloat(ev.target.value)
+  const val = Math.min(VOL_MAX, Math.max(0, parseFloat(ev.target.value)))
   volume.value = val
   muted.value = val === 0
-  const v = videoEl.value
-  if (v) { v.volume = val; v.muted = muted.value }
-  localStorage.setItem('anime-player-vol', String(val))
+  applyVolume()
+  _saveVol(val)
 }
 function toggleMute() {
   muted.value = !muted.value
-  if (videoEl.value) videoEl.value.muted = muted.value
+  applyVolume()
 }
 function setSpeed(s) {
   speed.value = s
@@ -654,10 +707,11 @@ function poke() {
 }
 function onWheel(ev) {
   const delta = ev.deltaY < 0 ? 0.05 : -0.05
-  const val = Math.min(1, Math.max(0, volume.value + delta))
+  const val = Math.min(VOL_MAX, Math.max(0, volume.value + delta))
   volume.value = val
-  if (videoEl.value) videoEl.value.volume = val
-  localStorage.setItem('anime-player-vol', String(val))
+  muted.value = val === 0
+  applyVolume()
+  _saveVol(val)
   poke()
 }
 function onKey(ev) {
@@ -834,7 +888,9 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 
           <div class="wp__vol">
             <button class="wp__ic" @click="toggleMute" :title="muted ? 'Quitar silencio' : 'Silenciar'"><span class="wp__sk">{{ muted || volume === 0 ? '🔇' : '🔊' }}</span></button>
-            <input type="range" min="0" max="1" step="0.02" :value="muted ? 0 : volume" @input="setVolume" />
+            <input type="range" min="0" :max="VOL_MAX" step="0.05" :value="muted ? 0 : volume" @input="setVolume"
+                   :title="`Volumen ${Math.round((muted ? 0 : volume) * 100)}% (arrastra por encima de 100% para aumentar)`" />
+            <span v-if="!muted && volume > 1.02" class="wp__boost" title="Volumen aumentado para esta serie">{{ Math.round(volume * 100) }}%</span>
           </div>
 
           <span class="wp__time">{{ fmt(time) }} <em>/ {{ fmt(duration) }}</em></span>
@@ -1124,6 +1180,10 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 .wp__vol { display: flex; align-items: center; gap: 4px; }
 .wp__vol input[type='range'] {
   width: 6rem; accent-color: var(--azure-bright); cursor: pointer;
+}
+.wp__boost {   /* indicador de volumen aumentado (>100%) */
+  font-size: var(--fs-2xs); font-weight: 700; color: var(--azure-bright);
+  font-family: var(--font-mono); min-width: 2.4rem;
 }
 .wp__time { font-family: var(--font-mono); font-size: var(--fs-xs); color: #fff; white-space: nowrap; }
 .wp__time em { font-style: normal; color: var(--ink-soft); }
