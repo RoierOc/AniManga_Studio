@@ -54,28 +54,59 @@ _lock = threading.Lock()
 # stream_proc = ffmpeg del HLS activo; thumb_proc = pase de miniaturas.
 # seek_ctx guarda lo necesario para relanzar el troceo desde otro punto (salto)
 # sin re-resolver el vídeo ni tocar thumbs/subs/fuentes; gen numera los relanzos.
-_current = {'sid': None, 'stream_proc': None, 'thumb_proc': None,
+_current = {'sid': None, 'stream_proc': None, 'thumb_procs': [],
             'sess': None, 'seek_ctx': None, 'gen': 0}
 
 # Miniaturas de la barra de progreso (preview al hacer hover, como Crunchyroll):
 # 1 frame cada N segundos, generadas en segundo plano al abrir la sesión.
 _THUMB_IV = 10
+# Cuántos ffmpeg en paralelo para generarlas. Un solo pase decodifica los
+# keyframes del archivo entero en serie (una peli de 98 min = ~59 s); repartir
+# el archivo en trozos lo baja a ~16 s. Tope bajo para no acaparar CPU durante
+# la reproducción (el decode compite con el remux y el upscaler).
+_THUMB_WORKERS = 4
 
 
-def _gen_thumbs(video: str, sess: Path):
-    """Genera thumbs/t_00001.jpg… en la sesión. Decode solo-keyframes: barato
-    incluso en episodios largos; el player las va pidiendo según existan."""
+def _spawn_thumb(video, tdir, start, dur_limit, start_number, frames):
+    """Un ffmpeg que saca miniaturas de un tramo. `-ss start` (seek a keyframe)
+    + `-t dur_limit` acotan el tramo; `-start_number`/`-frames:v` numeran las
+    salidas en la rejilla global (t_<idx>) para que los tramos NO se solapen."""
+    cmd = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
+           '-skip_frame', 'nokey']
+    if start > 0:
+        cmd += ['-ss', str(start)]
+    if dur_limit:
+        cmd += ['-t', str(dur_limit)]
+    cmd += ['-i', video, '-vf', f'fps=1/{_THUMB_IV},scale=240:-2', '-q:v', '5']
+    if frames:
+        cmd += ['-frames:v', str(frames)]
+    cmd += ['-start_number', str(start_number), str(tdir / 't_%05d.jpg')]
+    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _gen_thumbs(video: str, sess: Path, duration: float = 0):
+    """Genera thumbs/t_00001.jpg… en la sesión, en varios ffmpeg paralelos por
+    tramos (decode solo-keyframes). El player las va pidiendo según existan."""
     tdir = sess / 'thumbs'
     try:
         tdir.mkdir(exist_ok=True)
-        proc = subprocess.Popen(
-            ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error',
-             '-skip_frame', 'nokey', '-i', video,
-             '-vf', f'fps=1/{_THUMB_IV},scale=240:-2', '-q:v', '5',
-             str(tdir / 't_%05d.jpg')],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        _current['thumb_proc'] = proc
-        proc.wait()
+        procs = []
+        if duration and duration > 240:
+            n = min(_THUMB_WORKERS, max(1, int(duration) // 120))
+            # chunk múltiplo del intervalo → los índices de cada tramo casan
+            chunk = -(-((int(duration) + n - 1) // n)) // _THUMB_IV * _THUMB_IV
+            for k in range(n):
+                start = k * chunk
+                if start >= duration:
+                    break
+                procs.append(_spawn_thumb(video, tdir, start, chunk,
+                                          start // _THUMB_IV + 1, chunk // _THUMB_IV))
+        else:
+            # clip corto: un solo pase (paralelizar no compensa)
+            procs.append(_spawn_thumb(video, tdir, 0, None, 1, 0))
+        _current['thumb_procs'] = procs
+        for pr in procs:
+            pr.wait()
     except Exception:
         pass
 
@@ -111,9 +142,10 @@ def _kill_stream():
 def _kill_current():
     """Mata la sesión entera (stream + thumbs) y borra sus segmentos. _lock."""
     _term(_current.get('stream_proc'))
-    _term(_current.get('thumb_proc'))
+    for pr in _current.get('thumb_procs') or []:
+        _term(pr)
     _current['stream_proc'] = None
-    _current['thumb_proc'] = None
+    _current['thumb_procs'] = []
     sid = _current.get('sid')
     if sid:
         shutil.rmtree(_SESS_ROOT / sid, ignore_errors=True)
@@ -302,7 +334,7 @@ def stream_open():
         code = 504 if 'timeout' in err else 500
         return jsonify({'error': err}), code
 
-    threading.Thread(target=_gen_thumbs, args=(video, sess), daemon=True).start()
+    threading.Thread(target=_gen_thumbs, args=(video, sess, duration), daemon=True).start()
 
     return jsonify({
         'ok': True, 'sid': sid,
