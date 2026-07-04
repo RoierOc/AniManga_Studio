@@ -2,7 +2,7 @@
 import { computed } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { ANIME_STATUS, animeFormatLabel, fmtCountdown } from '@/lib/anime'
-import { imgProxy } from '@/lib/img'
+import { imgProxy, imgThumb } from '@/lib/img'
 import { vtTag } from '@/lib/vt'
 import Icon from '@/components/ui/Icon.vue'
 
@@ -17,6 +17,7 @@ function openCard(ev) {
   emit('open', props.anime)
 }
 
+const thumb = computed(() => imgThumb(props.anime.cover))
 const total = computed(() => props.anime.total_episodes || 0)
 const done = computed(() => props.anime.downloaded_count || 0)
 const status = computed(() => ANIME_STATUS[props.anime.status] || null)
@@ -66,6 +67,7 @@ const dots = computed(() =>
 <template>
   <article class="acard" tabindex="0" @click="openCard" @keydown.enter="openCard">
     <div class="acard__poster">
+      <img v-if="thumb" :src="thumb" class="blurup" aria-hidden="true" alt="" />
       <img v-if="anime.cover" :src="imgProxy(anime.cover)" :alt="anime.title" loading="lazy" class="acard__img"
            @load="$event.target.classList.add('is-loaded')" />
       <div class="acard__scrim" />

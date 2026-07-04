@@ -1,10 +1,12 @@
 <script setup>
 import { computed } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
+import { imgThumb } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 
 const props = defineProps({ anime: { type: Object, required: true } })
 const store = useAnimeStore()
+const thumb = computed(() => imgThumb(props.anime.cover))
 const inLib = computed(() => store.isInLibrary(props.anime))
 const scoreTier = computed(() => {
   const s = props.anime.score
@@ -18,6 +20,7 @@ const scoreTier = computed(() => {
 <template>
   <article class="sc" tabindex="0" @click="store.openTorrents(anime)" @keydown.enter="store.openTorrents(anime)">
     <div class="sc__cover">
+      <img v-if="thumb" :src="thumb" class="blurup" aria-hidden="true" alt="" />
       <img v-if="anime.cover" :src="anime.cover" :alt="anime.title" loading="lazy"
            @load="$event.target.classList.add('is-loaded')" class="sc__img" />
       <div v-else class="sc__ph"><Icon name="film" :size="30" /></div>

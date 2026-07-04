@@ -6,7 +6,7 @@ import { useMangaStore } from '@/stores/manga'
 import { MANGA_STATUS, MANGA_STATUS_ORDER } from '@/lib/manga'
 import MangaCard from '@/components/manga/MangaCard.vue'
 import HistoryPanel from '@/components/manga/HistoryPanel.vue'
-import { imgProxy } from '@/lib/img'
+import { imgProxy, imgThumb } from '@/lib/img'
 import Spinner from '@/components/ui/Spinner.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -208,6 +208,7 @@ watch(() => manga.libraryDirty, () => load())
         <button v-for="m in continueItems" :key="m.id" class="contcard" @click="manga.resumeManga(m)"
                 :title="`Reanudar ${m.name} · Cap. ${m._resume.lastChapter}`">
           <div class="contcard__cov">
+            <img v-if="imgThumb(m.cover)" :src="imgThumb(m.cover)" class="blurup" aria-hidden="true" alt="" />
             <img v-if="m.cover" :src="imgProxy(m.cover)" loading="lazy" alt="" />
             <div v-else class="contcard__ph"><Icon name="library" :size="20" /></div>
             <span class="contcard__play"><Icon name="spark" :size="18" /></span>

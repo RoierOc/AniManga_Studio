@@ -8,6 +8,8 @@ long max-age so the browser's *disk* cache (not RAM) takes over after that.
 """
 import hashlib
 import mimetypes
+import os
+import threading
 from pathlib import Path as _Path
 from urllib.parse import urlparse
 
@@ -58,7 +60,9 @@ def _fetch_and_cache(url):
         return None
 
     dest = _CACHE_DIR / f'{key}{_ext_for(r.headers.get("Content-Type"), url)}'
-    tmp = dest.with_suffix(dest.suffix + '.part')
+    # Unique tmp per writer: the blur-up thumb and the full cover are requested
+    # in parallel for the same uncached URL, and both land here concurrently.
+    tmp = dest.with_suffix(dest.suffix + f'.{os.getpid()}-{threading.get_ident()}.part')
     with open(tmp, 'wb') as f:
         for chunk in r.iter_content(65536):
             f.write(chunk)
@@ -80,6 +84,26 @@ def warm(url):
         pass
 
 
+def _thumb_for(dest, key, width):
+    """Tiny downscaled JPEG next to the cached original — the blur-up
+    placeholder the cards paint (blurred) while the full cover loads.
+    Returns the thumb path, or None if the original can't be decoded."""
+    thumb = _CACHE_DIR / f'{key}_w{width}.thumb.jpg'
+    if thumb.exists() and thumb.stat().st_size > 0:
+        return thumb
+    try:
+        from PIL import Image
+        with Image.open(dest) as im:
+            im = im.convert('RGB')
+            im.thumbnail((width, width * 2))
+            tmp = thumb.with_suffix(f'.{os.getpid()}-{threading.get_ident()}.part')
+            im.save(tmp, 'JPEG', quality=55)
+        tmp.replace(thumb)
+        return thumb
+    except Exception:
+        return None
+
+
 @imgproxy_bp.route('')
 def proxy():
     url = request.args.get('u', '')
@@ -93,4 +117,16 @@ def proxy():
     if dest is None:
         # Don't break the <img> over a fetch failure — fall back to the original CDN.
         return redirect(url, code=302)
+
+    try:
+        width = int(request.args.get('w', 0))
+    except ValueError:
+        width = 0
+    if width:
+        width = max(8, min(width, 64))
+        thumb = _thumb_for(dest, hashlib.sha256(url.encode()).hexdigest(), width)
+        if thumb is not None:
+            return send_file(str(thumb), max_age=_MAX_AGE, conditional=True)
+        # undecodable original → serve it as-is rather than 500 the placeholder
+
     return send_file(str(dest), max_age=_MAX_AGE, conditional=True)

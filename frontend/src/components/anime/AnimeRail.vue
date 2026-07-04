@@ -1,6 +1,6 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { imgProxy } from '@/lib/img'
+import { imgProxy, imgThumb } from '@/lib/img'
 import { animeFormatLabel } from '@/lib/anime'
 import Icon from '@/components/ui/Icon.vue'
 
@@ -77,6 +77,7 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
       <article v-for="it in items" :key="it.anime.id || it.anime.al_id" class="pcard"
                @click="$emit('select', it)">
         <div class="pcard__poster">
+          <img v-if="imgThumb(it.anime.cover)" :src="imgThumb(it.anime.cover)" class="blurup" aria-hidden="true" alt="" />
           <img v-if="it.anime.cover" :src="imgProxy(it.anime.cover)" :alt="it.anime.title" loading="lazy"
                @load="$event.target.classList.add('is-loaded')" class="pcard__img" />
           <div v-else class="pcard__ph">{{ (it.anime.title || '?')[0].toUpperCase() }}</div>

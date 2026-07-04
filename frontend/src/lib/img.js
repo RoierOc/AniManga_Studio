@@ -16,3 +16,12 @@ export function imgProxy(url) {
   }
   return `/api/img?u=${encodeURIComponent(url)}`
 }
+
+/* Blur-up placeholder: ~28px thumb (~1 KB) served from the proxy's disk cache,
+ * painted blurred under the real cover while it loads. Only exists for
+ * proxyable hosts — returns null otherwise (card falls back to plain fade). */
+export function imgThumb(url, w = 28) {
+  const proxied = imgProxy(url)
+  if (!proxied || !proxied.startsWith('/api/img?')) return null
+  return `${proxied}&w=${w}`
+}

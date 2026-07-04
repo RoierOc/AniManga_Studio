@@ -126,6 +126,20 @@ ul, ol { list-style: none; }
   ::view-transition-new(*) { animation: none !important; }
 }
 
+/* Blur-up cover placeholder (lib/img.js imgThumb): micro-thumb pintado
+   difuminado bajo la portada real; ésta se funde encima al cargar. scale
+   compensa el sangrado de bordes del blur. */
+.blurup {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%; object-fit: cover;
+  filter: blur(16px) saturate(1.15);
+  transform: scale(1.12);
+  pointer-events: none;
+}
+/* la portada real (hermana siguiente) debe pintar ENCIMA del placeholder:
+   al posicionarla, el orden DOM decide y tapa al .blurup al cargar */
+.blurup + img { position: relative; }
+
 /* Staggered page-load reveal — children rise in sequence.
    Set --i on each child (0,1,2,…) to cascade.                              */
 .stagger > * {
