@@ -916,9 +916,10 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 
           <div class="wp__vol">
             <button class="wp__ic" @click="toggleMute" :title="muted ? 'Quitar silencio' : 'Silenciar'"><span class="wp__sk">{{ muted || volume === 0 ? '🔇' : '🔊' }}</span></button>
-            <input type="range" min="0" :max="VOL_MAX" step="0.05" :value="muted ? 0 : volume" @input="setVolume"
-                   :title="`Volumen ${Math.round((muted ? 0 : volume) * 100)}% (arrastra por encima de 100% para aumentar)`" />
-            <span v-if="!muted && volume > 1.02" class="wp__boost" title="Volumen aumentado para esta serie">{{ Math.round(volume * 100) }}%</span>
+            <!-- barra 0–100%; por encima se aumenta virtualmente con la RUEDA (como MPV) -->
+            <input type="range" min="0" max="1" step="0.02" :value="muted ? 0 : Math.min(1, volume)" @input="setVolume"
+                   :title="`Volumen ${Math.round((muted ? 0 : volume) * 100)}% — rueda del ratón para aumentar por encima de 100%`" />
+            <span v-if="!muted && volume > 1.02" class="wp__boost" title="Volumen aumentado (rueda del ratón), recordado para esta serie">{{ Math.round(volume * 100) }}%</span>
           </div>
 
           <span class="wp__time">{{ fmt(time) }} <em>/ {{ fmt(duration) }}</em></span>
