@@ -12,7 +12,6 @@ cerrar o al abrir la siguiente.
 import json
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 import uuid
@@ -20,13 +19,21 @@ from pathlib import Path
 
 from flask import Blueprint, jsonify, request, send_from_directory
 
+from api.runtime import DATA_ROOT
+
 stream_bp = Blueprint('stream', __name__)
 
-_SESS_ROOT = Path(tempfile.gettempdir()) / 'animanga_stream'
+# En DISCO (no /tmp, que suele ser tmpfs=RAM): remuxar una película entera son
+# varios GB y en RAM competiría con el upscaler/MPV. En SSD va sobrado y rápido.
+_SESS_ROOT = DATA_ROOT / '_stream_cache'
 # Sesiones huérfanas de arranques anteriores (el server murió con streams vivos)
 shutil.rmtree(_SESS_ROOT, ignore_errors=True)
 _lock = threading.Lock()
-_current = {'sid': None, 'proc': None, 'thumb_proc': None}
+# stream_proc = ffmpeg del HLS activo; thumb_proc = pase de miniaturas.
+# seek_ctx guarda lo necesario para relanzar el troceo desde otro punto (salto)
+# sin re-resolver el vídeo ni tocar thumbs/subs/fuentes; gen numera los relanzos.
+_current = {'sid': None, 'stream_proc': None, 'thumb_proc': None,
+            'sess': None, 'seek_ctx': None, 'gen': 0}
 
 # Miniaturas de la barra de progreso (preview al hacer hover, como Crunchyroll):
 # 1 frame cada N segundos, generadas en segundo plano al abrir la sesión.
@@ -63,22 +70,136 @@ def _ffprobe(path: str) -> dict:
     return json.loads(r.stdout or '{}')
 
 
+def _term(proc):
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def _kill_stream():
+    """Mata SOLO el ffmpeg del HLS (deja vivas thumbs/subs/fuentes de la
+    sesión). Para relanzar el troceo desde otro punto al saltar. Con _lock."""
+    _term(_current.get('stream_proc'))
+    _current['stream_proc'] = None
+
+
 def _kill_current():
-    """Mata la sesión ffmpeg activa y borra sus segmentos. Llamar con _lock."""
-    for key in ('proc', 'thumb_proc'):
-        proc = _current.get(key)
-        if proc and proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-        _current[key] = None
+    """Mata la sesión entera (stream + thumbs) y borra sus segmentos. _lock."""
+    _term(_current.get('stream_proc'))
+    _term(_current.get('thumb_proc'))
+    _current['stream_proc'] = None
+    _current['thumb_proc'] = None
     sid = _current.get('sid')
     if sid:
         shutil.rmtree(_SESS_ROOT / sid, ignore_errors=True)
     _current['sid'] = None
-    _current['proc'] = None
+    _current['sess'] = None
+    _current['seek_ctx'] = None
+
+
+def _keyframe_at(video, t):
+    """Keyframe real (≤ t) donde ffmpeg -ss arrancará el troceo en modo copia.
+    Se usa como base de la sesión para que el offset no desincronice la barra ni
+    los subtítulos (los .ass van en tiempo absoluto). Probe corto y barato."""
+    if not t or t <= 0:
+        return 0.0
+    try:
+        r = subprocess.run(
+            ['ffprobe', '-v', 'error',
+             '-read_intervals', f'{max(0.0, t - 6):.3f}%{t + 0.1:.3f}',
+             '-select_streams', 'v:0', '-show_entries', 'packet=pts_time,flags',
+             '-of', 'csv=p=0', video],
+            capture_output=True, text=True, timeout=15)
+        best = 0.0
+        for line in (r.stdout or '').splitlines():
+            parts = line.split(',')
+            if len(parts) >= 2 and 'K' in parts[1]:
+                try:
+                    pt = float(parts[0])
+                except ValueError:
+                    continue
+                if pt <= t + 0.05 and pt > best:
+                    best = pt
+        return best if best > 0 else max(0.0, t)
+    except Exception:
+        return max(0.0, t)
+
+
+def _hls_cmd(video, out_dir, audio_idx, has_audio, v_copy, a_copy, vcodec, start_at):
+    """Lista de intentos ffmpeg (por códec) que trocean el vídeo a HLS fMP4 en
+    out_dir, empezando en start_at (0 = desde el principio)."""
+    def _cmd(video_args, pre_input=()):
+        pre = list(pre_input)
+        if start_at and start_at > 0:
+            pre = ['-ss', f'{start_at:.3f}'] + pre
+        c = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'warning', '-y',
+             *pre, '-i', video, '-map', '0:v:0']
+        if has_audio:
+            c += ['-map', f'0:a:{audio_idx}']
+        c += video_args
+        if has_audio:
+            c += (['-c:a', 'copy'] if a_copy else ['-c:a', 'aac', '-b:a', '192k', '-ac', '2'])
+        # playlist_type EVENT: ffmpeg añade cada segmento al playlist al cerrarlo
+        # (VOD lo escribe SOLO al terminar → un transcode largo nunca publicaba
+        # el playlist y el open moría en 504). Al acabar escribe ENDLIST igual.
+        c += ['-sn', '-dn',
+              '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'event',
+              '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', 'init.mp4',
+              '-hls_segment_filename', str(out_dir / 'seg_%05d.m4s'),
+              str(out_dir / 'index.m3u8')]
+        return c
+
+    if v_copy:
+        # MSE exige el sample entry hvc1 (los MKV traen hev1) — sin el retag el
+        # navegador rechaza el stream HEVC aunque sepa decodificarlo.
+        vargs = ['-c:v', 'copy'] + (['-tag:v', 'hvc1'] if vcodec == 'hevc' else [])
+        return [_cmd(vargs)]
+    # HEVC 10-bit → yuv420p antes del encoder; cadena GPU→GPU, CPU+NVENC, todo CPU
+    return [
+        _cmd(['-vf', 'scale_cuda=format=yuv420p',
+              '-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '21'],
+             pre_input=('-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda')),
+        _cmd(['-vf', 'format=yuv420p', '-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '21']),
+        _cmd(['-vf', 'format=yuv420p', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21']),
+    ]
+
+
+def _launch_hls(attempts, out_dir, timeout=30):
+    """Lanza ffmpeg (probando cada intento de códec) troceando a out_dir. NO
+    toca thumbs ni borra la sesión. Devuelve (proc, err); proc None si falla."""
+    playlist = out_dir / 'index.m3u8'
+    last_err = ''
+    for cmd in attempts:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # stderr a archivo, NUNCA a PIPE sin lector: se llena el buffer y ffmpeg
+        # se congela (504).
+        with open(out_dir / 'ffmpeg.log', 'w') as errlog:
+            try:
+                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=errlog)
+            except Exception as e:
+                return None, f'ffmpeg: {e}'
+        _current['stream_proc'] = proc
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if playlist.exists() and 'seg_' in playlist.read_text(errors='ignore'):
+                # cosecha el proceso al terminar (evita zombies <defunct>)
+                threading.Thread(target=proc.wait, daemon=True).start()
+                return proc, ''
+            if proc.poll() is not None:       # murió: prueba el siguiente intento
+                try:
+                    last_err = (out_dir / 'ffmpeg.log').read_text(errors='ignore')[-400:]
+                except OSError:
+                    last_err = ''
+                print(f'[stream] ffmpeg murió: {last_err[-200:]}', flush=True)
+                break
+            time.sleep(0.15)
+        else:
+            _term(proc)                        # timeout real: vivo pero sin segmento
+            return None, 'timeout preparando el stream'
+    return None, last_err or 'ffmpeg falló'
 
 
 @stream_bp.route('/open', methods=['POST'])
@@ -126,113 +247,89 @@ def stream_open():
         v_copy = False
     a_copy = acodec in _AUDIO_COPY
 
-    sid = uuid.uuid4().hex[:12]
-    sess = _SESS_ROOT / sid
-    sess.mkdir(parents=True, exist_ok=True)
-
-    def _cmd(video_args, pre_input=()):
-        c = ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'warning', '-y',
-             *pre_input, '-i', video, '-map', '0:v:0']
-        if astreams:
-            c += ['-map', f'0:a:{audio_idx}']
-        c += video_args
-        if astreams:
-            c += (['-c:a', 'copy'] if a_copy else ['-c:a', 'aac', '-b:a', '192k', '-ac', '2'])
-        # playlist_type EVENT: ffmpeg añade cada segmento al playlist al cerrarlo
-        # (VOD lo escribe SOLO al terminar → un transcode largo nunca publicaba
-        # el playlist y el open moría en 504). Al acabar escribe ENDLIST igual.
-        c += ['-sn', '-dn',
-              '-f', 'hls', '-hls_time', '4', '-hls_playlist_type', 'event',
-              '-hls_segment_type', 'fmp4', '-hls_fmp4_init_filename', 'init.mp4',
-              '-hls_segment_filename', str(sess / 'seg_%05d.m4s'),
-              str(sess / 'index.m3u8')]
-        return c
-
-    if v_copy:
-        # MSE exige el sample entry hvc1 (los MKV traen hev1) — sin el retag el
-        # navegador rechaza el stream HEVC aunque sepa decodificarlo.
-        vargs = ['-c:v', 'copy'] + (['-tag:v', 'hvc1'] if vcodec == 'hevc' else [])
-        attempts = [_cmd(vargs)]
-    else:
-        # El anime HEVC suele ser 10-bit y h264_nvenc solo codifica 8-bit →
-        # SIEMPRE convertir a yuv420p antes del encoder (los navegadores tampoco
-        # reproducen H.264 High10). Cadena de intentos:
-        #  1) GPU completa: NVDEC decodifica + NVENC codifica (el decode 10-bit
-        #     por CPU era el cuello: el primer segmento tardaba >30 s → 504).
-        #  2) decode CPU + NVENC   3) todo CPU (libx264).
-        attempts = [
-            _cmd(['-vf', 'scale_cuda=format=yuv420p',
-                  '-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '21'],
-                 pre_input=('-hwaccel', 'cuda', '-hwaccel_output_format', 'cuda')),
-            _cmd(['-vf', 'format=yuv420p', '-c:v', 'h264_nvenc', '-preset', 'p4', '-cq', '21']),
-            _cmd(['-vf', 'format=yuv420p', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21']),
-        ]
-
-    playlist = sess / 'index.m3u8'
-    proc = None
-    last_err = ''
-    for cmd in attempts:
-        with _lock:
-            _kill_current()
-            _current['sid'] = sid  # _kill_current borra la sesión: recrear dir
-            sess.mkdir(parents=True, exist_ok=True)
-            # stderr a archivo, NUNCA a PIPE sin lector: archivos con muchos
-            # warnings llenan el buffer de 64 KB y ffmpeg se congela (504).
-            errlog = open(sess / 'ffmpeg.log', 'w')
-            try:
-                proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=errlog)
-            except Exception as e:
-                return jsonify({'error': f'ffmpeg: {e}'}), 500
-            finally:
-                errlog.close()
-            _current['proc'] = proc
-        deadline = time.monotonic() + 30
-        ok = False
-        while time.monotonic() < deadline:
-            if playlist.exists() and 'seg_' in playlist.read_text(errors='ignore'):
-                ok = True
-                break
-            if proc.poll() is not None:   # murió — prueba el siguiente intento
-                try:
-                    last_err = (sess / 'ffmpeg.log').read_text(errors='ignore')[-400:]
-                except OSError:
-                    last_err = ''
-                print(f'[stream] ffmpeg murió: {last_err[-200:]}', flush=True)
-                break
-            time.sleep(0.15)
-        if ok:
-            # cosecha el proceso al terminar el remux (evita zombies <defunct>)
-            threading.Thread(target=proc.wait, daemon=True).start()
-            break
-        if proc.poll() is None:           # sigue vivo pero sin segmento: timeout real
-            with _lock:
-                _kill_current()
-            return jsonify({'error': 'timeout preparando el stream'}), 504
-    else:
-        with _lock:
-            _kill_current()
-        return jsonify({'error': f'ffmpeg falló: {last_err}'}), 500
-
+    # Punto de arranque: start_at explícito (cambio de audio conserva posición) o
+    # el resume guardado. Se trocea directamente desde ahí para que reanudar sea
+    # instantáneo aunque el archivo sea enorme (no hay que remuxar hasta ese punto).
     anime_id = data.get('anime_id', '')
     ep_str = str(data.get('episode', ''))
-    resume = 0
+    resume = 0.0
     if anime_id:
         resume = float((_lib_read().get(anime_id) or {})
                        .get('positions', {}).get(ep_str, 0))
+    req_start = data.get('start_at')
+    want = float(req_start) if req_start is not None else resume
+    base = _keyframe_at(video, want)
+
+    sid = uuid.uuid4().hex[:12]
+    sess = _SESS_ROOT / sid
+    out_dir = sess / 'hls0'
+    has_audio = bool(astreams)
+    ctx = {'video': video, 'audio_idx': audio_idx, 'has_audio': has_audio,
+           'v_copy': v_copy, 'a_copy': a_copy, 'vcodec': vcodec}
+    attempts = _hls_cmd(video, out_dir, audio_idx, has_audio,
+                        v_copy, a_copy, vcodec, base)
+
+    with _lock:
+        _kill_current()
+        _current.update({'sid': sid, 'sess': sess, 'seek_ctx': ctx, 'gen': 0})
+        sess.mkdir(parents=True, exist_ok=True)
+        proc, err = _launch_hls(attempts, out_dir)
+    if not proc:
+        with _lock:
+            _kill_current()
+        code = 504 if 'timeout' in err else 500
+        return jsonify({'error': err}), code
 
     threading.Thread(target=_gen_thumbs, args=(video, sess), daemon=True).start()
 
     return jsonify({
         'ok': True, 'sid': sid,
-        'playlist': f'/api/stream/hls/{sid}/index.m3u8',
+        'playlist': f'/api/stream/hls/{sid}/hls0/index.m3u8',
         'thumbs': {'url': f'/api/stream/hls/{sid}/thumbs', 'interval': _THUMB_IV},
         'duration': duration,
         'resume_pos': resume,
+        'start_offset': base,
         'path': video,
         'video_codec': vcodec, 'transcode': not (v_copy and a_copy),
         'audio_tracks': [_track(s, i) for i, s in enumerate(astreams)],
         'sub_tracks': [_track(s, i) for i, s in enumerate(sstreams)],
     })
+
+
+@stream_bp.route('/seek', methods=['POST'])
+def stream_seek():
+    """Relanza el troceo de la sesión activa desde start_at (segundos absolutos)
+    para que saltar a cualquier punto cargue en ~1-2 s sin importar cuánto
+    quede por remuxar. Conserva thumbs/subs/fuentes. Body: {start_at}.
+    Devuelve {playlist, start_offset} — el offset real (keyframe) de la sesión."""
+    data = request.get_json(silent=True) or {}
+    want = float(data.get('start_at', 0) or 0)
+    with _lock:
+        ctx = _current.get('seek_ctx')
+        sid = _current.get('sid')
+        sess = _current.get('sess')
+        if not ctx or not sid or not sess or not Path(sess).is_dir():
+            return jsonify({'error': 'sin sesión activa'}), 409
+        base = _keyframe_at(ctx['video'], want)
+        _current['gen'] += 1
+        gen = _current['gen']
+        out_dir = Path(sess) / f'hls{gen}'
+        _kill_stream()   # solo el stream; thumbs/subs/fuentes siguen vivos
+        attempts = _hls_cmd(ctx['video'], out_dir, ctx['audio_idx'],
+                            ctx['has_audio'], ctx['v_copy'], ctx['a_copy'],
+                            ctx['vcodec'], base)
+        proc, err = _launch_hls(attempts, out_dir)
+        if proc:
+            # Tira las generaciones anteriores (sus segmentos ya no se usan; si el
+            # usuario vuelve a saltar ahí, se regeneran). Evita que una sesión con
+            # muchos saltos acumule GB de segmentos abandonados.
+            for d in Path(sess).glob('hls*'):
+                if d.name != f'hls{gen}':
+                    shutil.rmtree(d, ignore_errors=True)
+    if not proc:
+        return jsonify({'error': err}), (504 if 'timeout' in err else 500)
+    return jsonify({'ok': True, 'start_offset': base,
+                    'playlist': f'/api/stream/hls/{sid}/hls{gen}/index.m3u8'})
 
 
 @stream_bp.route('/hls/<sid>/<path:fn>')

@@ -31,9 +31,17 @@ const videoEl = ref(null)
 
 /* ── estado de reproducción ── */
 const playing = ref(false)
-const time = ref(0)
+const time = ref(0)             // tiempo ABSOLUTO del episodio (streamBase + video.currentTime)
 const duration = ref(0)
 const buffered = ref(0)
+/* Streaming con salto instantáneo (estilo Netflix/Crunchyroll): el backend
+ * trocea desde un punto (streamBase); el <video> corre relativo a esa base, así
+ * que tiempo absoluto = streamBase + video.currentTime. Saltar fuera de lo ya
+ * remuxado relanza el troceo desde ahí en ~1 s en vez de esperar el remux. */
+const streamBase = ref(0)       // segundo absoluto donde arranca la sesión actual
+const publishedRel = ref(0)     // segundos ya publicados por ffmpeg (relativos a la base)
+let restartToken = 0            // invalida reinicios de salto obsoletos
+let restartTimer = null
 const volume = ref(parseFloat(localStorage.getItem('anime-player-vol') ?? '1'))
 const muted = ref(false)
 const speed = ref(1)
@@ -122,20 +130,18 @@ const activeSkip = computed(() => {
   return null
 })
 function doActiveSkip() {
-  const v = videoEl.value
   const a = activeSkip.value
-  if (!v || !a) return
-  v.currentTime = a.to
+  if (!a) return
+  seekAbsolute(a.to)
   poke()
 }
 /* El botón "Saltar OP" fijo además APRENDE: recuerda dónde lo pulsaste para
  * mostrar el contextual en los siguientes episodios de la serie. */
 function skipOpManual() {
-  const v = videoEl.value
-  if (v && p.value) {
+  if (p.value) {
     try {
       const m = JSON.parse(localStorage.getItem(OP_MEM_KEY) || '{}')
-      m[p.value.anime.id] = Math.round(v.currentTime)
+      m[p.value.anime.id] = Math.round(time.value)   // absoluto: se compara con AniSkip
       localStorage.setItem(OP_MEM_KEY, JSON.stringify(m))
       manualOpMem.value = m[p.value.anime.id]
     } catch (_) {}
@@ -171,7 +177,7 @@ function armDecodeWatchdog() {
 }
 function retryTranscode() {
   const { anime, ep } = p.value
-  store.openPlayer(anime, ep, 0, audioIndex.value, true)
+  store.openPlayer(anime, ep, time.value, audioIndex.value, true)
 }
 
 let hls = null
@@ -258,25 +264,28 @@ watch(() => p.value?.sess, async (sess) => {
   setup(sess)
 })
 
-function setup(sess) {
-  teardownMedia()
+/* Crea (o recrea, tras un salto) el pipeline HLS apuntando a `playlist`. El
+ * <video> siempre arranca en 0 (relativo a streamBase); el tiempo absoluto se
+ * deriva en onTime. Recrear hls no toca jassub ni Anime4K (cuelgan del <video>). */
+function loadHls(playlist) {
   const v = videoEl.value
   if (!v) return
-  duration.value = sess.duration || 0
-  audioIndex.value = p.value.audio || 0
-
-  const resume = p.value?.startPos > 0 ? p.value.startPos : (sess.resume_pos || 0)
-  // startPosition explícito: el playlist es tipo EVENT (crece mientras ffmpeg
-  // remuxa) y sin esto hls.js lo trata como "live" y arranca por el final →
-  // el player se queda cargando sin imagen.
-  hls = new Hls({ maxBufferLength: 60, maxMaxBufferLength: 120,
-                  startPosition: resume > 5 ? resume : 0 })
-  hls.loadSource(sess.playlist)
+  if (hls) { try { hls.destroy() } catch (_) {} hls = null }
+  publishedRel.value = 0
+  // startPosition 0: el playlist es tipo EVENT (crece mientras ffmpeg remuxa) y
+  // sin esto hls.js lo trata como "live" y arranca por el final → se queda
+  // cargando sin imagen. El contenido ya empieza en streamBase por el -ss.
+  hls = new Hls({ maxBufferLength: 60, maxMaxBufferLength: 120, startPosition: 0 })
+  hls.loadSource(playlist)
   hls.attachMedia(v)
   hls.on(Hls.Events.MANIFEST_PARSED, () => {
     v.volume = volume.value
     v.playbackRate = speed.value
     v.play().catch(() => {})
+    waiting.value = false
+  })
+  hls.on(Hls.Events.LEVEL_UPDATED, (_e, data) => {
+    publishedRel.value = data?.details?.totalduration || publishedRel.value
   })
   hls.on(Hls.Events.ERROR, (_e, data) => {
     if (data.fatal) {
@@ -284,6 +293,19 @@ function setup(sess) {
       else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError()
     }
   })
+  armDecodeWatchdog()
+}
+
+function setup(sess) {
+  teardownMedia()
+  const v = videoEl.value
+  if (!v) return
+  duration.value = sess.duration || 0
+  audioIndex.value = p.value.audio || 0
+  streamBase.value = sess.start_offset || 0
+  time.value = streamBase.value
+
+  loadHls(sess.playlist)
 
   // Subs por defecto: español si existe, si no la primera pista
   const subs = sess.sub_tracks || []
@@ -291,7 +313,6 @@ function setup(sess) {
   setSubTrack(esIdx >= 0 ? esIdx : (subs.length ? 0 : -1))
 
   progressTimer = setInterval(() => sendProgress(false), 10000)
-  armDecodeWatchdog()
 
   // Saltar intro inteligente: tiempos de AniSkip + memoria manual de la serie
   store.loadSkip(p.value.anime, p.value.ep)
@@ -327,6 +348,9 @@ async function setSubTrack(idx) {
         // Noto Sans (la _fallback.ttf que el server incluye siempre) en vez
         // de no dibujar nada.
         defaultFont: 'Noto Sans',
+        // Los .ass van en tiempo absoluto; la sesión corre relativa a
+        // streamBase → jassub busca el subtítulo en (currentTime + timeOffset).
+        timeOffset: streamBase.value,
       })
       // El worker de jassub muere en silencio si algo falla (wasm, fuentes…):
       // vigilar el handshake y dejar rastro en consola + log del backend.
@@ -371,15 +395,19 @@ async function setAudioTrack(idx) {
     m[p.value.anime.id] = idx
     localStorage.setItem('anime-audio-pref', JSON.stringify(m))
   } catch (_) {}
-  const pos = videoEl.value?.currentTime || 0
   const { anime, ep } = p.value
-  await store.openPlayer(anime, ep, pos, idx)
+  await store.openPlayer(anime, ep, time.value, idx)   // conserva posición absoluta
 }
 
 function teardownMedia() {
   a4k.stop()
   a4kActive.value = false
   window.removeEventListener('resize', updateCanvasRect)
+  clearTimeout(restartTimer)
+  restartToken++
+  streamBase.value = 0
+  publishedRel.value = 0
+  waiting.value = false
   if (decodeTimer) { clearTimeout(decodeTimer); decodeTimer = null }
   if (progressTimer) { clearInterval(progressTimer); progressTimer = null }
   if (nextTimer) { clearInterval(nextTimer); nextTimer = null; nextCd.value = 0 }
@@ -397,13 +425,51 @@ function close() {
 function sendProgress(ended, flush = false) {
   const v = videoEl.value
   if (!v || !p.value) return
-  const pos = ended ? (duration.value || v.duration || 0) : v.currentTime
+  // posición ABSOLUTA (streamBase + relativo) para reanudar correctamente
+  const pos = ended ? (duration.value || 0) : time.value
   if (!ended && !flush && Math.abs(pos - lastSentPos) < 5) return
   lastSentPos = pos
   api.post('/api/stream/progress', {
     anime_id: p.value.anime.id, episode: p.value.ep.num,
-    position: pos, duration: duration.value || v.duration || 0, ended,
+    position: pos, duration: duration.value || 0, ended,
   }).catch(() => {})
+}
+
+/* ── salto instantáneo ──
+ * Salta a un segundo ABSOLUTO: si cae en lo ya remuxado de la sesión actual es
+ * un seek normal (instantáneo); si no, relanza el troceo desde ahí (~1 s). */
+function seekAbsolute(absT) {
+  const v = videoEl.value
+  if (!v || !duration.value) return
+  absT = Math.min(Math.max(0, absT), duration.value)
+  const rel = absT - streamBase.value
+  // dentro de lo publicado por ffmpeg (con 1.5 s de margen hacia adelante)
+  if (rel >= 0 && rel <= publishedRel.value + 1.5) {
+    restartToken++            // cancela cualquier reinicio pendiente
+    clearTimeout(restartTimer)
+    v.currentTime = rel
+    time.value = absT
+  } else {
+    restartAt(absT)
+  }
+}
+
+function restartAt(absT) {
+  waiting.value = true
+  time.value = absT           // la barra responde ya, aunque el vídeo tarde ~1 s
+  clearTimeout(restartTimer)
+  const my = ++restartToken
+  restartTimer = setTimeout(async () => {
+    try {
+      const r = await api.post('/api/stream/seek', { start_at: absT })
+      if (!p.value || my !== restartToken) return   // cerrado o superado por otro salto
+      streamBase.value = r.start_offset ?? absT
+      if (jassub) jassub.timeOffset = streamBase.value
+      loadHls(r.playlist)
+    } catch (_) {
+      if (my === restartToken) waiting.value = false
+    }
+  }, 260)
 }
 
 /* ═══ eventos del <video> ═══ */
@@ -411,11 +477,13 @@ function onTime() {
   const v = videoEl.value
   if (!v) return
   if (v.currentTime > 0.2 && decodeTimer) { clearTimeout(decodeTimer); decodeTimer = null; decodeFailed.value = false }
-  time.value = v.currentTime
-  if (v.duration && isFinite(v.duration)) duration.value = v.duration
+  // tiempo ABSOLUTO = base de la sesión + posición relativa del <video>.
+  // duration NO se toca: es la del episodio completo (sess.duration), no la de
+  // la sesión (que arranca en streamBase y sería más corta).
+  time.value = streamBase.value + v.currentTime
   try {
     const b = v.buffered
-    buffered.value = b.length ? b.end(b.length - 1) : 0
+    buffered.value = streamBase.value + (b.length ? b.end(b.length - 1) : 0)
   } catch (_) {}
 }
 function onEnded() {
@@ -473,11 +541,10 @@ function togglePlay() {
   else { v.pause(); showRipple('pause') }
 }
 function seekTo(ev) {
-  const v = videoEl.value
-  if (!v || !duration.value) return
+  if (!duration.value) return
   const r = ev.currentTarget.getBoundingClientRect()
   const frac = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width))
-  v.currentTime = frac * duration.value
+  seekAbsolute(frac * duration.value)
   poke()
 }
 
@@ -503,8 +570,7 @@ const thumbUrl = computed(() => {
 // las miniaturas se generan en segundo plano: si aún no existe, solo el tiempo
 watch(thumbUrl, () => { thumbOk.value = false })
 function skip(secs) {
-  const v = videoEl.value
-  if (v) v.currentTime = Math.min(Math.max(0, v.currentTime + secs), duration.value || 1e9)
+  seekAbsolute(time.value + secs)
   showSeekBubble(secs)
   poke()
 }
@@ -541,7 +607,7 @@ function onFsChange() {
 
 function openInMpv() {
   const { anime, ep } = p.value
-  const pos = videoEl.value?.currentTime || 0
+  const pos = time.value   // absoluto: MPV abre en la posición real
   close()
   store.setPlayerMode('mpv')
   store.play(anime, ep, '', pos)

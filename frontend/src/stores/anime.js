@@ -647,7 +647,10 @@ export const useAnimeStore = defineStore('anime', {
          || MediaSource.isTypeSupported('video/mp4; codecs="hev1.2.4.L153.B0"'))
       try {
         const sess = await api.post('/api/stream/open',
-          { ...base, audio, hevc_ok: hevcOk, force_transcode: forceTranscode })
+          { ...base, audio, hevc_ok: hevcOk, force_transcode: forceTranscode,
+            // posición explícita (cambio de audio/reintento/continuar) → el
+            // backend trocea directamente desde ahí; 0 = usa el resume guardado
+            ...(startPos > 0 ? { start_at: startPos } : {}) })
         if (!this.player) return           // cerrado mientras abría
         this.player.sess = sess
         this.player.loading = false
