@@ -6,6 +6,7 @@ import { useMangaStore } from '@/stores/manga'
 import { useAnimeStore } from '@/stores/anime'
 import { formatBytes } from '@/lib/format'
 import Icon from '@/components/ui/Icon.vue'
+import Spinner from '@/components/ui/Spinner.vue'
 import FolderPicker from '@/components/anime/FolderPicker.vue'
 
 const ui = useUiStore()
@@ -22,12 +23,43 @@ async function clearQa() {
   await manga.qaClear(); loadQa()
 }
 
+// ── Almacenamiento ──────────────────────────────────────────────────────────
+const storage = ref(null)
+const storageLoading = ref(false)
+const storageBusy = ref('')
+async function loadStorage() {
+  storageLoading.value = true
+  try { storage.value = await api.get('/api/storage/summary') }
+  catch (_) { storage.value = null }
+  finally { storageLoading.value = false }
+}
+async function purge(target, series = null) {
+  const key = series ? `up:${series}` : target
+  storageBusy.value = key
+  try {
+    const res = await api.post('/api/storage/purge', { target, ...(series ? { series } : {}) })
+    ui.toast(`Liberado ${formatBytes(res.freed || 0)}`, 'ok')
+    await loadStorage()
+  } catch (_) { ui.toast('No se pudo liberar espacio', 'error') }
+  finally { storageBusy.value = '' }
+}
+function purgeStreamCache() { purge('stream_cache') }
+function purgeAllUpscaled() {
+  if (!confirm('¿Borrar TODAS las copias escaladas 4K? Se pueden regenerar volviendo a escalar (los originales no se tocan).')) return
+  purge('upscaled')
+}
+function purgeSeriesUpscaled(s) {
+  if (!confirm(`¿Borrar la copia 4K de "${s.name}"? Se puede regenerar volviendo a escalar.`)) return
+  purge('upscaled', s.name)
+}
+
 onMounted(() => {
   if (!Object.keys(manga.models).length) manga.loadModels()
   manga.loadDestinations()
   anime.loadDlSettings()
   anime.checkQbt()
   loadQa()
+  loadStorage()
 })
 
 const phoneCopied = ref(false)
@@ -160,6 +192,65 @@ async function onImportFile(e) {
       <p class="hint">Los casos se guardan en <code>data/_translation_qa/</code> (salida + arte EN + ES emparejada + overlay + diagnóstico) para afinar el algoritmo. Apagar el modo no borra lo ya guardado.</p>
     </section>
 
+    <!-- Almacenamiento -->
+    <section class="card">
+      <div class="card__title">
+        <Icon name="folder" :size="16" /> Almacenamiento
+        <span v-if="storage" class="stg__total">{{ formatBytes(storage.totals.total) }}</span>
+        <button class="btn btn--xs stg__refresh" :disabled="storageLoading" @click="loadStorage" title="Recalcular">
+          <Icon name="refresh" :size="13" />
+        </button>
+      </div>
+
+      <div v-if="storageLoading && !storage" class="stg__loading"><Spinner :size="22" /> Calculando uso de disco…</div>
+
+      <template v-else-if="storage">
+        <!-- Desglose por tipo -->
+        <div class="stg__bar" :aria-label="'Uso de disco'">
+          <span class="stg__seg stg__seg--orig" :style="{ flexGrow: storage.totals.original || 0.0001 }" title="Originales descargados" />
+          <span class="stg__seg stg__seg--up" :style="{ flexGrow: storage.totals.upscaled || 0.0001 }" title="Escalado 4K" />
+          <span class="stg__seg stg__seg--cache" :style="{ flexGrow: (storage.totals.stream_cache + storage.totals.qa) || 0.0001 }" title="Cachés" />
+        </div>
+        <div class="stg__legend">
+          <span><i class="stg__dot stg__dot--orig" /> Originales <b>{{ formatBytes(storage.totals.original) }}</b></span>
+          <span><i class="stg__dot stg__dot--up" /> Escalado 4K <b>{{ formatBytes(storage.totals.upscaled) }}</b></span>
+          <span><i class="stg__dot stg__dot--cache" /> Cachés <b>{{ formatBytes(storage.totals.stream_cache + storage.totals.qa) }}</b></span>
+        </div>
+
+        <!-- Acciones globales -->
+        <div class="row stg__actions">
+          <button class="btn" :disabled="storageBusy === 'stream_cache' || !storage.totals.stream_cache" @click="purgeStreamCache">
+            <Icon name="close" :size="13" /> Vaciar caché de streaming
+            <span class="stg__free">{{ formatBytes(storage.totals.stream_cache) }}</span>
+          </button>
+          <button class="btn btn--danger" :disabled="storageBusy === 'upscaled' || !storage.totals.upscaled" @click="purgeAllUpscaled">
+            <Icon name="spark" :size="13" /> Borrar todo el escalado 4K
+            <span class="stg__free">{{ formatBytes(storage.totals.upscaled) }}</span>
+          </button>
+        </div>
+        <p class="hint">El escalado 4K es regenerable (se puede volver a escalar) y la caché de streaming es efímera. Los originales descargados nunca se borran desde aquí.</p>
+
+        <!-- Series que más ocupan -->
+        <div v-if="storage.series.length" class="sep" />
+        <div class="stg__list">
+          <div v-for="s in storage.series.slice(0, 12)" :key="s.name" class="stg__row">
+            <div class="stg__row-main">
+              <span class="stg__name" :title="s.name">{{ s.name }}</span>
+              <span class="stg__meta">
+                {{ formatBytes(s.original_bytes) }} orig.
+                <template v-if="s.upscaled_bytes"> · <b class="stg__up">{{ formatBytes(s.upscaled_bytes) }} 4K</b></template>
+                <template v-if="s.translated_chapters"> · <span class="stg__tr">ES {{ s.translated_chapters }}</span></template>
+              </span>
+            </div>
+            <button v-if="s.upscaled_bytes" class="btn btn--danger btn--xs" :disabled="storageBusy === `up:${s.name}`"
+                    @click="purgeSeriesUpscaled(s)" :title="`Borrar la copia 4K de ${s.name}`">
+              <Icon name="close" :size="12" /> 4K
+            </button>
+          </div>
+        </div>
+      </template>
+    </section>
+
     <!-- Backup de biblioteca -->
     <section class="card">
       <div class="card__title"><Icon name="download" :size="16" /> Respaldo de biblioteca</div>
@@ -230,6 +321,32 @@ async function onImportFile(e) {
 .dest__ok { color: var(--jade); font-size: var(--fs-sm); }
 .dest__link { color: var(--azure-bright); font-size: var(--fs-sm); }
 .dest__muted { color: var(--ink-faint); font-size: var(--fs-sm); }
+
+/* Almacenamiento */
+.stg__total { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink-faint); font-weight: 500; }
+.stg__refresh { margin-left: auto; padding: 4px 8px; }
+.stg__loading { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); color: var(--ink-faint); padding: var(--s-2) 0; }
+.stg__bar { display: flex; height: 10px; border-radius: var(--r-pill); overflow: hidden; background: var(--surface-2); margin-bottom: var(--s-3); }
+.stg__seg { min-width: 2px; transition: flex-grow var(--t-base); }
+.stg__seg--orig { background: var(--azure); }
+.stg__seg--up { background: var(--cyan); }
+.stg__seg--cache { background: var(--ink-ghost); }
+.stg__legend { display: flex; gap: var(--s-4); flex-wrap: wrap; font-size: var(--fs-xs); color: var(--ink-faint); margin-bottom: var(--s-4); }
+.stg__legend b { color: var(--ink); font-weight: 600; margin-left: 3px; }
+.stg__dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: baseline; }
+.stg__dot--orig { background: var(--azure); }
+.stg__dot--up { background: var(--cyan); }
+.stg__dot--cache { background: var(--ink-ghost); }
+.stg__actions { margin-bottom: var(--s-2); }
+.stg__free { font-family: var(--font-mono); font-size: var(--fs-2xs); opacity: .7; margin-left: 4px; }
+.stg__list { display: flex; flex-direction: column; gap: 2px; }
+.stg__row { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-2); border-radius: var(--r-sm); }
+.stg__row:hover { background: var(--surface-2); }
+.stg__row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.stg__name { font-size: var(--fs-sm); color: var(--ink); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stg__meta { font-size: var(--fs-2xs); color: var(--ink-faint); font-family: var(--font-mono); }
+.stg__up { color: var(--cyan); font-weight: 600; }
+.stg__tr { color: var(--jade); }
 
 @media (max-width: 560px) { .set { padding: 0 var(--s-4) var(--s-8); } }
 </style>

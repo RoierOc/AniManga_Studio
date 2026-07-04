@@ -31,9 +31,16 @@ function openMangaFromGroup(m, groupSource) {
         <p class="eyebrow"><span class="tick" /> EXTENSIONES MIHON / SUWAYOMI</p>
         <h1>Fuentes</h1>
       </div>
-      <span class="src__status" :class="{ 'is-on': store.online, 'is-starting': store.starting }">
-        <span class="dot" /> {{ store.online ? `${store.sources.length} fuentes` : (store.starting ? 'Arrancando fuentes…' : 'Suwayomi offline') }}
-      </span>
+      <div class="src__head-r">
+        <button class="src__webui" :disabled="store.openingWebUI" @click="store.openWebUI()"
+          title="Abrir Suwayomi (:4567) para instalar extensiones y elegir fuentes">
+          <Icon name="external" :size="15" />
+          {{ store.openingWebUI ? 'Abriendo…' : 'Gestionar fuentes' }}
+        </button>
+        <span class="src__status" :class="{ 'is-on': store.online, 'is-starting': store.starting }">
+          <span class="dot" /> {{ store.online ? `${store.sources.length} fuentes` : (store.starting ? 'Arrancando fuentes…' : 'Suwayomi offline') }}
+        </span>
+      </div>
     </header>
 
     <div v-if="store.checked && !store.online && store.starting" class="offline">
@@ -43,7 +50,12 @@ function openMangaFromGroup(m, groupSource) {
     <div v-else-if="store.checked && !store.online" class="offline">
       <Icon name="globe" :size="36" />
       <p>Suwayomi no está corriendo (puerto 4567).</p>
-      <button class="btn" @click="store.checkHealth()">Reintentar</button>
+      <div class="offline__btns">
+        <button class="btn btn--ghost" @click="store.checkHealth()">Reintentar</button>
+        <button class="btn" :disabled="store.openingWebUI" @click="store.openWebUI()">
+          <Icon name="external" :size="14" /> {{ store.openingWebUI ? 'Abriendo…' : 'Arrancar y gestionar fuentes' }}
+        </button>
+      </div>
     </div>
 
     <template v-else>
@@ -157,8 +169,19 @@ function openMangaFromGroup(m, groupSource) {
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-ghost); }
 .src__status.is-on .dot { background: var(--jade); box-shadow: 0 0 10px color-mix(in srgb, var(--jade) 60%, transparent); }
 
+.src__head-r { display: flex; align-items: center; gap: var(--s-3); }
+.src__webui { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); font-weight: 500; color: var(--ink-soft); padding: 6px 12px; border-radius: var(--r-pill); border: 1px solid var(--line); background: var(--surface); transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast); }
+.src__webui:hover:not(:disabled) { color: var(--ink); border-color: var(--azure); background: var(--azure-haze); }
+.src__webui:hover:not(:disabled) :deep(svg) { color: var(--azure-bright); }
+.src__webui:disabled { opacity: .6; cursor: default; }
+
 .offline { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-9) 0; color: var(--ink-faint); text-align: center; }
-.btn { padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); }
+.offline__btns { display: flex; gap: var(--s-3); flex-wrap: wrap; justify-content: center; }
+.btn { display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); border: 1px solid transparent; transition: background var(--t-fast); }
+.btn:hover:not(:disabled) { background: var(--azure-bright); }
+.btn:disabled { opacity: .6; cursor: default; }
+.btn--ghost { background: transparent; color: var(--ink-soft); border-color: var(--line-strong); }
+.btn--ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--ink); }
 
 .bigbox { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-4); background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-lg); color: var(--ink-faint); transition: border-color var(--t-fast), box-shadow var(--t-fast); }
 .bigbox:focus-within { border-color: var(--azure); box-shadow: 0 0 0 4px var(--azure-haze); }

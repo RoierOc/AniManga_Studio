@@ -21,6 +21,7 @@ const PATHS = {
   upload:  '<path d="M12 15V3m0 0 4 4m-4-4-4 4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
   plus:    '<path d="M12 5v14M5 12h14"/>',
   screen:  '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
+  refresh: '<path d="M20 11A8 8 0 0 0 6.3 6.3L4 8.5"/><path d="M4 4v4.5h4.5"/><path d="M4 13a8 8 0 0 0 13.7 4.7L20 15.5"/><path d="M20 20v-4.5h-4.5"/>',
 }
 defineProps({ name: { type: String, required: true }, size: { type: [Number, String], default: 20 } })
 </script>

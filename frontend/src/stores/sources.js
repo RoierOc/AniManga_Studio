@@ -9,6 +9,8 @@ export const useSourcesStore = defineStore('sources', {
     starting: false,   // JVM on-demand arrancando (splash "arrancando fuentes…")
     checked: false,
     sources: [],
+    webuiUrl: '',      // WebUI propia de Suwayomi (:4567) para gestionar extensiones/fuentes
+    openingWebUI: false,
 
     // Array of selected source IDs (never Set — Pinia can't serialize Set)
     activeSources: [],
@@ -50,6 +52,7 @@ export const useSourcesStore = defineStore('sources', {
         const h = await api.get('/api/sources/health?wake=1')
         this.online = !!h?.online
         starting = !!h?.starting
+        if (h?.url) this.webuiUrl = h.url.replace('localhost', '127.0.0.1')
       }
       catch (_) { this.online = false }
       finally { this.checked = true }
@@ -57,6 +60,37 @@ export const useSourcesStore = defineStore('sources', {
       if (this.online) { this.starting = false; if (!this.sources.length) this.loadSources(); return }
       if (retries > 0) setTimeout(() => this.checkHealth(retries - 1), 5000)
       else this.starting = false
+    },
+
+    // Abre la WebUI de Suwayomi (:4567) en una pestaña nueva para instalar
+    // extensiones y elegir fuentes. Como la JVM es on-demand, la despierta antes
+    // de navegar. Abre la pestaña YA (dentro del click) para no chocar con el
+    // bloqueador de popups; si no arranca, la cierra.
+    async openWebUI() {
+      const url = this.webuiUrl || 'http://127.0.0.1:4567'
+      if (this.online) { window.open(url, '_blank', 'noopener'); return }
+      const win = window.open('', '_blank')
+      this.openingWebUI = true
+      this.starting = true
+      try {
+        await api.get('/api/sources/health?wake=1')  // dispara el arranque en el backend
+        for (let i = 0; i < 16; i++) {
+          await new Promise((r) => setTimeout(r, 2000))
+          const h = await api.get('/api/sources/health').catch(() => null)
+          if (h?.online) {
+            this.online = true; this.starting = false; this.openingWebUI = false
+            if (!this.sources.length) this.loadSources()
+            if (win) win.location = url; else window.open(url, '_blank', 'noopener')
+            return
+          }
+        }
+        this.starting = false; this.openingWebUI = false
+        if (win) win.close()
+        useUiStore().toast('El servidor de fuentes tardó demasiado en arrancar', 'error')
+      } catch (_) {
+        this.starting = false; this.openingWebUI = false
+        if (win) win.close()
+      }
     },
     async loadSources() {
       try { this.sources = await api.get('/api/sources/list') || [] } catch (_) {}
