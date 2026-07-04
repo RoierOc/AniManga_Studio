@@ -678,6 +678,34 @@ function toggleFs() {
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {})
   else wrap.value?.requestFullscreen().catch(() => {})
 }
+
+/* Transmisión a un monitor concreto (Window Management API). Pone el player a
+ * pantalla completa en la pantalla elegida — es la MISMA ventana, así que
+ * conserva Anime4K y la calidad tal cual (útil con varios monitores + TV HDMI). */
+const screens = ref([])
+async function openScreenPicker() {
+  if (!('getScreenDetails' in window)) { toggleFs(); return }   // navegador viejo
+  try {
+    const det = await window.getScreenDetails()
+    screens.value = det.screens.map((s, i) => ({
+      label: s.label || `Pantalla ${i + 1}`, primary: s.isPrimary,
+      dims: `${s.width}×${s.height}`, _detail: s,
+    }))
+    if (screens.value.length <= 1) { toggleFs(); return }        // una sola → normal
+    menuOpen.value = menuOpen.value === 'cast' ? '' : 'cast'
+  } catch (_) {
+    toggleFs()   // permiso denegado / no disponible → fullscreen normal
+  }
+}
+async function castToScreen(scr) {
+  menuOpen.value = ''
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen().catch(() => {})
+    await wrap.value?.requestFullscreen({ screen: scr._detail })
+  } catch (_) {
+    wrap.value?.requestFullscreen().catch(() => {})   // fallback sin target
+  }
+}
 function onFsChange() {
   isFs.value = !!document.fullscreenElement
   requestAnimationFrame(() => {
@@ -947,6 +975,17 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
                   title="Lista de episodios" @click="epPanel = !epPanel">
             <Icon name="menu" :size="14" /> Episodios
           </button>
+          <div class="wp__menuwrap">
+            <button class="wp__ic" :class="{ 'is-on': menuOpen === 'cast' }" title="Transmitir a otro monitor" @click="openScreenPicker">
+              <Icon name="screen" :size="18" />
+            </button>
+            <div v-if="menuOpen === 'cast'" class="wp__menu">
+              <div class="wp__menu-h">Reproducir en…</div>
+              <button v-for="(s, i) in screens" :key="'sc' + i" @click="castToScreen(s)">
+                {{ s.label }}<small>{{ s.dims }}{{ s.primary ? ' · principal' : '' }}</small>
+              </button>
+            </div>
+          </div>
           <button class="wp__ic" :title="isFs ? 'Salir de pantalla completa' : 'Pantalla completa'" @click="toggleFs">
             <Icon name="external" :size="18" />
           </button>
@@ -1211,6 +1250,9 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 .wp__menu button:hover { background: var(--azure-haze); color: #fff; }
 .wp__menu button.is-sel { color: var(--azure-bright); font-weight: 700; }
+.wp__menu-h { padding: var(--s-2) var(--s-3) var(--s-1); font-size: var(--fs-2xs);
+  text-transform: uppercase; letter-spacing: .04em; color: var(--ink-dim); }
+.wp__menu button small { display: block; font-size: var(--fs-2xs); color: var(--ink-dim); margin-top: 2px; }
 
 /* tamaño de subtítulos (stepper fijo arriba del menú; las pistas scrollean debajo) */
 .wp__subsize {
