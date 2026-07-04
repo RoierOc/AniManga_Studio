@@ -42,10 +42,6 @@ const initials = computed(() =>
         <span v-if="status" class="card__status" :style="{ '--c': status.color }">{{ status.label }}</span>
       </div>
 
-      <div class="card__hover">
-        <button class="card__open"><Icon name="play" :size="18" /></button>
-      </div>
-
       <!-- Title + stats overlaid on the poster bottom -->
       <div class="card__overlay">
         <h3 class="card__title">{{ manga.name }}</h3>
@@ -127,19 +123,6 @@ const initials = computed(() =>
   color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent);
   border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); backdrop-filter: blur(6px);
 }
-
-.card__hover {
-  position: absolute; inset: 0; display: grid; place-items: center;
-  opacity: 0; transition: opacity var(--t-base) var(--ease-silk);
-}
-.card:hover .card__hover, .card:focus-visible .card__hover { opacity: 1; }
-.card__open {
-  width: 52px; height: 52px; display: grid; place-items: center;
-  border-radius: 50%; color: #fff;
-  background: var(--azure); box-shadow: var(--glow-azure);
-  transform: scale(0.8); transition: transform var(--t-base) var(--ease-snap);
-}
-.card:hover .card__open { transform: scale(1); }
 
 .card__overlay {
   position: absolute; left: 0; right: 0; bottom: 0;

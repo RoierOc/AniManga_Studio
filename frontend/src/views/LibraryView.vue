@@ -20,6 +20,33 @@ const search = ref('')
 const filter = ref('all')
 const statusFilter = ref('all')
 const showHistory = ref(false)
+const sort = ref(localStorage.getItem('lib-sort') || 'title')
+const SORTS = [
+  { id: 'title', label: 'Título' },
+  { id: 'recent', label: 'Leído reciente' },
+  { id: 'chapters', label: 'Capítulos' },
+  { id: 'updates', label: 'Novedades' },
+  { id: 'size', label: 'Tamaño' },
+]
+watch(sort, (s) => { localStorage.setItem('lib-sort', s); if (s === 'size') ensureSizes() })
+
+// Tamaño real por serie: se pide una sola vez, de forma perezosa, al ordenar por tamaño.
+const sizeMap = ref(null)
+async function ensureSizes() {
+  if (sizeMap.value) return
+  try {
+    const d = await api.get('/api/storage/summary')
+    const m = {}
+    for (const s of (d.series || [])) m[s.name] = (s.original_bytes || 0) + (s.upscaled_bytes || 0)
+    sizeMap.value = m
+  } catch (_) { sizeMap.value = {} }
+}
+// Ranking de "leído recientemente" (título → posición); los no leídos van al final.
+const readRank = computed(() => {
+  const rank = {}
+  manga.recentlyRead(999).forEach((r, i) => { rank[r.title] = i })
+  return rank
+})
 
 const FILTERS = computed(() => [
   { id: 'all', label: 'Todo' },
@@ -52,7 +79,16 @@ const filtered = computed(() => {
   if (statusFilter.value !== 'all') list = list.filter(m => m.status === statusFilter.value)
   const q = search.value.trim().toLowerCase()
   if (q) list = list.filter(m => (m.name || '').toLowerCase().includes(q))
-  return list
+
+  const upd = (m) => manga.updatesByTitle[m.name]?.new_count || 0
+  const cmp = {
+    title: (a, b) => (a.name || '').localeCompare(b.name || ''),
+    chapters: (a, b) => (b.chapter_count || 0) - (a.chapter_count || 0),
+    updates: (a, b) => upd(b) - upd(a),
+    recent: (a, b) => (readRank.value[a.id] ?? 1e9) - (readRank.value[b.id] ?? 1e9),
+    size: (a, b) => ((sizeMap.value?.[b.id] || 0) - (sizeMap.value?.[a.id] || 0)),
+  }[sort.value]
+  return cmp ? [...list].sort(cmp) : list
 })
 
 const totals = computed(() => ({
@@ -136,7 +172,7 @@ async function findCovers() {
   } catch (_) { ui.toast('Error buscando portadas', 'error') }
   finally { findingCovers.value = false }
 }
-onMounted(() => { load(); if (!manga.updatesLoaded) manga.loadUpdates() })
+onMounted(() => { load(); if (!manga.updatesLoaded) manga.loadUpdates(); if (sort.value === 'size') ensureSizes() })
 // Reload the grid after a manga is deleted from the modal.
 watch(() => manga.libraryDirty, () => load())
 </script>
@@ -194,6 +230,12 @@ watch(() => manga.libraryDirty, () => load())
           <span v-if="manga.offlineCovers?.running" class="covspin" /><Icon v-else name="download" :size="14" />
           <span v-if="manga.offlineCovers?.running">{{ manga.offlineCovers.done }}/{{ manga.offlineCovers.total }}</span><span v-else>Offline</span>
         </button>
+        <label class="sortbox" title="Ordenar la biblioteca">
+          <Icon name="chevron" :size="13" class="sortbox__ic" />
+          <select v-model="sort">
+            <option v-for="s in SORTS" :key="s.id" :value="s.id">{{ s.label }}</option>
+          </select>
+        </label>
         <label class="searchbox">
           <Icon name="search" :size="15" />
           <input v-model="search" type="search" placeholder="Filtrar series…" />
@@ -312,6 +354,16 @@ watch(() => manga.libraryDirty, () => load())
 }
 .searchbox:focus-within { border-color: var(--azure); box-shadow: 0 0 0 3px var(--azure-haze); }
 .searchbox input { flex: 1; border: none; outline: none; background: none; color: var(--ink); font-size: var(--fs-sm); }
+.sortbox {
+  display: flex; align-items: center; gap: 4px;
+  padding: var(--s-2) var(--s-2) var(--s-2) var(--s-3);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
+  color: var(--ink-faint); transition: border-color var(--t-fast);
+}
+.sortbox:focus-within { border-color: var(--azure); }
+.sortbox__ic { transform: rotate(90deg); flex: none; }
+.sortbox select { border: none; outline: none; background: none; color: var(--ink); font-size: var(--fs-sm); cursor: pointer; padding-right: 2px; }
+.sortbox select option { background: var(--surface); color: var(--ink); }
 .tb-right { display: flex; align-items: center; gap: var(--s-2); }
 .covbtn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-md); font-size: var(--fs-sm); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .covbtn:hover:not(:disabled) { color: var(--azure-bright); border-color: var(--azure); }
