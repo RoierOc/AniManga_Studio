@@ -138,36 +138,6 @@ def read_chapter():
             out.append(f"{actual_folder}/{p}")
     return jsonify({'pages': out, 'folder': actual_folder, 'source': resolved})
 
-@reader_bp.route('/read_compare', methods=['POST'])
-def read_compare():
-    """Serve pages from a _compare subfolder for scanlation comparison."""
-    data = request.get_json()
-    title       = data.get('title')
-    chapter     = data.get('chapter')
-    compare_dir = data.get('compare_dir')   # e.g. "_compare/ch0001_TCBScans_en"
-
-    if not all([title, chapter, compare_dir]):
-        return jsonify({'error': 'title, chapter, compare_dir required'}), 400
-
-    from api.library import find_manga_folder
-    actual_folder = find_manga_folder(title)
-    chapter_prefix = _chapter_prefix(chapter)
-    folder = Path(MANGA_DIR) / actual_folder / compare_dir
-
-    if not folder.exists():
-        return jsonify({'pages': [], 'error': 'Comparison folder not found'})
-
-    pages = []
-    for ext in ['jpg', 'png', 'webp']:
-        pages.extend(sorted(f.name for f in folder.glob(f'{chapter_prefix}*.{ext}')))
-    pages = sorted(pages)
-
-    return jsonify({
-        'pages': [f"{actual_folder}/{compare_dir}/{p}" for p in pages],
-        'folder': actual_folder,
-        'compare_dir': compare_dir,
-    })
-
 
 @reader_bp.route('/random')
 def random_chapter():
