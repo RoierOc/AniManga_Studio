@@ -10,7 +10,7 @@ import random
 import time
 from decimal import Decimal, InvalidOperation
 
-from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter
+from api.runtime import manga_dir, upscaled_dir, normalize_chapter
 
 
 def _chapter_prefix(chapter):
@@ -29,7 +29,7 @@ reader_bp = Blueprint('reader', __name__)
 # ── Reading history ──────────────────────────────────────────────────────
 
 def _history_path():
-    return Path(MANGA_DIR) / 'reading_history.json'
+    return Path(manga_dir()) / 'reading_history.json'
 
 def _history_read():
     try:
@@ -102,8 +102,8 @@ def read_chapter():
             pages.extend(sorted(f.name for f in folder_path.glob(f'{chapter_prefix}*.{ext}')))
         return sorted(pages)
 
-    upscaled_folder = Path(UPSCALED_DIR) / actual_folder
-    original_folder = Path(MANGA_DIR) / actual_folder
+    upscaled_folder = Path(upscaled_dir()) / actual_folder
+    original_folder = Path(manga_dir()) / actual_folder
 
     if source == 'original':
         folder = original_folder
@@ -143,7 +143,7 @@ def read_chapter():
 def random_chapter():
     all_chapters = []
     
-    for folder in Path(MANGA_DIR).iterdir():
+    for folder in Path(manga_dir()).iterdir():
         if not folder.is_dir():
             continue
         
@@ -157,7 +157,7 @@ def random_chapter():
     import random
     title = random.choice(all_chapters)
     
-    images = list((Path(MANGA_DIR) / title).glob('*.jpg'))
+    images = list((Path(manga_dir()) / title).glob('*.jpg'))
     if images:
         ch = images[0].stem.split('_')[0][2:]
     else:

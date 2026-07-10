@@ -22,6 +22,13 @@ const PATHS = {
   plus:    '<path d="M12 5v14M5 12h14"/>',
   screen:  '<rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/>',
   refresh: '<path d="M20 11A8 8 0 0 0 6.3 6.3L4 8.5"/><path d="M4 4v4.5h4.5"/><path d="M4 13a8 8 0 0 0 13.7 4.7L20 15.5"/><path d="M20 20v-4.5h-4.5"/>',
+  // Cuatro flechas hacia las esquinas → entrar a pantalla completa.
+  expand:  '<path d="M8 3H4a1 1 0 0 0-1 1v4"/><path d="M16 3h4a1 1 0 0 1 1 1v4"/><path d="M16 21h4a1 1 0 0 0 1-1v-4"/><path d="M8 21H4a1 1 0 0 1-1-1v-4"/>',
+  // Cuatro flechas hacia el centro → salir de pantalla completa.
+  collapse:'<path d="M3 8h4a1 1 0 0 0 1-1V3"/><path d="M21 8h-4a1 1 0 0 1-1-1V3"/><path d="M21 16h-4a1 1 0 0 0-1 1v4"/><path d="M3 16h4a1 1 0 0 1 1 1v4"/>',
+  trash:   '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7v13a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7"/><path d="M10 11v6M14 11v6"/>',
+  // Grid 2x2 → cobertura por capítulo (heatmap capítulo×fuente).
+  grid:    '<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/>',
 }
 defineProps({ name: { type: String, required: true }, size: { type: [Number, String], default: 20 } })
 </script>

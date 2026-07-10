@@ -27,6 +27,8 @@ body {
   text-rendering: optimizeLegibility;
   min-height: 100vh;
   overflow-x: hidden;
+  /* Deja hueco arriba para la barra de título propia (0 fuera de la shell nativa). */
+  padding-top: var(--titlebar-h);
 }
 
 /* ── Atmosphere: cosmos glow + analog noise grain ─────────────────────────

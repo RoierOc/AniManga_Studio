@@ -596,8 +596,11 @@ def unfollow_manga(manga_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
-# Local library management
-LIBRARY_FILE = str(Path(MANGA_DIR) / "local_library.json")
+# Local library management. Resuelto en tiempo de llamada (no congelado al
+# importar) para que en modo oculto la lista de seguidos viva bajo la raíz oculta.
+def _library_file() -> str:
+    from api.runtime import manga_dir
+    return str(Path(manga_dir()) / "local_library.json")
 
 
 def _normalize_library_entry(entry):
@@ -618,9 +621,10 @@ def _normalize_library_entry(entry):
 
 def load_local_library():
     """Load local library from JSON"""
-    if os.path.exists(LIBRARY_FILE):
+    library_file = _library_file()
+    if os.path.exists(library_file):
         try:
-            with open(LIBRARY_FILE, "r") as f:
+            with open(library_file, "r") as f:
                 raw = json.load(f)
 
             if not isinstance(raw, list):
@@ -645,8 +649,9 @@ def load_local_library():
 
 def save_local_library(lib):
     """Save local library to JSON"""
-    os.makedirs(os.path.dirname(LIBRARY_FILE), exist_ok=True)
-    with open(LIBRARY_FILE, "w") as f:
+    library_file = _library_file()
+    os.makedirs(os.path.dirname(library_file), exist_ok=True)
+    with open(library_file, "w") as f:
         json.dump(lib, f, indent=2)
 
 @auth_bp.route('/local_library')
@@ -815,7 +820,8 @@ def manga_updates():
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
     lib = load_local_library()
-    manga_dir_path = Path(MANGA_DIR)
+    from api.runtime import manga_dir
+    manga_dir_path = Path(manga_dir())
 
     # Collect entries that have local chapters on disk
     candidates = []  # [(manga_id, title, cover, local_chs)]

@@ -16,6 +16,8 @@ from decimal import Decimal, InvalidOperation
 from api.runtime import (
     MANGA_DIR,
     UPSCALED_DIR,
+    manga_dir,
+    upscaled_dir,
     PROJECT_ROOT,
     PYTHON_EXECUTABLE,
     build_task_id,
@@ -217,7 +219,7 @@ def download_manga():
     if not manga_id:
         return jsonify({'status': 'error', 'message': 'mangaId required'}), 400
     
-    folder = Path(MANGA_DIR) / title
+    folder = Path(manga_dir()) / title
     folder.mkdir(parents=True, exist_ok=True)
 
     download_id = f"{sanitize_title_for_id(title)}_download_all"
@@ -231,7 +233,7 @@ def download_manga():
 def _run_download_chapter(download_id, title, chapter_norm, chapter_id, manga_id):
     """Background thread: resolve chapter ID if needed, then download all pages."""
     with _dl_semaphore:
-        folder = Path(MANGA_DIR) / title
+        folder = Path(manga_dir()) / title
         folder.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -412,14 +414,14 @@ def delete_chapter():
         deleted = 0
 
         # Delete from downloaded folder
-        folder = Path(MANGA_DIR) / title
+        folder = Path(manga_dir()) / title
         if folder.exists():
             for f in folder.glob(pattern):
                 f.unlink()
                 deleted += 1
 
         # Also delete from upscaled folder
-        upscaled_folder = Path(UPSCALED_DIR) / title
+        upscaled_folder = Path(upscaled_dir()) / title
         if upscaled_folder.exists():
             for f in upscaled_folder.glob(pattern):
                 f.unlink()
@@ -447,8 +449,8 @@ def delete_manga():
 
     try:
         import shutil
-        folder = Path(MANGA_DIR) / title
-        upscaled_folder = Path(UPSCALED_DIR) / title
+        folder = Path(manga_dir()) / title
+        upscaled_folder = Path(upscaled_dir()) / title
 
         deleted = 0
         if folder.exists():
@@ -528,7 +530,7 @@ def download_source_chapter():
 def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=None, manga_id=None, source_name=None, source_lang=None):
     import json as _json
     with _dl_semaphore:
-        folder = Path(MANGA_DIR) / title
+        folder = Path(manga_dir()) / title
         folder.mkdir(parents=True, exist_ok=True)
         # Persist source context so the library can reload chapters from Suwayomi
         if source_id and manga_id:
@@ -656,7 +658,7 @@ def run_download(download_id, manga_id, title, max_chapters):
 
         chapters = sorted(chapters_by_num.keys(), key=lambda x: float(x) if x.replace('.', '').isdigit() else 0, reverse=True)[:max_chapters]
 
-        folder = Path(MANGA_DIR) / title
+        folder = Path(manga_dir()) / title
         folder.mkdir(parents=True, exist_ok=True)
 
         for i, ch in enumerate(chapters):

@@ -1,4 +1,4 @@
-# Crea el acceso directo "AniManga Studio" en el Menú Inicio apuntando al
+﻿# Crea el acceso directo "AniManga Studio" en el Menú Inicio apuntando al
 # lanzador ya copiado a %LOCALAPPDATA%\AniMangaStudio (lo copia install.sh).
 # Se invoca desde WSL: powershell.exe -File "$(wslpath -w desktop/windows/install-shortcut.ps1)"
 $ErrorActionPreference = "Stop"

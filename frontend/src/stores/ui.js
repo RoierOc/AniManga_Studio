@@ -1,4 +1,6 @@
 import { defineStore } from 'pinia'
+import { api } from '@/lib/api'
+import { isNative, send as nativeSend } from '@/lib/nativeBridge'
 import { useAnimeStore } from './anime'
 import { useMangaStore } from './manga'
 
@@ -47,6 +49,14 @@ const LEGACY_VIEWS = { mangadex: 'explore', sources: 'explore', local: 'library'
 const VALID = new Set([...VIEWS.flatMap(g => g.items.map(i => i.id)), ...EXTRA_VIEWS])
 function _normView(v) { v = LEGACY_VIEWS[v] || v; return VALID.has(v) ? v : 'library' }
 
+// El wrapper de api guarda el cuerpo del error como texto crudo en `e.body`;
+// extrae el {error, retry_after} JSON del backend de la biblioteca oculta.
+function _hiddenErr(e) {
+  let error = e?.message || 'error', retry_after = 0
+  try { const j = JSON.parse(e?.body || '{}'); if (j.error) error = j.error; if (j.retry_after) retry_after = j.retry_after } catch {}
+  return { error, retry_after }
+}
+
 export const useUiStore = defineStore('ui', {
   state: () => {
     const s = loadSession()
@@ -57,6 +67,15 @@ export const useUiStore = defineStore('ui', {
       showShortcuts: false,
       activityOpen: false,         // Activity drawer (slide-over) open
       activityTab: 'active',       // 'active' | 'history' — tab of the full Activity view
+      // Biblioteca oculta: reflejo (solo en memoria) del modo del backend. NUNCA se
+      // persiste ni se restaura de localStorage — se sincroniza desde el backend
+      // (`refreshHiddenStatus`) al arrancar, y el backend siempre vuelve a normal
+      // al reiniciar. `hiddenConfigured` = ya hay un código guardado.
+      hiddenModeActive: false,
+      hiddenConfigured: false,
+      // Pantalla completa unificada (lector, F11). En la shell nativa va por la
+      // ventana (verbo IPC 'fullscreen', borderless real); en navegador, API DOM.
+      fullscreen: false,
       toasts: [],
       _toastSeq: 0,
     }
@@ -127,6 +146,24 @@ export const useUiStore = defineStore('ui', {
     // Go back — used by close/Volver buttons so Forward can reopen what was closed.
     back() { try { window.history.back() } catch {} },
 
+    // ── Pantalla completa unificada ───────────────────────────────────────────
+    // En la shell nativa la ventana entra en fullscreen borderless real (Rust);
+    // en navegador usamos la API DOM. Un solo estado para lector/F11 → nunca se
+    // queda "atascado" (al cerrar el capítulo se llama setFullscreen(false)).
+    setFullscreen(on) {
+      on = !!on
+      this.fullscreen = on
+      if (isNative()) { nativeSend('fullscreen', { on }); return }
+      try {
+        if (on) document.documentElement.requestFullscreen?.()
+        else if (document.fullscreenElement) document.exitFullscreen?.()
+      } catch {}
+    },
+    toggleFullscreen() { this.setFullscreen(!this.fullscreen) },
+    // El usuario puede salir del fullscreen del navegador con Esc/F11 del SO →
+    // App.vue engancha 'fullscreenchange' y sincroniza este flag.
+    _syncFullscreen(on) { this.fullscreen = !!on },
+
     goto(view) {
       const v = LEGACY_VIEWS[view] || view
       if (VALID.has(v)) this.currentView = v
@@ -146,6 +183,44 @@ export const useUiStore = defineStore('ui', {
     // Persist the real current location (survives F5, like a normal web app).
     persist() {
       try { localStorage.setItem(SESSION_KEY, JSON.stringify(this.snapshot())) } catch {}
+    },
+
+    // ── Biblioteca oculta ─────────────────────────────────────────────────────
+    // Sincroniza el estado del modo con el backend (fuente de verdad dentro del
+    // proceso). Se llama al arrancar la app y tras abrir Ajustes.
+    async refreshHiddenStatus() {
+      try {
+        const s = await api.get('/api/config/hidden/status')
+        this.hiddenModeActive = !!s.active
+        this.hiddenConfigured = !!s.configured
+      } catch { /* backend caído: deja los valores actuales */ }
+    },
+
+    // Establece o cambia el código secreto. `current` sólo hace falta si ya había
+    // uno configurado. Devuelve {ok} o {error} para que la vista pinte el mensaje.
+    async setHiddenCode(code, current = '') {
+      try {
+        await api.post('/api/config/hidden/set-code', { code, current_code: current })
+        this.hiddenConfigured = true
+        return { ok: true }
+      } catch (e) {
+        return { ok: false, ..._hiddenErr(e) }
+      }
+    },
+
+    // Alterna el modo oculto verificando el código. En éxito recarga la página:
+    // así TODAS las vistas se re-piden contra la biblioteca correcta sin cablear
+    // recargas por store, y el estado se re-sincroniza desde el backend al volver.
+    async toggleHiddenMode(code) {
+      try {
+        const r = await api.post('/api/config/hidden/toggle', { code })
+        this.hiddenModeActive = !!r.active
+        // Recarga dura para repintar biblioteca/almacenamiento con la raíz activa.
+        try { location.reload() } catch {}
+        return { ok: true, active: !!r.active }
+      } catch (e) {
+        return { ok: false, ..._hiddenErr(e) }
+      }
     },
 
     // action (optional): { label, fn } → renders a button (e.g. "Deshacer").

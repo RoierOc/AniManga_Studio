@@ -52,7 +52,11 @@ const isActive = (item) =>
 
     <!-- Footer status -->
     <div class="sidebar__foot">
-      <div class="status-chip">
+      <div v-if="ui.hiddenModeActive" class="status-chip status-chip--hid" title="Estás en la biblioteca oculta. Vuelve a la principal desde Ajustes.">
+        <span class="status-chip__dot" />
+        <span class="status-chip__text">Biblioteca oculta</span>
+      </div>
+      <div v-else class="status-chip">
         <span class="status-chip__dot" />
         <span class="status-chip__text">Conectado</span>
       </div>
@@ -62,8 +66,8 @@ const isActive = (item) =>
 
 <style scoped>
 .sidebar {
-  position: sticky; top: 0;
-  height: 100vh;
+  position: sticky; top: var(--titlebar-h);
+  height: calc(100vh - var(--titlebar-h));
   width: var(--sidebar-w);
   flex-shrink: 0;
   display: flex; flex-direction: column;
@@ -161,6 +165,8 @@ const isActive = (item) =>
   animation: pulse-live 2.4s var(--ease-drift) infinite;
 }
 .is-collapsed .status-chip__text { display: none; }
+.status-chip--hid { color: var(--violet); font-weight: 600; }
+.status-chip--hid .status-chip__dot { background: var(--violet); box-shadow: 0 0 8px color-mix(in srgb, var(--violet) 65%, transparent); }
 
 /* ── Mobile ───────────────────────────────────────────────────────────── */
 @media (max-width: 860px) {

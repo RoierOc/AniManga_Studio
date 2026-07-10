@@ -6,12 +6,15 @@ import { useAnimeStore } from '@/stores/anime'
 import Icon from '@/components/ui/Icon.vue'
 import Sidebar from '@/components/layout/Sidebar.vue'
 import TopBar from '@/components/layout/TopBar.vue'
+import TitleBar from '@/components/layout/TitleBar.vue'
+import { isNative, onMessage } from '@/lib/nativeBridge'
 import Toaster from '@/components/ui/Toaster.vue'
 import ActivityDrawer from '@/components/ui/ActivityDrawer.vue'
 import ShortcutsModal from '@/components/ui/ShortcutsModal.vue'
 import MangaModal from '@/components/manga/MangaModal.vue'
 import Reader from '@/components/manga/Reader.vue'
 import PlayerOverlay from '@/components/anime/PlayerOverlay.vue'
+import NativePlayerOverlay from '@/components/anime/NativePlayerOverlay.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 
 // Views are code-split into their own chunks (loaded on demand) to shrink the initial
@@ -30,24 +33,59 @@ const SettingsView = defineAsyncComponent(() => import('@/views/SettingsView.vue
 const ui = useUiStore()
 const manga = useMangaStore()
 
+// Dentro de la shell nativa (WebView2 sin marco) pintamos nuestra propia barra de
+// título. La clase en <html> activa el hueco superior (--titlebar-h) global.
+const native = isNative()
+if (native) document.documentElement.classList.add('native-shell')
+
 function onGlobalKey(e) {
+  // F11: pantalla completa, en cualquier contexto. Si hay player nativo abierto
+  // alterna el suyo; si no, el fullscreen unificado (lector/ventana). Se captura
+  // siempre (incluso en inputs) para no ceder al fullscreen del navegador/SO.
+  if (e.key === 'F11') {
+    e.preventDefault()
+    try {
+      const a = useAnimeStore()
+      if (a.nativePlayer) { a.toggleNativeFullscreen(); return }
+    } catch {}
+    ui.toggleFullscreen()
+    return
+  }
   const tag = (e.target?.tagName || '').toLowerCase()
   if (tag === 'input' || tag === 'textarea' || tag === 'select') return
   if (e.key === '?') { e.preventDefault(); ui.showShortcuts = !ui.showShortcuts }
   else if (e.key === 'Escape' && ui.showShortcuts) ui.showShortcuts = false
 }
+
+// Botones laterales del ratón → historial (atrás/adelante). En la shell nativa el
+// evento llega por IPC desde Rust; en navegador los botones ya navegan de serie.
+let _offNav = null
+function onNavigate(d) {
+  if (!d || d.event !== 'navigate') return
+  if (d.dir === 'back') window.history.back()
+  else if (d.dir === 'forward') window.history.forward()
+}
+// El usuario puede salir del fullscreen del navegador con Esc/F11 del SO → sincroniza.
+function onFsChange() { ui._syncFullscreen(!!document.fullscreenElement) }
 onMounted(() => {
   ui.initNav()   // capture the landing view as the first history entry (before any nav),
                  // so browser back/forward traverses the whole app, not just details.
   manga.init()
+  ui.refreshHiddenStatus()   // sincroniza el modo Biblioteca Oculta con el backend
   const anime = useAnimeStore()
   anime.reportCaps()  // qué códecs decodifica este navegador → log backend
   // gancho de depuración local (app 100% local): permite drivear los stores
   // desde CDP/consola para diagnosticar el player sin tocar la UI
   window.__stores = { anime, manga, ui }
   window.addEventListener('keydown', onGlobalKey)
+  document.addEventListener('fullscreenchange', onFsChange)
+  _offNav = onMessage(onNavigate)
 })
-onUnmounted(() => window.removeEventListener('keydown', onGlobalKey))
+onUnmounted(() => {
+  window.removeEventListener('keydown', onGlobalKey)
+  document.removeEventListener('fullscreenchange', onFsChange)
+  if (_offNav) _offNav()
+})
 
 // Every sidebar view has a real component below; the PlaceholderView is only a
 // defensive fallback and should never render in normal use.
@@ -76,6 +114,7 @@ watch(() => ui.currentView, () => { crash.value = null })
 
 <template>
   <div class="shell">
+    <TitleBar v-if="native" />
     <Sidebar />
     <div
       v-if="ui.sidebarMobileOpen"
@@ -106,6 +145,7 @@ watch(() => ui.currentView, () => { crash.value = null })
     <MangaModal />
     <Reader />
     <PlayerOverlay />
+    <NativePlayerOverlay />
     <ActivityDrawer />
     <ShortcutsModal />
     <Toaster />

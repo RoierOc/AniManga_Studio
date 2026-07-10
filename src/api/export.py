@@ -23,7 +23,7 @@ import numpy as np
 from flask import Blueprint, jsonify, request, send_file
 from PIL import Image
 
-from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter, cache_get, cache_set
+from api.runtime import manga_dir, upscaled_dir, normalize_chapter, cache_get, cache_set
 
 _COLOR_TTL = 30 * 86400   # la firma de contenido en la clave auto-invalida; el TTL solo poda viejos
 
@@ -198,8 +198,8 @@ def _collect_images(title: str, chapters: list, exclude_pages: set = None, arc_e
     Prefers upscaled images; falls back to originals per-file.
     arcname uses arc_ext (matches the codec the pages are re-encoded with).
     exclude_pages: set of original filenames to skip."""
-    manga_root = Path(MANGA_DIR) / title
-    up_root = Path(UPSCALED_DIR) / title
+    manga_root = Path(manga_dir()) / title
+    up_root = Path(upscaled_dir()) / title
     result = []
     exclude = exclude_pages or set()
 
@@ -329,7 +329,7 @@ def preview_cbz():
 
     images = _collect_images(title, chapters, exclude_pages)
     raw_bytes = sum(p.stat().st_size for _, p in images if p.exists())
-    up_root = Path(UPSCALED_DIR) / title
+    up_root = Path(upscaled_dir()) / title
     upscaled_count = sum(1 for _, p in images if str(p).startswith(str(up_root)))
     original_count = len(images) - upscaled_count
 
@@ -359,7 +359,7 @@ def get_color_pages():
     if not title or not chapters:
         return jsonify([])
 
-    manga_root = Path(MANGA_DIR) / title
+    manga_root = Path(manga_dir()) / title
     color_pages = []
 
     for ch in sorted(chapters, key=_sort_key):

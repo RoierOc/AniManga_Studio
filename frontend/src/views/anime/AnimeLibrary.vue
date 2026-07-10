@@ -35,9 +35,14 @@ const SORTS = [
   { id: 'progress', label: 'Progreso' },
 ]
 
+// "Todos" muestra solo contenido ACTIVO: las series completadas o abandonadas
+// solo aparecen en su propia pestaña (viven ahí, no ensucian la lista principal).
+const INACTIVE = ['completed', 'dropped']
+
 const filtered = computed(() => {
   let list = [...store.library]
   if (store.libFilter !== 'all') list = list.filter(a => a.status === store.libFilter)
+  else list = list.filter(a => !INACTIVE.includes(a.status))
   const q = store.libSearch.trim().toLowerCase()
   if (q) list = list.filter(a => (a.title || '').toLowerCase().includes(q))
   const s = store.libSort
@@ -55,7 +60,8 @@ const filtered = computed(() => {
 })
 
 const counts = computed(() => {
-  const c = { all: store.library.length }
+  // El contador de "Todo" refleja lo que realmente muestra: solo activos.
+  const c = { all: store.library.filter(a => !INACTIVE.includes(a.status)).length }
   for (const k of STATUS_ORDER) c[k] = store.library.filter(a => a.status === k).length
   return c
 })

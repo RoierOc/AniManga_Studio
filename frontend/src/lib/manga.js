@@ -33,6 +33,13 @@ export const MANGA_STATUS_ORDER = ['reading', 'plan_to_read', 'on_hold', 'comple
 
 // Page URL served by Flask (/uploads prefers upscaled, falls back to original).
 // Absolute paths (CBZ pages, remote URLs) pass through unchanged.
-export const pageUrl = (p) => (/^(https?:)?\/\//.test(p) || p.startsWith('/')) ? p : `/uploads/${p}`
+// `w` (opcional): pide la página reescalada a ese ancho (el backend cachea) — el
+// lector la usa para no decodificar 4K completo cuando se muestra a ~1000px (lag
+// del WebView2). Sin w o en rutas remotas/absolutas → archivo íntegro.
+export const pageUrl = (p, w = 0) => {
+  if (/^(https?:)?\/\//.test(p)) return p
+  const base = p.startsWith('/') ? p : `/uploads/${p}`
+  return w > 0 ? `${base}${base.includes('?') ? '&' : '?'}w=${w}` : base
+}
 export const pageUrlOriginal = (p) => `/uploads/original/${p}`
 export const pageUrlUpscaled = (p) => `/uploads/upscaled/${p}`

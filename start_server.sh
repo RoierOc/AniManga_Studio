@@ -21,7 +21,10 @@ if [[ "${MANGA_SERVER_DETACHED:-}" != "1" && "${MANGA_SERVER_FG:-}" != "1" ]]; t
     fi
     exec 8>&-
     LOG_FILE="/tmp/manga_server.log"
-    MANGA_SERVER_DETACHED=1 nohup "$0" "$@" >"$LOG_FILE" 2>&1 &
+    # Ruta absoluta (no "$0"): invocado como `bash start_server.sh` sin "./" (p.ej.
+    # `wsl.exe -e bash start_server.sh` desde el lanzador de Windows), $0 queda como
+    # nombre pelado y nohup no lo resuelve ("No such file or directory").
+    MANGA_SERVER_DETACHED=1 nohup "$SCRIPT_DIR/start_server.sh" "$@" >"$LOG_FILE" 2>&1 &
     pid=$!
     echo "[start] Servidor lanzado en segundo plano (PID $pid)."
     echo "[start]   logs:    tail -f $LOG_FILE"

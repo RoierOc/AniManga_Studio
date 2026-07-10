@@ -9,7 +9,7 @@ from pathlib import Path
 import json as _json
 from api.resilient_http import http as http_requests  # retry + backoff + per-host rate limiting
 
-from api.runtime import MANGA_DIR
+from api.runtime import manga_dir, cache_get, cache_set
 
 sources_bp = Blueprint("sources", __name__)
 
@@ -148,8 +148,20 @@ def health():
 
 # ── Sources list ──────────────────────────────────────────────────────────────
 
+# Caché de disco para búsquedas/listados de fuentes: Suwayomi consulta extensiones
+# remotas (lento) y repetimos las mismas llamadas al abrir Fuentes / paginar. TTLs
+# cortos → coste de RAM/CPU nulo y frescura razonable (inLibrary puede ir unos min
+# desfasado). Se invalida `sources_list` al instalar una extensión.
+_TTL_LIST = 300
+_TTL_SEARCH = 300
+_TTL_POPULAR = 600
+
+
 @sources_bp.route("/list", methods=["GET"])
 def list_sources():
+    cached = cache_get("sources_list", "all", _TTL_LIST)
+    if cached is not None:
+        return jsonify(cached)
     try:
         data = _gql("""
             query {
@@ -179,6 +191,14 @@ def list_sources():
             for n in nodes
             if n["id"] != "0"
         ]
+        # NO cachear una lista vacía: Suwayomi responde por HTTP (health "online")
+        # antes de terminar de cargar sus extensiones, así que un `list` disparado
+        # justo tras arrancar (p.ej. el location.reload() al alternar biblioteca
+        # oculta) puede devolver 0 fuentes. Si lo cacheáramos, quedaría pegado en 0
+        # durante _TTL_LIST (5 min) para TODOS los modos —cache no namespaceada por
+        # modo—, incluido al volver a la biblioteca normal. Cachear solo si hay datos.
+        if sources:
+            cache_set("sources_list", "all", sources, _TTL_LIST)
         return jsonify(sources)
     except Exception as e:
         return jsonify({"error": str(e), "offline": not _suwayomi_online()}), 503
@@ -192,6 +212,10 @@ def search_all():
     query = (request.args.get("q") or "").strip()
     if not query:
         return jsonify({"error": "q is required"}), 400
+
+    cached = cache_get("sources_search_all", query.lower(), _TTL_SEARCH)
+    if cached is not None:
+        return jsonify(cached)
 
     try:
         src_data = _gql("{ sources { nodes { id name lang } } }")
@@ -235,6 +259,9 @@ def search_all():
             groups.append(fut.result())
 
     groups.sort(key=lambda g: -len(g["results"]))
+    # Cachear solo si al menos una fuente respondió (no fijar un fallo transitorio).
+    if any(g["results"] for g in groups):
+        cache_set("sources_search_all", query.lower(), groups, _TTL_SEARCH)
     return jsonify(groups)
 
 
@@ -348,6 +375,10 @@ def search():
     if not source_id or not query:
         return jsonify({"error": "source and q are required"}), 400
 
+    ckey = f"{source_id}|{query.lower()}|{page}"
+    cached = cache_get("sources_search", ckey, _TTL_SEARCH)
+    if cached is not None:
+        return jsonify(cached)
     try:
         data = _gql(
             """
@@ -375,7 +406,9 @@ def search():
             }
             for m in results["mangas"]
         ]
-        return jsonify({"results": mangas, "hasNextPage": results["hasNextPage"], "page": page})
+        payload = {"results": mangas, "hasNextPage": results["hasNextPage"], "page": page}
+        cache_set("sources_search", ckey, payload, _TTL_SEARCH)
+        return jsonify(payload)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -392,6 +425,10 @@ def popular():
         kind = "POPULAR"
     if not source_id:
         return jsonify({"error": "source required"}), 400
+    ckey = f"{source_id}|{kind}|{page}"
+    cached = cache_get("sources_popular", ckey, _TTL_POPULAR)
+    if cached is not None:
+        return jsonify(cached)
     try:
         data = _gql(
             """
@@ -414,7 +451,9 @@ def popular():
             }
             for m in results["mangas"]
         ]
-        return jsonify({"results": mangas, "hasNextPage": results["hasNextPage"], "page": page})
+        payload = {"results": mangas, "hasNextPage": results["hasNextPage"], "page": page}
+        cache_set("sources_popular", ckey, payload, _TTL_POPULAR)
+        return jsonify(payload)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -574,6 +613,8 @@ def install_extension():
             """,
             {"pkg": pkg},
         )
+        # La lista de fuentes cambió → invalida su caché para que aparezca ya.
+        cache_set("sources_list", "all", None, 0)
         return jsonify(data)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -589,7 +630,7 @@ def enrich_library():
         return jsonify({"error": str(e), "offline": not _suwayomi_online()}), 503
 
     enriched = []
-    for meta_path in Path(MANGA_DIR).glob("*/.source_meta.json"):
+    for meta_path in Path(manga_dir()).glob("*/.source_meta.json"):
         try:
             meta = _json.loads(meta_path.read_text())
             sid = str(meta.get("sourceId", ""))
@@ -626,7 +667,7 @@ def save_to_library():
     if not title or not source_id or not manga_id:
         return jsonify({"error": "title, sourceId, mangaId required"}), 400
 
-    folder = Path(MANGA_DIR) / title
+    folder = Path(manga_dir()) / title
     if only_if_exists and not folder.exists():
         return jsonify({"status": "skipped", "reason": "folder does not exist"})
 

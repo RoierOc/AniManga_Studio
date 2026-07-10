@@ -39,12 +39,17 @@ try:
 except Exception:
     pass
 
-from api.runtime import MANGA_DIR, UPSCALED_DIR
+from api.runtime import MANGA_DIR, UPSCALED_DIR, HIDDEN_MANGA_DIR, HIDDEN_UPSCALED_DIR, manga_dir, upscaled_dir
 
 os.makedirs(str(MANGA_DIR), exist_ok=True)
 os.makedirs(str(UPSCALED_DIR), exist_ok=True)
+# Raíces de la biblioteca oculta: se crean vacías al arrancar para que la primera
+# activación del modo oculto no falle. Vacías no delatan nada (mismo aspecto que
+# cualquier carpeta de datos sin usar).
+os.makedirs(str(HIDDEN_MANGA_DIR), exist_ok=True)
+os.makedirs(str(HIDDEN_UPSCALED_DIR), exist_ok=True)
 
-from flask import Flask, render_template, jsonify, request, send_from_directory
+from flask import Flask, render_template, jsonify, request, send_from_directory, send_file
 from flask_compress import Compress
 
 app = Flask(__name__,
@@ -140,6 +145,27 @@ def _stop_suwayomi():
             print(f'[shutdown] Suwayomi stop failed: {e}', flush=True)
 
 
+def _stop_tracked_mpv():
+    """Cierra los mpv.exe (Windows) que la app lanzó para el anime — así el cierre por
+    /shutdown también los libera aunque no pase por el shell nativo. Best-effort."""
+    import subprocess, shutil
+    pid_file = '/tmp/manga_mpv_pids'
+    if not os.path.exists(pid_file) or not shutil.which('taskkill.exe'):
+        return
+    try:
+        with open(pid_file) as f:
+            pids = [ln.strip() for ln in f if ln.strip()]
+        for pid in pids:
+            try:
+                subprocess.run(['taskkill.exe', '/PID', pid, '/F'], timeout=5,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception:
+                pass
+        os.remove(pid_file)
+    except Exception as e:
+        print(f'[shutdown] mpv stop failed: {e}', flush=True)
+
+
 @app.route('/shutdown', methods=['POST'])
 def shutdown_server():
     from flask import request, jsonify, abort
@@ -148,6 +174,7 @@ def shutdown_server():
 
     def _die():
         _stop_suwayomi()
+        _stop_tracked_mpv()
         print('[shutdown] bye', flush=True)
         os._exit(0)
 
@@ -213,52 +240,91 @@ def serve_static(filename):
 
 _PAGE_MAX_AGE = 7 * 24 * 3600  # chapter pages are immutable once downloaded/upscaled
 
+import hashlib as _hashlib
+_READER_CACHE = Path.home() / '.cache' / 'manga-upscaler' / 'reader'
+
+def _serve_page_file(directory, name):
+    """Sirve una página del lector. Con ?w=N y si la imagen es MÁS ANCHA que N,
+    devuelve una versión reescalada (JPEG) cacheada en disco por (ruta, mtime, N).
+    Motivo (lag del lector 4K en la shell nativa): el lector muestra la página a
+    ~1000px pero el archivo escalado mide ~5760px → el WebView2 decodifica/pinta
+    30× más píxeles de los que se ven. Servir al tamaño del viewport lo elimina;
+    a resolución completa (zoom/original) el lector pide sin ?w. Cualquier fallo
+    cae al archivo original: nunca romper la lectura."""
+    try:
+        w = int(request.args.get('w', 0))
+    except (TypeError, ValueError):
+        w = 0
+    if w <= 0:
+        return send_from_directory(str(directory), name, max_age=_PAGE_MAX_AGE)
+    try:
+        from PIL import Image
+        src = Path(directory) / name
+        st = src.stat()
+        key = _hashlib.sha256(f'{src}|{int(st.st_mtime)}|{w}'.encode()).hexdigest()
+        cached = _READER_CACHE / f'{key}.jpg'
+        if not (cached.exists() and cached.stat().st_size > 0):
+            with Image.open(src) as im:
+                if im.width <= w:
+                    return send_from_directory(str(directory), name, max_age=_PAGE_MAX_AGE)
+                h = round(im.height * w / im.width)
+                if im.mode not in ('RGB', 'L'):
+                    im = im.convert('RGB')
+                im = im.resize((w, h), Image.LANCZOS)
+                _READER_CACHE.mkdir(parents=True, exist_ok=True)
+                tmp = cached.with_suffix('.tmp')
+                im.save(tmp, 'JPEG', quality=88, optimize=True)
+                tmp.replace(cached)
+        return send_file(str(cached), mimetype='image/jpeg', max_age=_PAGE_MAX_AGE)
+    except Exception:
+        return send_from_directory(str(directory), name, max_age=_PAGE_MAX_AGE)
+
 @app.route('/uploads/original/<path:filename>')
 def serve_upload_original(filename):
-    """Always serve from MANGA_DIR (used by compare mode to show unscaled page)."""
-    path = Path(MANGA_DIR) / filename
+    """Always serve from the active library's original root (compare mode → unscaled page)."""
+    path = Path(manga_dir()) / filename
     if path.exists():
-        return send_from_directory(str(path.parent), path.name, max_age=_PAGE_MAX_AGE)
+        return _serve_page_file(path.parent, path.name)
     # Upscaled pages are always .jpg; originals may be .png or .webp — try alternatives
     for ext in ('.png', '.webp', '.jpg', '.jpeg'):
         alt = path.with_suffix(ext)
         if alt != path and alt.exists():
-            return send_from_directory(str(alt.parent), alt.name, max_age=_PAGE_MAX_AGE)
+            return _serve_page_file(alt.parent, alt.name)
     return 'Not found', 404
 
 @app.route('/uploads/upscaled/<path:filename>')
 def serve_upload_upscaled(filename):
-    """Always serve from UPSCALED_DIR (used by compare mode to show upscaled page)."""
-    path = Path(UPSCALED_DIR) / filename
+    """Always serve from the active library's upscaled root (compare mode → upscaled page)."""
+    path = Path(upscaled_dir()) / filename
     if path.exists():
-        return send_from_directory(str(path.parent), path.name, max_age=_PAGE_MAX_AGE)
+        return _serve_page_file(path.parent, path.name)
     # The requested extension may differ from the file on disk (upscaled output is
     # usually .jpg, but originals/pages can be .png/.webp) — try alternatives so the
     # compare slider always resolves the right upscaled page.
     for ext in ('.jpg', '.png', '.webp', '.jpeg'):
         alt = path.with_suffix(ext)
         if alt != path and alt.exists():
-            return send_from_directory(str(alt.parent), alt.name, max_age=_PAGE_MAX_AGE)
+            return _serve_page_file(alt.parent, alt.name)
     return 'Not found', 404
 
 @app.route('/uploads/<path:filename>')
 def serve_upload(filename):
     # Prefer upscaled version when available; fall back to original
-    for d in [UPSCALED_DIR, MANGA_DIR]:
+    for d in [upscaled_dir(), manga_dir()]:
         path = Path(d) / filename
         if path.exists():
-            return send_from_directory(str(path.parent), path.name, max_age=_PAGE_MAX_AGE)
+            return _serve_page_file(path.parent, path.name)
 
     parts = filename.split('/')
     if len(parts) >= 2:
         subfolder = parts[0]
         filename_only = '/'.join(parts[1:])
-        for d in [UPSCALED_DIR, MANGA_DIR]:
+        for d in [upscaled_dir(), manga_dir()]:
             search_path = Path(d) / subfolder
             if search_path.is_dir():
                 full_path = search_path / filename_only
                 if full_path.exists():
-                    return send_from_directory(str(search_path), filename_only, max_age=_PAGE_MAX_AGE)
+                    return _serve_page_file(search_path, filename_only)
 
     return 'Not found', 404
 

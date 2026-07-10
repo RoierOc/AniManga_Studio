@@ -43,7 +43,7 @@ const current = computed(() => {
 
 <style scoped>
 .topbar {
-  position: sticky; top: 0;
+  position: sticky; top: var(--titlebar-h);
   z-index: var(--z-topbar);
   height: var(--topbar-h);
   display: flex; align-items: center; gap: var(--s-4);

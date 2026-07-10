@@ -1349,6 +1349,50 @@ def _get_anime_titles(anime_id: str) -> list:
         return []
 
 
+# ── Centro de Actividad: exponer las traducciones de subtítulos ────────────────
+# La traducción de subtítulos de anime por el modelo (Gemini/Qwen) es una tarea
+# "importante" que faltaba en Actividad. Se cuela en el MISMO snapshot SSE
+# (/api/status/stream → clave `subtitles`) que descargas/upscale/tomo/transplant,
+# para que Actividad sea el punto central de seguimiento. Las descargas de anime
+# NO van aquí (tienen su vista propia de Descargas).
+_SUBTITLE_TERMINAL = {'done', 'error', 'cancelled'}
+
+
+def _mk_sub_task(task_id: str, anime_id: str, episode: int, fallback: str = ''):
+    """Crea la entrada de tarea con metadatos para Actividad (título del anime +
+    episodio) además del estado de progreso."""
+    titles = _get_anime_titles(anime_id)
+    title = titles[0] if titles else (fallback or 'Anime')
+    _tasks[task_id] = dict(
+        status='starting', progress=0, message='Iniciando…', error=None, output=None,
+        kind='subtitle', title=title, anime_id=anime_id, episode=int(episode),
+        _ts=time.time(),
+    )
+
+
+def get_subtitle_tasks() -> dict:
+    """Snapshot de las traducciones de subtítulos para el Centro de Actividad.
+    Estampa `ended_at` al detectar estado terminal (para el historial) y poda las
+    terminales de más de 1 h para que el dict no crezca sin fin. Omite `output`
+    (ruta interna del MKV, no relevante para la UI)."""
+    now = time.time()
+    out, stale = {}, []
+    for tid, t in list(_tasks.items()):
+        if not isinstance(t, dict):
+            continue
+        if t.get('status') in _SUBTITLE_TERMINAL and not t.get('ended_at'):
+            t['ended_at'] = now
+        ended = t.get('ended_at')
+        if ended and (now - ended) > 3600:
+            stale.append(tid)
+            continue
+        out[tid] = {k: v for k, v in t.items() if k != 'output'}
+    for tid in stale:
+        _tasks.pop(tid, None)
+        _cancel_flags.pop(tid, None)
+    return out
+
+
 @subtitle_bp.route('/tracks')
 def subtitle_tracks():
     """List subtitle tracks in an MKV. Always searches for Spanish subs (direct inject).
@@ -1468,8 +1512,7 @@ def subtitle_translate():
     if external_sub:
         src_lang = external_sub.get('language', 'eng')
         task_id = uuid.uuid4().hex[:8]
-        _tasks[task_id] = dict(status='starting', progress=0, message='Iniciando…',
-                               error=None, output=None)
+        _mk_sub_task(task_id, anime_id, episode, fallback=os.path.basename(path))
         t = threading.Thread(
             target=_do_translate,
             args=(task_id, path, 0, 'subrip', len(tracks), src_lang),
@@ -1498,8 +1541,7 @@ def subtitle_translate():
     src_lang = track.get('language') or 'eng'
 
     task_id = uuid.uuid4().hex[:8]
-    _tasks[task_id] = dict(status='starting', progress=0, message='Iniciando…',
-                           error=None, output=None)
+    _mk_sub_task(task_id, anime_id, episode, fallback=os.path.basename(path))
 
     t = threading.Thread(
         target=_do_translate,

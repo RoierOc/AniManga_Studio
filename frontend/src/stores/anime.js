@@ -4,6 +4,7 @@ import { onSSE } from '@/lib/sse'
 import { useUiStore } from './ui'
 import { nextUnwatchedEp, isSpanishOrMulti, isEnglishSub } from '@/lib/anime'
 import { vtGo } from '@/lib/vt'
+import { isNative, send as nativeSend, onMessage as onNativeMessage } from '@/lib/nativeBridge'
 
 let autoplayTimer = null
 let nowTimer = null
@@ -104,8 +105,15 @@ export const useAnimeStore = defineStore('anime', {
     addedHashes: [],             // keys just added (transient ✓)
 
     // ── Player web embebido (estilo Crunchyroll) ─────────────────────────
-    playerMode: localStorage.getItem('anime-player-mode') || 'web', // 'web' | 'mpv'
+    playerMode: localStorage.getItem('anime-player-mode') || 'web', // 'web' | 'mpv' | 'native'
     player: null,                // {anime, ep, sess, loading, error} — overlay abierto si != null
+    // Reproductor NATIVO embebido (libmpv en la shell Windows, vía nativeBridge).
+    nativePlayer: null,          // {anime, ep, pos, duration, paused, tier} — abierto si != null
+    native4kTier: localStorage.getItem('anime-native-4k') || 'high', // 'off' | 'high'
+    nativeVol: Number(localStorage.getItem('anime-native-vol') ?? 100), // 0..100
+    nativeSubScale: Number(localStorage.getItem('anime-native-subscale') ?? 1), // 0.5..2
+    nativeBright: Number(localStorage.getItem('anime-native-bright') ?? 1), // 0.5..3 gamma (HDR)
+    nativeSat: Number(localStorage.getItem('anime-native-sat') ?? 1), // 0.5..3 saturación (HDR)
   }),
 
   getters: {
@@ -612,6 +620,12 @@ export const useAnimeStore = defineStore('anime', {
     },
 
     async play(anime, ep, subFile = '', startPos = 0) {
+      // En la shell nativa se prefiere el motor embebido (libmpv) — es el objetivo:
+      // vídeo nativo bajo la UI. Se puede forzar MPV externo (mode 'mpv', p.ej. el
+      // botón "abrir en MPV") o subs traducidos, que siguen siendo exclusivos de MPV.
+      if (isNative() && this.playerMode !== 'mpv' && !subFile) {
+        return this.playNative(anime, ep, startPos)
+      }
       // Player web embebido por defecto; MPV externo si el modo lo pide o si se
       // pasa un subtítulo externo (subs traducidos — flujo aún exclusivo de MPV).
       if (this.playerMode === 'web' && !subFile) {
@@ -647,6 +661,221 @@ export const useAnimeStore = defineStore('anime', {
     setPlayerMode(mode) {
       this.playerMode = mode
       localStorage.setItem('anime-player-mode', mode)
+    },
+
+    /* ── Reproductor nativo embebido (libmpv en la shell) ──────────────────── */
+    async playNative(anime, ep, startPos = 0) {
+      this.dismissAutoplay?.()
+      // Mostrar el overlay YA (estado de carga) para no dejar al usuario en la vista
+      // previa mientras se resuelve la ruta (ffprobe) — la espera se percibía como
+      // "no abre". El spinner se quita al llegar el primer evento de tiempo.
+      this.nativePlayer = {
+        anime, ep, pos: startPos, duration: 0, paused: false, loading: true,
+        tier: this.native4kTier, _lastReport: 0, fullscreen: false,
+        audioTracks: [], subTracks: [], aid: 1, sid: 0,
+        speed: 1, subScale: this.nativeSubScale, subSync: 0,
+        bright: this.nativeBright, sat: this.nativeSat,
+      }
+      this._ensureNativeSub()
+
+      const base = ep.in_local
+        ? { anime_id: anime.id, episode: ep.num, local_path: ep.local_path }
+        : { anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash }
+      const body = startPos > 0 ? { ...base, start_pos: startPos } : base
+      let res
+      try {
+        res = await api.post('/api/anime/native/resolve', body)
+      } catch (e) {
+        useUiStore().toast(e?.message || 'No se pudo resolver el vídeo', 'error')
+        this.nativePlayer = null
+        return
+      }
+      if (!this.nativePlayer) return // cerrado mientras cargaba
+      if (!res?.win_path) {
+        useUiStore().toast('No se encontró el archivo de vídeo', 'error')
+        this.nativePlayer = null
+        return
+      }
+      const resume = startPos > 0 ? startPos : (res.resume_pos || 0)
+      const subTracks = res.sub_tracks || []
+      // Pista por defecto: preferir español (sidecar traducido o pista spa incrustada),
+      // si no la primera. 0 = subtítulos desactivados.
+      const spaIdx = subTracks.findIndex((t) => /^(spa|es)/i.test(t.lang || ''))
+      const defSid = subTracks.length ? (spaIdx >= 0 ? spaIdx + 1 : 1) : 0
+      Object.assign(this.nativePlayer, {
+        pos: resume,
+        duration: res.duration || this.nativePlayer.duration || 0,
+        audioTracks: res.audio_tracks || [],
+        subTracks,
+        aid: 1,                          // 1-based (orden de aparición)
+        sid: defSid,
+        thumbs: res.thumbs || null,      // {url, interval} para el scrubbing
+      })
+      // Cargar con el inicio ya en la posición de reanudación (fiable: fijar 'start'
+      // antes de loadfile, no un seek posterior que se ignoraría) + tier Anime4K.
+      nativeSend('loadfile', { path: res.win_path, start: resume })
+      // Añadir los subtítulos externos (sidecar) como pistas mpv, en el MISMO orden en
+      // que el backend los listó tras los incrustados → el sid (índice+1) coincide.
+      // Unifica el gestor: en .m2ts/Blu-ray los subs traducidos van como sidecar y antes
+      // no aparecían como pista; ahora se comportan como cualquier pista incrustada.
+      for (const t of subTracks) {
+        if (t.external && t.win_path) nativeSend('subadd', { path: t.win_path })
+      }
+      // Fijar la pista elegida (mpv no la autoselecciona con sub-auto=no + sub-add auto).
+      if (defSid > 0) nativeSend('track', { sid: String(defSid) })
+      nativeSend('shaders', { tier: this.native4kTier })
+      // Permitir amplificar hasta 150% (mpv corta en volume-max, 100 por defecto).
+      nativeSend('setprop', { name: 'volume-max', value: '150' })
+      nativeSend('volume', { value: this.nativeVol })
+      // Reponer estado que persiste en el motor reutilizado entre episodios.
+      nativeSend('setprop', { name: 'speed', value: '1' })
+      nativeSend('setprop', { name: 'sub-delay', value: '0' })
+      if (this.nativeSubScale !== 1) {
+        nativeSend('setprop', { name: 'sub-scale', value: String(this.nativeSubScale) })
+      }
+      // Ajustes de imagen HDR (ecualizadores nativos de mpv): gamma + saturación.
+      if (this.nativeBright !== 1) nativeSend('bright', { value: this.nativeBright })
+      if (this.nativeSat !== 1) nativeSend('sat', { value: this.nativeSat })
+      this.nativePlayer.bright = this.nativeBright
+      this.nativePlayer.sat = this.nativeSat
+    },
+
+    // Suscripción única a los eventos que envía Rust (tiempo/estado).
+    _ensureNativeSub() {
+      if (this._nativeSubbed) return
+      this._nativeSubbed = true
+      onNativeMessage((d) => {
+        if (!d || d.event !== 'time' || !this.nativePlayer) return
+        this.nativePlayer.loading = false   // ya hay vídeo → quitar spinner
+        this.nativePlayer.pos = d.pos ?? this.nativePlayer.pos
+        this.nativePlayer.duration = d.duration || this.nativePlayer.duration
+        this.nativePlayer.paused = !!d.paused
+        // Reportar progreso al backend ~cada 5 s (resume/visto).
+        const now = Date.now()
+        if (now - (this.nativePlayer._lastReport || 0) > 5000) {
+          this.nativePlayer._lastReport = now
+          this._reportNativeProgress(false)
+        }
+        // Fin de episodio: marcar visto y encadenar auto-play.
+        if (d.duration > 0 && d.pos >= d.duration - 1) {
+          const { anime, ep } = this.nativePlayer
+          this._reportNativeProgress(true)
+          this.closeNative()
+          const nxt = nextUnwatchedEp(anime, ep)
+          if (nxt) this.showAutoplay(anime, nxt)
+        }
+      })
+    },
+
+    _reportNativeProgress(ended) {
+      const np = this.nativePlayer
+      if (!np) return
+      api.post('/api/anime/native/progress', {
+        anime_id: np.anime.id,
+        episode: np.ep.num,
+        position: np.pos,
+        duration: np.duration,
+        ended,
+      }).catch(() => {})
+    },
+
+    nativePause(v) {
+      if (!this.nativePlayer) return
+      this.nativePlayer.paused = v
+      nativeSend('pause', { value: v })
+    },
+    nativeSeek(pos) {
+      if (!this.nativePlayer) return
+      this.nativePlayer.pos = pos
+      nativeSend('seek', { pos })
+    },
+    setNativeVol(v) {
+      this.nativeVol = v
+      localStorage.setItem('anime-native-vol', String(v))
+      nativeSend('volume', { value: v })
+    },
+    setNativeSpeed(v) {
+      if (this.nativePlayer) this.nativePlayer.speed = v
+      nativeSend('setprop', { name: 'speed', value: String(v) })
+    },
+    setNativeSubScale(v) {
+      v = Math.min(2, Math.max(0.5, Math.round(v * 10) / 10))
+      this.nativeSubScale = v
+      localStorage.setItem('anime-native-subscale', String(v))
+      if (this.nativePlayer) this.nativePlayer.subScale = v
+      nativeSend('setprop', { name: 'sub-scale', value: String(v) })
+    },
+    setNativeSubSync(v) {
+      v = Math.round(v * 10) / 10
+      if (this.nativePlayer) this.nativePlayer.subSync = v
+      nativeSend('setprop', { name: 'sub-delay', value: String(v) })
+    },
+    // Gamma: ecualizador nativo de mpv para calzar el gamma un pelín superior de mpv en
+    // HDR. 1.0 = neutro. Sin shader (sin rojo/lag).
+    setNativeBright(v) {
+      v = Math.min(3, Math.max(0.5, Math.round(v * 100) / 100))
+      this.nativeBright = v
+      localStorage.setItem('anime-native-bright', String(v))
+      if (this.nativePlayer) this.nativePlayer.bright = v
+      nativeSend('bright', { value: v })
+    },
+    // Saturación: ecualizador nativo de mpv; devuelve el "punch" que el gamma le quita.
+    setNativeSat(v) {
+      v = Math.min(3, Math.max(0.5, Math.round(v * 100) / 100))
+      this.nativeSat = v
+      localStorage.setItem('anime-native-sat', String(v))
+      if (this.nativePlayer) this.nativePlayer.sat = v
+      nativeSend('sat', { value: v })
+    },
+    toggleNativeFullscreen() {
+      if (!this.nativePlayer) return
+      this.nativePlayer.fullscreen = !this.nativePlayer.fullscreen
+      nativeSend('fullscreen', { on: this.nativePlayer.fullscreen })
+    },
+    setNativeAudio(idx) {           // idx 0-based
+      if (!this.nativePlayer) return
+      this.nativePlayer.aid = idx + 1
+      nativeSend('track', { aid: String(idx + 1) })
+    },
+    setNativeSub(idx) {             // idx 0-based; -1 = desactivar
+      if (!this.nativePlayer) return
+      this.nativePlayer.sid = idx + 1   // 0 = off
+      nativeSend('track', { sid: idx < 0 ? 'no' : String(idx + 1) })
+    },
+    nativeSkipOp() {                // salto de opening (mismo importe que MPV)
+      if (!this.nativePlayer) return
+      this.nativeSeek((this.nativePlayer.pos || 0) + 88)
+    },
+    setNative4kTier(tier) {
+      this.native4kTier = tier
+      localStorage.setItem('anime-native-4k', tier)
+      if (this.nativePlayer) {
+        this.nativePlayer.tier = tier
+        nativeSend('shaders', { tier })
+      }
+    },
+    closeNative() {
+      if (!this.nativePlayer) return
+      this._reportNativeProgress(false)
+      // Parcheo optimista del progreso en la biblioteca local para que "Continuar
+      // viendo"/el episodio reflejen la posición AL INSTANTE, sin esperar el ida y
+      // vuelta del SSE (que también llegará y confirmará). Evita el "hasta F5".
+      const np = this.nativePlayer
+      try {
+        const anime = this.library.find(a => a.id === np.anime.id)
+        const ep = anime && (anime.episodes || []).find(e => String(e.num) === String(np.ep.num))
+        if (ep && np.duration > 0) {
+          const watched = np.pos / np.duration >= 0.9
+          const pos = Math.floor(np.pos || 0)
+          ep.watched = watched
+          ep.resume_pos = watched ? 0 : pos
+          // Recencia al instante: completado O con posición guardable (>30 s) →
+          // "Continuar viendo" refleja/reordena sin esperar el SSE ni F5.
+          if (watched || pos > 30) anime.last_watched_at = Math.floor(Date.now() / 1000)
+        }
+      } catch {}
+      nativeSend('stop')
+      this.nativePlayer = null
     },
 
     /* ── Player web embebido ────────────────────────────────────────────── */
@@ -793,6 +1022,9 @@ export const useAnimeStore = defineStore('anime', {
         ep.resume_pos = ev.position || 0
         if (ev.duration) ep.duration = ev.duration
       }
+      // Progreso parcial también actualiza la recencia → "Continuar viendo" reordena
+      // y muestra la serie al instante (el backend lo manda al guardar posición >30s).
+      if (ev.last_watched_at) anime.last_watched_at = ev.last_watched_at
     },
 
     /* ── qBittorrent ────────────────────────────────────────────────────── */

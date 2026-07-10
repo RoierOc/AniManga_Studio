@@ -11,7 +11,7 @@ import json
 from api.resilient_http import http as _http  # retry + backoff + per-host rate limiting
 import threading
 
-from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter, cache_get, cache_set
+from api.runtime import manga_dir, upscaled_dir, get_library_mode, normalize_chapter, cache_get, cache_set
 from api.index_db import cached_measure, prune
 
 
@@ -31,7 +31,8 @@ def _count_pages(path):
 def _count_upscaled(path):
     return len(list(Path(path).glob('*.jpg'))), 0, {}
 
-_COVER_CACHE_FILE = Path(MANGA_DIR) / '.cover_cache.json'
+def _cover_cache_file() -> Path:
+    return Path(manga_dir()) / '.cover_cache.json'
 
 # Portadas: lado largo máximo. Se muestran a ~225-340px en las tarjetas/rail; 1000px da
 # margen retina. Sin esto, elegir una PÁGINA HD como portada (p.ej. arte local 3024x4299,
@@ -58,8 +59,9 @@ def _normalize_cover_bytes(raw: bytes):
 
 def _load_cover_cache() -> dict:
     try:
-        if _COVER_CACHE_FILE.exists():
-            return json.loads(_COVER_CACHE_FILE.read_text(encoding='utf-8'))
+        f = _cover_cache_file()
+        if f.exists():
+            return json.loads(f.read_text(encoding='utf-8'))
     except Exception:
         pass
     return {}
@@ -67,7 +69,7 @@ def _load_cover_cache() -> dict:
 
 def _save_cover_cache(cache: dict):
     try:
-        _COVER_CACHE_FILE.write_text(json.dumps(cache, ensure_ascii=False), encoding='utf-8')
+        _cover_cache_file().write_text(json.dumps(cache, ensure_ascii=False), encoding='utf-8')
     except Exception:
         pass
 
@@ -84,7 +86,7 @@ library_bp = Blueprint('library', __name__)
 def get_library():
     # Build a title→cover lookup from local_library.json + disk cover cache
     lib_covers: dict = _load_cover_cache()
-    lib_json = Path(MANGA_DIR) / 'local_library.json'
+    lib_json = Path(manga_dir()) / 'local_library.json'
     if lib_json.exists():
         try:
             for entry in json.loads(lib_json.read_text()):
@@ -95,16 +97,22 @@ def get_library():
         except Exception:
             pass
 
+    # Namespaced by modo para que las mediciones de la biblioteca oculta nunca se
+    # crucen (ni delaten su existencia) en la caché de la biblioteca normal.
+    _mode_suffix = '' if get_library_mode() == 'normal' else f':{get_library_mode()}'
+    _libcount_key = f'libcount{_mode_suffix}'
+    _libup_key = f'libup{_mode_suffix}'
+
     folders = []
-    for f in Path(MANGA_DIR).iterdir():
+    for f in Path(manga_dir()).iterdir():
         if not f.is_dir() or f.name.startswith('.'):
             continue   # salta carpetas internas: .cache, .import_staging, etc.
 
         # Per-folder page/chapter counts are cached by mtime (index_db) so the whole
         # library listing stays instant instead of globbing every folder each call.
-        image_count, chapters_count, _ = cached_measure('libcount', f.name, str(f), _count_pages)
+        image_count, chapters_count, _ = cached_measure(_libcount_key, f.name, str(f), _count_pages)
         upscaled_count, _, _ = cached_measure(
-            'libup', f.name, str(Path(UPSCALED_DIR) / f.name), _count_upscaled)
+            _libup_key, f.name, str(Path(upscaled_dir()) / f.name), _count_upscaled)
 
         source_meta = None
         meta_path = f / '.source_meta.json'
@@ -147,8 +155,8 @@ def get_library():
             'translated_count': translated_count,
         })
 
-    prune('libcount', [x['name'] for x in folders])
-    prune('libup', [x['name'] for x in folders])
+    prune(_libcount_key, [x['name'] for x in folders])
+    prune(_libup_key, [x['name'] for x in folders])
     folders.sort(key=lambda x: x['name'].lower())
     return jsonify(folders)
 
@@ -173,7 +181,7 @@ def search_covers():
     from api.resilient_http import http as http_requests
 
     results = {}
-    for folder in Path(MANGA_DIR).iterdir():
+    for folder in Path(manga_dir()).iterdir():
         if not folder.is_dir():
             continue
         
@@ -233,15 +241,15 @@ def get_chapter_status(title):
 @library_bp.route('/<path:title>')
 @library_bp.route('/chapters/<path:title>')
 def get_manga(title):
-    folder = Path(MANGA_DIR) / title
+    folder = Path(manga_dir()) / title
     if not folder.exists():
         # Try with spaces
-        folder = Path(MANGA_DIR) / title.replace('_', ' ')
+        folder = Path(manga_dir()) / title.replace('_', ' ')
         if not folder.exists():
             return jsonify({'error': 'Manga not found'}), 404
     
     chapters = get_chapters_from_folder(folder)
-    upscaled_folder = Path(UPSCALED_DIR) / title.replace('_', ' ')
+    upscaled_folder = Path(upscaled_dir()) / title.replace('_', ' ')
     upscaled = {}
 
     _IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp']
@@ -351,8 +359,8 @@ def chapter_health(title):
     """
     actual = find_manga_folder(title)
 
-    dl_folder = Path(MANGA_DIR) / actual
-    up_folder = Path(UPSCALED_DIR) / actual
+    dl_folder = Path(manga_dir()) / actual
+    up_folder = Path(upscaled_dir()) / actual
 
     if not dl_folder.exists():
         return jsonify({'error': 'not found'}), 404
@@ -434,7 +442,7 @@ def edit_metadata(title):
     cover_b64 = (data.get('cover_b64') or '').strip()
     cover_url = (data.get('cover_url') or '').strip()
 
-    folder = Path(MANGA_DIR) / title
+    folder = Path(manga_dir()) / title
     if not folder.exists():
         return jsonify({'error': 'not found'}), 404
 
@@ -472,13 +480,13 @@ def edit_metadata(title):
 
     # Rename folder
     if new_title and new_title != title:
-        new_folder = Path(MANGA_DIR) / new_title
+        new_folder = Path(manga_dir()) / new_title
         if new_folder.exists():
             return jsonify({'error': 'Ya existe una carpeta con ese nombre'}), 409
         folder.rename(new_folder)
-        up_folder = Path(UPSCALED_DIR) / title
+        up_folder = Path(upscaled_dir()) / title
         if up_folder.exists():
-            up_folder.rename(Path(UPSCALED_DIR) / new_title)
+            up_folder.rename(Path(upscaled_dir()) / new_title)
         return jsonify({'ok': True, 'new_title': new_title})
 
     return jsonify({'ok': True})
@@ -500,7 +508,7 @@ def cover_options():
     cached = None if refresh else cache_get('cover_options', ck, 604800)
 
     out = {'current': None, 'anilist': [], 'mangadex': []}
-    folder = Path(MANGA_DIR) / title
+    folder = Path(manga_dir()) / title
     if folder.is_dir() and any((folder / f'cover.{e}').exists() for e in ('jpg', 'png', 'webp')):
         out['current'] = f"/api/library/cover/{quote(title, safe='')}"
 
@@ -572,7 +580,7 @@ def scan_corrupt(title):
     """Check all downloaded images in a manga folder for corruption."""
     from PIL import Image, UnidentifiedImageError
 
-    folder = Path(MANGA_DIR) / title
+    folder = Path(manga_dir()) / title
     if not folder.exists():
         return jsonify({'error': 'not found'}), 404
 
@@ -602,7 +610,7 @@ def find_manga_folder(query):
     query_norm = query.lower().replace('-', ' ').replace('_', ' ')
     candidates = []
     
-    for f in Path(MANGA_DIR).iterdir():
+    for f in Path(manga_dir()).iterdir():
         if not f.is_dir():
             continue
         
@@ -637,7 +645,7 @@ _offline_cover_status = {"running": False, "done": 0, "total": 0, "errors": 0}
 @library_bp.route('/cover/<path:title>')
 def serve_local_cover(title):
     """Serve a locally-downloaded cover image."""
-    folder = Path(MANGA_DIR) / title
+    folder = Path(manga_dir()) / title
     for ext in ('jpg', 'png', 'webp'):
         p = folder / f'cover.{ext}'
         if p.exists():
@@ -672,7 +680,7 @@ def download_covers_offline():
 
     # Collect manga folders + their current cover URL
     lib_covers = _load_cover_cache()
-    lib_json = Path(MANGA_DIR) / 'local_library.json'
+    lib_json = Path(manga_dir()) / 'local_library.json'
     if lib_json.exists():
         try:
             for entry in json.loads(lib_json.read_text()):
@@ -684,7 +692,7 @@ def download_covers_offline():
             pass
 
     targets = []
-    for folder in Path(MANGA_DIR).iterdir():
+    for folder in Path(manga_dir()).iterdir():
         if not folder.is_dir():
             continue
         # Skip if local cover already exists

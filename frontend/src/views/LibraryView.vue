@@ -10,6 +10,7 @@ import { imgProxy, imgThumb } from '@/lib/img'
 import Spinner from '@/components/ui/Spinner.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import MangaRecRail from '@/components/manga/MangaRecRail.vue'
 
 const ui = useUiStore()
 const manga = useMangaStore()
@@ -69,6 +70,18 @@ const continueItems = computed(() => {
     .filter(Boolean)
     .slice(0, 8)
 })
+
+// Rueda del ratón → scroll HORIZONTAL del rail. En la shell nativa la rueda solo
+// mueve la página en vertical, así que sin esto no había forma de recorrer el rail
+// "Continuar leyendo" de lado. Solo actúa si hay desbordamiento y el gesto es vertical
+// (deja pasar el scroll horizontal nativo de trackpad).
+function railWheel(e) {
+  const el = e.currentTarget
+  if (el.scrollWidth <= el.clientWidth) return
+  if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
+  el.scrollLeft += e.deltaY
+  e.preventDefault()
+}
 
 const filtered = computed(() => {
   let list = items.value
@@ -172,7 +185,7 @@ async function findCovers() {
   } catch (_) { ui.toast('Error buscando portadas', 'error') }
   finally { findingCovers.value = false }
 }
-onMounted(() => { load(); if (!manga.updatesLoaded) manga.loadUpdates(); if (sort.value === 'size') ensureSizes() })
+onMounted(() => { load(); if (!manga.updatesLoaded) manga.loadUpdates(); if (sort.value === 'size') ensureSizes(); manga.loadForYou() })
 // Reload the grid after a manga is deleted from the modal.
 watch(() => manga.libraryDirty, () => load())
 </script>
@@ -246,7 +259,7 @@ watch(() => manga.libraryDirty, () => load())
     <!-- Continuar leyendo -->
     <section v-if="!loading && continueItems.length" class="cont">
       <h2 class="cont__title"><Icon name="spark" :size="15" /> Continuar leyendo</h2>
-      <div class="cont__rail">
+      <div class="cont__rail" @wheel="railWheel">
         <button v-for="m in continueItems" :key="m.id" class="contcard" @click="manga.resumeManga(m)"
                 :title="`Reanudar ${m.name} · Cap. ${m._resume.lastChapter}`">
           <div class="contcard__cov">
@@ -282,6 +295,12 @@ watch(() => manga.libraryDirty, () => load())
       <MangaCard v-for="m in filtered" :key="m.id" :manga="m" :updates="manga.updatesByTitle[m.name]?.new_count || 0" @click="manga.open(m)" />
     </div>
 
+    <!-- Para ti: recomendaciones basadas en tu biblioteca (AniList) — al final del todo -->
+    <MangaRecRail v-if="!loading && (manga.forYouLoading || manga.forYou.length)"
+                  :items="manga.forYou" :loading="manga.forYouLoading"
+                  title="Para ti" subtitle="Descubre mangas afines a tu biblioteca"
+                  @select="manga.discoverRec" />
+
     <HistoryPanel :open="showHistory" @close="showHistory = false" />
   </div>
 </template>
@@ -293,9 +312,13 @@ watch(() => manga.libraryDirty, () => load())
 .cont { margin: var(--s-2) 0 var(--s-6); }
 .cont__title { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-md); color: var(--azure-bright); margin-bottom: var(--s-3); }
 .cont__rail { display: flex; gap: var(--s-4); overflow-x: auto; padding-bottom: var(--s-2); scroll-snap-type: x proximity; }
-.contcard { flex: 0 0 8.5rem; scroll-snap-align: start; display: flex; flex-direction: column; gap: 4px; text-align: left; }
-.contcard__cov { position: relative; aspect-ratio: 2/3; border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
-.contcard__cov img { width: 100%; height: 100%; object-fit: cover; display: block; transition: transform var(--t-fast); }
+.contcard { flex: 0 0 8.5rem; width: 8.5rem; scroll-snap-align: start; display: flex; flex-direction: column; gap: 4px; text-align: left; }
+/* Caja de portada de tamaño FIJO (8.5×12.75rem = 2:3) con las imágenes en position
+   absolute: así la imagen NUNCA dicta el tamaño de la tarjeta. Antes algunas salían
+   apaisadas y otras normales porque la regla global `.blurup + img {position:relative}`
+   dejaba la imagen principal en flujo y su aspecto influía en la caja. Escala con rem. */
+.contcard__cov { position: relative; width: 8.5rem; height: 12.75rem; border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
+.contcard__cov img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; transition: transform var(--t-fast); }
 .contcard:hover .contcard__cov img { transform: scale(1.04); }
 .contcard__ph { width: 100%; height: 100%; display: grid; place-items: center; color: var(--ink-faint); }
 .contcard__play { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.35); color: #fff; opacity: 0; transition: opacity var(--t-fast); }

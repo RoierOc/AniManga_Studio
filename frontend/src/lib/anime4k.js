@@ -72,6 +72,22 @@ export class Anime4KRenderer {
     const Preset = (await presets())[modeId]
     if (!Preset) return false
 
+    const vw0 = video.videoWidth, vh0 = video.videoHeight
+    const tw0 = Math.round(Math.min(Math.max(targetW || vw0 * 2, vw0), vw0 * 2))
+    const th0 = Math.round(Math.min(Math.max(targetH || vh0 * 2, vh0), vh0 * 2))
+    const cacheKey = `${modeId}|${vw0}x${vh0}|${tw0}x${th0}`
+    // Recompilar los compute pipelines (shaders CNN) tarda de verdad en algunas
+    // GPU/driver — se notaba como "se queda cargando" al cambiar de episodio o
+    // poner pantalla completa aunque el tier/resolución no hubieran cambiado.
+    // Reusar el pipeline ya compilado cuando nada relevante cambió (mismo tier,
+    // misma resolución nativa y destino, mismo canvas) evita ese recompute.
+    if (this._cacheKey === cacheKey && this._pipeline && this._canvasEl === canvas && this.device) {
+      this.running = true
+      this._video = video
+      this._runFrame()
+      return true
+    }
+
     if (!this.device) {
       // Linux híbrido: low-power = la iGPU que decodifica el vídeo (VAAPI). La
       // dedicada computa más rápido pero SIEMPRE produce negro: los frames no
@@ -92,10 +108,7 @@ export class Anime4KRenderer {
       })
     }
     const device = this.device
-    const vw = video.videoWidth, vh = video.videoHeight
-    // tope: 2× nativo (más no aporta); suelo: nativo (menos sería downscale)
-    const tw = Math.round(Math.min(Math.max(targetW || vw * 2, vw), vw * 2))
-    const th = Math.round(Math.min(Math.max(targetH || vh * 2, vh), vh * 2))
+    const vw = vw0, vh = vh0, tw = tw0, th = th0
     this.frames = 0                              // contador para diagnóstico
 
     canvas.width = tw
@@ -131,33 +144,51 @@ export class Anime4KRenderer {
       ],
     })
 
+    // Cachear: reabrir el mismo tier a la misma resolución (próximo episodio,
+    // reanudar) reusa esto en vez de recompilar los compute pipelines.
+    this._cacheKey = cacheKey
+    this._canvasEl = canvas
+    this._ctx = ctx
+    this._inputTexture = inputTexture
+    this._pipeline = pipeline
+    this._blit = blit
+    this._bindGroup = bindGroup
+    this._vw = vw
+    this._vh = vh
+
     this.running = true
+    this._video = video
+    this._runFrame()
+    return true
+  }
+
+  /** Bucle por rVFC. Reusa this._pipeline/_inputTexture/_blit/_bindGroup/_ctx,
+   * ya sea recién creados o cacheados de un start() anterior con la misma
+   * clave (tier+resolución) — así reabrir el shader no recompila nada. */
+  _runFrame() {
     let errCount = 0
-    // Ingesta por VideoFrame en el MISMO device que decodifica (Intel):
-    // única combinación que renderiza contenido real en este híbrido.
-    // Matriz probada (2026-07-02): NVIDIA = negro siempre (cross-GPU);
-    // canvas2D/getImageData = negro (frames VAAPI ilegibles);
-    // importExternalTexture = negro en NVIDIA y cuelga el renderer en Intel.
+    const { device } = this
     const frame = () => {
       if (!this.running) return
+      const video = this._video
       try {
         const vf = new VideoFrame(video)
         try {
           device.queue.copyExternalImageToTexture(
-            { source: vf }, { texture: inputTexture }, [vw, vh])
+            { source: vf }, { texture: this._inputTexture }, [this._vw, this._vh])
         } finally {
           vf.close()
         }
         const encoder = device.createCommandEncoder()
-        pipeline.pass(encoder)
+        this._pipeline.pass(encoder)
         const rp = encoder.beginRenderPass({
           colorAttachments: [{
-            view: ctx.getCurrentTexture().createView(),
+            view: this._ctx.getCurrentTexture().createView(),
             loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 },
           }],
         })
-        rp.setPipeline(blit)
-        rp.setBindGroup(0, bindGroup)
+        rp.setPipeline(this._blit)
+        rp.setBindGroup(0, this._bindGroup)
         rp.draw(3)
         rp.end()
         device.queue.submit([encoder.finish()])
@@ -169,6 +200,7 @@ export class Anime4KRenderer {
         if (++errCount === 1) console.warn('[a4k] error de frame:', e)
         if (errCount > 30) {
           console.error('[a4k] errores sostenidos — apagando shader:', e)
+          this._cacheKey = null   // no reusar un pipeline que dio errores sostenidos
           this.stop()
           this.onFatal?.(e)
           return
@@ -176,9 +208,7 @@ export class Anime4KRenderer {
       }
       this._vfcHandle = video.requestVideoFrameCallback(frame)
     }
-    this._video = video
-    this._vfcHandle = video.requestVideoFrameCallback(frame)
-    return true
+    this._vfcHandle = this._video.requestVideoFrameCallback(frame)
   }
 
   stop() {

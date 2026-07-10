@@ -16,6 +16,7 @@ const KIND = {
   upscale:   { icon: 'spark',    color: 'var(--cyan)',   label: '4K' },
   export:    { icon: 'library',  color: 'var(--violet)', label: 'Tomo' },
   translate: { icon: 'globe',    color: 'var(--jade)',   label: 'Traducir' },
+  subtitle:  { icon: 'film',     color: 'var(--jade)',   label: 'Subtítulos' },
 }
 const kind = (k) => KIND[k] || KIND.download
 const monogram = (t) => (t || '?').trim().charAt(0).toUpperCase()
@@ -34,6 +35,8 @@ const activeGroups = computed(() => match(store.processingGroups))
 const historyGroups = computed(() => match(store.historyGroups))
 
 function openManga(g) {
+  // Grupos de anime (traducción de subtítulos) no tienen modal de manga → no-op.
+  if (g.isAnime) return
   store.open({ id: g.mangaId, name: g.title, cover: g.cover })
 }
 </script>

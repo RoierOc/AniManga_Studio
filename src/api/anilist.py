@@ -204,6 +204,154 @@ def search_manga():
     return jsonify(out)
 
 
+# ── Recomendaciones de manga (paridad con las de anime) ────────────────────────
+# Dos entradas: (1) por la serie que estás viendo (recommendations de AniList de ese
+# manga), (2) "Para ti" agregando las recomendaciones de una muestra de tu biblioteca,
+# ponderadas por frecuencia×rating y excluyendo lo que ya tienes. AniList limita ~90/min
+# → todo se cachea en disco 24h (cache_get/set) y el agregado muestrea pocos títulos.
+import threading as _threading
+from api.runtime import cache_get as _cache_get, cache_set as _cache_set, manga_dir as _manga_dir
+from pathlib import Path as _Path
+
+_REC_TTL = 24 * 3600
+
+_MANGA_REC_Q = '''
+query ($id: Int) {
+  Media(id: $id, type: MANGA) {
+    recommendations(sort: RATING_DESC, page: 1, perPage: 20) {
+      nodes {
+        rating
+        mediaRecommendation {
+          id idMal
+          title { romaji english native }
+          coverImage { large medium }
+          averageScore genres format chapters status countryOfOrigin
+        }
+      }
+    }
+  }
+}
+'''
+
+
+def _norm_key(s: str) -> str:
+    import re
+    return re.sub(r'[^a-z0-9]', '', (s or '').lower())
+
+
+def _resolve_manga_al_id(title: str):
+    """AniList id de un título de manga (cache 24h; 0 = no encontrado, se cachea igual
+    para no re-preguntar)."""
+    key = (title or '').strip().lower()
+    if not key:
+        return None
+    hit = _cache_get('manga_al_id', key, _REC_TTL)
+    if hit is not None:
+        return hit or None
+    d = _ql('query($s:String){Media(search:$s,type:MANGA){id}}', {'s': title})
+    al = ((d or {}).get('Media') or {}).get('id') or 0
+    _cache_set('manga_al_id', key, al, ttl=_REC_TTL, max_entries=800)
+    return al or None
+
+
+def _rec_row(node: dict) -> dict | None:
+    m = node.get('mediaRecommendation')
+    if not m:
+        return None
+    t = m.get('title') or {}
+    return {
+        'al_id':        m['id'],
+        'mal_id':       m.get('idMal'),
+        'title':        t.get('english') or t.get('romaji') or t.get('native') or '',
+        'title_romaji': t.get('romaji') or '',
+        'cover':        (m.get('coverImage') or {}).get('large') or (m.get('coverImage') or {}).get('medium', ''),
+        'score':        m.get('averageScore') or 0,
+        'genres':       (m.get('genres') or [])[:3],
+        'format':       m.get('format', ''),
+        'chapters':     m.get('chapters') or 0,
+        'status':       m.get('status', ''),
+        'rating':       node.get('rating') or 0,
+    }
+
+
+def _manga_recs_for(al_id: int) -> list:
+    """Recomendaciones de AniList para un manga (cache 24h)."""
+    hit = _cache_get('manga_recs', str(al_id), _REC_TTL)
+    if hit is not None:
+        return hit
+    d = _ql(_MANGA_REC_Q, {'id': int(al_id)})
+    nodes = (((d or {}).get('Media') or {}).get('recommendations') or {}).get('nodes') or []
+    recs = [r for r in (_rec_row(n) for n in nodes) if r and r['title']]
+    _cache_set('manga_recs', str(al_id), recs, ttl=_REC_TTL, max_entries=500)
+    return recs
+
+
+def _library_titles() -> list:
+    """Títulos (nombres de carpeta) de la biblioteca de manga del modo activo."""
+    try:
+        return [f.name for f in _Path(_manga_dir()).iterdir()
+                if f.is_dir() and not f.name.startswith('.')]
+    except Exception:
+        return []
+
+
+@anilist_bp.route('/manga/recommendations')
+def manga_recommendations():
+    """Recomendaciones para UN manga. Acepta ?al_id= o ?title= (se resuelve el id)."""
+    al_id = request.args.get('al_id', type=int)
+    title = request.args.get('title', '').strip()
+    if not al_id and title:
+        al_id = _resolve_manga_al_id(title)
+    if not al_id:
+        return jsonify([])
+    return jsonify(_manga_recs_for(al_id))
+
+
+@anilist_bp.route('/manga/for_you')
+def manga_for_you():
+    """"Para ti": agrega las recomendaciones de una MUESTRA de tu biblioteca, pondera
+    por frecuencia×rating y excluye lo que ya tienes. Cache 24h del resultado agregado
+    (clave = huella de la biblioteca) para no repetir el barrido de AniList."""
+    titles = _library_titles()
+    if not titles:
+        return jsonify([])
+    owned = {_norm_key(t) for t in titles}
+    # Huella estable de la biblioteca → clave de caché del agregado.
+    fp = str(hash(frozenset(owned)))
+    cached = _cache_get('manga_for_you', fp, _REC_TTL)
+    if cached is not None:
+        return jsonify(cached)
+
+    # Muestrea hasta 8 títulos (los alfabéticamente primeros, estable) para acotar el
+    # gasto de AniList; cada resolución + recs va cacheada, así que en llamadas
+    # sucesivas es barato aunque la muestra rote.
+    sample = sorted(titles, key=str.lower)[:8]
+    agg: dict = {}
+    for tt in sample:
+        al = _resolve_manga_al_id(tt)
+        if not al:
+            continue
+        for r in _manga_recs_for(al):
+            if not r['al_id'] or _norm_key(r['title']) in owned:
+                continue
+            e = agg.get(r['al_id'])
+            # Peso: sumatorio de ratings (una serie recomendada por varios de tus mangas
+            # y con rating alto sube). +1 por aparición para premiar la coincidencia.
+            w = (r['rating'] or 0) + 1
+            if e:
+                e['_w'] += w
+                e['_seeds'] += 1
+            else:
+                r = dict(r); r['_w'] = w; r['_seeds'] = 1
+                agg[r['al_id']] = r
+    ranked = sorted(agg.values(), key=lambda x: (x['_seeds'], x['_w'], x['score']), reverse=True)
+    for r in ranked:
+        r.pop('_w', None); r.pop('_seeds', None)
+    ranked = ranked[:24]
+    _cache_set('manga_for_you', fp, ranked, ttl=_REC_TTL, max_entries=20)
+    return jsonify(ranked)
+
+
 @anilist_bp.route('/variants')
 def variants_route():
     """Debug/UI endpoint: name variants for a title (or al_id)."""

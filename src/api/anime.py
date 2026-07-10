@@ -57,7 +57,11 @@ def _clear_thumb_cache():
 # ── Anime library persistence ──────────────────────────────────────────────────
 
 def _lib_path() -> _Path:
-    return _Path(os.environ.get('MANGA_DIR', str(_Path.home() / 'MangaLibrary'))) / 'anime_library.json'
+    # Raíz de biblioteca del modo ACTIVO (normal u oculta) — resuelta en tiempo de
+    # llamada, nunca congelada al importar, para que en modo oculto la membresía de
+    # anime viva por completo bajo la raíz oculta y no se cruce con la normal.
+    from api.runtime import manga_dir
+    return _Path(manga_dir()) / 'anime_library.json'
 
 def _lib_read() -> dict:
     try:
@@ -73,7 +77,8 @@ def _lib_write(data: dict):
 # ── Watch history ──────────────────────────────────────────────────────────────
 
 def _history_path() -> _Path:
-    return _Path(os.environ.get('MANGA_DIR', str(_Path.home() / 'MangaLibrary'))) / 'watch_history.json'
+    from api.runtime import manga_dir
+    return _Path(manga_dir()) / 'watch_history.json'
 
 def _history_read() -> list:
     try:
@@ -1066,6 +1071,20 @@ def _skip_args(dest_dir_linux: str, script_path_for_mpv: str) -> list:
             f'--script-opts-append=skip-intro-idle={_OSC_HIDE_MS / 1000:.3f}']
 
 
+_MPV_PID_FILE = '/tmp/manga_mpv_pids'
+
+
+def _record_mpv_pid(win_pid: int) -> None:
+    """Anota el PID de Windows de un mpv.exe que lanzamos, para que el teardown
+    (stop.sh / cierre de la app) lo cierre con taskkill.exe y no queden reproductores
+    huérfanos. Solo se guardan los PIDs que ESTA app abrió — nunca se toca un mpv ajeno."""
+    try:
+        with open(_MPV_PID_FILE, 'a') as f:
+            f.write(f'{win_pid}\n')
+    except Exception:
+        pass
+
+
 def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> tuple:
     """Open the video file with mpv.
     Returns (ok, proc, wl_dir): proc is Popen|None; wl_dir is the Linux watch-later dir for reading.
@@ -1125,6 +1144,7 @@ def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> t
                     stderr=subprocess.DEVNULL, timeout=15,
                 ).decode().strip()
                 win_pid = int(pid_str)
+                _record_mpv_pid(win_pid)  # para que el teardown (stop.sh) lo cierre al salir
                 print(f'[mpv] launched via Start-Process win_pid={win_pid}', flush=True)
                 return (True, None, wl_dir)  # proc=None; tracked via tasklist
             except Exception as e:
@@ -1296,9 +1316,13 @@ def _track_mpv_session(proc, wl_dir: str, anime_id: str, ep_str: str, duration: 
                            last_watched_at=now, watched=True,
                            duration=int(duration), from_mpv=True)
         else:
+            now = int(time.time())
+            if save_pos > 30:
+                lib[anime_id]['last_watched_at'] = now
             _lib_write(lib)
             push_sse_event('position', anime_id=anime_id, ep_str=ep_str,
-                           position=save_pos, duration=int(duration))
+                           position=save_pos, duration=int(duration),
+                           last_watched_at=(now if save_pos > 30 else 0))
     except Exception as e:
         print(f'[mpv] track error: {e}', flush=True)
 
@@ -1758,6 +1782,22 @@ def _build_save_path(base: str, folder: str) -> str:
     return base.rstrip('/\\') + sep + folder
 
 
+# Subcarpeta (con punto) donde caen los vídeos de anime cuando el modo oculto está
+# activo. El panel de Almacenamiento normal ignora las carpetas con punto, así que
+# los animes ocultos nunca se listan ni suman en la biblioteca normal, aunque
+# compartan el mismo download_path físico configurado por el usuario.
+_HIDDEN_ANIME_SUBDIR = '.hidden_anime'
+
+
+def _apply_hidden_anime_subdir(base: str) -> str:
+    """Devuelve la base de descargas ajustada al modo de biblioteca ACTIVO: en modo
+    oculto cuelga de `_HIDDEN_ANIME_SUBDIR`; en normal, la base tal cual."""
+    from api.runtime import get_library_mode
+    if base and get_library_mode() == 'hidden':
+        return _build_save_path(base, _HIDDEN_ANIME_SUBDIR)
+    return base
+
+
 @anime_bp.route('/qbt/add', methods=['POST'])
 def qbt_add():
     data = request.get_json(silent=True) or {}
@@ -1778,6 +1818,7 @@ def qbt_add():
                     base = (_q('get', '/app/preferences').json() or {}).get('save_path', '')
                 except Exception:
                     base = ''
+            base = _apply_hidden_anime_subdir(base)
             if base:
                 folder = _sanitize_folder(data.get('anime_title') or '')
                 form['savepath'] = _build_save_path(base, folder) if folder else base
@@ -2949,6 +2990,245 @@ def anime_play():
         if not _launch_and_track(video):
             return jsonify({'error': 'failed to launch mpv — is mpv.exe in PATH?'}), 500
         return jsonify({'ok': True, 'path': video, 'resume_pos': start_pos})
+    except Exception as e:
+        return jsonify({'error': f'internal error: {e}'}), 500
+
+
+def _video_to_win(path: str) -> str:
+    """Convierte una ruta WSL (/mnt/d/..) a Windows (D:\\..) para libmpv en la shell
+    nativa. Fuera de WSL devuelve la ruta tal cual."""
+    try:
+        return subprocess.check_output(
+            ['wslpath', '-w', path], stderr=subprocess.DEVNULL, timeout=3
+        ).decode().strip()
+    except Exception:
+        return path
+
+
+def _sidecar_subs(path: str) -> list:
+    """Subtítulos externos (sidecar) junto al vídeo — el mismo criterio que
+    `_find_subtitles`, pero SOLO los de ESTE episodio (basename que empieza por el
+    stem del vídeo, p.ej. `Ep01.spa.srt`). Devuelve la ruta Windows para que la shell
+    los cargue con `sub-add`, más una etiqueta de idioma inferida del sufijo del nombre.
+
+    Esto UNIFICA el tratamiento entre contenedores: en MKV los subs traducidos se
+    incrustan (mkvmerge) y salen por ffprobe; en Blu-ray/.m2ts (donde mkvmerge no puede
+    escribir el contenedor) se guardan como sidecar y ANTES no aparecían como pista. Al
+    listarlos aquí y cargarlos por `sub-add`, se comportan como una pista normal (con
+    delay/tamaño/estilo)."""
+    try:
+        video = _Path(path)
+        if not video.exists():
+            return []
+    except Exception:
+        return []
+    # Sufijo de nombre → etiqueta de idioma (video.spa.srt → 'spa').
+    _SUF_LANG = {'spa': 'spa', 'es': 'spa', 'esp': 'spa', 'lat': 'spa',
+                 'eng': 'eng', 'en': 'eng', 'jpn': 'jpn', 'ja': 'jpn'}
+    out = []
+    stem = video.stem.lower()
+    try:
+        entries = sorted(video.parent.iterdir(), key=lambda f: f.name.lower())
+    except Exception:
+        return []
+    for f in entries:
+        if f.suffix.lower() not in _SUBTITLE_EXTS:
+            continue
+        name_l = f.name.lower()
+        # Solo sidecars de este episodio (evita mezclar subs de otros vídeos de la carpeta).
+        if not name_l.startswith(stem):
+            continue
+        # Sufijos entre el stem y la extensión → idioma (p.ej. '.spa' en 'Ep01.spa.srt').
+        mid = f.name[len(video.stem):-len(f.suffix)].strip('. ').lower()
+        lang = ''
+        for part in re.split(r'[.\-_ ]+', mid):
+            if part in _SUF_LANG:
+                lang = _SUF_LANG[part]
+                break
+        out.append({
+            'codec': f.suffix.lower().lstrip('.'), 'lang': lang,
+            'title': f.name, 'external': True,
+            'win_path': _video_to_win(str(f)),
+        })
+    return out
+
+
+def _probe_tracks(path: str) -> dict:
+    """Lista pistas de audio/subs (mismo formato que stream.py) para el player nativo.
+    Los ids de mpv (aid/sid) son 1-based en orden de aparición → index+1 en el front.
+    Las pistas de subtítulos incrustadas van PRIMERO (orden del contenedor) y los
+    sidecar externos DESPUÉS, en el mismo orden en que la shell hará `sub-add` → así el
+    sid (índice+1) que envía el front coincide con el que asigna mpv."""
+    try:
+        out = subprocess.check_output(
+            ['ffprobe', '-v', 'quiet', '-print_format', 'json', '-show_streams', path],
+            stderr=subprocess.DEVNULL, timeout=10,
+        ).decode()
+        streams = json.loads(out).get('streams') or []
+    except Exception:
+        streams = []
+
+    def _t(s, rel):
+        tags = s.get('tags') or {}
+        return {'index': rel, 'codec': s.get('codec_name', ''),
+                'lang': tags.get('language', ''), 'title': tags.get('title', ''),
+                'external': False}
+
+    astreams = [s for s in streams if s.get('codec_type') == 'audio']
+    sstreams = [s for s in streams if s.get('codec_type') == 'subtitle']
+    subs = [_t(s, i) for i, s in enumerate(sstreams)]
+    # Añadir los sidecar externos DESPUÉS de los incrustados (orden = orden de sub-add).
+    for i, ext in enumerate(_sidecar_subs(path)):
+        ext['index'] = len(subs)
+        subs.append(ext)
+    return {
+        'audio_tracks': [_t(s, i) for i, s in enumerate(astreams)],
+        'sub_tracks':   subs,
+    }
+
+
+_SCRUB_IV = 10  # segundos entre miniaturas de la barra de progreso (player nativo)
+_SCRUB_DIR = _DATA_ROOT / '_native_thumbs'
+_scrub_lock = threading.Lock()
+_scrub_active = set()  # keys en generación (evita relanzar ffmpeg en paralelo)
+
+
+def _scrub_key(video: str) -> str:
+    import hashlib
+    return hashlib.md5(video.encode('utf-8', 'ignore')).hexdigest()[:16]
+
+
+def _gen_scrub_thumbs(video: str, key: str):
+    """Genera t_00001.jpg… (una cada _SCRUB_IV s, ancho 240) para el scrubbing del
+    reproductor nativo, en un ffmpeg de fondo. Idempotente: si ya está hecho no repite;
+    los archivos de vídeo no cambian, así que la caché no expira."""
+    tdir = _SCRUB_DIR / key
+    done = tdir / '.done'
+    if done.exists():
+        return
+    with _scrub_lock:
+        if key in _scrub_active:
+            return
+        _scrub_active.add(key)
+    try:
+        tdir.mkdir(parents=True, exist_ok=True)
+        subprocess.run(
+            ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
+             '-i', video, '-vf', f'fps=1/{_SCRUB_IV},scale=240:-2', '-q:v', '5',
+             str(tdir / 't_%05d.jpg')],
+            stderr=subprocess.DEVNULL, timeout=600,
+        )
+        done.touch()
+    except Exception:
+        pass
+    finally:
+        with _scrub_lock:
+            _scrub_active.discard(key)
+
+
+@anime_bp.route('/native/scrub/<key>/<int:idx>')
+def anime_native_scrub(key, idx):
+    """Sirve la miniatura idx (1-based) del scrubbing. 404 si aún no está generada
+    (el front oculta la imagen y reintenta al mover el cursor)."""
+    if not re.fullmatch(r'[0-9a-f]{1,32}', key or ''):
+        return ('', 404)
+    p = _SCRUB_DIR / key / f't_{idx:05d}.jpg'
+    if p.exists() and p.stat().st_size > 0:
+        return send_file(str(p), mimetype='image/jpeg', max_age=604800)
+    return ('', 404)
+
+
+@anime_bp.route('/native/resolve', methods=['POST'])
+def anime_native_resolve():
+    """Resuelve la ruta del vídeo para el reproductor NATIVO embebido (libmpv en la
+    shell Windows), SIN lanzar mpv externo — el motor vive en la shell y recibe la
+    ruta por IPC. Devuelve la ruta Windows + la posición de reanudación."""
+    try:
+        data = request.get_json(silent=True) or {}
+        video, err = resolve_episode_video(data)
+        if err:
+            return jsonify({'error': err[0]}), err[1]
+        anime_id = data.get('anime_id', '')
+        ep_str   = str(data.get('episode', -1))
+        if data.get('start_pos') is not None:
+            resume = float(data['start_pos'])
+        elif anime_id:
+            resume = float((_lib_read().get(anime_id) or {}).get('positions', {}).get(ep_str, 0))
+        else:
+            resume = 0.0
+        # Miniaturas de la barra de progreso: generarlas en background y devolver
+        # su base + intervalo + duración (para mapear hover→índice en el front).
+        key = _scrub_key(video)
+        threading.Thread(target=_gen_scrub_thumbs, args=(video, key), daemon=True).start()
+        return jsonify({
+            'ok': True,
+            'path': video,
+            'win_path': _video_to_win(video),
+            'resume_pos': resume,
+            'duration': _video_duration(video),
+            'thumbs': {'url': f'/api/anime/native/scrub/{key}', 'interval': _SCRUB_IV},
+            **_probe_tracks(video),
+        })
+    except Exception as e:
+        return jsonify({'error': f'internal error: {e}'}), 500
+
+
+@anime_bp.route('/native/progress', methods=['POST'])
+def anime_native_progress():
+    """Persiste posición/visto desde el reproductor nativo (el motor manda el tiempo
+    por IPC). Misma lógica de umbral y misma estructura que _track_mpv_session, para
+    que resume/visto/historial se comporten igual que con MPV externo."""
+    try:
+        data = request.get_json(silent=True) or {}
+        anime_id = data.get('anime_id', '')
+        ep_str   = str(data.get('episode', -1))
+        position = float(data.get('position', 0))
+        duration = float(data.get('duration', 0))
+        ended    = bool(data.get('ended', False))
+        if not anime_id:
+            return jsonify({'ok': True})
+
+        if ended:
+            watched, save_pos = True, 0
+        elif position > 0 and duration > 0:
+            watched  = (position / duration) >= _WATCHED_THRESHOLD
+            save_pos = 0 if watched else int(position)
+        elif position > 0:
+            watched, save_pos = False, int(position)
+        else:
+            watched, save_pos = False, 0
+
+        lib = _lib_read()
+        if anime_id not in lib:
+            return jsonify({'ok': True})
+        if duration > 0:
+            lib[anime_id].setdefault('durations', {})[ep_str] = int(duration)
+        if save_pos > 30:
+            lib[anime_id].setdefault('positions', {})[ep_str] = save_pos
+        else:
+            lib[anime_id].get('positions', {}).pop(ep_str, None)
+
+        if watched:
+            lib[anime_id].setdefault('watched', {})[ep_str] = True
+            now = int(time.time())
+            lib[anime_id]['last_watched_at'] = now
+            _lib_write(lib)
+            _history_append(anime_id, lib[anime_id].get('title', anime_id),
+                            int(ep_str), lib[anime_id].get('cover', ''))
+            push_sse_event('watched', anime_id=anime_id, ep_str=ep_str,
+                           last_watched_at=now, watched=True,
+                           duration=int(duration), from_mpv=True)
+        else:
+            # Progreso parcial: bump de last_watched_at para que "Continuar viendo"
+            # muestre/reordene la serie al instante (no solo al completar).
+            now = int(time.time())
+            if save_pos > 30:
+                lib[anime_id]['last_watched_at'] = now
+            _lib_write(lib)
+            push_sse_event('position', anime_id=anime_id, ep_str=ep_str,
+                           position=save_pos, duration=int(duration),
+                           last_watched_at=(now if save_pos > 30 else 0))
+        return jsonify({'ok': True, 'watched': watched, 'saved_pos': save_pos})
     except Exception as e:
         return jsonify({'error': f'internal error: {e}'}), 500
 

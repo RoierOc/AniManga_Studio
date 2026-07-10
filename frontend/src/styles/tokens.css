@@ -119,9 +119,19 @@
   --sidebar-w-collapsed: 4.5rem; /* 72px  */
   --topbar-h:         4rem;      /* 64px  */
   --content-max:      90rem;     /* 1440px @16px — grows on larger monitors */
+  /* Barra de título propia: 0 en navegador, alto real solo dentro de la shell
+     nativa (.native-shell). Sidebar/TopBar/body la usan para dejar hueco arriba. */
+  --titlebar-h:       0rem;
   --z-sidebar:  40;
   --z-topbar:   45;
   --z-overlay:  90;
   --z-modal:    100;
+  /* La barra de título va por encima de modales (siempre se puede cerrar/mover la
+     ventana), pero por debajo del lector (110) y de los players (300), que son
+     inmersivos y la tapan. */
+  --z-titlebar: 105;
   --z-toast:    120;
 }
+
+/* La shell nativa (WebView2 sin marco) reserva el alto de la barra propia. */
+.native-shell { --titlebar-h: 2.25rem; }   /* 36px */

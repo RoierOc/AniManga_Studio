@@ -18,6 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 from api.runtime import (
     MANGA_DIR,
     UPSCALED_DIR,
+    manga_dir,
+    upscaled_dir,
     MODELS_DIR,
     build_task_id,
     normalize_chapter,
@@ -567,8 +569,8 @@ def repair_chapter():
 
         from api.library import find_manga_folder
         actual_folder = find_manga_folder(title)
-        input_folder = Path(MANGA_DIR) / actual_folder
-        output_folder = Path(UPSCALED_DIR) / actual_folder
+        input_folder = Path(manga_dir()) / actual_folder
+        output_folder = Path(upscaled_dir()) / actual_folder
 
         if not input_folder.exists():
             return jsonify({'status': 'error', 'message': 'Folder not found'}), 404
@@ -731,8 +733,8 @@ def upscale_chapter():
 
         from api.library import find_manga_folder
         actual_folder = find_manga_folder(title)
-        input_folder = Path(MANGA_DIR) / actual_folder
-        output_folder = Path(UPSCALED_DIR) / actual_folder
+        input_folder = Path(manga_dir()) / actual_folder
+        output_folder = Path(upscaled_dir()) / actual_folder
         output_folder.mkdir(parents=True, exist_ok=True)
 
         if not input_folder.exists():
@@ -834,8 +836,8 @@ def upscale_manga():
 
     from api.library import find_manga_folder
     actual_folder = find_manga_folder(title)
-    input_folder = Path(MANGA_DIR) / actual_folder
-    output_folder = Path(UPSCALED_DIR) / actual_folder
+    input_folder = Path(manga_dir()) / actual_folder
+    output_folder = Path(upscaled_dir()) / actual_folder
     output_folder.mkdir(parents=True, exist_ok=True)
 
     if not input_folder.exists():

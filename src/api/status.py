@@ -16,6 +16,7 @@ def _all_status():
     from api.upscale import get_upscale_status
     from api.export import get_export_tasks
     from api.transplant import get_transplant_tasks
+    from api.subtitle import get_subtitle_tasks
 
     dl_status = get_dl_status()
     up_status = get_upscale_status()
@@ -27,8 +28,11 @@ def _all_status():
     # Translation/version-download tasks ride the same aggregated snapshot as everything
     # else so the unified Activity center + the in-modal progress read ONE source of truth.
     transplant_tasks = get_transplant_tasks()
+    # Traducción de subtítulos de anime (modelo Gemini/Qwen) — misma vía unificada, para
+    # que Actividad sea el registro global. Las descargas de anime NO se incluyen (vista propia).
+    subtitle_tasks = get_subtitle_tasks()
     return {'downloads': dl_status, 'upscale': up_status, 'exports': export_tasks,
-            'transplant': transplant_tasks}
+            'transplant': transplant_tasks, 'subtitles': subtitle_tasks}
 
 
 @status_bp.route('/stream')

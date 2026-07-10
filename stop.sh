@@ -20,13 +20,23 @@ if pkill -f 'from app import app' 2>/dev/null; then
   echo -e "${GREEN}✓  Flask/waitress detenido${RESET}"; stopped=1
 fi
 
-# 3) Suwayomi (por PID file).
-if [ -f /tmp/suwayomi.pid ] && kill -0 "$(cat /tmp/suwayomi.pid)" 2>/dev/null; then
-  kill "$(cat /tmp/suwayomi.pid)" && echo -e "${GREEN}✓  Suwayomi detenido${RESET}"
-  rm -f /tmp/suwayomi.pid; stopped=1
+# 3) Suwayomi (kill robusto: PID file + patrón del JAR + puerto + Xvfb).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if bash "$SCRIPT_DIR/suwayomi/stop.sh" 2>/dev/null | grep -q "stopped"; then
+  echo -e "${GREEN}✓  Suwayomi detenido${RESET}"; stopped=1
 fi
 
-# 4) Lock huérfano (lo toma start_server.sh con flock; al morir se libera, pero por si acaso).
+# 4) MPV (Windows) que el backend lanzó para el anime — se registran sus PIDs de
+#    Windows en este archivo; los cerramos con taskkill.exe (interop WSL→Windows).
+#    Solo mata los mpv.exe que ESTA app abrió, nunca un mpv ajeno del usuario.
+if [ -f /tmp/manga_mpv_pids ] && command -v taskkill.exe >/dev/null 2>&1; then
+  while read -r _mpv_pid; do
+    [ -n "$_mpv_pid" ] && taskkill.exe /PID "$_mpv_pid" /F >/dev/null 2>&1 && stopped=1
+  done < /tmp/manga_mpv_pids
+  rm -f /tmp/manga_mpv_pids 2>/dev/null
+fi
+
+# 5) Lock huérfano (lo toma start_server.sh con flock; al morir se libera, pero por si acaso).
 rm -f /tmp/manga_server.lock 2>/dev/null
 
 if [ $stopped -eq 0 ]; then

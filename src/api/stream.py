@@ -559,9 +559,15 @@ def stream_progress():
                        last_watched_at=now, watched=True,
                        duration=int(duration), from_mpv=False)
     else:
+        # Progreso parcial: marcar la serie como "vista recientemente" para que
+        # "Continuar viendo" la muestre/reordene AL INSTANTE (no solo al terminar).
+        now = int(time.time())
+        if save_pos > 30:
+            lib[anime_id]['last_watched_at'] = now
         _lib_write(lib)
         push_sse_event('position', anime_id=anime_id, ep_str=ep_str,
-                       position=save_pos, duration=int(duration))
+                       position=save_pos, duration=int(duration),
+                       last_watched_at=(now if save_pos > 30 else 0))
     return jsonify({'ok': True, 'watched': watched})
 
 

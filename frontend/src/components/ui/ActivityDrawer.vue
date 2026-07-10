@@ -15,6 +15,7 @@ const KIND = {
   upscale:   { icon: 'spark',    color: 'var(--cyan)',   label: '4K' },
   export:    { icon: 'library',  color: 'var(--violet)', label: 'Tomo' },
   translate: { icon: 'globe',    color: 'var(--jade)',   label: 'Traducir' },
+  subtitle:  { icon: 'film',     color: 'var(--jade)',   label: 'Subtítulos' },
 }
 const kind = (k) => KIND[k] || KIND.download
 const monogram = (t) => (t || '?').trim().charAt(0).toUpperCase()

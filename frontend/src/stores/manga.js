@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { onStatus } from '@/lib/sse'
 import { useUiStore } from './ui'
+import { useVersionsStore } from './versions'
 import { taskId } from '@/lib/manga'
 
 let statusBound = false
@@ -93,6 +94,15 @@ function normalizeTask(kind, id, v) {
   if (kind === 'versiondl')   // descarga de versión: visualmente una descarga
     return { ...base, kind: 'download', mangaId: v.title || '', title: v.title || '',
       pct: _pct(v.chapterDone, v.chapterTotal), label: v.chapterTotal ? `Versión · ${v.chapterDone || 0}/${v.chapterTotal} cap.` : 'Descarga de versión' }
+  if (kind === 'subtitle') {
+    // Traducción de subtítulos de anime. El backend ya reporta progress 0-100. Se
+    // agrupa aparte de los mangas (clave `anime:<título>` + isAnime) para que el
+    // clic NO abra el modal de manga y el icono/portada sean los del anime.
+    const title = v.title || 'Anime'
+    return { ...base, mangaId: `anime:${title}`, title, isAnime: true,
+      episode: v.episode, pct: status === 'done' ? 100 : Math.min(100, Math.round(v.progress || 0)),
+      label: v.episode != null ? `Ep. ${v.episode} · subtítulos` : 'Subtítulos' }
+  }
   return null
 }
 // Agrupa una lista de tareas normalizadas por manga, con portada (si se conoce) y % medio.
@@ -100,7 +110,7 @@ function groupByManga(tasks, coverCache) {
   const map = new Map()
   for (const t of tasks) {
     const key = t.mangaId || t.title || t.id
-    if (!map.has(key)) map.set(key, { mangaId: key, title: t.title || key, cover: coverCache[key] || '', tasks: [], pct: 0, anyError: false, anyActive: false })
+    if (!map.has(key)) map.set(key, { mangaId: key, title: t.title || key, cover: coverCache[key] || '', tasks: [], pct: 0, anyError: false, anyActive: false, isAnime: !!t.isAnime })
     map.get(key).tasks.push(t)
   }
   for (const g of map.values()) {
@@ -130,6 +140,10 @@ export const useMangaStore = defineStore('manga', {
     dismissedExports: [],     // export task ids dismissed from the queue
     libraryDirty: 0,          // bumped after a manga is deleted so LibraryView reloads
     pendingDelete: [],        // manga ids hidden during the undo window before deletion
+
+    // Recomendados (AniList): por el manga abierto + "Para ti" (de la biblioteca).
+    recs: [], recsLoading: false, recsFor: '',
+    forYou: [], forYouLoading: false, forYouLoaded: false,
 
     // Traducción por trasplante (pestaña "Traducir" del modal), scoped al manga actual
     tp: {
@@ -164,6 +178,7 @@ export const useMangaStore = defineStore('manga', {
     upscale: {},
     exports: {},
     transplant: {},           // { taskId: {status, phase, chapterDone, chapterTotal, ...} } — traducción + descarga de versión
+    subtitles: {},            // { taskId: {status, progress, title, episode, ...} } — traducción de subs de anime (modelo)
 
     // Centro de Actividad: historial DERIVADO del mismo snapshot (rebanada terminal). No se
     // graba en el cliente — activas e historial son la misma fuente de verdad y sobreviven F5.
@@ -252,8 +267,11 @@ export const useMangaStore = defineStore('manga', {
     upscaleByChapter: (s) => buildProgressMap(s.upTasks, s.upscale),
     sortedChapters: (s) => [...s.chapters].sort((a, b) => parseFloat(b.chapter) - parseFloat(a.chapter)),
     mdLangs: (s) => [...new Set(s.mdChapters.map(c => c.language).filter(Boolean))].sort(),
-    // Merge local + source + MD chapters, showing all available for download
-    mergedChapters: (s) => {
+    // Filas LOCALES (archivos ya descargados), ocultando las que tienen una descarga EN VUELO
+    // (para que se vea el anillo de progreso en vez de las páginas a medias). Base compartida
+    // por `mergedChapters` (modo navegar) y `collectionChapters` (modo curado) — una sola
+    // definición de "qué tengo en disco ahora mismo".
+    _localRows: (s) => {
       // Only truly in-flight downloads suppress the local chapter (positive check avoids
       // stale/failed statuses like 'no_chapters' or 'starting' from a crashed session from
       // incorrectly hiding local chapters and causing source+MD duplicates).
@@ -265,7 +283,12 @@ export const useMangaStore = defineStore('manga', {
           return st && st.title === curId && _IN_FLIGHT.includes(st.status)
         }).map(([ch]) => ch)
       )
-      const localChapters = s.chapters.filter(c => !activeDownloading.has(String(c.chapter)))
+      return s.chapters.filter(c => !activeDownloading.has(String(c.chapter)))
+    },
+    // Merge local + source + MD chapters, showing all available for download (modo NAVEGAR)
+    mergedChapters() {
+      const s = this
+      const localChapters = this._localRows
       // seenNorms tracks what's already in result; prevents a chapter from appearing via both
       // sourceChapters (Suwayomi) AND mdChapters (MangaDex) when dlNorms misses it.
       const seenNorms = new Set(localChapters.map(c => String(c.chapter)))
@@ -284,7 +307,54 @@ export const useMangaStore = defineStore('manga', {
           seenNorms.add(cNorm)
         }
       }
-      return result.sort((a, b) => parseFloat(b.chapter) - parseFloat(a.chapter))
+      // Etiqueta ADITIVA de fuente asignada (chapter_sources), solo lectura: no cambia el
+      // orden ni qué filas aparecen — permite que la pestaña Capítulos muestre de dónde
+      // viene cada capítulo sin tocar la lógica de fusión existente. Copia cada fila (spread)
+      // en vez de mutar los objetos compartidos con `s.chapters`/`s.sourceChapters` — mutar
+      // estado reactivo ajeno dentro de un getter es lo que impedía que la vista se refrescara
+      // de forma fiable al reasignar una fuente.
+      let tagged = result
+      if (s.current?.id) {
+        const vs = useVersionsStore()
+        if (vs.title === s.current.id) {
+          tagged = result.map((row) => {
+            const a = vs.assigned[String(row.chapter)]
+            return a ? { ...row, _assignedSource: a, _assignedSourceKind: a.sourceKind, _assignedSourceName: a.sourceName } : row
+          })
+        }
+      }
+      return tagged.sort((a, b) => parseFloat(b.chapter) - parseFloat(a.chapter))
+    },
+    // Lista ÚNICA de la pestaña Capítulos — el "plan de colección" del manga. Dos modos:
+    //  · CURADO (el manga tiene ≥1 asignación en chapter_sources): la colección es
+    //    EXACTAMENTE `local ∪ asignado`, NADA MÁS. Se descartan por completo los catálogos
+    //    sueltos de la fuente activa / MangaDex — un capítulo de otra fuente (p.ej. un 2.2)
+    //    NO aparece solo por existir en algún sitio; solo aparece lo que el usuario eligió.
+    //  · NAVEGAR (sin asignaciones): comportamiento legado (local + fuente de origen +
+    //    MangaDex) intacto — los mangas normales no cambian.
+    // Nunca se infiere "la mejor fuente disponible" para huecos ni se comparan números entre
+    // fuentes: numeraciones como 1.5/3.2 varían por fuente, no hay tal cosa como un "hueco".
+    collectionChapters() {
+      const vs = useVersionsStore()
+      const curated = !!this.current?.id && vs.title === this.current.id && vs.hasAssignments
+      if (!curated) return this.mergedChapters
+      // Modo curado: parte de lo local (etiquetado con su fuente si está asignado) y añade una
+      // fila por cada capítulo asignado que aún no esté descargado.
+      const local = this._localRows
+      const seen = new Set(local.map(c => String(c.chapter)))
+      const rows = local.map((row) => {
+        const a = vs.assigned[String(row.chapter)]
+        return a ? { ...row, _assignedSource: a, _assignedSourceKind: a.sourceKind, _assignedSourceName: a.sourceName } : row
+      })
+      for (const [chn, a] of Object.entries(vs.assigned)) {
+        if (seen.has(chn)) continue
+        seen.add(chn)
+        rows.push({
+          chapter: chn, page_count: null, _covMulti: true,
+          _assignedSource: a, _assignedSourceKind: a.sourceKind, _assignedSourceName: a.sourceName,
+        })
+      }
+      return rows.sort((a, b) => parseFloat(b.chapter) - parseFloat(a.chapter))
     },
     hasSourceMeta: (s) => !!(s.current?.source_meta?.sourceId && s.current?.source_meta?.mangaId) || !!s.mdId,
     // Fuente activa de capítulos: si hay una versión FIJADA como principal (recommended_source)
@@ -304,6 +374,22 @@ export const useMangaStore = defineStore('manga', {
       }
       if (sm?.sourceId && sm?.mangaId) return { sourceId: sm.sourceId, mangaId: sm.mangaId, sourceName: sm.sourceName || '', sourceLang: sm.sourceLang || '', kind: 'suwayomi', pinned: false }
       return null
+    },
+    // Fuente efectiva de UN capítulo concreto: si `chapter_sources` (store `versions`) tiene
+    // una asignación explícita para ese capítulo, manda (permite mezclar fuentes por rango);
+    // si no, cae exactamente al comportamiento legado de `effectiveSource` (fuente única del
+    // manga completo) — así ningún manga sin asignaciones por capítulo cambia de comportamiento.
+    effectiveSourceForChapter() {
+      return (chapterNorm) => {
+        if (this.current?.id) {
+          const vs = useVersionsStore()
+          if (vs.title === this.current.id) {
+            const a = vs.sourceForChapter(chapterNorm)
+            if (a) return { sourceId: a.sourceId, mangaId: a.mangaId, sourceName: a.sourceName || '', sourceLang: a.sourceLang || '', kind: a.sourceKind, pinned: true }
+          }
+        }
+        return this.effectiveSource
+      }
     },
     // Whether we have any external chapters to show (source, MD, or local)
     hasAnyChapters: (s) => s.mergedChapters.length > 0,
@@ -366,6 +452,9 @@ export const useMangaStore = defineStore('manga', {
         const kind = id.endsWith('_transplant_chdlversion') ? 'versiondl' : 'translate'
         const t = normalizeTask(kind, id, v); if (t) out.push(t)
       }
+      for (const [id, v] of Object.entries(s.subtitles)) {
+        const t = normalizeTask('subtitle', id, v); if (t) out.push(t)
+      }
       return out
     },
     // Solo lo que está vivo ahora (cola + corriendo) — alimenta indicador, drawer y "Activas".
@@ -402,6 +491,7 @@ export const useMangaStore = defineStore('manga', {
         this.upscale = data.upscale || {}
         this.exports = data.exports || {}
         this.transplant = data.transplant || {}
+        this.subtitles = data.subtitles || {}
         // Drop cancelled ids once the backend has actually stopped them (terminal
         // status or gone), so the set can't grow unbounded.
         if (this.cancelledIds.length) {
@@ -588,6 +678,16 @@ export const useMangaStore = defineStore('manga', {
       this.mdLang = ''
       this.upscaled = {}
       this.modalLoading = true
+      // Ciclo de vida del store `versions` (plan de colección): lo gestiona SOLO aquí, en la
+      // apertura del manga — NO el watch del modal (que antes hacía `vg.reset()` y borraba en
+      // carrera el mapa recién cargado, dejando la selección invisible). `resetForManga` limpia
+      // lo transitorio de Cobertura y fija `title`; `loadCoverageCached` repuebla en UNA sola
+      // consulta tanto la asignación persistida (chapter_sources) como el último resultado de
+      // cobertura guardado en disco → el grid aparece al instante sin recalcular (solo
+      // "Recalcular" re-mide). Si no hay cobertura cacheada, igual trae el mapa de asignación.
+      const _vs = useVersionsStore()
+      _vs.resetForManga(this.current.id)
+      _vs.loadCoverageCached(this.current.id, this.current.source_meta?.sourceLang || '')
       // Push a history entry so browser back closes the modal and forward reopens it.
       // Skip when we're re-opening *because of* a back/forward (fromHistory).
       if (!opts.fromHistory) useUiStore().pushNav()
@@ -1097,12 +1197,48 @@ export const useMangaStore = defineStore('manga', {
         // Use the backend's real task id so the progress ring matches SSE keys
         // even if the optimistic id normalization differs.
         if (res?.task_id) this.upTasks[chKey] = res.task_id
-        useUiStore().toast(`Escalando 4K · cap. ${chapter}`, 'info')
-      } catch (_) { useUiStore().toast('No se pudo iniciar el escalado', 'error'); delete this.upTasks[chKey] }
+        if (!opts.silent) useUiStore().toast(`Escalando 4K · cap. ${chapter}`, 'info')
+        return true
+      } catch (_) {
+        if (!opts.silent) useUiStore().toast('No se pudo iniciar el escalado', 'error')
+        delete this.upTasks[chKey]
+        return false
+      }
     },
     async loadUpdates() {
       try { this.updates = await api.get('/api/mangadex/updates') || [] } catch (_) { this.updates = [] }
       finally { this.updatesLoaded = true }
+    },
+    // ── Recomendados (AniList) ─────────────────────────────────────────────────
+    // Por el manga que estás viendo. Se resuelve el al_id por título en el backend
+    // (cacheado 24h). Idempotente por título para no re-pedir al reabrir el mismo.
+    async loadRecs(title) {
+      const t = (title || '').trim()
+      if (!t) { this.recs = []; return }
+      if (this.recsFor === t && (this.recs.length || this.recsLoading)) return
+      this.recsFor = t; this.recs = []; this.recsLoading = true
+      try { this.recs = await api.get(`/api/anilist/manga/recommendations?title=${encodeURIComponent(t)}`) || [] }
+      catch (_) { this.recs = [] }
+      finally { this.recsLoading = false }
+    },
+    // "Para ti": agrega recomendaciones de tu biblioteca (backend cacheado 24h).
+    async loadForYou(force = false) {
+      if (this.forYouLoaded && !force && this.forYou.length) return
+      this.forYouLoading = true
+      try { this.forYou = await api.get('/api/anilist/manga/for_you') || [] }
+      catch (_) { this.forYou = [] }
+      finally { this.forYouLoading = false; this.forYouLoaded = true }
+    },
+    // Clic en una recomendación → buscarla en Explorar (MangaDex) para descubrir/añadir.
+    async discoverRec(rec) {
+      const q = rec?.title || rec?.title_romaji || ''
+      if (!q) return
+      const { useMangadexStore } = await import('./mangadex')
+      const md = useMangadexStore()
+      md.query = q
+      try { localStorage.setItem('manga-explore-tab', 'mangadex') } catch (_) {}
+      useUiStore().goto('explore')
+      md.setTab('search')
     },
     async loadModels() {
       try { const d = await api.get('/api/upscale/models'); this.models = d.models || {}; this.activeModel = d.active || 'eula' } catch (_) {}
@@ -1225,6 +1361,7 @@ export const useMangaStore = defineStore('manga', {
     cancelAnyTask(t) {
       if (!t) return
       if (t.kind === 'translate') return this.cancelTransplant(t.id)
+      if (t.kind === 'subtitle') { api.post(`/api/subtitle/cancel/${t.id}`).catch(() => {}); return }
       if (t.kind === 'export') {
         const terminal = ['done', 'complete', 'error', 'cancelled']
         if (terminal.includes(t.status)) return this.dismissExport(t.id)
@@ -1345,6 +1482,49 @@ export const useMangaStore = defineStore('manga', {
         })
         useUiStore().toast(`Escalando ${chapters.length} capítulos`, 'info')
       } catch (_) { useUiStore().toast('No se pudo iniciar', 'error') }
+    },
+    // ── Acciones por lote (casillas de la lista de Capítulos) ──────────────────────
+    // Escala a 4K una lista EXPLÍCITA de capítulos (los que el usuario marcó). Solo tienen
+    // sentido los capítulos LOCALES que no estén ya en 4K; el resto se ignora en silencio.
+    async upscaleChapters(chapters, opts = {}) {
+      const ui = useUiStore()
+      const local = new Set(this.chapters.map(c => String(c.chapter)))
+      const targets = [...new Set(chapters.map(String))].filter(ch => local.has(ch) && this.upscaled[ch] !== true)
+      if (!targets.length) { ui.toast('Nada que escalar en la selección (deben ser capítulos descargados y sin 4K)', 'info'); return }
+      // Reutiliza EXACTAMENTE el flujo individual (/upscale_chapter): filtra por
+      // ch_prefix y crea un task_id por capítulo → progreso real en la lista Y en
+      // Actividad. El endpoint /upscale_manga ignoraba `chapters` (globeaba TODA la
+      // carpeta bajo un task 'all') por eso el lote "no funcionaba". Silencioso por
+      // capítulo (un solo toast resumen al final); el worker GPU es una cola única, así
+      // que lanzarlos en ráfaga es equivalente a pulsar el botón individual N veces.
+      let started = 0
+      for (const ch of targets) {
+        if (await this.upscaleChapter(ch, { ...opts, silent: true })) started++
+      }
+      if (started) ui.toast(`Escalando ${started} capítulo(s) a 4K`, 'info')
+      else ui.toast('No se pudo iniciar el escalado', 'error')
+    },
+    // Descarga una lista EXPLÍCITA de capítulos resolviendo la fuente de cada uno igual que el
+    // botón individual: fuente ASIGNADA (chapter_sources) primero, luego fuente Suwayomi, luego
+    // MangaDex. Los capítulos ya locales se ignoran. Reutiliza los endpoints por capítulo.
+    async downloadChapters(chapters) {
+      const ui = useUiStore()
+      const vg = useVersionsStore()
+      const wanted = new Set(chapters.map(String))
+      const rows = this.collectionChapters.filter(c => wanted.has(String(c.chapter)))
+      let started = 0
+      for (const c of rows) {
+        // capítulo ya local (no es fila de fuente/MD/multi) → nada que descargar
+        if (!c._sourceId && !c._mdChapterId && !c._covMulti) continue
+        if (this.downloadByChapter[c.chapter] || this.dlTasks[String(c.chapter)]) continue
+        if (c._assignedSource) vg.downloadChapterFrom(c.chapter, c._assignedSource)
+        else if (c._sourceId) this.downloadSourceChapter(c)
+        else if (c._mdChapterId) this.downloadMdChapter(c)
+        else continue
+        started++
+      }
+      if (!started) ui.toast('Nada que descargar en la selección (ya están descargados)', 'info')
+      else ui.toast(`Descargando ${started} capítulo(s)`, 'info')
     },
     async loadColorPages(chapters) {
       this.colorLoading = true; this.excludedPages = []
@@ -1573,23 +1753,44 @@ export const useMangaStore = defineStore('manga', {
     // Read a not-yet-downloaded chapter (MangaModal) directly from its source, online.
     async readOnline(ch) {
       const ui = useUiStore()
-      this.onlineLoadingId = ch._sourceId || ch._mdChapterId
+      // La asignación explícita por capítulo (chapter_sources) manda SIEMPRE sobre los
+      // `_sourceId`/`_mdChapterId` legados de la fila (que vienen de la fuente única vieja
+      // y quedan obsoletos en cuanto el capítulo se reasigna) — si no, "Leer" seguía
+      // abriendo la fuente ORIGINAL aunque el capítulo ya estuviera reasignado a otra.
+      const vs = useVersionsStore()
+      const assigned = this.current?.id ? vs.sourceForChapter(ch.chapter) : null
+      const busyKey = assigned ? `assigned:${ch.chapter}` : (ch._sourceId || ch._mdChapterId)
+      this.onlineLoadingId = busyKey
       try {
         let pages = []
-        if (ch._sourceId) {
+        let meta
+        if (assigned) {
+          const d = await api.post('/api/transplant/chapter_urls', {
+            title: this.current.id, chapter: ch.chapter,
+            source: { sourceKind: assigned.sourceKind, sourceId: assigned.sourceId, mangaId: assigned.mangaId, sourceLang: assigned.sourceLang },
+          })
+          pages = d.urls || []
+          meta = { kind: 'source', chapterRef: `${assigned.sourceId}_${assigned.mangaId}` }
+        } else if (ch._sourceId) {
           const pg = await api.get(`/api/sources/chapter/${ch._sourceId}/pages`)
           pages = pg.pages || []
+          meta = { kind: 'source', chapterRef: ch._sourceId }
         } else if (ch._mdChapterId) {
           const pg = await api.get(`/api/mangadex/chapter/${ch._mdChapterId}/pages`)
           pages = pg.pages || []
+          meta = { kind: 'mangadex', chapterRef: ch._mdChapterId }
         }
         if (!pages.length) { ui.toast('Capítulo sin páginas', 'error'); return }
-        const meta = ch._sourceId ? { kind: 'source', chapterRef: ch._sourceId } : { kind: 'mangadex', chapterRef: ch._mdChapterId }
         this.openOnlineReader(this.current.id, ch.chapter, pages, '', meta, this.current?.cover || '')
       } catch (_) { ui.toast('No se pudo abrir el capítulo', 'error') }
       finally { this.onlineLoadingId = null }
     },
-    closeReader() { this.reader = null; this.pages = []; this._resetView() },
+    closeReader() {
+      // Salir de pantalla completa al abandonar el capítulo: si el usuario estaba en
+      // fullscreen, el estado quedaba atascado (ni F11 lo recuperaba) hasta reabrir otro.
+      try { const ui = useUiStore(); if (ui.fullscreen) ui.setFullscreen(false) } catch {}
+      this.reader = null; this.pages = []; this._resetView()
+    },
 
     setPage(i) {
       if (i < 0 || i >= this.pages.length) return
@@ -1678,10 +1879,19 @@ export const useMangaStore = defineStore('manga', {
 
     /* reading progress (localStorage, per manga id) */
     _persistProgress() { localStorage.setItem('manga-progress-v1', JSON.stringify(this.progress)) },
+    // Devuelve la entrada de progreso SIEMPRE por el proxy reactivo de Pinia. Ojo:
+    // `x = this.progress[k] || (this.progress[k] = {...})` devolvía el objeto CRUDO
+    // recién asignado (no el proxy) la 1ª vez que se lee un manga nuevo → mutar
+    // `e.lastPage=…` NO disparaba reactividad y la UI (continuar/leído) no se
+    // actualizaba hasta F5. Leer de vuelta `this.progress[k]` da el proxy → reactivo.
+    _progressEntry(k) {
+      if (!this.progress[k]) this.progress[k] = { read: {} }
+      return this.progress[k]
+    },
     _saveProgress() {
       if (this.reader?.kind !== 'manga') return
       const k = this.reader.title
-      const e = this.progress[k] || (this.progress[k] = { read: {} })
+      const e = this._progressEntry(k)
       e.lastChapter = String(this.reader.chapter); e.lastPage = this.page
       e.lastTotal = this.pages.length || e.lastTotal || 0
       e.ts = Date.now()   // recencia → "Continuar leyendo"
@@ -1699,7 +1909,7 @@ export const useMangaStore = defineStore('manga', {
     markRead(chapter) {
       if (this.reader?.kind !== 'manga' || chapter == null) return
       const k = this.reader.title
-      const e = this.progress[k] || (this.progress[k] = { read: {} })
+      const e = this._progressEntry(k)
       ;(e.read ||= {})[String(chapter)] = true
       this._persistProgress()
       this._recordHistory(chapter)
@@ -1707,7 +1917,7 @@ export const useMangaStore = defineStore('manga', {
     isChapterRead(chapter) { return !!this.progress[this.current?.id]?.read?.[String(chapter)] },
     toggleChapterRead(chapter) {
       const k = this.current?.id; if (!k) return
-      const e = this.progress[k] || (this.progress[k] = { read: {} })
+      const e = this._progressEntry(k)
       e.read ||= {}
       if (e.read[String(chapter)]) delete e.read[String(chapter)]; else e.read[String(chapter)] = true
       e.ts = Date.now()
@@ -1717,7 +1927,7 @@ export const useMangaStore = defineStore('manga', {
     markReadUpTo(chapter) {
       const k = this.current?.id; if (!k) return
       const hi = parseFloat(chapter)
-      const e = this.progress[k] || (this.progress[k] = { read: {} })
+      const e = this._progressEntry(k)
       e.read ||= {}
       for (const c of this.chapters) {
         const n = parseFloat(c.chapter)

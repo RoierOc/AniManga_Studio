@@ -29,7 +29,7 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 
-from api.runtime import MANGA_DIR, UPSCALED_DIR, normalize_chapter
+from api.runtime import MANGA_DIR, UPSCALED_DIR, manga_dir, upscaled_dir, normalize_chapter
 from api.cbz import _list_entries, _extract, _ARCHIVE_EXTS, _MIME
 
 import_bp = Blueprint('import_cbz', __name__)
@@ -427,7 +427,7 @@ def commit():
 
     entries = _list_entries(arc)
     n = len(entries)
-    folder = Path(MANGA_DIR) / title
+    folder = Path(manga_dir()) / title
     folder.mkdir(parents=True, exist_ok=True)
 
     cover_idx = body.get('cover')
@@ -483,7 +483,7 @@ def commit():
 @import_bp.route('/list')
 def list_imported():
     items = []
-    root = Path(MANGA_DIR)
+    root = Path(manga_dir())
     if not root.is_dir():
         return jsonify(items)
 
@@ -501,7 +501,7 @@ def list_imported():
             if m:
                 chapters.add(m.group(1))
 
-        upscaled = list((Path(UPSCALED_DIR) / f.name).glob('*.jpg')) if (Path(UPSCALED_DIR) / f.name).is_dir() else []
+        upscaled = list((Path(upscaled_dir()) / f.name).glob('*.jpg')) if (Path(upscaled_dir()) / f.name).is_dir() else []
 
         translated_count = 0
         tp_path = f / '.transplant_meta.json'

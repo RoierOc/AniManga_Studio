@@ -1,4 +1,4 @@
-# AniManga Studio — lanzador Windows con backend en WSL.
+﻿# AniManga Studio — lanzador Windows con backend en WSL.
 # Instalado por `bash desktop/install.sh` (ejecutado DENTRO de WSL), que copia este
 # script + config.json + icono a %LOCALAPPDATA%\AniMangaStudio y crea el acceso
 # directo del Menú Inicio. No editar la copia instalada: re-ejecutar el instalador.
@@ -25,10 +25,12 @@ $Owned = -not (Alive)
 if ($Owned) {
     # Sin MANGA_SERVER_FG, start_server.sh se relanza detached (nohup) y wsl.exe
     # retorna enseguida; el watchdog queda vivo dentro de la distro.
-    # Start-Process (PS 5.1) no cita argumentos con espacios: se citan a mano.
-    Start-Process -WindowStyle Hidden wsl.exe -ArgumentList @(
-        "-d", "`"$($Cfg.distro)`"", "--cd", "`"$($Cfg.linuxPath)`"",
-        "-e", "bash", "start_server.sh")
+    # -ArgumentList como ARRAY con comillas embebidas manualmente rompe Start-Process
+    # (CreateProcess falla, ExitCode -1) en cuanto un elemento contiene un `"` literal
+    # — probado en vivo. Un STRING único sí funciona (Start-Process no re-cita sus
+    # trozos), así que las comillas solo hacen falta ahí para rutas con espacios.
+    $WslArgs = "-d `"$($Cfg.distro)`" --cd `"$($Cfg.linuxPath)`" -e bash start_server.sh"
+    Start-Process -WindowStyle Hidden wsl.exe -ArgumentList $WslArgs
     $Deadline = (Get-Date).AddSeconds(150)   # margen para arranque en frío de WSL
     while (-not (Alive)) {
         if ((Get-Date) -gt $Deadline) {

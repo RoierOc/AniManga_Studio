@@ -24,7 +24,7 @@ _CH_RE = re.compile(r"ch(\d+)_\d+", re.IGNORECASE)
 
 from flask import Blueprint, jsonify, request
 
-from api.runtime import MANGA_DIR, UPSCALED_DIR, QA_DIR
+from api.runtime import manga_dir, upscaled_dir, get_library_mode, QA_DIR
 from api.index_db import cached_measure, prune
 
 storage_bp = Blueprint("storage", __name__)
@@ -80,9 +80,13 @@ def _anime_root() -> Path:
     """Carpeta base de descargas de anime (cada serie en su subcarpeta). Viene de
     anime_settings.json (download_path); None si no está configurada."""
     try:
-        from api.anime import _anime_settings_read
+        from api.anime import _anime_settings_read, _apply_hidden_anime_subdir
         p = (_anime_settings_read().get("download_path") or "").strip()
-        return Path(p) if p else None
+        if not p:
+            return None
+        # Ajusta la raíz al modo activo: en oculto apunta al subdir con punto donde
+        # caen los vídeos ocultos; en normal, a la base (que ignora ese subdir).
+        return Path(_apply_hidden_anime_subdir(p))
     except Exception:
         return None
 
@@ -108,7 +112,7 @@ def _measure_anime(series_dir: Path):
 
 
 def _translated_count(title: str) -> int:
-    meta = Path(MANGA_DIR) / title / ".transplant_meta.json"
+    meta = Path(manga_dir()) / title / ".transplant_meta.json"
     if not meta.exists():
         return 0
     try:
@@ -145,8 +149,13 @@ def _safe_child(root: Path, name: str):
 @storage_bp.route("/summary", methods=["GET"])
 def summary():
     """Desglose de disco: por serie (original vs escalado) + totales + cachés."""
-    manga_root = Path(MANGA_DIR)
-    up_root = Path(UPSCALED_DIR)
+    manga_root = Path(manga_dir())
+    up_root = Path(upscaled_dir())
+
+    # Namespacea las claves de caché por modo para que las mediciones de la
+    # biblioteca oculta nunca se crucen (ni delaten su existencia) en la normal.
+    _suf = '' if get_library_mode() == 'normal' else f':{get_library_mode()}'
+    _k_manga, _k_up, _k_anime = f"manga{_suf}", f"upscaled{_suf}", f"anime{_suf}"
 
     series = {}  # name -> dict
 
@@ -157,7 +166,7 @@ def summary():
             if not entry.is_dir(follow_symlinks=False) or entry.name.startswith("."):
                 continue
             manga_names.append(entry.name)
-            b, ch, _ = cached_measure("manga", entry.name, entry.path,
+            b, ch, _ = cached_measure(_k_manga, entry.name, entry.path,
                                       lambda p: (*_measure_series(Path(p)), {}))
             series[entry.name] = {
                 "name": entry.name,
@@ -173,7 +182,7 @@ def summary():
             if not entry.is_dir(follow_symlinks=False) or entry.name.startswith("."):
                 continue
             up_names.append(entry.name)
-            b, ch, _ = cached_measure("upscaled", entry.name, entry.path,
+            b, ch, _ = cached_measure(_k_up, entry.name, entry.path,
                                       lambda p: (*_measure_series(Path(p)), {}))
             row = series.setdefault(entry.name, {
                 "name": entry.name, "original_bytes": 0, "original_chapters": 0,
@@ -195,7 +204,7 @@ def summary():
                 continue
             anime_names.append(entry.name)
             b, _, extra = cached_measure(
-                "anime", entry.name, entry.path,
+                _k_anime, entry.name, entry.path,
                 lambda p: (lambda r: (r[0], 0, {"episodes": r[1]}))(_measure_anime(Path(p))),
             )
             eps = extra.get("episodes", 0)
@@ -214,9 +223,9 @@ def summary():
             }
 
     # Drop cached rows for series that no longer exist on disk.
-    prune("manga", manga_names)
-    prune("upscaled", up_names)
-    prune("anime", anime_names)
+    prune(_k_manga, manga_names)
+    prune(_k_up, up_names)
+    prune(_k_anime, anime_names)
 
     rows = sorted(
         series.values(),
@@ -231,7 +240,7 @@ def summary():
 
     disk = {}
     try:
-        du = shutil.disk_usage(str(manga_root if manga_root.exists() else Path(MANGA_DIR).parent))
+        du = shutil.disk_usage(str(manga_root if manga_root.exists() else Path(manga_dir()).parent))
         disk = {"disk_total": du.total, "disk_free": du.free, "disk_used": du.used}
     except Exception:
         pass
@@ -256,8 +265,8 @@ def series_size():
     title = (request.args.get("title") or "").strip()
     if not title:
         return jsonify({"error": "falta title"}), 400
-    orig = _safe_child(Path(MANGA_DIR), title)
-    up = _safe_child(Path(UPSCALED_DIR), title)
+    orig = _safe_child(Path(manga_dir()), title)
+    up = _safe_child(Path(upscaled_dir()), title)
     ob, oc = _measure_series(orig) if (orig and orig.is_dir()) else (0, 0)
     ub, uc = _measure_series(up) if (up and up.is_dir()) else (0, 0)
     return jsonify({
@@ -266,6 +275,43 @@ def series_size():
         "upscaled_bytes": ub, "upscaled_chapters": uc,
         "translated_chapters": _translated_count(title),
     })
+
+
+@storage_bp.route("/series/delete", methods=["POST"])
+def series_delete():
+    """Borra los archivos descargados de un manga para liberar espacio, como en el
+    anime. Body: {title, scope}. scope:
+      - 'upscaled' → solo la copia 4K (regenerable) — recomendado.
+      - 'original' → solo los originales descargados.
+      - 'all'      → ambos (deja la serie sin páginas en disco).
+    El registro de la biblioteca/seguimiento NO se toca aquí; el usuario puede
+    re-descargar/re-escalar. Devuelve los bytes liberados."""
+    body = request.get_json(silent=True) or {}
+    title = (body.get("title") or "").strip()
+    scope = (body.get("scope") or "upscaled").strip()
+    if not title:
+        return jsonify({"error": "falta title"}), 400
+    if scope not in ("upscaled", "original", "all"):
+        return jsonify({"error": "scope inválido"}), 400
+
+    targets = []
+    if scope in ("upscaled", "all"):
+        targets.append(_safe_child(Path(upscaled_dir()), title))
+    if scope in ("original", "all"):
+        targets.append(_safe_child(Path(manga_dir()), title))
+
+    freed = 0
+    for d in targets:
+        if d and d.is_dir():
+            freed += _tree_bytes(str(d))
+            shutil.rmtree(d, ignore_errors=True)
+    # Invalidar la medición cacheada por mtime (index_db) para que summary/series
+    # reflejen el borrado sin esperar a un cambio de mtime.
+    try:
+        prune()
+    except Exception:
+        pass
+    return jsonify({"ok": True, "freed": freed, "scope": scope})
 
 
 @storage_bp.route("/purge", methods=["POST"])

@@ -92,8 +92,19 @@ export const useSourcesStore = defineStore('sources', {
         if (win) win.close()
       }
     },
-    async loadSources() {
-      try { this.sources = await api.get('/api/sources/list') || [] } catch (_) {}
+    async loadSources(retries = 5) {
+      try {
+        const list = await api.get('/api/sources/list') || []
+        this.sources = list
+        // Suwayomi puede reportar "online" antes de terminar de cargar sus
+        // extensiones → lista vacía. Reintentar en vez de quedarse en 0 fuentes
+        // (el backend ya no cachea listas vacías, así que cada reintento re-consulta).
+        if (!list.length && retries > 0) {
+          setTimeout(() => this.loadSources(retries - 1), 3000)
+        }
+      } catch (_) {
+        if (retries > 0) setTimeout(() => this.loadSources(retries - 1), 3000)
+      }
     },
 
     toggleSource(id) {

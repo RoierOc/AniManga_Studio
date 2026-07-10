@@ -52,6 +52,45 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_ROOT = Path(os.environ.get("DATA_ROOT") or str(PROJECT_ROOT / "data")).expanduser()
 MANGA_DIR = Path(os.environ.get("MANGA_DIR") or str(DATA_ROOT / "MangaLibrary")).expanduser()
 UPSCALED_DIR = Path(os.environ.get("UPSCALED_DIR") or str(DATA_ROOT / "MangaLibrary_Upscaled")).expanduser()
+
+# Biblioteca oculta: raíces gemelas, físicamente separadas de las de arriba, con
+# el mismo formato interno (carpeta por título, mismo layout de capítulos). Un
+# manga/anime añadido en modo oculto vive por completo bajo estas rutas, así
+# que nunca aparece al listar/medir/exportar la biblioteca normal.
+HIDDEN_MANGA_DIR = Path(os.environ.get("HIDDEN_MANGA_DIR") or str(DATA_ROOT / "MangaLibrary_Hidden")).expanduser()
+HIDDEN_UPSCALED_DIR = Path(os.environ.get("HIDDEN_UPSCALED_DIR") or str(DATA_ROOT / "MangaLibrary_Hidden_Upscaled")).expanduser()
+
+# Modo de biblioteca activo para este proceso — SOLO en memoria, nunca se
+# persiste a disco. Cada arranque del backend empieza siempre en "normal": no
+# debe quedar ningún rastro en disco de que el modo oculto existió o estuvo
+# activo. `manga_dir()`/`upscaled_dir()` son la indirección que el resto del
+# backend debe usar (en vez de las constantes MANGA_DIR/UPSCALED_DIR) en
+# cualquier operación que determine qué se lista/añade/borra/mide como
+# contenido de biblioteca.
+_library_mode = "normal"
+_library_mode_lock = threading.Lock()
+
+
+def get_library_mode() -> str:
+    with _library_mode_lock:
+        return _library_mode
+
+
+def set_library_mode(mode: str) -> str:
+    global _library_mode
+    if mode not in ("normal", "hidden"):
+        raise ValueError("mode must be 'normal' or 'hidden'")
+    with _library_mode_lock:
+        _library_mode = mode
+    return mode
+
+
+def manga_dir() -> Path:
+    return HIDDEN_MANGA_DIR if get_library_mode() == "hidden" else MANGA_DIR
+
+
+def upscaled_dir() -> Path:
+    return HIDDEN_UPSCALED_DIR if get_library_mode() == "hidden" else UPSCALED_DIR
 # Translation QA (testing-only): when the QA flag is on, the transplant run keeps per-page
 # debug bundles here (EN art + matched ES + detection overlay + stats) so flagged pages can
 # be diagnosed. Off by default; "Borrar datos QA" wipes this dir.

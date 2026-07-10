@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref, watch, computed } from 'vue'
+import { onMounted, onUnmounted, ref, watch, computed } from 'vue'
 import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
@@ -34,6 +34,64 @@ async function loadQa() { qaInfo.value = await manga.qaSize() }
 async function clearQa() {
   if (!confirm('¿Borrar todos los datos QA (artefactos y páginas marcadas)?')) return
   await manga.qaClear(); loadQa()
+}
+
+// ── Biblioteca oculta (descubrimiento discreto) ──────────────────────────────
+// La tarjeta NO se muestra en Ajustes salvo que: (a) el modo oculto ya esté
+// activo, o (b) se haya "revelado". Se revela de dos formas discretas:
+//   · Tecleando la combinación numérica en cualquier parte de Ajustes (fuera de
+//     un campo) → activa el modo directamente (recarga).
+//   · 7 toques en el título "CONFIGURACIÓN" → revela el formulario (necesario la
+//     primera vez, cuando aún no hay código que teclear).
+const hidCode = ref('')        // código a introducir (toggle) o nuevo código (set)
+const hidCurrent = ref('')     // código actual (sólo al cambiar uno ya existente)
+const hidMsg = ref('')         // mensaje de error/estado bajo el input
+const hidBusy = ref(false)
+const hidRevealed = ref(false) // knock: revela la tarjeta aunque el modo no esté activo
+const hidCardShown = computed(() => ui.hiddenModeActive || hidRevealed.value)
+
+// Knock en el título: 7 toques seguidos revelan la tarjeta.
+let _knock = 0, _knockTimer = null
+function hidKnock() {
+  clearTimeout(_knockTimer)
+  _knockTimer = setTimeout(() => { _knock = 0 }, 1500)
+  if (++_knock >= 7) { _knock = 0; hidRevealed.value = true; tab.value = 'general' }
+}
+
+// Buffer de dígitos tecleados en Ajustes (fuera de inputs). Tras una pausa breve,
+// si coincide con el código configurado, alterna el modo (una única prueba por
+// pausa → sin brute-force ni bloqueo del backend por tecleo legítimo).
+let _digits = '', _digitTimer = null
+function onSettingsKey(e) {
+  const el = e.target
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable)) return
+  if (!ui.hiddenConfigured) return          // sin código aún → sólo el knock revela
+  if (e.key < '0' || e.key > '9') return
+  _digits = (_digits + e.key).slice(-12)
+  clearTimeout(_digitTimer)
+  _digitTimer = setTimeout(async () => {
+    const seq = _digits; _digits = ''
+    if (seq.length >= 3) await ui.toggleHiddenMode(seq)   // en éxito recarga; en fallo, silencio
+  }, 900)
+}
+onMounted(() => window.addEventListener('keydown', onSettingsKey))
+onUnmounted(() => { window.removeEventListener('keydown', onSettingsKey); clearTimeout(_digitTimer); clearTimeout(_knockTimer) })
+async function saveHiddenCode() {
+  if (!hidCode.value.trim()) { hidMsg.value = 'Introduce un código'; return }
+  hidBusy.value = true; hidMsg.value = ''
+  const r = await ui.setHiddenCode(hidCode.value.trim(), hidCurrent.value.trim())
+  hidBusy.value = false
+  if (r.ok) { hidCode.value = ''; hidCurrent.value = ''; ui.toast('Código de biblioteca oculta guardado', 'ok') }
+  else hidMsg.value = r.error || 'No se pudo guardar'
+}
+async function toggleHidden() {
+  if (!hidCode.value.trim()) { hidMsg.value = 'Introduce el código'; return }
+  hidBusy.value = true; hidMsg.value = ''
+  const r = await ui.toggleHiddenMode(hidCode.value.trim())
+  hidBusy.value = false
+  // En éxito la página se recarga (toggleHiddenMode hace location.reload); sólo
+  // llegamos aquí en error.
+  if (!r.ok) hidMsg.value = r.retry_after ? `Demasiados intentos, espera ${Math.ceil(r.retry_after)}s` : (r.error || 'Código incorrecto')
 }
 
 // ── Almacenamiento ──────────────────────────────────────────────────────────
@@ -79,6 +137,7 @@ onMounted(() => {
   loadStorage()
   settings.loadKeys()
   settings.loadSyncStatus()
+  ui.refreshHiddenStatus()
 })
 
 // ── API keys ──────────────────────────────────────────────────────────────
@@ -173,7 +232,7 @@ async function onImportFile(e) {
 <template>
   <div class="set">
     <header class="set__head">
-      <p class="eyebrow"><span class="tick" /> CONFIGURACIÓN</p>
+      <p class="eyebrow" @click="hidKnock"><span class="tick" /> CONFIGURACIÓN</p>
       <h1>Ajustes</h1>
     </header>
 
@@ -227,7 +286,67 @@ async function onImportFile(e) {
       <p class="hint">Los casos se guardan en <code>data/_translation_qa/</code> (salida + arte EN + ES emparejada + overlay + diagnóstico) para afinar el algoritmo. Apagar el modo no borra lo ya guardado.</p>
     </section>
 
-    
+<!-- Biblioteca oculta (oculta salvo modo activo o revelada por gesto) -->
+    <section v-if="hidCardShown" class="card" :class="{ 'card--hid': ui.hiddenModeActive }">
+      <div class="card__title">
+        <Icon name="library" :size="16" /> Biblioteca oculta
+        <span v-if="ui.hiddenModeActive" class="tag tag--hid">ACTIVA</span>
+      </div>
+      <p class="hint">
+        Un espacio de biblioteca <b>totalmente independiente</b> (manga y anime). Lo que añadas
+        aquí no aparece nunca en la biblioteca principal, ni en su almacenamiento, mientras el
+        modo oculto esté desactivado. El modo <b>siempre vuelve a normal</b> al reiniciar la app.
+      </p>
+
+      <!-- Sin código configurado → configurarlo -->
+      <template v-if="!ui.hiddenConfigured">
+        <label class="fld">
+          <span>Crear código secreto <em>· combinación numérica, ej. 77788</em></span>
+          <input v-model="hidCode" type="password" inputmode="numeric" class="mono" autocomplete="off"
+                 placeholder="Nuevo código" @keyup.enter="saveHiddenCode" />
+        </label>
+        <div class="row">
+          <button class="btn btn--accent" :disabled="hidBusy" @click="saveHiddenCode">Guardar código</button>
+        </div>
+      </template>
+
+      <!-- Con código → activar/desactivar el modo -->
+      <template v-else>
+        <div class="hid__state" :class="{ 'is-on': ui.hiddenModeActive }">
+          <span class="dot" />
+          {{ ui.hiddenModeActive ? 'Estás en la biblioteca oculta' : 'Estás en la biblioteca principal' }}
+        </div>
+        <label class="fld">
+          <span>Código secreto</span>
+          <input v-model="hidCode" type="password" inputmode="numeric" class="mono" autocomplete="off"
+                 :placeholder="ui.hiddenModeActive ? 'Código para volver a la principal' : 'Código para entrar'"
+                 @keyup.enter="toggleHidden" />
+        </label>
+        <div class="row">
+          <button class="btn" :class="ui.hiddenModeActive ? 'btn--danger' : 'btn--accent'" :disabled="hidBusy" @click="toggleHidden">
+            {{ ui.hiddenModeActive ? 'Volver a la biblioteca principal' : 'Entrar en la biblioteca oculta' }}
+          </button>
+        </div>
+        <details class="hid__change">
+          <summary>Cambiar el código</summary>
+          <label class="fld">
+            <span>Código actual</span>
+            <input v-model="hidCurrent" type="password" inputmode="numeric" class="mono" autocomplete="off" placeholder="Actual" />
+          </label>
+          <label class="fld">
+            <span>Nuevo código</span>
+            <input v-model="hidCode" type="password" inputmode="numeric" class="mono" autocomplete="off" placeholder="Nuevo" />
+          </label>
+          <div class="row">
+            <button class="btn btn--accent btn--xs" :disabled="hidBusy" @click="saveHiddenCode">Guardar nuevo código</button>
+          </div>
+        </details>
+      </template>
+
+      <p v-if="hidMsg" class="hid__msg">{{ hidMsg }}</p>
+    </section>
+
+
         </div>
 
         <!-- Anime -->
@@ -648,6 +767,19 @@ async function onImportFile(e) {
 .keygrp__hint { color: var(--jade) !important; font-family: var(--font-mono); font-size: var(--fs-2xs); }
 .keygrp__fields { display: flex; flex-wrap: wrap; gap: var(--s-3); }
 .keygrp__foot { margin-top: var(--s-2); }
+
+/* Biblioteca oculta */
+.card--hid { border-color: color-mix(in srgb, var(--violet) 42%, transparent); box-shadow: inset 2px 0 0 var(--violet), 0 0 18px -8px color-mix(in srgb, var(--violet) 70%, transparent); }
+.card--hid .card__title :deep(svg) { color: var(--violet); }
+.tag--hid { color: var(--violet); border-color: color-mix(in srgb, var(--violet) 45%, transparent); }
+.hid__state { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); color: var(--ink-faint); margin: var(--s-1) 0 var(--s-3); }
+.hid__state.is-on { color: var(--violet); }
+.hid__state.is-on .dot { background: var(--violet); box-shadow: 0 0 8px color-mix(in srgb, var(--violet) 60%, transparent); }
+.hid__change { margin-top: var(--s-3); }
+.hid__change summary { font-size: var(--fs-xs); color: var(--ink-faint); cursor: pointer; user-select: none; }
+.hid__change summary:hover { color: var(--ink-soft); }
+.hid__change .fld { margin-top: var(--s-3); }
+.hid__msg { font-size: var(--fs-xs); color: var(--coral); margin-top: var(--s-2); }
 
 /* Sync */
 .sync__foot { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; }

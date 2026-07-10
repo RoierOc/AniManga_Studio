@@ -8,9 +8,13 @@ import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import { useVersionsStore } from '@/stores/versions'
+import VersionsCoverageGrid from '@/components/manga/VersionsCoverageGrid.vue'
+import MangaRecRail from '@/components/manga/MangaRecRail.vue'
 
 const store = useMangaStore()
 const ui = useUiStore()
+const vg = useVersionsStore()
 // The X / overlay just closes the modal and stays on the current view — it must NOT
 // navigate browser history (that was jumping to the previous page, sometimes Mi Anime).
 // replaceNav updates the current history entry to "closed"; the browser back/forward
@@ -24,8 +28,31 @@ const seriesSize = ref(null)
 watch(() => store.current?.id, async (id) => {
   seriesSize.value = null
   if (!id) return
+  // Recomendados por esta serie (AniList, resuelto por título en el backend).
+  store.loadRecs(store.current?.name || id)
   try { seriesSize.value = await api.get(`/api/storage/series?title=${encodeURIComponent(id)}`) } catch (_) {}
 }, { immediate: true })
+
+// Liberar espacio: borra del disco el 4K (regenerable) o los originales descargados,
+// como en el anime. No quita el manga de la biblioteca (se puede re-descargar/re-escalar).
+const freeing = ref('')
+async function freeSpace(scope) {
+  const id = store.current?.id
+  if (!id || freeing.value) return
+  const label = scope === 'upscaled' ? 'la copia 4K' : scope === 'original' ? 'los archivos originales descargados' : 'TODOS los archivos (4K + originales)'
+  if (!window.confirm(`¿Borrar ${label} de "${store.current?.name || id}" del disco?\n\nEl manga sigue en tu biblioteca; podrás volver a descargar/escalar.`)) return
+  freeing.value = scope
+  try {
+    const r = await api.post('/api/storage/series/delete', { title: id, scope })
+    try { seriesSize.value = await api.get(`/api/storage/series?title=${encodeURIComponent(id)}`) } catch (_) {}
+    if (scope !== 'original') store._refreshUpscaled()   // 4K borrado → refresca badges
+    ui.toast(`Liberados ${formatBytes(r.freed || 0)}`, 'ok')
+  } catch (_) {
+    ui.toast('No se pudo liberar el espacio', 'error')
+  } finally {
+    freeing.value = ''
+  }
+}
 
 // Cobertura de escalado: cuántos capítulos están en 4K / parciales / sin escalar.
 const coverage = computed(() => {
@@ -43,13 +70,36 @@ const coverage = computed(() => {
 const LANG_FLAG = { en: '🇬🇧', es: '🇪🇸', 'es-la': '🇲🇽', ja: '🇯🇵', 'pt-br': '🇧🇷', fr: '🇫🇷', ko: '🇰🇷', zh: '🇨🇳', 'zh-hk': '🇭🇰', it: '🇮🇹', de: '🇩🇪', ru: '🇷🇺' }
 const flag = (l) => LANG_FLAG[l] || l
 
-// bulk upscale range
-const rangeFrom = ref('')
-const rangeTo = ref('')
-function doRange() {
-  if (!rangeFrom.value || !rangeTo.value) return
+// ── Selección por lote (casillas en la lista de Capítulos) ──────────────────────
+// batchSel = Set de claves de capítulo marcadas. Una barra flotante actúa sobre ellas:
+// Descargar (capítulos remotos) o Escalar 4K (capítulos locales). Se limpia al cambiar de
+// pestaña/manga.
+const batchSel = ref(new Set())
+function toggleBatch(ch) {
+  const s = new Set(batchSel.value); const k = String(ch)
+  s.has(k) ? s.delete(k) : s.add(k); batchSel.value = s
+}
+function clearBatch() { batchSel.value = new Set() }
+// De lo marcado: cuántos son locales (escalables) vs remotos (descargables).
+const batchStats = computed(() => {
+  let local = 0, remote = 0
+  for (const c of store.collectionChapters) {
+    if (!batchSel.value.has(String(c.chapter))) continue
+    if (!c._sourceId && !c._mdChapterId && !c._covMulti) local++
+    else remote++
+  }
+  return { local, remote }
+})
+function batchDownload() {
+  store.downloadChapters([...batchSel.value]); clearBatch()
+}
+function batchUpscale() {
   const excludePages = store.current?.source_meta?.imported ? store.excludedPages : []
-  store.upscaleRange(rangeFrom.value, rangeTo.value, false, excludePages)
+  store.upscaleChapters([...batchSel.value], { excludePages }); clearBatch()
+}
+function toggleAllBatch() {
+  const all = store.collectionChapters.map(c => String(c.chapter))
+  batchSel.value = batchSel.value.size === all.length ? new Set() : new Set(all)
 }
 // color pages
 function detectColors() { store.loadColorPages([...sel.value]) }
@@ -79,6 +129,20 @@ const tpSel = ref(new Set())
 const toggleTp = (ch) => { const s = new Set(tpSel.value); s.has(ch) ? s.delete(ch) : s.add(ch); tpSel.value = s }
 const onArt = (e) => store.tpSelectArt(tp.value.artCands.find(c => store._candKey(c) === e.target.value))
 const onEs = (e) => store.tpSelectEs(tp.value.esCands.find(c => store._candKey(c) === e.target.value))
+// Si el capítulo tiene una fuente asignada (grid de cobertura) que NO es español, el backend
+// usa ese arte para ESE capítulo en vez del arte global del título (ver transplant.py
+// _run_chapters) — mostramos por qué para que no sea una sorpresa.
+const _ES_LANGS = new Set(['es', 'es-419', 'es-es', 'es-la', 'es-mx'])
+function artOverrideFor(chn) {
+  const a = vg.assigned[String(chn)]
+  return a && !_ES_LANGS.has((a.sourceLang || '').toLowerCase()) ? a : null
+}
+// Fuente ES anclada por capítulo (chapter_sources en español): el backend la usa como fuente
+// ES de ESE capítulo en vez del ES global — se lo mostramos al usuario para que no sorprenda.
+function esOverrideFor(chn) {
+  const a = vg.assigned[String(chn)]
+  return a && _ES_LANGS.has((a.sourceLang || '').toLowerCase()) ? a : null
+}
 const tpPhaseLabel = computed(() => {
   const p = tp.value.discoverProgress || {}
   switch (tp.value.phase) {
@@ -133,6 +197,53 @@ const verPhaseLabel = computed(() => {
   }
 })
 
+// Cobertura de capítulos por fuente ("Fuentes por capítulo"): grid + asignación por rango
+// + revisar actualizaciones. Store dedicado `versions.js`. La asignación (chapter_sources) es
+// la ÚNICA fuente de verdad de la colección: nunca se completan huecos automáticamente.
+const rangePanel = ref(null)   // { source } cuando el panel Desde/Hasta está abierto
+const rangeFromCh = ref('')
+const rangeToCh = ref('')
+function loadCoverage(refresh = false) { vg.fetchCoverage(store.current?.id, store.current?.al_id, refresh, store.current?.source_meta?.sourceLang || '') }
+// Misma clave que usa store.readOnline() internamente para marcar "en curso" — necesaria
+// porque una fila con asignación por capítulo ya no se identifica por _sourceId/_mdChapterId.
+function onlineBusyKey(c) { return c._assignedSource ? `assigned:${c.chapter}` : (c._sourceId || c._mdChapterId) }
+function openRangePanel(source) { rangePanel.value = { source }; rangeFromCh.value = ''; rangeToCh.value = '' }
+function closeRangePanel() { rangePanel.value = null }
+async function confirmRangePanel() {
+  if (!rangePanel.value) return
+  const src = rangePanel.value.source
+  await vg.assignSource({
+    range: { from: rangeFromCh.value || null, to: rangeToCh.value || null },
+    source: { sourceKind: src.sourceKind, sourceId: src.sourceId, mangaId: src.mangaId, sourceName: src.sourceName, sourceLang: src.sourceLang },
+  })
+  closeRangePanel()
+}
+function onGridAssignRange({ source, chapters }) {
+  vg.assignSource({
+    chapters,
+    source: { sourceKind: source.sourceKind, sourceId: source.sourceId, mangaId: source.mangaId, sourceName: source.sourceName, sourceLang: source.sourceLang },
+  })
+}
+// Vuelve al modo NAVEGAR: borra todas las asignaciones del manga (source:null, range:'all').
+// El backend elimina las filas de chapter_sources; el getter collectionChapters vuelve a la
+// fusión legada (local + fuente de origen + MangaDex) en cuanto `hasAssignments` pasa a false.
+function clearAllAssignments() {
+  vg.assignSource({ range: 'all', source: null })
+}
+const showFreshness = ref(false)
+function toggleFreshness() {
+  showFreshness.value = !showFreshness.value
+  if (showFreshness.value && !vg.freshness.suggestions.length) vg.checkFreshness(store.current?.al_id)
+}
+
+// Reasignación puntual de UN capítulo ya descargado, desde la pestaña Capítulos.
+const reassignOpen = ref(null)   // chapterNorm del capítulo con el menú abierto
+function toggleReassign(chn) { reassignOpen.value = reassignOpen.value === chn ? null : chn }
+function pickReassign(chn, src) {
+  vg.assignSource({ chapters: [chn], source: { sourceKind: src.sourceKind, sourceId: src.sourceId, mangaId: src.mangaId, sourceName: src.sourceName, sourceLang: src.sourceLang } })
+  reassignOpen.value = null
+}
+
 // Reparto manual de un tomo (cuando el reparto automático por nº de páginas ES falla)
 const manualVol = ref(null)
 const manualCounts = ref([])
@@ -159,8 +270,12 @@ function submitManualSplit() {
 watch(m, (v) => {
   tab.value = 'chapters'; sel.value = new Set(); volName.value = v?.name || ''
   showManage.value = false; renameVal.value = v?.name || ''; coverUrlVal.value = ''
-  tomoCover.value = ''; rangeFrom.value = ''; rangeTo.value = ''; tpSel.value = new Set()
-  store.verReset()
+  tomoCover.value = ''; clearBatch(); tpSel.value = new Set()
+  // NO tocar `vg` aquí: su ciclo de vida (resetForManga + loadAssignedMap) lo gestiona
+  // store.open() en la apertura del manga. Llamar `vg.reset()` aquí borraba en carrera el mapa
+  // de asignación recién cargado y dejaba la selección persistida invisible. Solo reseteamos
+  // la UI local del modal y el ranking de Versiones (namespace `ver`, independiente).
+  store.verReset(); rangePanel.value = null; showFreshness.value = false; reassignOpen.value = null
   if (v) { store.resetMdex(); store.loadHealth(); store.colorPages = []; store.excludedPages = []; store.exportPreview = { pages: 0, est_mb: 0, upscaled_pages: 0, original_pages: 0 } }
   if (v && !Object.keys(store.models).length) store.loadModels()
   if (v) store.loadDestinations()
@@ -246,11 +361,6 @@ async function doExport(toDrive = false) {
               </div>
               <div class="modal__hacts">
                 <button class="hbtn hbtn--accent" @click="store.upscaleAll(m.source_meta?.imported ? { excludePages: store.excludedPages } : {})"><Icon name="spark" :size="13" /> Escalar todo 4K</button>
-                <span class="rangebox">
-                  <input v-model="rangeFrom" placeholder="de" inputmode="decimal" />
-                  <input v-model="rangeTo" placeholder="a" inputmode="decimal" />
-                  <button @click="doRange" title="Escalar rango">4K rango</button>
-                </span>
                 <button class="hbtn" @click="showManage = !showManage" :class="{ 'is-on': showManage }">Gestionar</button>
                 <button class="hbtn" @click="store.scanCorrupt()">Verificar</button>
               </div>
@@ -267,6 +377,16 @@ async function doExport(toDrive = false) {
                   <span><b>{{ formatBytes(seriesSize.original_bytes) }}</b> original</span>
                   <span v-if="seriesSize.upscaled_bytes" class="manage__size-4k">· <b>{{ formatBytes(seriesSize.upscaled_bytes) }}</b> 4K</span>
                   <span class="manage__size-tot">· {{ formatBytes(seriesSize.original_bytes + seriesSize.upscaled_bytes) }} en total · {{ seriesSize.original_chapters }} cap.</span>
+                </div>
+                <!-- Liberar espacio en disco (como el anime): borra 4K u originales -->
+                <div v-if="seriesSize && (seriesSize.upscaled_bytes || seriesSize.original_bytes)" class="manage__free">
+                  <span class="manage__free-lbl"><Icon name="trash" :size="12" /> Liberar espacio</span>
+                  <button v-if="seriesSize.upscaled_bytes" class="freebtn" :disabled="!!freeing" @click="freeSpace('upscaled')">
+                    {{ freeing === 'upscaled' ? 'Borrando…' : `Borrar 4K (${formatBytes(seriesSize.upscaled_bytes)})` }}
+                  </button>
+                  <button v-if="seriesSize.original_bytes" class="freebtn" :disabled="!!freeing" @click="freeSpace('original')">
+                    {{ freeing === 'original' ? 'Borrando…' : `Borrar descargados (${formatBytes(seriesSize.original_bytes)})` }}
+                  </button>
                 </div>
                 <div class="manage__row">
                   <label class="mf"><span>Renombrar</span><input v-model="renameVal" type="text" /></label>
@@ -334,11 +454,22 @@ async function doExport(toDrive = false) {
               <span v-if="store.current?.transplant_meta?.translated?.length" class="mtab__badge">ES</span>
             </button>
             <button class="mtab" :class="{ 'is-active': tab === 'tomo' }" @click="tab = 'tomo'"><Icon name="library" :size="13" /> Exportar Tomo</button>
+            <button class="mtab" :class="{ 'is-active': tab === 'recs' }" @click="tab = 'recs'"><Icon name="spark" :size="13" /> Recomendados</button>
           </div>
 
           <div class="modal__body">
             <div v-if="store.modalLoading" class="center"><Spinner /></div>
-            <div v-else-if="!store.chapters.length && !store.hasSourceMeta" class="empty">Sin capítulos descargados.</div>
+            <div v-else-if="!store.chapters.length && !store.hasSourceMeta && !vg.hasAssignments && tab !== 'recs'" class="empty">Sin capítulos descargados.</div>
+
+            <!-- RECOMENDADOS -->
+            <div v-else-if="tab === 'recs'" class="recs">
+              <MangaRecRail v-if="store.recsLoading || store.recs.length"
+                            :items="store.recs" :loading="store.recsLoading"
+                            layout="grid" title="Similares a este"
+                            subtitle="Otras series que gustan a lectores de esta"
+                            @select="store.discoverRec" />
+              <div v-else class="empty">No hay recomendaciones para esta serie.</div>
+            </div>
 
             <!-- TOMO EXPORT -->
             <div v-else-if="tab === 'tomo'" class="tomo">
@@ -550,6 +681,71 @@ async function doExport(toDrive = false) {
                 </ul>
                 <div v-else class="empty">No hay versiones en este idioma.</div>
               </template>
+
+              <!-- ── Fuentes por capítulo: cobertura + asignación por rango + huecos ── -->
+              <div class="vg">
+                <div class="vg__head">
+                  <h4 class="vg__title">Cobertura por capítulo</h4>
+                  <div class="vg__actions">
+                    <button v-if="vg.phase !== 'ready'" class="hbtn" :disabled="vg.loading" @click="loadCoverage(false)">
+                      <Spinner v-if="vg.loading" :size="13" /><Icon v-else name="grid" :size="14" /> Ver cobertura
+                    </button>
+                    <button v-if="vg.phase === 'ready'" class="hbtn" :disabled="vg.loading" @click="loadCoverage(true)" title="Recalcular saltando la caché (vuelve a medir todas las fuentes)">
+                      <Spinner v-if="vg.loading" :size="13" /><Icon v-else name="refresh" :size="14" /> Recalcular
+                    </button>
+                    <button v-if="vg.phase === 'ready'" class="hbtn" @click="toggleFreshness">
+                      <Icon name="spark" :size="14" /> Revisar actualizaciones
+                    </button>
+                    <button v-if="vg.hasAssignments" class="hbtn hbtn--danger" @click="clearAllAssignments"
+                      title="Elimina todas las asignaciones de este manga y vuelve al modo normal (fuente de origen + MangaDex)">
+                      <Icon name="trash" :size="14" /> Vaciar selección
+                    </button>
+                  </div>
+                </div>
+                <p class="vg__lead">Cada fuente marcada en <span class="vg__swcyan">cian</span> es la fuente ASIGNADA a ese capítulo; en <span class="vg__swblue">azul</span>, alternativas disponibles. Arrastra sobre la fila de una fuente para asignar un rango de capítulos. Solo se descargan/leen los capítulos que asignes — la app nunca completa huecos por su cuenta.</p>
+
+                <div v-if="vg.loading" class="vr__disc"><Spinner :size="16" /><span class="muted">{{ vg.phase === 'coverage' ? `Calculando cobertura… ${vg.progress.covered || 0}/${vg.progress.coverTotal || 0}` : 'Buscando fuentes…' }}</span></div>
+
+                <div v-if="showFreshness" class="vg__fresh">
+                  <div v-if="vg.freshness.loading" class="vr__disc"><Spinner :size="16" /><span class="muted">Revisando fuentes…</span></div>
+                  <ul v-else-if="vg.freshness.suggestions.length" class="vg__suglist">
+                    <li v-for="sug in vg.freshness.suggestions" :key="sug.chapter + sug.reason" class="vg__sug">
+                      <span class="vg__sugtxt">
+                        Cap. {{ formatChapter(sug.chapter) }} —
+                        <template v-if="sug.reason === 'new'">nuevo en {{ sug.betterSource.sourceName }}</template>
+                        <template v-else>mejor calidad en {{ sug.betterSource.sourceName }} (+{{ sug.delta }})</template>
+                      </span>
+                      <button class="hbtn hbtn--accent" @click="vg.applySuggestion(sug)">Aplicar</button>
+                    </li>
+                  </ul>
+                  <p v-else class="muted">Nada nuevo por ahora.</p>
+                </div>
+
+                <template v-if="vg.phase === 'ready'">
+                  <VersionsCoverageGrid :sources="vg.sources" :assigned="vg.assigned" :total-known-chapters="vg.totalKnownChapters"
+                    @assign-range="onGridAssignRange" @select-source="openRangePanel" />
+
+                  <ul class="vg__srclist">
+                    <li v-for="s in vg.sources" :key="s.sourceId + '_' + s.mangaId" class="vg__srcrow">
+                      <span class="vg__srcname">{{ s.sourceName }} <em class="vr__lang">{{ flag(s.sourceLang) }}</em></span>
+                      <!-- El backend ya descarta <85% de match (_COVERAGE_MATCH_MIN); lo cercano al piso
+                           (<95%) se resalta como "aún así, vale la pena mirarlo dos veces". -->
+                      <span v-if="s.match != null" class="vg__match" :class="{ 'vg__match--low': s.match < 0.95 }" :title="'Parecido de título con &quot;' + m?.name + '&quot; — valores cercanos al 85% pueden ser una obra distinta, revisa antes de confiar'">{{ Math.round(s.match * 100) }}% título</span>
+                      <span class="vg__srcmeta">{{ s.count }} cap.<template v-if="s.completeness != null"> · {{ Math.round(s.completeness * 100) }}% completo</template><template v-if="s.updateFrequency?.medianDaysBetweenChapters"> · ~{{ s.updateFrequency.medianDaysBetweenChapters }}d/cap</template></span>
+                      <button class="vr__fix" @click="openRangePanel(s)">Asignar rango…</button>
+                    </li>
+                  </ul>
+
+                  <div v-if="rangePanel" class="vg__rangepanel">
+                    <span>Asignar a <strong>{{ rangePanel.source.sourceName }}</strong>:</span>
+                    <input class="vg__rangein" type="text" placeholder="Desde (ej. 1)" v-model="rangeFromCh" />
+                    <span>–</span>
+                    <input class="vg__rangein" type="text" placeholder="Hasta (vacío = fin)" v-model="rangeToCh" />
+                    <button class="hbtn hbtn--accent" @click="confirmRangePanel">Aplicar</button>
+                    <button class="hbtn" @click="closeRangePanel">Cancelar</button>
+                  </div>
+                </template>
+              </div>
             </div>
 
             <!-- TRADUCIR (trasplante) -->
@@ -667,6 +863,12 @@ async function doExport(toDrive = false) {
                       <span class="tl__chip" :class="'tl__chip--' + (tp.runStatus?.chapter === c.chapter && tp.running ? 'doing' : c.status)">
                         {{ tp.runStatus?.chapter === c.chapter && tp.running ? 'traduciendo' : c.status === 'done' ? 'hecho' : c.status === 'failed' ? 'falló' : 'pendiente' }}
                       </span>
+                      <span v-if="artOverrideFor(c.chapter)" class="chap__tag chap__tag--assigned" :title="`Este capítulo usará el arte de ${artOverrideFor(c.chapter).sourceName} (asignado en Cobertura) en vez del arte global`">
+                        arte: {{ artOverrideFor(c.chapter).sourceName }}
+                      </span>
+                      <span v-if="esOverrideFor(c.chapter)" class="chap__tag chap__tag--assigned" :title="`Este capítulo tomará el español de ${esOverrideFor(c.chapter).sourceName} (anclado en Cobertura) en vez de la fuente ES global`">
+                        ES: {{ esOverrideFor(c.chapter).sourceName }}
+                      </span>
                       <button class="tl__eye" :class="{ 'is-on': tp.preview[c.chapter]?.open }" @click.stop="store.tpTogglePreview(c.chapter)" title="Vista previa del arte">
                         <Icon name="search" :size="13" />
                       </button>
@@ -686,7 +888,7 @@ async function doExport(toDrive = false) {
               </template>
             </div>
 
-            <template v-if="tab === 'chapters' && !store.modalLoading && (store.chapters.length || store.hasSourceMeta)">
+            <template v-if="tab === 'chapters' && !store.modalLoading && (store.chapters.length || store.hasSourceMeta || vg.hasAssignments)">
             <!-- Taller: exclusión manual de páginas a color antes de escalar -->
             <div v-if="m.source_meta?.imported" class="colors colors--ws">
               <div class="colors__head">
@@ -722,31 +924,86 @@ async function doExport(toDrive = false) {
               <span v-if="store.continueInfo().total" class="contbar__p">pág {{ store.continueInfo().page + 1 }}/{{ store.continueInfo().total }}</span>
             </button>
 
+            <!-- Barra de selección por lote: marca capítulos y actúa sobre ellos (descargar/escalar) -->
+            <div v-if="store.collectionChapters.length" class="batchhead">
+              <button class="batchhead__all" @click="toggleAllBatch" :title="batchSel.size === store.collectionChapters.length ? 'Deseleccionar todo' : 'Seleccionar todo'">
+                <span class="batchbox" :class="{ 'is-on': batchSel.size && batchSel.size === store.collectionChapters.length, 'is-part': batchSel.size && batchSel.size < store.collectionChapters.length }">
+                  <Icon v-if="batchSel.size" name="check" :size="11" />
+                </span>
+                Seleccionar
+              </button>
+              <span v-if="batchSel.size" class="batchhead__n">{{ batchSel.size }} marcado(s)</span>
+            </div>
+
             <ul class="chaps">
-              <template v-for="c in (store.hasSourceMeta ? store.mergedChapters : store.sortedChapters)" :key="c.chapter">
-              <li class="chap"
-                  :class="{ 'chap--4k': upState(c.chapter) === true, 'chap--part': upState(c.chapter) === 'partial', 'chap--src': c._sourceId || c._mdChapterId, 'chap--md': !!c._mdChapterId, 'chap--read': store.isChapterRead(c.chapter) }">
-                <!-- Downloaded chapter: clic = leer · clic derecho = marcar/desmarcar leído -->
-                <button v-if="!c._sourceId && !c._mdChapterId" class="chap__read" @click="store.read(c.chapter)"
-                        @contextmenu.prevent="store.toggleChapterRead(c.chapter)" :title="store.isChapterRead(c.chapter) ? 'Leído · clic derecho para desmarcar' : 'Clic derecho: marcar leído'">
-                  <span v-if="store.isChapterRead(c.chapter)" class="chap__read-dot" title="Leído" />
-                  <span class="chap__num">{{ formatChapter(c.chapter) }}</span>
-                  <span class="chap__pages">{{ c.page_count }} pág.</span>
-                  <span v-if="upState(c.chapter) === true" class="chap__tag chap__tag--4k">4K</span>
-                  <span v-else-if="upState(c.chapter) === 'partial'" class="chap__tag chap__tag--part" :title="store.health[c.chapter] ? `Faltan ${store.health[c.chapter].missing_upscaled} págs.` : ''">PARCIAL<template v-if="store.health[c.chapter]?.missing_upscaled"> ·{{ store.health[c.chapter].missing_upscaled }}</template></span>
+              <template v-for="c in store.collectionChapters" :key="c.chapter">
+              <li class="chap" :class="{ 'chap--4k': upState(c.chapter) === true, 'chap--part': upState(c.chapter) === 'partial', 'chap--src': c._sourceId || c._mdChapterId || c._covMulti, 'chap--md': !!c._mdChapterId, 'chap--read': store.isChapterRead(c.chapter), 'chap--sel': batchSel.has(String(c.chapter)) }">
+                <!-- Casilla de selección por lote -->
+                <button class="chap__check" @click.stop="toggleBatch(c.chapter)" :title="batchSel.has(String(c.chapter)) ? 'Quitar de la selección' : 'Añadir a la selección'">
+                  <span class="batchbox" :class="{ 'is-on': batchSel.has(String(c.chapter)) }"><Icon v-if="batchSel.has(String(c.chapter))" name="check" :size="11" /></span>
                 </button>
-                <!-- Source/MD chapter: not clickable, show download info -->
+                <!-- Downloaded chapter: clic = leer · clic derecho = marcar/desmarcar leído -->
+                <template v-if="!c._sourceId && !c._mdChapterId && !c._covMulti">
+                  <button class="chap__read" @click="store.read(c.chapter)"
+                          @contextmenu.prevent="store.toggleChapterRead(c.chapter)" :title="store.isChapterRead(c.chapter) ? 'Leído · clic derecho para desmarcar' : 'Clic derecho: marcar leído'">
+                    <span v-if="store.isChapterRead(c.chapter)" class="chap__read-dot" title="Leído" />
+                    <span class="chap__num">{{ formatChapter(c.chapter) }}</span>
+                    <span class="chap__pages">{{ c.page_count }} pág.</span>
+                    <span v-if="upState(c.chapter) === true" class="chap__tag chap__tag--4k">4K</span>
+                    <span v-else-if="upState(c.chapter) === 'partial'" class="chap__tag chap__tag--part" :title="store.health[c.chapter] ? `Faltan ${store.health[c.chapter].missing_upscaled} págs.` : ''">PARCIAL<template v-if="store.health[c.chapter]?.missing_upscaled"> ·{{ store.health[c.chapter].missing_upscaled }}</template></span>
+                  </button>
+                  <!-- Fuente asignada a este capítulo (chapter_sources) + reasignación puntual -->
+                  <div v-if="vg.sources.length" class="chap__srcpin">
+                    <button class="chap__srcpinbtn" @click="toggleReassign(String(c.chapter))" :title="c._assignedSourceName ? `Asignado: ${c._assignedSourceName}` : 'Asignar fuente para completar/actualizar este capítulo'">
+                      <Icon name="grid" :size="11" /> {{ c._assignedSourceName || 'Fuente' }}
+                    </button>
+                    <ul v-if="reassignOpen === String(c.chapter)" class="chap__srcmenu">
+                      <li v-for="s in vg.sourcesWithChapter(c.chapter)" :key="s.sourceId + '_' + s.mangaId">
+                        <button @click="pickReassign(String(c.chapter), s)">{{ s.sourceName }} <em class="vr__lang">{{ flag(s.sourceLang) }}</em></button>
+                      </li>
+                      <li v-if="!vg.sourcesWithChapter(c.chapter).length" class="muted chap__srcmenuempty">Ninguna fuente conocida tiene este capítulo.</li>
+                    </ul>
+                  </div>
+                </template>
+                <!-- Source/MD/multi-fuente chapter: not clickable, show download info.
+                     `_assignedSource` (chapter_sources) SIEMPRE manda sobre la fuente legada
+                     del manga completo — nunca se muestran las dos a la vez. -->
                 <div v-else class="chap__read">
                   <span v-if="c._mdLang" class="chap__flag" :title="c._mdLang">{{ flag(c._mdLang) }}</span>
                   <span class="chap__num">{{ formatChapter(c.chapter) }}</span>
-                  <span class="chap__pages" v-if="c._sourceId">vía {{ store.current.source_meta?.sourceName }}</span>
+                  <span class="chap__pages" v-if="c._assignedSourceName">vía {{ c._assignedSourceName }}</span>
+                  <span class="chap__pages" v-else-if="c._sourceId">vía {{ store.current.source_meta?.sourceName }}</span>
                   <span class="chap__pages" v-else-if="c._mdLang">{{ c._mdGroup || 'MangaDex' }}<template v-if="c.page_count"> · {{ c.page_count }} pág.</template></span>
                   <span class="chap__pages" v-else>MangaDex</span>
                 </div>
 
                 <div class="chap__actions">
+                  <!-- multi-fuente: capítulo conocido en cobertura pero aún no descargado.
+                       Mismas dos acciones que un capítulo externo normal (Leer/Descargar) —
+                       ambas resuelven la fuente en el momento vía chapter_urls. -->
+                  <template v-if="c._covMulti">
+                    <template v-if="store.downloadByChapter[c.chapter]">
+                      <div class="chap__dlprog">
+                        <svg class="dl-ring" viewBox="0 0 24 24">
+                          <circle class="dl-ring__track" cx="12" cy="12" r="9" />
+                          <circle class="dl-ring__fill" cx="12" cy="12" r="9"
+                            :style="{ strokeDashoffset: 56.5 - (56.5 * (store.downloadByChapter[c.chapter].pct / 100)) }" />
+                        </svg>
+                        <span class="chap__dlprog-n" v-if="store.downloadByChapter[c.chapter].total">{{ store.downloadByChapter[c.chapter].pct }}%</span>
+                      </div>
+                    </template>
+                    <template v-else>
+                      <button class="chap__dlbtn chap__dlbtn--ghost"
+                        :disabled="onlineBusyKey(c) === store.onlineLoadingId" @click="store.readOnline(c)">
+                        <Spinner v-if="onlineBusyKey(c) === store.onlineLoadingId" :size="13" /><Icon v-else name="library" :size="14" /> Leer
+                      </button>
+                      <button class="chap__dlbtn" :disabled="!c._assignedSource" @click="vg.downloadChapterFrom(c.chapter, c._assignedSource)">
+                        <Icon name="download" :size="14" /> Descargar
+                      </button>
+                    </template>
+                  </template>
                   <!-- Source / MD chapter: download button with spinner -->
-                  <template v-if="c._sourceId || c._mdChapterId">
+                  <template v-else-if="c._sourceId || c._mdChapterId">
                     <span v-if="c._mdGroup || c._mdTitle" class="chap__srcmeta">{{ c._mdGroup || c._scanlator }}<template v-if="c._mdTitle"> · {{ c._mdTitle }}</template></span>
                     <template v-if="store.downloadByChapter[c.chapter]">
                       <div class="chap__dlprog">
@@ -760,11 +1017,11 @@ async function doExport(toDrive = false) {
                     </template>
                     <template v-else>
                       <button class="chap__dlbtn chap__dlbtn--ghost"
-                        :disabled="store.onlineLoadingId === (c._sourceId || c._mdChapterId)" @click="store.readOnline(c)">
-                        <Spinner v-if="store.onlineLoadingId === (c._sourceId || c._mdChapterId)" :size="13" /><Icon v-else name="library" :size="14" /> Leer
+                        :disabled="onlineBusyKey(c) === store.onlineLoadingId" @click="store.readOnline(c)">
+                        <Spinner v-if="onlineBusyKey(c) === store.onlineLoadingId" :size="13" /><Icon v-else name="library" :size="14" /> Leer
                       </button>
                       <button class="chap__dlbtn"
-                        @click="c._sourceId ? store.downloadSourceChapter(c) : store.downloadMdChapter(c)">
+                        @click="c._assignedSource ? vg.downloadChapterFrom(c.chapter, c._assignedSource) : (c._sourceId ? store.downloadSourceChapter(c) : store.downloadMdChapter(c))">
                         <Icon name="download" :size="14" /> Descargar
                       </button>
                     </template>
@@ -791,6 +1048,22 @@ async function doExport(toDrive = false) {
               </li>
               </template>
             </ul>
+
+            <!-- Barra flotante de acciones por lote -->
+            <Transition name="info">
+              <div v-if="batchSel.size" class="batchbar">
+                <span class="batchbar__n">{{ batchSel.size }} seleccionado(s)</span>
+                <div class="batchbar__acts">
+                  <button v-if="batchStats.remote" class="hbtn hbtn--accent" @click="batchDownload">
+                    <Icon name="download" :size="14" /> Descargar {{ batchStats.remote }}
+                  </button>
+                  <button v-if="batchStats.local" class="hbtn" @click="batchUpscale">
+                    <Icon name="spark" :size="14" /> Escalar 4K {{ batchStats.local }}
+                  </button>
+                  <button class="hbtn batchbar__clear" @click="clearBatch"><Icon name="close" :size="14" /></button>
+                </div>
+              </div>
+            </Transition>
             </template>
           </div>
         </div>
@@ -839,8 +1112,16 @@ async function doExport(toDrive = false) {
 .hbtn.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 .hbtn--accent { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 30%, transparent); }
 .hbtn--accent:hover { background: var(--cyan-glow); color: #d6fffb; }
+.hbtn--danger { color: var(--danger, #f0788c); border-color: color-mix(in srgb, var(--danger, #f0788c) 30%, transparent); }
+.hbtn--danger:hover { background: color-mix(in srgb, var(--danger, #f0788c) 14%, transparent); color: #ffb3bf; border-color: var(--danger, #f0788c); }
 .mf--chk { flex-direction: row; align-items: center; justify-content: space-between; }
 .mf--chk input { width: auto; }
+.manage__free { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-2); }
+.manage__free-lbl { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-2xs); color: var(--ink-faint); }
+.freebtn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600;
+  color: var(--coral); border: 1px solid color-mix(in srgb, var(--coral) 30%, transparent); transition: all var(--t-fast); }
+.freebtn:hover:not(:disabled) { background: color-mix(in srgb, var(--coral) 12%, transparent); border-color: color-mix(in srgb, var(--coral) 55%, transparent); }
+.freebtn:disabled { opacity: .5; cursor: default; }
 .manage { padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--line); background: var(--base); overflow: hidden; flex-shrink: 0; }
 /* expand/collapse animation for the management panel */
 .info-enter-active, .info-leave-active { transition: max-height var(--t-base) var(--ease-silk), opacity var(--t-base) var(--ease-silk); overflow: hidden; }
@@ -955,6 +1236,8 @@ async function doExport(toDrive = false) {
 
 /* Pestaña Versiones (ranking de calidad de imagen) */
 .vr { padding: var(--s-2) 0 var(--s-4); }
+.recs { padding: var(--s-1) var(--s-1) var(--s-4); }
+.recs :deep(.rec) { margin-top: 0; }
 .vr__lead { font-size: var(--fs-xs); color: var(--ink-soft); line-height: var(--lh-body); margin-bottom: var(--s-3); }
 .vr__disc { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-4); }
 .vr__cta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-3); padding: var(--s-3) 0; }
@@ -988,6 +1271,27 @@ async function doExport(toDrive = false) {
 .vr__row--primary { border-color: color-mix(in srgb, var(--cyan) 55%, transparent); }
 .vr__row--cmp { box-shadow: 0 0 0 1px var(--azure) inset; }
 .vr__badge--primary { background: var(--cyan); color: #04130c; }
+
+/* Fuentes por capítulo: cobertura + asignación por rango + huecos + actualizaciones */
+.vg { margin-top: var(--s-5); padding-top: var(--s-4); border-top: 1px solid var(--line); }
+.vg__head { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-2); }
+.vg__title { font-size: var(--fs-sm); font-weight: 700; color: var(--ink); margin: 0; }
+.vg__actions { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.vg__lead { font-size: var(--fs-2xs); color: var(--ink-faint); line-height: var(--lh-body); margin-bottom: var(--s-3); }
+.vg__swcyan { color: var(--cyan); font-weight: 600; }
+.vg__swblue { color: var(--azure-bright, var(--azure)); font-weight: 600; }
+.vg__srclist { display: flex; flex-direction: column; gap: var(--s-1); margin-top: var(--s-3); }
+.vg__srcrow { display: flex; align-items: center; gap: var(--s-2); padding: 5px var(--s-2); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line); font-size: var(--fs-2xs); }
+.vg__srcname { flex: 1; min-width: 0; color: var(--ink); font-weight: 600; }
+.vg__srcmeta { color: var(--ink-faint); font-family: var(--font-mono); }
+.vg__match { font-family: var(--font-mono); font-size: var(--fs-2xs); padding: 1px 6px; border-radius: var(--r-xs); color: var(--ink-faint); background: var(--surface-2); cursor: help; }
+.vg__match--low { color: var(--warn, var(--gold)); background: color-mix(in srgb, var(--warn, var(--gold)) 16%, transparent); }
+.vg__rangepanel { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-md); background: var(--surface-2); border: 1px dashed var(--line); font-size: var(--fs-xs); flex-wrap: wrap; }
+.vg__rangein { width: 6.5rem; font-size: var(--fs-xs); padding: 4px 8px; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line); color: var(--ink); }
+.vg__fresh { margin-bottom: var(--s-3); }
+.vg__suglist { display: flex; flex-direction: column; gap: var(--s-1); }
+.vg__sug { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); padding: 5px var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line); font-size: var(--fs-2xs); }
+.vg__sugtxt { color: var(--ink-soft); }
 .vr__primary { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--cyan); margin-bottom: var(--s-2); }
 .vr__primary strong { color: var(--ink); font-weight: 600; }
 .vr__tray { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); padding: var(--s-2) var(--s-3); margin-bottom: var(--s-3); border-radius: var(--r-md); background: var(--azure-haze); border: 1px solid color-mix(in srgb, var(--azure) 30%, transparent); }
@@ -1118,6 +1422,26 @@ async function doExport(toDrive = false) {
 .langsel:focus { outline: none; border-color: var(--azure); }
 .chap { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid transparent; transition: background var(--t-fast), border-color var(--t-fast); }
 .chap:hover { background: var(--surface); border-color: var(--line); }
+.chap--sel { background: var(--azure-haze); border-color: color-mix(in srgb, var(--azure) 45%, transparent); }
+.chap--sel:hover { background: color-mix(in oklab, var(--azure) 20%, transparent); }
+
+/* Selección por lote: casilla + cabecera "seleccionar" + barra flotante de acciones */
+.batchbox { width: 17px; height: 17px; flex-shrink: 0; display: grid; place-items: center; border-radius: 5px;
+  border: 1.5px solid var(--line-strong); color: var(--ink-inverse, #06101f); background: var(--surface); transition: all var(--t-fast); }
+.batchbox.is-on { background: var(--azure); border-color: var(--azure); color: #06101f; }
+.batchbox.is-part { background: color-mix(in srgb, var(--azure) 40%, transparent); border-color: var(--azure); color: #06101f; }
+.chap__check { flex-shrink: 0; display: grid; place-items: center; padding: 2px; }
+.chap__check:hover .batchbox { border-color: var(--azure); }
+.batchhead { display: flex; align-items: center; gap: var(--s-3); padding: 2px var(--s-3) var(--s-2); }
+.batchhead__all { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); }
+.batchhead__all:hover { color: var(--ink); }
+.batchhead__n { font-size: var(--fs-2xs); color: var(--azure-bright); font-weight: 600; }
+.batchbar { position: sticky; bottom: 0; z-index: 3; display: flex; align-items: center; justify-content: space-between; gap: var(--s-3);
+  margin-top: var(--s-3); padding: var(--s-3) var(--s-4); border-radius: var(--r-md);
+  background: var(--glass-strong); border: 1px solid var(--azure); box-shadow: var(--shadow-lg); backdrop-filter: blur(8px); }
+.batchbar__n { font-size: var(--fs-sm); font-weight: 600; color: var(--azure-bright); }
+.batchbar__acts { display: flex; align-items: center; gap: var(--s-2); }
+.batchbar__clear { padding: 6px 8px; }
 .chap--4k { border-left: 2px solid var(--cyan); }
 .chap--part { border-left: 2px solid var(--gold); }
 .chap--src { border-left: 2px solid var(--violet); opacity: .85; }
@@ -1129,6 +1453,14 @@ async function doExport(toDrive = false) {
 .chap__tag { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 1px 6px; border-radius: var(--r-xs); }
 .chap__tag--4k { color: var(--cyan); background: var(--cyan-glow); }
 .chap__tag--part { color: var(--gold); background: color-mix(in srgb, var(--gold) 16%, transparent); }
+.chap__tag--assigned { color: var(--azure-bright, var(--azure)); background: var(--azure-haze, color-mix(in srgb, var(--azure) 16%, transparent)); margin-left: 4px; }
+.chap__srcpin { position: relative; flex-shrink: 0; margin-right: var(--s-2); }
+.chap__srcpinbtn { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-2xs); color: var(--ink-faint); padding: 3px 8px; border-radius: var(--r-pill); border: 1px solid var(--line); background: var(--surface-2); }
+.chap__srcpinbtn:hover { color: var(--azure-bright); border-color: var(--azure); }
+.chap__srcmenu { position: absolute; z-index: 20; top: calc(100% + 4px); right: 0; min-width: 10rem; max-height: 12rem; overflow-y: auto; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: 4px; box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,.35)); }
+.chap__srcmenu button { display: block; width: 100%; text-align: left; padding: 5px 8px; border-radius: var(--r-sm); font-size: var(--fs-2xs); color: var(--ink); }
+.chap__srcmenu button:hover { background: var(--surface); color: var(--azure-bright); }
+.chap__srcmenuempty { padding: 6px 8px; font-size: var(--fs-2xs); }
 
 .chap__actions { display: flex; align-items: center; gap: 4px; }
 .ib { width: 32px; height: 30px; display: grid; place-items: center; border-radius: var(--r-xs); border: 1px solid var(--line); color: var(--ink-faint); transition: all var(--t-fast); }

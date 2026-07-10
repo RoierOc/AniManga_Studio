@@ -1,16 +1,28 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMangaStore } from '@/stores/manga'
+import { useUiStore } from '@/stores/ui'
 import { pageUrl } from '@/lib/manga'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useMangaStore()
+const ui = useUiStore()
 const open = computed(() => !!store.reader)
 const isManga = computed(() => store.reader?.kind !== 'cbz')
 const isUpscaled = computed(() => store.reader?.source === 'upscaled')
 const isRTL = computed(() => store.dir === 'rtl')
+
+// Ancho de imagen a pedir al backend: al tamaño del viewport (nítido) en lectura
+// normal, o full-res (w=0) al hacer zoom o en fit "original". El backend cachea el
+// reescalado por mtime → decodificar ~2000px en vez de ~5760px elimina el lag del
+// WebView2 al leer 4K (mismo contenido que en el navegador, que sí iba fluido).
+const reqWidth = computed(() => {
+  if (store.zoom > 1.01 || store.fit === 'original') return 0
+  const dpr = Math.min(2, window.devicePixelRatio || 1)
+  return Math.min(2560, Math.round((window.innerWidth || 1280) * dpr))
+})
 
 // Modo QA (testing): marcar la página actual como mal traducida. Solo sobre páginas locales.
 const qaCanFlag = computed(() => store.qaMode && isManga.value && !['online', 'compare'].includes(store.reader?.source))
@@ -60,7 +72,7 @@ function preloadNeighbors() {
   for (let n = 1; n <= ahead; n++) offsets.push(store.page + step * n)
   for (const i of offsets) {
     if (i < 0 || i >= store.pages.length) continue
-    const u = pageUrl(store.pages[i])
+    const u = pageUrl(store.pages[i], reqWidth.value)
     if (preloaded.has(u)) continue
     preloaded.add(u)
     const img = new Image(); img.src = u
@@ -162,10 +174,10 @@ function poke() {
   if (store.mode === 'paged') barsTimer = setTimeout(() => { store.barsHidden = true }, 1600)
 }
 
-function toggleFullscreen() {
-  if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {})
-  else document.exitFullscreen().catch(() => {})
-}
+// Pantalla completa por el store unificado: en la shell nativa entra en fullscreen
+// real de ventana (Rust), en navegador usa la API DOM. Al cerrar el capítulo,
+// closeReader() del store llama setFullscreen(false) → nunca se queda atascado.
+function toggleFullscreen() { ui.toggleFullscreen() }
 
 // ── keyboard ──
 function onKey(e) {
@@ -211,7 +223,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
             <button v-if="store.canCompare" class="rd__btn" :class="{ 'is-on': store.compareMode }" title="Comparar original / 4K (C)" @click="store.toggleCompare()"><Icon name="spark" :size="15" /></button>
             <button v-if="isManga" class="rd__btn" :class="{ 'is-on': store.isChapterRead(store.reader.chapter) }" title="Marcar leído" @click="store.toggleChapterRead(store.reader.chapter)"><Icon name="check" :size="15" /></button>
             <button v-if="qaCanFlag" class="rd__btn rd__btn--qa" :class="{ 'is-on': qaOpen }" title="Marcar página mal traducida (QA)" @click="qaOpen = !qaOpen"><span class="rd__txt">⚑</span></button>
-            <button class="rd__btn" title="Pantalla completa" @click="toggleFullscreen"><Icon name="spark" :size="15" /></button>
+            <button class="rd__btn" :class="{ 'is-on': ui.fullscreen }" :title="ui.fullscreen ? 'Salir de pantalla completa (F11)' : 'Pantalla completa (F11)'" @click="toggleFullscreen"><Icon :name="ui.fullscreen ? 'collapse' : 'expand'" :size="16" /></button>
           </div>
 
           <!-- QA: picker de motivo para la página actual -->
@@ -255,11 +267,11 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
           <div v-else-if="store.spreadActive && store.spreadPair.length === 2" :key="'sp' + store.page"
                class="rd__spread rd__fade" :class="[`fit-${store.fit}`, { 'is-rtl': isRTL }]" :style="{ transform }"
                @click.stop.prevent="pageClick">
-            <img :src="pageUrl(store.pages[store.spreadPair[0]])" class="rd__simg" draggable="false" decoding="async" fetchpriority="high" :alt="`Página ${store.spreadPair[0] + 1}`" />
-            <img :src="pageUrl(store.pages[store.spreadPair[1]])" class="rd__simg" draggable="false" decoding="async" fetchpriority="high" :alt="`Página ${store.spreadPair[1] + 1}`" />
+            <img :src="pageUrl(store.pages[store.spreadPair[0]], reqWidth)" class="rd__simg" draggable="false" decoding="async" fetchpriority="high" :alt="`Página ${store.spreadPair[0] + 1}`" />
+            <img :src="pageUrl(store.pages[store.spreadPair[1]], reqWidth)" class="rd__simg" draggable="false" decoding="async" fetchpriority="high" :alt="`Página ${store.spreadPair[1] + 1}`" />
           </div>
           <!-- single page -->
-          <img v-else :key="'pg' + store.page" :src="pageUrl(store.pages[store.page])" class="rd__img rd__fade" :class="`fit-${store.fit}`" :style="{ transform }" draggable="false" decoding="async" fetchpriority="high" :alt="`Página ${store.page + 1}`"
+          <img v-else :key="'pg' + store.page" :src="pageUrl(store.pages[store.page], reqWidth)" class="rd__img rd__fade" :class="`fit-${store.fit}`" :style="{ transform }" draggable="false" decoding="async" fetchpriority="high" :alt="`Página ${store.page + 1}`"
                @click.stop.prevent="pageClick" />
 
           <div class="rd__counter" :class="{ 'is-hidden': store.barsHidden }">{{ counterLabel }}</div>
@@ -267,7 +279,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 
         <!-- Webtoon -->
         <div v-else class="rd__webtoon" @scroll="onScroll">
-          <img v-for="(p, i) in store.pages" :key="i" :src="pageUrl(p)" loading="lazy" decoding="async" class="rd__wimg" :style="{ maxWidth: store.fit === 'width' ? '900px' : 'none', transform: `scale(${store.zoom})` }" :alt="`Página ${i + 1}`" />
+          <img v-for="(p, i) in store.pages" :key="i" :src="pageUrl(p, reqWidth)" loading="lazy" decoding="async" class="rd__wimg" :style="{ maxWidth: store.fit === 'width' ? '900px' : 'none', transform: `scale(${store.zoom})` }" :alt="`Página ${i + 1}`" />
           <!-- End-of-chapter card (inline at the bottom of the scroll) -->
           <div v-if="isManga && store.pages.length" class="rd__wend">
             <span class="rd__end-check"><Icon name="check" :size="20" /></span>
@@ -322,7 +334,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
           </div>
           <div class="rd__thumbs">
             <button v-for="(p, i) in store.pages" :key="i" class="rd__thumb" :class="{ 'is-active': i === store.page }" @click="store.setPage(i)">
-              <img :src="pageUrl(p)" loading="lazy" alt="" />
+              <img :src="pageUrl(p, 120)" loading="lazy" alt="" />
             </button>
           </div>
         </footer>
@@ -376,13 +388,20 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__zone { position: absolute; top: 50%; transform: translateY(-50%); color: #fff; filter: drop-shadow(0 1px 4px rgba(0,0,0,.7)); }
 .rd__zone--prev { left: var(--s-5); }
 .rd__zone--next { right: var(--s-5); }
-.rd__img { display: block; will-change: transform; user-select: none; }
+.rd__img { display: block; user-select: none; }
+/* will-change SOLO al hacer zoom/paneo (is-grab). Dejarlo siempre forzaba a
+   WebView2 (composición/DComp transparente) a mantener una textura GPU del tamaño
+   NATIVO de la página 4K (~5760px) aunque se muestre a ~1000px → lag brutal solo
+   en la shell nativa (el navegador normal usa otro compositor y no se nota). */
+.rd__paged.is-grab .rd__img,
+.rd__paged.is-grab .rd__spread,
+.rd__paged.is-grab .rd__cmp { will-change: transform; }
 .rd__img.fit-width { width: 100%; max-width: 1000px; height: auto; }
 .rd__img.fit-height { height: 100vh; width: auto; }
 .rd__img.fit-original { width: auto; height: auto; max-width: none; }
 
 /* two-page spread: both pages share one container; RTL flips reading order */
-.rd__spread { display: flex; align-items: flex-start; will-change: transform; }
+.rd__spread { display: flex; align-items: flex-start; }
 .rd__spread.is-rtl { flex-direction: row-reverse; }
 .rd__spread.fit-width { width: 100%; max-width: 1800px; }
 .rd__spread.fit-width .rd__simg { width: 50%; height: auto; }
@@ -401,7 +420,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__paged:hover .rd__ghost { opacity: 1; }
 .rd__ghost span { font-size: var(--fs-xs); color: var(--ice); font-weight: 600; text-shadow: 0 1px 4px #000; }
 
-.rd__cmp { position: relative; will-change: transform; }
+.rd__cmp { position: relative; }
 /* Fit behaviour goes on the wrapper; both images fill it at identical dimensions. */
 .rd__cmp.fit-width  { width: 100%; max-width: 1000px; }
 .rd__cmp.fit-height { height: 100vh; }

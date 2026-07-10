@@ -14,14 +14,17 @@ Why a store instead of just editing .env: several blueprints read their keys at
 means a key saved from the UI applies immediately, without restarting the server.
 """
 
+import hashlib
+import hmac
 import json
 import os
 import threading
+import time
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 
-from api.runtime import DATA_ROOT, PROJECT_ROOT
+from api.runtime import DATA_ROOT, PROJECT_ROOT, get_library_mode, set_library_mode
 
 config_bp = Blueprint('config', __name__)
 
@@ -263,3 +266,100 @@ def post_import_env():
         text = data.get('text', '')
     detected = import_env_text(text)
     return jsonify({'ok': True, 'detected': detected, 'groups': describe_all()})
+
+
+# ── Biblioteca oculta: código secreto ─────────────────────────────────────────
+# El código se guarda hasheado (nunca en claro) en el mismo overlay que las
+# demás claves — se beneficia del mismo chmod 600 y de que nunca se sincroniza.
+# El intento fallido añade un backoff progresivo en memoria (no persistido) para
+# frenar el fuerza-bruta sobre un código corto sin tocar el overlay en disco.
+
+_HIDDEN_CODE_KEY = 'HIDDEN_LIBRARY_CODE_HASH'
+_HIDDEN_SALT = b'animanga-studio-hidden-library-v1'
+
+_hidden_fail_lock = threading.Lock()
+_hidden_fail_count = 0
+_hidden_fail_until = 0.0
+
+
+def _hash_code(code: str) -> str:
+    return hmac.new(_HIDDEN_SALT, str(code).strip().encode('utf-8'), hashlib.sha256).hexdigest()
+
+
+def _hidden_configured() -> bool:
+    return bool(get_secret(_HIDDEN_CODE_KEY))
+
+
+def _hidden_backoff_seconds() -> float:
+    with _hidden_fail_lock:
+        return max(0.0, _hidden_fail_until - time.monotonic())
+
+
+def _hidden_register_fail():
+    global _hidden_fail_count, _hidden_fail_until
+    with _hidden_fail_lock:
+        _hidden_fail_count += 1
+        # El primer fallo no bloquea (un error de tecleo humano no debe asustar);
+        # a partir del 2º, backoff exponencial 0.5s, 1s, 2s ... tope 30s — disuade
+        # el fuerza-bruta casi de inmediato sin bloquear la app entera.
+        if _hidden_fail_count < 2:
+            _hidden_fail_until = 0.0
+        else:
+            _hidden_fail_until = time.monotonic() + min(30.0, 0.5 * (2 ** (_hidden_fail_count - 2)))
+
+
+def _hidden_register_success():
+    global _hidden_fail_count, _hidden_fail_until
+    with _hidden_fail_lock:
+        _hidden_fail_count = 0
+        _hidden_fail_until = 0.0
+
+
+@config_bp.route('/hidden/status')
+def get_hidden_status():
+    return jsonify({
+        'configured': _hidden_configured(),
+        'active': get_library_mode() == 'hidden',
+    })
+
+
+@config_bp.route('/hidden/set-code', methods=['POST'])
+def post_hidden_set_code():
+    data = request.get_json(silent=True) or {}
+    new_code = str(data.get('code') or '').strip()
+    current_code = str(data.get('current_code') or '').strip()
+    if not new_code:
+        return jsonify({'error': 'code requerido'}), 400
+
+    if _hidden_configured():
+        wait = _hidden_backoff_seconds()
+        if wait > 0:
+            return jsonify({'error': 'demasiados intentos, espera', 'retry_after': wait}), 429
+        if not hmac.compare_digest(_hash_code(current_code), get_secret(_HIDDEN_CODE_KEY)):
+            _hidden_register_fail()
+            return jsonify({'error': 'código actual incorrecto'}), 403
+
+    set_secrets({_HIDDEN_CODE_KEY: _hash_code(new_code)})
+    _hidden_register_success()
+    return jsonify({'ok': True, 'configured': True})
+
+
+@config_bp.route('/hidden/toggle', methods=['POST'])
+def post_hidden_toggle():
+    if not _hidden_configured():
+        return jsonify({'error': 'no hay código configurado'}), 400
+
+    wait = _hidden_backoff_seconds()
+    if wait > 0:
+        return jsonify({'error': 'demasiados intentos, espera', 'retry_after': wait}), 429
+
+    data = request.get_json(silent=True) or {}
+    code = str(data.get('code') or '').strip()
+    if not hmac.compare_digest(_hash_code(code), get_secret(_HIDDEN_CODE_KEY)):
+        _hidden_register_fail()
+        return jsonify({'error': 'código incorrecto'}), 403
+
+    _hidden_register_success()
+    next_mode = 'normal' if get_library_mode() == 'hidden' else 'hidden'
+    set_library_mode(next_mode)
+    return jsonify({'ok': True, 'active': next_mode == 'hidden'})

@@ -260,6 +260,7 @@ let lastSentPos = -1
 const a4kCanvas = ref(null)
 const a4kMode = ref(localStorage.getItem('anime-a4k') || 'off')
 const a4kActive = ref(false)          // pipeline corriendo (canvas visible)
+const a4kCompiling = ref(false)        // compilando shaders (1ª vez / cambio de tier o tamaño) — no es buffering de vídeo
 const a4kAvailable = Anime4KRenderer.supported()
 const a4k = new Anime4KRenderer()
 a4k.onFatal = () => { a4kActive.value = false }   // canvas fuera, vídeo visible
@@ -295,6 +296,11 @@ async function applyA4k() {
   updateCanvasRect()
   const wasPlaying = !v.paused
   const dpr = window.devicePixelRatio || 1
+  // Compilar los compute pipelines (tiers CNN pesados) puede tardar de verdad
+  // en algunas GPU/driver — sin esto se veía como el vídeo "congelado". Si ya
+  // había un pipeline cacheado para el mismo tier/resolución, a4k.start()
+  // resuelve al toque y este flag ni llega a pintarse.
+  a4kCompiling.value = true
   try {
     const ok = await a4k.start(v, a4kCanvas.value, a4kMode.value,
       canvasRect.value.width * dpr, canvasRect.value.height * dpr)
@@ -304,6 +310,8 @@ async function applyA4k() {
     a4kActive.value = false
     console.error('[a4k] error al arrancar:', e)
     api.post('/api/stream/caps', { a4k_error: String(e?.message || e) }).catch(() => {})
+  } finally {
+    a4kCompiling.value = false
   }
   // Chromium pausa el vídeo internamente (una vez) al crear el device WebGPU
   // sobre él — reanudar si estaba reproduciendo. Un pequeño delay porque la
@@ -801,6 +809,11 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
                         width: canvasRect.width + 'px', height: canvasRect.height + 'px' }"
               @click="togglePlay" @dblclick="toggleFs" />
 
+      <!-- compilando shaders: distinto del buffering de vídeo, para no parecer colgado -->
+      <div v-if="a4kCompiling" class="wp__a4kload">
+        <Icon name="spark" :size="16" /> Preparando Anime4K…
+      </div>
+
       <!-- estados -->
       <div v-if="p.loading" class="wp__center">
         <Spinner :size="42" /><p>Preparando el stream…</p>
@@ -932,9 +945,12 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
               <button v-for="(t, i) in audioTracks" :key="'a' + i" :class="{ 'is-sel': i === audioIndex }" @click="setAudioTrack(i)">{{ trackLabel(t, i) }}</button>
             </div>
           </div>
-          <div class="wp__menuwrap" v-if="subTracks.length">
+          <div class="wp__menuwrap">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'subs' }" @click="menuOpen = menuOpen === 'subs' ? '' : 'subs'">Subtítulos</button>
             <div v-if="menuOpen === 'subs'" class="wp__menu">
+              <div v-if="!subTracks.length" class="wp__subsize wp__subnote" @click.stop>
+                <span>Este episodio no tiene pistas de subtítulos</span>
+              </div>
               <div v-if="subIndex >= 0" class="wp__subsize" @click.stop>
                 <span>Tamaño</span>
                 <button :disabled="subScale <= 0.5" aria-label="Subtítulos más pequeños" @click="bumpSubScale(-0.1)">−</button>
@@ -988,7 +1004,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
             </div>
           </div>
           <button class="wp__ic" :title="isFs ? 'Salir de pantalla completa' : 'Pantalla completa'" @click="toggleFs">
-            <Icon name="external" :size="18" />
+            <Icon :name="isFs ? 'collapse' : 'expand'" :size="18" />
           </button>
         </div>
       </footer>
@@ -1040,6 +1056,14 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 .wp__a4k { position: absolute; z-index: 1; }
 /* subtítulos (JASSUB) siempre por encima del canvas Anime4K */
 .wp :deep(canvas.JASSUB) { z-index: 2; }
+.wp__a4kload {
+  position: absolute; top: var(--s-4); left: 50%; transform: translateX(-50%);
+  z-index: 5; display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: var(--r-md);
+  background: rgba(10, 14, 24, 0.75); backdrop-filter: blur(4px);
+  color: var(--ink-soft); font-size: var(--fs-xs); font-weight: 600;
+  pointer-events: none; animation: fade var(--t-fast);
+}
 .wp__ctl.is-glow { color: var(--cyan); text-shadow: 0 0 8px var(--cyan-glow); }
 
 .wp__center {
@@ -1264,6 +1288,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
   background: rgba(10,14,24,.96); border-bottom: 1px solid var(--line);
 }
 .wp__subsize span { font-size: var(--fs-xs); color: var(--ink-dim); margin-right: auto; }
+.wp__subnote span { font-size: var(--fs-2xs); margin-right: 0; }
 .wp__subsize b { font-size: var(--fs-xs); color: var(--ink); min-width: 2.6rem; text-align: center; }
 .wp__subsize b.is-zero { color: var(--ink-dim); }        /* sincronía en 0 = sin ajuste */
 .wp__subsize button {
