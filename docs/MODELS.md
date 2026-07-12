@@ -72,9 +72,21 @@ suben al repo, solo `registry.json` (que es texto, no binario).
 
 ## Modelos incluidos por defecto (enlaces de descarga)
 
-> **Pendiente** — el repo no trae los pesos por su tamaño. Descargalos de las
-> fuentes oficiales y colocalos en `models/` con estos nombres exactos para que
-> el `registry.json` por defecto los encuentre sin tocar nada:
+> El repo no trae los pesos por su tamaño. Hay dos formas de colocarlos:
+>
+> **Automática** — `bash scripts/fetch-models.sh` lee `registry.json`, ve qué
+> archivos faltan y descarga los que conozca su URL. Como las URLs oficiales no
+> son estables/directas para todos los modelos, el script las toma (en orden) de:
+> 1. una variable de entorno por archivo —
+>    `MODEL_URL__<archivo con no-alfanum → _>` (ej.
+>    `MODEL_URL__4x_MangaJaNai_1200p_V1_ESRGAN_70k_pth=…`), o
+> 2. un archivo `scripts/model-urls.env` (líneas `CLAVE=URL`, gitignorado).
+>
+> Rellená ahí las URLs una vez y el fetcher (y todas las instalaciones futuras)
+> las reusa. Sin URL, el script no rompe: avisa qué falta.
+>
+> **Manual** — descargalos de las fuentes oficiales y colocalos en `models/` con
+> estos nombres exactos para que el `registry.json` por defecto los encuentre:
 
 | Archivo | Modelo | Descarga |
 |---|---|---|

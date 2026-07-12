@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
-import { fmtCountdown } from '@/lib/anime'
+import { fmtCountdown, fmtAgo } from '@/lib/anime'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -54,15 +54,44 @@ const days = computed(() => {
 })
 const hasAny = computed(() => entries.value.length > 0)
 
-// "Hoy": estrenos del día calendario actual, con hora local exacta (destacados arriba).
-const todayItems = computed(() => {
-  const today = new Date(nowTick.value).getDay()
-  return entries.value.filter(e => new Date(e.at * 1000).getDay() === today).sort((x, y) => x.at - y.at)
+// Misma fecha de calendario local (no "últimas 24h") para casar con la cabecera "HOY".
+const sameLocalDay = (aSec, bMs) => {
+  const a = new Date(aSec * 1000), b = new Date(bMs)
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+}
+
+// "Emitido hoy": episodios que YA SALIERON hoy (emisión anterior, en el pasado), con
+// el tiempo transcurrido. Antes se derivaba de `entries` (futuro) filtrando por día de
+// la semana → pescaba el episodio de LA SEMANA QUE VIENE (mismo día) y mostraba "en 6d".
+// Ahora se usa la emisión previa real: `last_aired_at` del backend, o `next_airing_at − 7d`
+// (semanal) como respaldo. Fuente: biblioteca (store.airing) + populares de temporada.
+const airedToday = computed(() => {
+  const now = nowTick.value / 1000
+  const out = []
+  const seen = new Set()
+  const consider = (anime, at, ep, mine) => {
+    if (!at || at > now || !sameLocalDay(at, nowTick.value)) return
+    if (seen.has(anime.al_id)) return
+    seen.add(anime.al_id)
+    out.push({ anime, ep, at, mine })
+  }
+  for (const a of store.library) {
+    const inf = store.airing[a.al_id]
+    if (!inf) continue
+    let at = inf.last_aired_at, ep = inf.last_episode
+    if (!at && inf.next_airing_at) { at = inf.next_airing_at - 7 * 86400; ep = (inf.next_episode || 1) - 1 }
+    consider(a, at, ep, true)
+  }
+  for (const a of store.seasonalPopular) {
+    let at = a.last_aired_at, ep = a.last_episode
+    if (!at && a.airing_at) { at = a.airing_at - 7 * 86400; ep = (a.next_episode || 1) - 1 }
+    consider(a, at, ep, false)
+  }
+  return out.sort((x, y) => y.at - x.at)   // más reciente primero
 })
+
 const todayLabel = computed(() =>
   new Date(nowTick.value).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' }))
-const isSoon = (at) => at - nowTick.value / 1000 < 3600   // sale dentro de la próxima hora
-
 const timeLabel = (at) => new Date(at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 function countdownLabel(at) {
   const c = fmtCountdown(at, nowTick.value / 1000)
@@ -70,6 +99,13 @@ function countdownLabel(at) {
   if (c.d > 0) return `en ${c.d}d ${c.h}h`
   if (c.h > 0) return `en ${c.h}h ${c.m}m`
   return `en ${c.m}m`
+}
+function agoLabel(at) {
+  const c = fmtAgo(at, nowTick.value / 1000)
+  if (!c || c.diff < 60) return 'recién emitido'
+  if (c.d > 0) return `hace ${c.d}d ${c.h}h`
+  if (c.h > 0) return `hace ${c.h}h ${c.m}m`
+  return `hace ${c.m}m`
 }
 const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(e.anime)
 </script>
@@ -83,19 +119,19 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
       </div>
     </header>
 
-    <EmptyState v-if="!hasAny && !store.seasonalLoading" icon="clock" title="No hay estrenos próximos."
+    <EmptyState v-if="!hasAny && !airedToday.length && !store.seasonalLoading" icon="clock" title="No hay estrenos próximos."
                 hint="Añade series en emisión o revisa la pestaña Temporada." />
 
-    <!-- Hoy: estrenos del día con hora local exacta -->
-    <section v-if="todayItems.length" class="today">
+    <!-- Emitido hoy: episodios que YA salieron hoy, con el tiempo transcurrido -->
+    <section v-if="airedToday.length" class="today">
       <div class="today__head">
-        <span class="today__badge"><span class="today__dot" /> HOY</span>
+        <span class="today__badge today__badge--aired"><span class="today__dot" /> EMITIDO HOY</span>
         <h2 class="today__date">{{ todayLabel }}</h2>
-        <span class="today__n">{{ todayItems.length }} {{ todayItems.length === 1 ? 'estreno' : 'estrenos' }}</span>
+        <span class="today__n">{{ airedToday.length }} {{ airedToday.length === 1 ? 'episodio' : 'episodios' }}</span>
       </div>
       <div class="today__row">
-        <button v-for="e in todayItems" :key="(e.anime.al_id || e.anime.id) + '-t' + e.ep"
-                class="tcard" :class="{ 'is-soon': isSoon(e.at) }" @click="openEntry(e)">
+        <button v-for="e in airedToday" :key="(e.anime.al_id || e.anime.id) + '-a' + e.ep"
+                class="tcard tcard--aired" @click="openEntry(e)">
           <div class="tcard__cov">
             <img v-if="e.anime.cover" :src="imgProxy(e.anime.cover)" loading="lazy" alt=""
                  @load="$event.target.classList.add('is-loaded')" />
@@ -105,15 +141,15 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
             <span class="tcard__title">{{ e.anime.title }}</span>
             <span class="tcard__ep">Episodio {{ e.ep || '?' }}</span>
             <div class="tcard__time">
-              <Icon name="clock" :size="13" /><strong>{{ timeLabel(e.at) }}</strong>
-              <span class="tcard__cd">{{ countdownLabel(e.at) }}</span>
+              <Icon name="check" :size="13" /><strong>{{ timeLabel(e.at) }}</strong>
+              <span class="tcard__cd tcard__cd--aired">{{ agoLabel(e.at) }}</span>
             </div>
           </div>
         </button>
       </div>
     </section>
 
-    <h3 v-if="hasAny && todayItems.length" class="week__title">Esta semana</h3>
+    <h3 v-if="hasAny && airedToday.length" class="week__title">Próximos esta semana</h3>
     <div v-if="hasAny" class="week">
       <section v-for="day in days" :key="day.d" class="col" :class="{ 'is-today': day.isToday }">
         <div class="col__head">
@@ -172,6 +208,12 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
 .tcard__time strong { color: var(--ink); font-family: var(--font-display); }
 .tcard__cd { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--cyan); }
 .tcard.is-soon .tcard__cd { color: var(--azure-bright); font-weight: 700; }
+
+/* Variante "emitido hoy": ya salió → acento jade (éxito) en vez de cian (cuenta atrás) */
+.today__badge--aired { color: var(--jade); background: color-mix(in srgb, var(--jade) 12%, transparent); border-color: color-mix(in srgb, var(--jade) 40%, transparent); }
+.today__badge--aired .today__dot { background: var(--jade); box-shadow: 0 0 6px color-mix(in srgb, var(--jade) 60%, transparent); animation: none; }
+.tcard--aired .tcard__time :deep(svg) { color: var(--jade); }
+.tcard__cd--aired { color: var(--jade); }
 
 .week__title { font-family: var(--font-display); font-size: var(--fs-lg); margin-bottom: var(--s-3); color: var(--ink-soft); }
 .week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--s-3); }

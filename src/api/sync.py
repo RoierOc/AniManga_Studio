@@ -194,10 +194,31 @@ class GitBackend(SyncBackend):
                 st['last_saved_at'] = int(r.stdout.strip())
         return st
 
+    def _align_to_remote(self):
+        """Reposiciona la rama local sobre `origin/main` ANTES de commitear, para que
+        un guardado desde otra máquina/sesión (o el commit inicial del repo, p.ej. un
+        README) no rechace nuestro push por 'fetch first' / histórico divergente.
+
+        El perfil se regenera entero desde el estado local justo después, así que solo
+        necesitamos que HEAD quede sobre el remoto: `reset --mixed` mueve el puntero de
+        la rama a `origin/main` SIN tocar el árbol de trabajo, y el snapshot fresco se
+        commitea encima → el push avanza rápido. Tolera el primer push (aún sin `main`
+        en el remoto): si no existe la ref, no hace nada y el push la crea."""
+        if not _remote_url():
+            return
+        fetch = _run_git(['fetch', 'origin', 'main'], check=False, pat=_pat())
+        if fetch.returncode != 0:
+            return  # remoto vacío/inalcanzable → deja que el push cree main o falle claro
+        ref = _run_git(['rev-parse', '--verify', '-q', 'origin/main'], check=False)
+        if ref.returncode != 0 or not ref.stdout.strip():
+            return
+        _run_git(['reset', '--mixed', 'origin/main'], check=False)
+
     def save(self):
         if not _remote_url() or not _pat():
             raise RuntimeError('Configura el repo remoto y el token antes de guardar.')
         _ensure_repo()
+        self._align_to_remote()
         _collect_profile()
         _run_git(['add', '-A'])
         # Nothing changed? still a success (idempotent save).

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { useMangaStore } from '@/stores/manga'
-import { formatChapter, MANGA_STATUS } from '@/lib/manga'
+import { formatChapter, MANGA_STATUS, pageUrl } from '@/lib/manga'
 import { formatBytes } from '@/lib/format'
 import { imgProxy } from '@/lib/img'
 import { api } from '@/lib/api'
@@ -21,6 +21,24 @@ const vg = useVersionsStore()
 // buttons still reopen/close via the snapshot model.
 function closeModal() { store.close(); ui.replaceNav() }
 const m = computed(() => store.current)
+// ¿Hay algún modelo a color (APISR)? Habilita los botones de escalado a color.
+const hasColorModel = computed(() => Object.values(store.modelsColor).includes(true))
+const colorModelKeys = computed(() => Object.keys(store.modelsColor).filter(k => store.modelsColor[k]))
+const colorModelLabel = computed(() => {
+  const k = (store.colorModel && colorModelKeys.value.includes(store.colorModel)) ? store.colorModel : colorModelKeys.value[0]
+  return store.models[k] || 'el modelo a color'
+})
+const colorPickerSelCount = computed(() => {
+  const cp = store.colorPicker
+  if (cp.mode === 'all') return cp.chapters.reduce((n, c) => n + c.pages.filter(p => p.sel).length, 0)
+  return cp.pages.filter(p => p.sel).length
+})
+const colorPickerTotal = computed(() => {
+  const cp = store.colorPicker
+  if (cp.mode === 'all') return cp.chapters.reduce((n, c) => n + c.pages.length, 0)
+  return cp.pages.length
+})
+const colorPickerEmpty = computed(() => colorPickerTotal.value === 0)
 const upState = (ch) => store.upscaled[ch]          // true | 'partial' | undefined
 
 // Tamaño en disco de esta serie (original vs 4K) — se muestra en el panel Gestionar.
@@ -278,7 +296,7 @@ watch(m, (v) => {
   store.verReset(); rangePanel.value = null; showFreshness.value = false; reassignOpen.value = null
   if (v) { store.resetMdex(); store.loadHealth(); store.colorPages = []; store.excludedPages = []; store.exportPreview = { pages: 0, est_mb: 0, upscaled_pages: 0, original_pages: 0 } }
   if (v && !Object.keys(store.models).length) store.loadModels()
-  if (v) store.loadDestinations()
+  if (v) { store.loadDestinations(); store.loadColorStatus() }
 }, { immediate: true })
 
 // Live tomo estimate: recompute whenever the selection, quality or exclusions change
@@ -442,6 +460,12 @@ async function doExport(toDrive = false) {
                   <label class="mf mf--chk"><span>Modo eco <em>(deja correr MPV al escalar)</em></span>
                     <input type="checkbox" :checked="store.eco" @change="store.setEco($event.target.checked)" />
                   </label>
+                </div>
+                <div class="manage__row manage__row--color" v-if="hasColorModel">
+                  <button class="colorbtn" @click="store.openColorPickerAll()" title="Muestra las páginas a color de todo el manga para que elijas cuáles escalar con el modelo a color">
+                    <Icon name="palette" :size="13" /> Escalar páginas a color
+                  </button>
+                  <span class="manage__hint">Detecta las páginas a color de todo el manga y te deja elegir cuáles escalar con el modelo a color. El progreso sale en Actividad.</span>
                 </div>
               </section>
             </div>
@@ -752,6 +776,18 @@ async function doExport(toDrive = false) {
             <div v-if="tab === 'translate' && !store.modalLoading" class="tl">
               <p class="tl__lead">Busca la mejor fuente de arte (cualquier idioma) y una en español, y trasplanta el texto ES sobre el arte HD. El resultado reemplaza los capítulos del manga.</p>
 
+              <!-- Arte local: usar las páginas YA descargadas+escaladas (4K) como base del trasplante
+                   en vez de buscar una fuente de arte externa. Solo para descargados con capítulos
+                   locales; en importados el arte SIEMPRE es local (no hay opción). Siempre visible en
+                   la pestaña — al cambiarlo se vuelve a descubrir (solo se busca la fuente ES). -->
+              <label v-if="!m?.source_meta?.imported && store.chapters.length" class="tl__localart">
+                <input type="checkbox" :checked="tp.artLocal" @change="store.tpSetArtLocal($event.target.checked)" :disabled="tp.loading || tp.running" />
+                <span>
+                  Usar mis páginas descargadas y escaladas (4K) como arte
+                  <em class="tl__localhint">Solo se busca la fuente en español; el texto se trasplanta sobre tu copia local.</em>
+                </span>
+              </label>
+
               <!-- tomos importados sin repartir en capítulos reales (aún no se intentó) -->
               <div v-if="tp.pendingVolumes.length" class="tl__vol">
                 <div class="tl__volmsg">
@@ -800,7 +836,10 @@ async function doExport(toDrive = false) {
 
               <!-- sin fuentes aún -->
               <div v-else-if="tp.phase !== 'ready'" class="tl__cta">
-                <button class="hbtn hbtn--accent" @click="store.tpDiscover()"><Icon name="globe" :size="14" /> Buscar mejor fuente</button>
+                <button class="hbtn hbtn--accent" @click="store.tpDiscover()">
+                  <Icon name="globe" :size="14" />
+                  {{ (m?.source_meta?.imported || tp.artLocal) ? 'Buscar fuente en español' : 'Buscar mejor fuente' }}
+                </button>
                 <span v-if="tp.phase === 'error'" class="tl__err">No se encontraron fuentes. ¿Suwayomi en línea?</span>
               </div>
 
@@ -810,7 +849,7 @@ async function doExport(toDrive = false) {
                   <div class="tl__pick">
                     <div class="tl__pickh">Arte <button class="tl__re" @click="store.tpDiscover()" title="Volver a buscar">↻</button></div>
                     <div v-if="tp.artSel?.local" class="tl__cand">
-                      <span class="tl__src">Arte local (importado)</span>
+                      <span class="tl__src">{{ m?.source_meta?.imported ? 'Arte local (importado)' : 'Arte local (descargado + escalado 4K)' }}</span>
                     </div>
                     <div v-else-if="tp.artSel" class="tl__cand">
                       <span class="tl__src">{{ tp.artSel.sourceName }} · {{ tp.artSel.sourceLang }}</span>
@@ -1041,6 +1080,16 @@ async function doExport(toDrive = false) {
                     <button class="ib" title="Leer original" @click="store.read(c.chapter, 'original')"><Icon name="library" :size="14" /></button>
                     <button v-if="upState(c.chapter) === 'partial'" class="ib ib--warn" title="Reparar upscale" @click="store.repairChapter(c.chapter)"><Icon name="spark" :size="14" /></button>
                     <button v-else-if="upState(c.chapter) !== true" class="ib ib--accent" title="Escalar a 4K" @click="store.upscaleChapter(c.chapter, m.source_meta?.imported ? { excludePages: store.excludedPages } : {})"><Icon name="spark" :size="14" /></button>
+                    <template v-if="hasColorModel">
+                      <div v-if="store.colorByChapter[c.chapter] && store.colorByChapter[c.chapter].status === 'upscaling'" class="chap__dlprog" :title="`Color: ${store.colorByChapter[c.chapter].pct}%`">
+                        <svg class="dl-ring" viewBox="0 0 24 24">
+                          <circle class="dl-ring__track" cx="12" cy="12" r="9" />
+                          <circle class="dl-ring__fill" cx="12" cy="12" r="9" :style="{ strokeDashoffset: 56.5 - (56.5 * (store.colorByChapter[c.chapter].pct / 100)) }" />
+                        </svg>
+                      </div>
+                      <button v-else-if="store.colorDone[String(c.chapter)]" class="ib ib--colordone" title="Páginas a color ya escaladas" disabled><Icon name="palette" :size="14" /></button>
+                      <button v-else class="ib ib--color" title="Escalar páginas a color de este capítulo (elige cuáles)" @click="store.openColorPicker(c.chapter)"><Icon name="palette" :size="14" /></button>
+                    </template>
                     <button class="ib ib--danger" title="Borrar capítulo" @click="store.deleteChapter(c.chapter)"><Icon name="close" :size="14" /></button>
                   </template>
                   </template>
@@ -1066,6 +1115,55 @@ async function doExport(toDrive = false) {
             </Transition>
             </template>
           </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
+
+  <!-- Selector de páginas a color: elige qué escalar con APISR (color pre-marcado) -->
+  <Teleport to="body">
+    <Transition name="fade">
+      <div v-if="store.colorPicker.open" class="cpk-ov" @click.self="store.closeColorPicker()">
+        <div class="cpk">
+          <header class="cpk__head">
+            <div>
+              <h3 v-if="store.colorPicker.mode === 'all'">Escalar a color · Todo el manga</h3>
+              <h3 v-else>Escalar a color · Cap. {{ formatChapter(store.colorPicker.chapter) }}</h3>
+              <p>Solo se muestran las páginas a color. Marca las que quieras escalar con {{ colorModelLabel }}.</p>
+            </div>
+            <label class="cpk__model" v-if="colorModelKeys.length > 1">Modelo
+              <select :value="store.colorModel || colorModelKeys[0]" @change="store.setColorModel($event.target.value)">
+                <option v-for="k in colorModelKeys" :key="k" :value="k">{{ store.models[k] }}</option>
+              </select>
+            </label>
+            <button class="cpk__x" @click="store.closeColorPicker()"><Icon name="close" :size="16" /></button>
+          </header>
+          <div v-if="store.colorPicker.loading" class="cpk__center"><Spinner :size="28" /></div>
+          <div v-else-if="colorPickerEmpty" class="cpk__center"><p>No se detectaron páginas a color.</p></div>
+          <!-- Un capítulo: rejilla plana -->
+          <div v-else-if="store.colorPicker.mode === 'single'" class="cpk__grid">
+            <button v-for="p in store.colorPicker.pages" :key="p.name" class="cpk__pg" :class="{ 'is-sel': p.sel }" @click="store.toggleColorPage(p.name)">
+              <img :src="pageUrl(p.url, 180)" loading="lazy" alt="" />
+              <span class="cpk__check" :class="{ 'is-on': p.sel }"><Icon v-if="p.sel" name="check" :size="12" /></span>
+            </button>
+          </div>
+          <!-- Todo el manga: agrupado por capítulo -->
+          <div v-else class="cpk__scroll">
+            <section v-for="c in store.colorPicker.chapters" :key="c.chapter" class="cpk__chap">
+              <h4>Cap. {{ formatChapter(c.chapter) }} <em v-if="c.done">· ya escalado</em></h4>
+              <div class="cpk__grid">
+                <button v-for="p in c.pages" :key="p.name" class="cpk__pg" :class="{ 'is-sel': p.sel }" @click="store.toggleColorPage(p.name, c.chapter)">
+                  <img :src="pageUrl(p.url, 180)" loading="lazy" alt="" />
+                  <span class="cpk__check" :class="{ 'is-on': p.sel }"><Icon v-if="p.sel" name="check" :size="12" /></span>
+                </button>
+              </div>
+            </section>
+          </div>
+          <footer class="cpk__foot">
+            <span class="cpk__n">{{ colorPickerSelCount }} de {{ colorPickerTotal }} seleccionada(s)</span>
+            <button class="cpk__cancel" @click="store.closeColorPicker()">Cancelar</button>
+            <button class="cpk__run" :disabled="!colorPickerSelCount" @click="store.runColorPicker()"><Icon name="palette" :size="14" /> Escalar a color</button>
+          </footer>
         </div>
       </div>
     </Transition>
@@ -1161,6 +1259,10 @@ async function doExport(toDrive = false) {
 .upbtn:hover { color: var(--ink); }
 .savebtn { padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); }
 .savebtn:hover { background: var(--azure-bright); }
+.manage__row--color { align-items: center; margin-top: var(--s-2); }
+.colorbtn { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-4); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--cyan); border: 1px solid color-mix(in srgb, var(--cyan) 40%, transparent); background: color-mix(in srgb, var(--cyan) 8%, transparent); transition: all var(--t-fast); }
+.colorbtn:hover { background: color-mix(in srgb, var(--cyan) 16%, transparent); border-color: var(--cyan); }
+.manage__hint { font-size: var(--fs-2xs); color: var(--ink-ghost); line-height: var(--lh-snug); }
 
 /* ── Selector visual de portada ───────────────────────────────────────── */
 .cvp__toggle { display: inline-flex; align-items: center; gap: 6px; margin-top: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line); font-size: var(--fs-xs); color: var(--azure-bright); }
@@ -1188,7 +1290,10 @@ async function doExport(toDrive = false) {
 .tl { padding: var(--s-2) 0 var(--s-4); }
 .tl__lead { font-size: var(--fs-xs); color: var(--ink-soft); line-height: var(--lh-body); margin-bottom: var(--s-3); }
 .tl__disc { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-4); }
-.tl__cta { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) 0; }
+.tl__cta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3); padding: var(--s-3) 0; }
+.tl__localart { display: flex; align-items: flex-start; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-soft); cursor: pointer; margin-bottom: var(--s-3); padding: var(--s-2) var(--s-3); background: var(--surface-2, rgba(255,255,255,.03)); border-radius: var(--r-2, 8px); }
+.tl__localart input { accent-color: var(--accent); cursor: pointer; margin-top: 2px; }
+.tl__localhint { display: block; font-style: normal; color: var(--ink-faint, var(--ink-soft)); opacity: .8; margin-top: 2px; }
 .tl__err { font-size: var(--fs-xs); color: var(--rose, #e8748b); }
 .tl__picks { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3); margin-bottom: var(--s-3); }
 .tl__pick { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--s-3); }
@@ -1468,6 +1573,41 @@ async function doExport(toDrive = false) {
 .ib--accent:hover { color: var(--cyan); border-color: var(--cyan-glow); }
 .ib--warn:hover { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 40%, transparent); }
 .ib--danger:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
+.ib--color { color: color-mix(in srgb, var(--cyan) 65%, var(--ink-faint)); }
+.ib--color:hover { color: var(--cyan); border-color: var(--cyan-glow); background: color-mix(in srgb, var(--cyan) 10%, transparent); }
+.ib--colordone { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 35%, transparent); background: color-mix(in srgb, var(--jade) 10%, transparent); cursor: default; }
+
+/* Selector de páginas a color */
+.cpk-ov { position: fixed; inset: 0; z-index: calc(var(--z-modal) + 5); display: grid; place-items: center; padding: var(--s-5); background: rgba(7,10,18,.78); backdrop-filter: blur(8px); }
+.cpk { width: min(52rem, 100%); max-height: 86vh; display: flex; flex-direction: column; background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); overflow: hidden; }
+.cpk__head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-3); padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--line); }
+.cpk__head h3 { font-size: var(--fs-md); font-weight: 700; color: var(--ink); }
+.cpk__head p { font-size: var(--fs-xs); color: var(--ink-soft); margin-top: 2px; }
+.cpk__x { width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); border: 1px solid var(--line); flex-shrink: 0; }
+.cpk__x:hover { color: var(--ink); border-color: var(--line-strong); }
+.cpk__center { padding: var(--s-7); display: grid; place-items: center; }
+.cpk__grid { flex: 1; overflow-y: auto; padding: var(--s-4); display: grid; grid-template-columns: repeat(auto-fill, minmax(6rem, 1fr)); gap: var(--s-3); }
+.cpk__scroll { flex: 1; overflow-y: auto; }
+.cpk__scroll .cpk__grid { flex: none; overflow: visible; padding-top: 0; }
+.cpk__chap { border-bottom: 1px solid var(--line); }
+.cpk__chap h4 { padding: var(--s-3) var(--s-4) 0; font-size: var(--fs-sm); font-weight: 700; color: var(--ink); }
+.cpk__chap h4 em { font-style: normal; font-weight: 500; font-size: var(--fs-xs); color: var(--ink-soft); }
+.cpk__model { display: flex; flex-direction: column; gap: 2px; font-size: var(--fs-xs); color: var(--ink-soft); margin-left: auto; }
+.cpk__model select { font-size: var(--fs-xs); padding: 2px var(--s-2); border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); }
+.cpk__pg { position: relative; aspect-ratio: 2/3; border-radius: var(--r-sm); overflow: hidden; border: 2px solid var(--line); background: var(--surface-2); transition: all var(--t-fast); }
+.cpk__pg:hover { border-color: var(--line-strong); }
+.cpk__pg.is-sel { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
+.cpk__pg img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cpk__tag { position: absolute; top: 4px; left: 4px; padding: 1px 6px; border-radius: var(--r-pill); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: #fff; background: color-mix(in srgb, var(--cyan) 85%, black); }
+.cpk__check { position: absolute; bottom: 4px; right: 4px; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: rgba(10,14,24,.7); border: 1px solid rgba(255,255,255,.4); color: #fff; }
+.cpk__check.is-on { background: var(--cyan); border-color: transparent; }
+.cpk__foot { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-5); border-top: 1px solid var(--line); }
+.cpk__n { flex: 1; font-size: var(--fs-xs); color: var(--ink-soft); }
+.cpk__cancel { padding: var(--s-2) var(--s-4); border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); }
+.cpk__cancel:hover { color: var(--ink); border-color: var(--line-strong); }
+.cpk__run { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); font-size: var(--fs-sm); font-weight: 600; color: #fff; background: var(--cyan); }
+.cpk__run:hover:not(:disabled) { filter: brightness(1.1); }
+.cpk__run:disabled { opacity: .45; cursor: default; }
 .ib--read { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 35%, transparent); background: color-mix(in srgb, var(--jade) 10%, transparent); }
 .chap__dlbtn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); background: transparent; transition: all var(--t-fast); }
 .chap__dlbtn:hover:not(:disabled) { background: var(--azure-haze); color: #fff; }

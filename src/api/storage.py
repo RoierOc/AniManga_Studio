@@ -76,19 +76,64 @@ def _measure_series(series_dir: Path):
 _VIDEO_EXTS = {".mkv", ".mp4", ".avi", ".webm", ".mov", ".m4v"}
 
 
-def _anime_root() -> Path:
-    """Carpeta base de descargas de anime (cada serie en su subcarpeta). Viene de
-    anime_settings.json (download_path); None si no está configurada."""
+def _anime_dirs() -> dict:
+    """Carpetas de series de anime a medir, REPARTIDAS EN VARIOS DISCOS.
+
+    Fuente autoritativa = la BIBLIOTECA de anime: cada serie guarda su propio
+    `local_path`, que puede estar en cualquier disco/partición (aquí D: y E:).
+    Esto es lo que arregla el bug: antes se medía solo el `download_path` como una
+    sola raíz, y encima sin convertir `D:\\`→`/mnt/d`, así que `scandir` fallaba y
+    NO aparecía ningún anime.
+
+    Deliberadamente NO se escanea el `download_path`/scan-paths a lo bruto: el
+    usuario los tiene apuntando a RAÍCES DE DISCO enteras (`D:\\`, `E:\\`), donde
+    conviven juegos, películas y descargas sueltas — listar sus subcarpetas metía
+    Steam/Genshin/Downloads como si fueran anime e inflaba el total. La biblioteca
+    da exactamente las series que el usuario reconoce como anime.
+
+    `_lib_read` ya está namespaceada por modo (normal/oculto), así que iterarla no
+    cruza ni delata la biblioteca oculta. Devuelve {nombre: Path}, deduplicado por
+    ruta real; convierte rutas Windows a WSL cuando hace falta.
+    """
+    out: dict = {}
+    seen: set = set()  # rutas ya añadidas (resueltas), para deduplicar
+
     try:
-        from api.anime import _anime_settings_read, _apply_hidden_anime_subdir
-        p = (_anime_settings_read().get("download_path") or "").strip()
-        if not p:
-            return None
-        # Ajusta la raíz al modo activo: en oculto apunta al subdir con punto donde
-        # caen los vídeos ocultos; en normal, a la base (que ignora ese subdir).
-        return Path(_apply_hidden_anime_subdir(p))
+        from api.anime import _lib_read, _is_wsl, _win_to_wsl
     except Exception:
-        return None
+        return out
+
+    def _to_local(raw: str) -> Path:
+        raw = raw.strip()
+        if _is_wsl() and re.match(r"^[A-Za-z]:[/\\]", raw):
+            raw = _win_to_wsl(raw)
+        return Path(raw)
+
+    try:
+        for anime in _lib_read().values():
+            lp = (anime.get("local_path") or "").strip()
+            if not lp:
+                continue
+            p = _to_local(lp)
+            try:
+                if not p.is_dir():
+                    continue
+                rp = str(p.resolve())
+            except OSError:
+                continue
+            if rp in seen:
+                continue
+            seen.add(rp)
+            # Si dos discos tuvieran una serie con el MISMO nombre de carpeta, se
+            # desempata con un sufijo de ruta para no pisarse. Raro, pero seguro.
+            name = p.name
+            if name in out:
+                name = f"{name} ({p.parent.name})"
+            out[name] = p
+    except Exception:
+        pass
+
+    return out
 
 
 def _measure_anime(series_dir: Path):
@@ -195,32 +240,29 @@ def summary():
     for r in series.values():
         r["kind"] = "manga"
 
-    # Anime: vídeos descargados en su propia carpeta (download_path), aparte de MANGA_DIR.
+    # Anime: vídeos repartidos en VARIOS discos (download_path + local_path de cada
+    # serie de la biblioteca), aparte de MANGA_DIR.
     total_anime = 0
-    anime_root = _anime_root()
-    if anime_root and anime_root.is_dir():
-        for entry in os.scandir(anime_root):
-            if not entry.is_dir(follow_symlinks=False) or entry.name.startswith("."):
-                continue
-            anime_names.append(entry.name)
-            b, _, extra = cached_measure(
-                _k_anime, entry.name, entry.path,
-                lambda p: (lambda r: (r[0], 0, {"episodes": r[1]}))(_measure_anime(Path(p))),
-            )
-            eps = extra.get("episodes", 0)
-            if b <= 0:
-                continue
-            total_anime += b
-            series[f"\x00anime\x00{entry.name}"] = {
-                "name": entry.name,
-                "kind": "anime",
-                "original_bytes": b,      # tamaño total de la serie (para orden/rowsize en la UI)
-                "upscaled_bytes": 0,
-                "original_chapters": 0,
-                "upscaled_chapters": 0,
-                "translated_chapters": 0,
-                "episodes": eps,
-            }
+    for name, adir in _anime_dirs().items():
+        anime_names.append(name)
+        b, _, extra = cached_measure(
+            _k_anime, name, str(adir),
+            lambda p: (lambda r: (r[0], 0, {"episodes": r[1]}))(_measure_anime(Path(p))),
+        )
+        eps = extra.get("episodes", 0)
+        if b <= 0:
+            continue
+        total_anime += b
+        series[f"\x00anime\x00{name}"] = {
+            "name": name,
+            "kind": "anime",
+            "original_bytes": b,      # tamaño total de la serie (para orden/rowsize en la UI)
+            "upscaled_bytes": 0,
+            "original_chapters": 0,
+            "upscaled_chapters": 0,
+            "translated_chapters": 0,
+            "episodes": eps,
+        }
 
     # Drop cached rows for series that no longer exist on disk.
     prune(_k_manga, manga_names)

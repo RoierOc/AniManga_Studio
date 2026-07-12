@@ -493,42 +493,204 @@ def manga_details(manga_id):
         return jsonify({"error": str(e)}), 500
 
 
+# ── Capítulos de fuente: Stale-While-Revalidate ───────────────────────────────
+# El cuello de botella con Tachiyomi/Mihon era que `fetchChapters` (mutation) hace un
+# SCRAPE EN VIVO de la web de la fuente en CADA apertura, síncrono y bloqueante — mientras
+# que Suwayomi ya guarda los capítulos en su DB local (la query es instantánea, como el
+# feed de MangaDex). Estrategia SWR: servir la DB al instante y refrescar la fuente en 2º
+# plano, throttleado por TTL. Solo la PRIMERA vez (DB vacía) o un `?refresh=1` explícito
+# hacen el scrape síncrono.
+_TTL_SRC_CHAPTERS = 300          # caché de disco: absorbe reaperturas rápidas (5 min)
+_SRC_REFRESH_SECS = 6 * 3600     # refrescar la fuente como mucho 1×/6h por manga
+_src_fetched_at: dict = {}       # manga_id → epoch del último scrape completado (en memoria)
+_src_refreshing: set = set()     # manga_ids con un refresco en 2º plano en curso (dedup)
+_src_lock = _threading.Lock()
+
+_FETCH_CHAPTERS_MUT = """
+    mutation FetchChapters($id: Int!) {
+      fetchChapters(input: { mangaId: $id }) { chapters { id } }
+    }
+"""
+_GET_CHAPTERS_QUERY = """
+    query GetChapters($mangaId: Int!) {
+      chapters(condition: { mangaId: $mangaId }, orderBy: CHAPTER_NUMBER, orderByType: DESC) {
+        nodes { id name chapterNumber uploadDate scanlator pageCount isRead }
+      }
+    }
+"""
+
+
+def _query_src_chapters(manga_id):
+    return _gql(_GET_CHAPTERS_QUERY, {"mangaId": manga_id})["chapters"]["nodes"]
+
+
+_SEARCH_SRC_MUT = """
+    mutation SearchManga($source: LongString!, $query: String, $page: Int!) {
+      fetchSourceManga(input: { source: $source, type: SEARCH, query: $query, page: $page }) {
+        mangas { id title }
+      }
+    }
+"""
+
+
+def _resolve_source_manga_id(source_id: str, title: str):
+    """Re-resuelve el mangaId de Suwayomi buscando el título en su fuente. El id guardado en
+    `.source_meta.json` puede quedar OBSOLETO si la DB de Suwayomi se reconstruye/purga (los
+    ids son secuenciales y se reasignan) → los capítulos dejan de cargar. La búsqueda mete el
+    manga de vuelta en la DB de Suwayomi y devuelve su id ACTUAL (match exacto de título si lo
+    hay, si no el primer resultado)."""
+    try:
+        data = _gql(_SEARCH_SRC_MUT, {"source": str(source_id), "query": title, "page": 1})
+        mangas = data["fetchSourceManga"]["mangas"]
+    except Exception as e:
+        print(f"[sources] re-resolución falló ({title!r} en {source_id}): {e}", flush=True)
+        return None
+    tl = (title or "").strip().lower()
+    for m in mangas:
+        if (m.get("title") or "").strip().lower() == tl:
+            return m["id"]
+    return mangas[0]["id"] if mangas else None
+
+
+def _persist_source_meta_id(old_id: int, new_id: int, title: str = ""):
+    """Reescribe el mangaId (y el thumbnail, que lleva el id embebido) en el `.source_meta.json`
+    del manga, para que lecturas/descargas/reaperturas usen ya el id nuevo. Busca por el id
+    viejo y, si no, por título."""
+    try:
+        for meta_path in Path(manga_dir()).glob("*/.source_meta.json"):
+            try:
+                meta = _json.loads(meta_path.read_text())
+            except Exception:
+                continue
+            match = (meta.get("mangaId") == old_id) or (title and meta.get("title") == title)
+            if not match:
+                continue
+            meta["mangaId"] = int(new_id)
+            thumb = meta.get("thumbnailUrl") or ""
+            if f"/manga/{old_id}/" in thumb:
+                meta["thumbnailUrl"] = thumb.replace(f"/manga/{old_id}/", f"/manga/{new_id}/")
+            meta_path.write_text(_json.dumps(meta))
+            print(f"[sources] mangaId obsoleto {old_id} → {new_id} en {meta_path.parent.name}", flush=True)
+            return True
+    except Exception as e:
+        print(f"[sources] no se pudo persistir el id nuevo: {e}", flush=True)
+    return False
+
+
+def _scrape_src_chapters(manga_id):
+    """Refresca desde la web de la fuente (bloqueante). Actualiza la DB de Suwayomi."""
+    _gql(_FETCH_CHAPTERS_MUT, {"id": manga_id})
+    _src_fetched_at[manga_id] = _time.time()
+
+
+def _is_src_stale(manga_id) -> bool:
+    last = _src_fetched_at.get(manga_id, 0)
+    return (_time.time() - last) >= _SRC_REFRESH_SECS
+
+
+def _bg_refresh_src_chapters(manga_id):
+    """Hilo daemon: scrape + re-query + actualiza la caché de disco con lo fresco, para que
+    la siguiente lectura (o el re-poll SWR del front) muestre los capítulos nuevos."""
+    key = str(manga_id)
+    try:
+        if not ensure_suwayomi():
+            return
+        _scrape_src_chapters(manga_id)
+        fresh = _query_src_chapters(manga_id)
+        cache_set("sources_chapters", key, fresh, _TTL_SRC_CHAPTERS)
+    except Exception as e:
+        print(f"[sources] refresco 2º plano falló (manga {manga_id}): {e}", flush=True)
+    finally:
+        with _src_lock:
+            _src_refreshing.discard(manga_id)
+
+
+def _maybe_bg_refresh(manga_id):
+    """Lanza el refresco en 2º plano solo si está obsoleto y no hay ya uno en curso."""
+    if not _is_src_stale(manga_id):
+        return False
+    with _src_lock:
+        if manga_id in _src_refreshing:
+            return True
+        _src_refreshing.add(manga_id)
+    _threading.Thread(target=_bg_refresh_src_chapters, args=(manga_id,),
+                      daemon=True, name=f"src-refresh-{manga_id}").start()
+    return True
+
+
 @sources_bp.route("/manga/<int:manga_id>/chapters", methods=["GET"])
 def manga_chapters(manga_id):
-    """Return chapter list for a manga. Fetches from source if needed."""
-    try:
-        # First ensure chapters are loaded from the source
-        _gql(
-            """
-            mutation FetchChapters($id: Int!) {
-              fetchChapters(input: { mangaId: $id }) {
-                chapters { id }
-              }
-            }
-            """,
-            {"id": manga_id},
-        )
+    """Lista de capítulos de una fuente. SWR: sirve la DB local al instante y refresca la
+    web de la fuente en 2º plano. `?refresh=1` fuerza un scrape síncrono; `?meta=1` devuelve
+    `{chapters, stale}` (stale=hay un refresco pendiente → el front puede re-consultar)."""
+    force     = request.args.get("refresh") == "1"
+    with_meta = request.args.get("meta") == "1"
+    source_id = (request.args.get("sourceId") or "").strip()
+    title     = (request.args.get("title") or "").strip()
+    key = str(manga_id)
+    resolved_id = manga_id
 
-        data = _gql(
-            """
-            query GetChapters($mangaId: Int!) {
-              chapters(condition: { mangaId: $mangaId }, orderBy: CHAPTER_NUMBER, orderByType: DESC) {
-                nodes {
-                  id
-                  name
-                  chapterNumber
-                  uploadDate
-                  scanlator
-                  pageCount
-                  isRead
-                }
-              }
-            }
-            """,
-            {"mangaId": manga_id},
-        )
-        chapters = data["chapters"]["nodes"]
-        return jsonify(chapters)
+    def _respond(chapters, stale):
+        if not with_meta:
+            return jsonify(chapters)
+        body = {"chapters": chapters, "stale": stale}
+        if resolved_id != manga_id:
+            body["resolvedId"] = resolved_id   # el front actualiza su source_meta
+        return jsonify(body)
+
+    def _reresolve():
+        """Si el id está obsoleto (DB de Suwayomi reconstruida) y tenemos fuente+título,
+        busca el id ACTUAL, persístelo y actualiza la clave de caché. Devuelve True si cambió."""
+        nonlocal resolved_id, key
+        if not (source_id and title):
+            return False
+        new_id = _resolve_source_manga_id(source_id, title)
+        if not new_id or new_id == manga_id:
+            return False
+        _persist_source_meta_id(manga_id, new_id, title)
+        resolved_id, key = new_id, str(new_id)
+        return True
+
+    try:
+        # 1) Caché de disco (salvo refresco forzado) → respuesta inmediata.
+        if not force:
+            cached = cache_get("sources_chapters", key, _TTL_SRC_CHAPTERS)
+            if cached is not None:
+                _maybe_bg_refresh(manga_id)  # mantén frescura sin bloquear
+                return _respond(cached, _is_src_stale(manga_id))
+
+        # 2) Refresco forzado: scrape síncrono (el usuario pidió "buscar nuevos").
+        if force:
+            try:
+                _scrape_src_chapters(resolved_id)
+                chapters = _query_src_chapters(resolved_id)
+            except Exception:
+                chapters = []
+            if not chapters and _reresolve():
+                _scrape_src_chapters(resolved_id)
+                chapters = _query_src_chapters(resolved_id)
+            cache_set("sources_chapters", key, chapters, _TTL_SRC_CHAPTERS)
+            return _respond(chapters, False)
+
+        # 3) Camino normal: DB primero (instantáneo).
+        chapters = _query_src_chapters(resolved_id)
+        if not chapters:
+            # DB sin capítulos → primer scrape síncrono. Si falla o sigue vacío y el id está
+            # obsoleto, re-resuelve por búsqueda del título y reintenta con el id nuevo.
+            try:
+                _scrape_src_chapters(resolved_id)
+                chapters = _query_src_chapters(resolved_id)
+            except Exception:
+                chapters = []
+            if not chapters and _reresolve():
+                _scrape_src_chapters(resolved_id)
+                chapters = _query_src_chapters(resolved_id)
+            stale = False
+        else:
+            # Hay datos: sírvelos ya y refresca en 2º plano si toca (SWR).
+            stale = _maybe_bg_refresh(resolved_id)
+        cache_set("sources_chapters", key, chapters, _TTL_SRC_CHAPTERS)
+        return _respond(chapters, stale)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

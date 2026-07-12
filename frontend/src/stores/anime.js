@@ -109,7 +109,9 @@ export const useAnimeStore = defineStore('anime', {
     player: null,                // {anime, ep, sess, loading, error} — overlay abierto si != null
     // Reproductor NATIVO embebido (libmpv en la shell Windows, vía nativeBridge).
     nativePlayer: null,          // {anime, ep, pos, duration, paused, tier} — abierto si != null
-    native4kTier: localStorage.getItem('anime-native-4k') || 'high', // 'off' | 'high'
+    // 'off' | 'high' | 'ultra' (los tiers 'fast'/'medium'/'artcnn'/'fsrcnnx' se retiraron → migran a 'high')
+    native4kTier: ['off', 'high', 'ultra'].includes(localStorage.getItem('anime-native-4k'))
+      ? localStorage.getItem('anime-native-4k') : 'high',
     nativeVol: Number(localStorage.getItem('anime-native-vol') ?? 100), // 0..100
     nativeSubScale: Number(localStorage.getItem('anime-native-subscale') ?? 1), // 0.5..2
     nativeBright: Number(localStorage.getItem('anime-native-bright') ?? 1), // 0.5..3 gamma (HDR)
@@ -756,8 +758,10 @@ export const useAnimeStore = defineStore('anime', {
           this.nativePlayer._lastReport = now
           this._reportNativeProgress(false)
         }
-        // Fin de episodio: marcar visto y encadenar auto-play.
-        if (d.duration > 0 && d.pos >= d.duration - 1) {
+        // Fin de episodio REAL: marcar visto y encadenar auto-play. Exigimos duración
+        // creíble (>60 s) para no disparar con una duración espuria momentánea al cargar
+        // o cambiar de archivo (que marcaría visto tras un instante de reproducción).
+        if (d.duration > 60 && d.pos >= d.duration - 1) {
           const { anime, ep } = this.nativePlayer
           this._reportNativeProgress(true)
           this.closeNative()
@@ -842,9 +846,9 @@ export const useAnimeStore = defineStore('anime', {
       this.nativePlayer.sid = idx + 1   // 0 = off
       nativeSend('track', { sid: idx < 0 ? 'no' : String(idx + 1) })
     },
-    nativeSkipOp() {                // salto de opening (mismo importe que MPV)
-      if (!this.nativePlayer) return
-      this.nativeSeek((this.nativePlayer.pos || 0) + 88)
+    nativeSkipOp() {                // salto de opening: 86 s (2 s menos que antes, para no
+      if (!this.nativePlayer) return  // comerse el primer par de segundos tras el OP)
+      this.nativeSeek((this.nativePlayer.pos || 0) + 86)
     },
     setNative4kTier(tier) {
       this.native4kTier = tier
@@ -862,15 +866,22 @@ export const useAnimeStore = defineStore('anime', {
       // vuelta del SSE (que también llegará y confirmará). Evita el "hasta F5".
       const np = this.nativePlayer
       try {
-        const anime = this.library.find(a => a.id === np.anime.id)
+        // Localiza el objeto REAL de la biblioteca (por id o al_id — las tarjetas pueden pasar
+        // una copia con distinto identificador) para que la mutación sea reactiva en TODA la app.
+        const anime = this.library.find(a => a.id === np.anime.id || a.id === np.anime.al_id
+                                          || a.al_id === np.anime.id || a.al_id === np.anime.al_id)
         const ep = anime && (anime.episodes || []).find(e => String(e.num) === String(np.ep.num))
-        if (ep && np.duration > 0) {
-          const watched = np.pos / np.duration >= 0.9
+        if (ep) {
           const pos = Math.floor(np.pos || 0)
+          // Visto SOLO si realmente llegó al final: duración creíble (>2 min) y abandonó faltando
+          // ≤2 min. Mismo criterio (y guarda) que el backend en anime.py::_is_watched. En cualquier
+          // otro caso se CONSERVA el episodio y su minuto exacto (resume_pos), pase lo que pase.
+          const watched = np.duration > 120 && pos > 0 && (np.duration - np.pos) <= 120
           ep.watched = watched
-          ep.resume_pos = watched ? 0 : pos
-          // Recencia al instante: completado O con posición guardable (>30 s) →
-          // "Continuar viendo" refleja/reordena sin esperar el SSE ni F5.
+          // Espeja al backend: la posición solo se guarda a partir de 30 s (evita micro-resumes).
+          ep.resume_pos = watched ? 0 : (pos > 30 ? pos : 0)
+          // Recencia al instante: completado O con posición guardable → "Continuar viendo"
+          // refleja/reordena sin esperar el SSE ni un F5.
           if (watched || pos > 30) anime.last_watched_at = Math.floor(Date.now() / 1000)
         }
       } catch {}

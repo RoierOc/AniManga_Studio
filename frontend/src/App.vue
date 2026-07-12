@@ -38,6 +38,17 @@ const manga = useMangaStore()
 const native = isNative()
 if (native) document.documentElement.classList.add('native-shell')
 
+// Marca <html> cuando estamos en pantalla completa (ventana borderless del lector/F11 O
+// el fullscreen propio del reproductor nativo). La CSS usa `native-fs` para ocultar la
+// barra de título SOLO en fullscreen; mientras la ventana esté normal la barra queda por
+// encima de los overlays inmersivos (lector/player) para poder arrastrar la ventana.
+const _anime = useAnimeStore()
+watch(
+  () => ui.fullscreen || !!_anime.nativePlayer?.fullscreen,
+  (fs) => document.documentElement.classList.toggle('native-fs', fs),
+  { immediate: true },
+)
+
 function onGlobalKey(e) {
   // F11: pantalla completa, en cualquier contexto. Si hay player nativo abierto
   // alterna el suyo; si no, el fullscreen unificado (lector/ventana). Se captura

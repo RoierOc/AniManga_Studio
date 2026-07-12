@@ -90,12 +90,22 @@ def _history_read() -> list:
 
 def _history_append(anime_id: str, title: str, episode: int, cover: str = ''):
     history = _history_read()
+    now = int(time.time())
+    # Deduplicación defensiva: colapsa un re-registro del MISMO anime+episodio si
+    # aún es la entrada más reciente o se registró hace poco (< 6 h). El progreso
+    # nativo llama aquí cada ~5 s mientras el episodio está sobre el umbral de
+    # "visto", así que sin esto se acumularían decenas de entradas idénticas.
+    for i, h in enumerate(history[:20]):
+        if h.get('anime_id') == anime_id and h.get('episode') == episode:
+            if i == 0 or (now - int(h.get('watched_at', 0))) < 6 * 3600:
+                history.pop(i)                 # quita la vieja, re-insertamos arriba con ts fresco
+                break
     history.insert(0, {
         'anime_id': anime_id,
         'title': title,
         'episode': episode,
         'cover': cover,
-        'watched_at': int(time.time()),
+        'watched_at': now,
     })
     try:
         _history_path().write_text(
@@ -1192,7 +1202,21 @@ def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> t
             return (False, None, wl_dir)
 
 
-_WATCHED_THRESHOLD = 0.85  # must watch ≥85% before episode is auto-marked watched
+_WATCHED_THRESHOLD = 0.85  # (legado) fracción vista antes de marcar visto — ya no se usa como umbral principal
+# Umbral real: un episodio solo se da por TERMINADO (→ visto + avanzar al siguiente) cuando el
+# usuario lo abandona faltando ≤ este número de segundos para el final. En cualquier otro caso se
+# conserva el episodio actual y su posición exacta para "Continuar viendo". Fijo (2 min), no fracción,
+# para que sea coherente en episodios cortos y largos.
+_WATCHED_TAIL_SECS = 120
+
+def _is_watched(position, duration):
+    """True SOLO si el episodio realmente llegó al final: faltaban ≤ _WATCHED_TAIL_SECS para
+    terminar. Exigimos que la duración sea MAYOR que la cola (evita que un episodio más corto
+    que 2 min, o una duración espuria reportada al arrancar/cambiar de archivo, se marque como
+    visto tras reproducir un instante). Mientras esto no se cumpla se conserva el minuto exacto."""
+    return (duration > _WATCHED_TAIL_SECS
+            and position > 0
+            and (duration - position) <= _WATCHED_TAIL_SECS)
 
 
 def _read_wl_position(wl_dir: str) -> float:
@@ -1279,7 +1303,7 @@ def _track_mpv_session(proc, wl_dir: str, anime_id: str, ep_str: str, duration: 
 
     # position > 0 → user quit mid-episode; position == 0 → EOS or quick close
     if position > 0 and duration > 0:
-        watched  = (position / duration) >= _WATCHED_THRESHOLD
+        watched  = _is_watched(position, duration)
         save_pos = 0 if watched else int(position)
     elif position > 0:
         # duration unknown (ffprobe failed) — save position unconditionally for resume
@@ -1305,12 +1329,14 @@ def _track_mpv_session(proc, wl_dir: str, anime_id: str, ep_str: str, duration: 
             lib[anime_id].get('positions', {}).pop(ep_str, None)
 
         if watched:
+            was_watched = bool(lib[anime_id].get('watched', {}).get(ep_str))
             lib[anime_id].setdefault('watched', {})[ep_str] = True
             now = int(time.time())
             lib[anime_id]['last_watched_at'] = now
             _lib_write(lib)
-            _history_append(anime_id, lib[anime_id].get('title', anime_id),
-                            int(ep_str), lib[anime_id].get('cover', ''))
+            if not was_watched:   # solo la PRIMERA vez que pasa a visto (evita duplicados)
+                _history_append(anime_id, lib[anime_id].get('title', anime_id),
+                                int(ep_str), lib[anime_id].get('cover', ''))
             print(f'[mpv] marked watched: anime={anime_id} ep={ep_str}', flush=True)
             push_sse_event('watched', anime_id=anime_id, ep_str=ep_str,
                            last_watched_at=now, watched=True,
@@ -3191,7 +3217,7 @@ def anime_native_progress():
         if ended:
             watched, save_pos = True, 0
         elif position > 0 and duration > 0:
-            watched  = (position / duration) >= _WATCHED_THRESHOLD
+            watched  = _is_watched(position, duration)
             save_pos = 0 if watched else int(position)
         elif position > 0:
             watched, save_pos = False, int(position)
@@ -3209,12 +3235,14 @@ def anime_native_progress():
             lib[anime_id].get('positions', {}).pop(ep_str, None)
 
         if watched:
+            was_watched = bool(lib[anime_id].get('watched', {}).get(ep_str))
             lib[anime_id].setdefault('watched', {})[ep_str] = True
             now = int(time.time())
             lib[anime_id]['last_watched_at'] = now
             _lib_write(lib)
-            _history_append(anime_id, lib[anime_id].get('title', anime_id),
-                            int(ep_str), lib[anime_id].get('cover', ''))
+            if not was_watched:   # solo la PRIMERA vez que pasa a visto (evita duplicados)
+                _history_append(anime_id, lib[anime_id].get('title', anime_id),
+                                int(ep_str), lib[anime_id].get('cover', ''))
             push_sse_event('watched', anime_id=anime_id, ep_str=ep_str,
                            last_watched_at=now, watched=True,
                            duration=int(duration), from_mpv=True)

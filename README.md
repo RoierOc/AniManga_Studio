@@ -228,16 +228,22 @@ bash desktop/install.sh
 Después busca **AniManga Studio** en tu lanzador de aplicaciones. Para actualizar:
 `git pull` y re-ejecuta el instalador (es idempotente).
 
-**Windows (backend en WSL — recomendado):**
+**Windows (un clic — recomendado):**
 
-```bash
-# dentro de tu distro WSL, en la carpeta del proyecto:
-bash desktop/install.sh
-```
+En un equipo Windows nuevo, todo se instala con **`AniMangaStudio-Setup.exe`**: no
+hay que preparar WSL a mano. El instalador habilita **WSL2**, instala la distro
+**archlinux**, clona el repo, prepara dependencias, venv, frontend, **PyTorch CUDA**,
+**Suwayomi**, **modelos** y **`.env`**, y crea el acceso directo. Si Windows pide
+reiniciar para activar WSL2, al volver a iniciar sesión la preparación **continúa
+sola**. Es idempotente: re-ejecútalo para actualizar.
 
-El instalador detecta WSL y crea el acceso directo **AniManga Studio** en el Menú
-Inicio de Windows: el backend corre en WSL (CUDA, ffmpeg, todo lo que ya tienes)
-y la ventana en un Chromium de Windows — HEVC por hardware y Anime4K a plena GPU.
+> Requisito: **GPU NVIDIA con su driver de Windows** (WSL usa el driver del host).
+> El instalador avisa si CUDA no está disponible, pero no puede instalar el driver.
+
+_Alternativa manual_ (si ya tienes tu distro WSL montada): dentro de WSL, en la
+carpeta del proyecto, `bash desktop/install.sh` — detecta WSL, prepara todo y crea
+el acceso directo. Los scripts `scripts/fetch-*.sh` e `init-env.sh` son idempotentes
+y reutilizables para migraciones.
 
 **Windows (nativo, sin WSL — experimental):**
 

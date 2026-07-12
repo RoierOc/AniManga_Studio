@@ -11,6 +11,21 @@ export const STATUS_ORDER = ['watching', 'plan_to_watch', 'on_hold', 'completed'
 
 export const SEASON_ES = { WINTER: 'Invierno', SPRING: 'Primavera', SUMMER: 'Verano', FALL: 'Otoño' }
 
+// Temporada actual derivada de la fecha (misma partición que el backend:
+// anime.py — WINTER ene-mar, SPRING abr-jun, SUMMER jul-sep, FALL oct-dic).
+// Se recalcula en cada llamada → rueda sola al cambiar de trimestre, cero mantenimiento.
+export function currentSeason(now = new Date()) {
+  const m = now.getMonth() + 1
+  const season = m <= 3 ? 'WINTER' : m <= 6 ? 'SPRING' : m <= 9 ? 'SUMMER' : 'FALL'
+  return { season, year: now.getFullYear() }
+}
+
+// ¿Este anime pertenece a la temporada en emisión ahora mismo?
+export function isCurrentSeason(anime, cs = currentSeason()) {
+  return !!anime && (anime.season || '').toUpperCase() === cs.season
+    && Number(anime.season_year) === cs.year
+}
+
 const FORMAT_LABEL = {
   TV: 'TV', TV_SHORT: 'TV Corto', MOVIE: 'Película', OVA: 'OVA',
   ONA: 'ONA', SPECIAL: 'Especial', MUSIC: 'Música',
@@ -51,7 +66,16 @@ export function nextUnwatchedEp(anime) {
     .filter(e => e.num > 0 && e.ep_type !== 'special')
     .sort((a, b) => a.num - b.num)
   const batch = batchInfo(anime?.episodes || [])
-  return eps.find(e => !e.watched && isEpisodePlayable(e, batch)) || null
+  const playable = (e) => isEpisodePlayable(e, batch)
+  // "Punto más avanzado alcanzado": si el usuario saltó al ep 9 sin ver 7/8, el
+  // episodio a continuar es el 10 (tras el máximo visto), no el primer hueco. Si
+  // no hay nada tras ese punto, se cae al primer no visto (rellena huecos).
+  const maxWatched = eps.reduce((m, e) => (e.watched ? Math.max(m, e.num) : m), 0)
+  if (maxWatched > 0) {
+    const after = eps.find(e => e.num > maxWatched && !e.watched && playable(e))
+    if (after) return after
+  }
+  return eps.find(e => !e.watched && playable(e)) || null
 }
 
 /* Torrent title language detection.
@@ -68,6 +92,17 @@ export const isEnglishSub = (title) => {
 export function fmtCountdown(airingAt, nowSec) {
   const diff = airingAt - nowSec
   if (diff <= 0) return null
+  const d = Math.floor(diff / 86400)
+  const h = Math.floor((diff % 86400) / 3600)
+  const m = Math.floor((diff % 3600) / 60)
+  return { d, h, m, diff }
+}
+
+// Tiempo transcurrido DESDE una emisión ya ocurrida (para "Emitido hace 4h").
+// Simétrico a fmtCountdown; null si aún no ha pasado.
+export function fmtAgo(airedAt, nowSec) {
+  const diff = nowSec - airedAt
+  if (diff < 0) return null
   const d = Math.floor(diff / 86400)
   const h = Math.floor((diff % 86400) / 3600)
   const m = Math.floor((diff % 3600) / 60)

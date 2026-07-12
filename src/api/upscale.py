@@ -5,6 +5,7 @@ Upscale API - single GPU worker thread with tile batching.
 
 from flask import Blueprint, jsonify, request
 from pathlib import Path
+import re
 import threading
 import queue
 import json
@@ -90,6 +91,12 @@ def _load_model_registry() -> dict:
             'label': cfg.get('label', key),
             'models': models,
             'adaptive': cfg.get('adaptive', False),
+            # Modelo a color (3 canales): NO se saltan las páginas a color; al revés,
+            # son justo para eso. Los modelos B&N (1 canal) sí las saltan.
+            'color': cfg.get('color', False),
+            # fp16 + torch.compile por defecto; ponlo en false para modelos que fallan en
+            # half (p.ej. APISR/GRL da "mat1 and mat2 dtype float != Half") → corren en fp32.
+            'half': cfg.get('half', True),
         }
     return registry
 
@@ -105,6 +112,14 @@ TILE_OVERLAP = int(os.environ.get("UPSCALE_TILE_OVERLAP", "16"))
 GPU_BATCH_SIZE = int(os.environ.get("GPU_BATCH_SIZE", "8"))
 OUTPUT_DOWNSCALE = int(os.environ.get("UPSCALE_OUTPUT_DOWNSCALE", "1"))
 JPEG_QUALITY = int(os.environ.get("UPSCALE_JPEG_QUALITY", "95"))
+# Páginas que YA vienen en alta resolución (p.ej. el resultado del trasplante de traducción, que
+# ahora puede usar el arte 4K local como base → páginas de ~4600×6500) NO deben re-escalarse: un
+# 4x sobre una página de ese tamaño pide ~2 GB de buffers de reconstrucción POR PÁGINA
+# (out_sum/out_wgt en _upscale_tiled) y con varios capítulos en paralelo agota la RAM del sistema
+# → el WSL entero crashea (OOM). Si el lado mayor de la página ya supera este umbral, está a
+# resolución de lectura y se copia tal cual al directorio escalado (mismo trato que una página a
+# color en el modelo B&N). Umbral holgado sobre el ~4K objetivo del 4x de una página normal.
+UPSCALE_MAX_INPUT_LONG_SIDE = int(os.environ.get("UPSCALE_MAX_INPUT_LONG_SIDE", "3000"))
 VRAM_LIMIT_PCT = int(os.environ.get("VRAM_LIMIT_PCT", "74"))       # 74% = ~8.8GB allocator + ~1.2GB overhead CUDA/cuDNN ≈ 10GB total (RTX 5070)
 GPU_THROTTLE_MS = int(os.environ.get("GPU_THROTTLE_MS", "0"))     # 0ms en modo full — sin sleep entre batches
 
@@ -143,6 +158,13 @@ def is_color_page(img_pil, threshold=COLOR_DIFF_THRESHOLD, min_fraction=COLOR_PI
     return float(np.mean(max_diff > threshold)) > min_fraction
 
 
+def is_already_hires(img_pil, long_side=UPSCALE_MAX_INPUT_LONG_SIDE):
+    """True si la página ya está a resolución de lectura (lado mayor ≥ umbral) y NO debe
+    re-escalarse — evita el OOM de reconstruir un 4x sobre una página ya-4K (ver
+    UPSCALE_MAX_INPUT_LONG_SIDE)."""
+    return max(img_pil.width, img_pil.height) >= long_side
+
+
 # ── GPU worker ──────────────────────────────────────────────────────────────
 
 class _TileFuture:
@@ -175,6 +197,7 @@ _gpu_worker_ready = threading.Event()
 _gpu_worker_error: list = [None]
 _gpu_in_channels: list = [1]   # updated by worker on startup
 _gpu_scale: list = [4]         # updated by worker on startup from the model's own spandrel descriptor
+_gpu_half: list = [True]       # fp16 (True) o fp32 (False) según el modelo activo — lo fija el worker
 
 
 def _gpu_worker_loop():
@@ -208,6 +231,11 @@ def _gpu_worker_loop():
         loaded_models = {}
         primary_in_channels = 1
         primary_scale = 4
+        # Algunos modelos (APISR/GRL) fallan en fp16 ("mat1/mat2 dtype float != Half") y con
+        # torch.compile → se cargan en fp32 eager. El resto sigue en fp16+compile (rápido).
+        use_half = cfg.get('half', True)
+        _gpu_half[0] = use_half
+        _dtype = torch.float16 if use_half else torch.float32
 
         for entry in cfg['models']:
             sub_key, path = entry['sub_key'], entry['file']
@@ -218,8 +246,10 @@ def _gpu_worker_loop():
                 )
             print(f"GPU worker: cargando {Path(path).name}...", flush=True)
             desc = ModelLoader().load_from_file(str(path))
-            m = desc.model.cuda().eval().half().to(memory_format=torch.channels_last)
-            m.forward = torch.compile(m.forward, mode='default', fullgraph=False)
+            m = desc.model.cuda().eval().to(memory_format=torch.channels_last)
+            if use_half:
+                m = m.half()
+                m.forward = torch.compile(m.forward, mode='default', fullgraph=False)
             loaded_models[sub_key] = m
             primary_in_channels = getattr(desc, 'input_channels', 1)
             primary_scale = getattr(desc, 'scale', 4)
@@ -227,19 +257,19 @@ def _gpu_worker_loop():
         _gpu_in_channels[0] = primary_in_channels
         _gpu_scale[0] = primary_scale
 
-        # Warmup — varios pasos para que torch.compile termine de compilar kernels
+        # Warmup — varios pasos para que torch.compile termine de compilar kernels (solo fp16)
         first_model = next(iter(loaded_models.values()))
         dummy = torch.randn(1, primary_in_channels, TILE_SIZE, TILE_SIZE,
-                            device='cuda', dtype=torch.float16).to(memory_format=torch.channels_last)
-        print("GPU worker: compilando kernels (torch.compile warmup)...", flush=True)
+                            device='cuda', dtype=_dtype).to(memory_format=torch.channels_last)
+        print(f"GPU worker: preparando ({'fp16+compile' if use_half else 'fp32'})...", flush=True)
         with torch.inference_mode():
-            for _ in range(3):
+            for _ in range(3 if use_half else 1):
                 _ = first_model(dummy)
         torch.cuda.synchronize()
         del dummy
 
         _gpu_worker_ready.set()
-        print(f"GPU worker listo — modelo={active_key}, tile={TILE_SIZE}px, batch={GPU_BATCH_SIZE}, compile=ON, cudnn.benchmark=ON", flush=True)
+        print(f"GPU worker listo — modelo={active_key}, tile={TILE_SIZE}px, batch={GPU_BATCH_SIZE}, half={use_half}, cudnn.benchmark=ON", flush=True)
 
         # ── Main loop ──────────────────────────────────────────────────────────
         while True:
@@ -429,7 +459,7 @@ def _upscale_tiled(img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVE
                 tile_in = tile
 
             t = torch.from_numpy(tile_in).permute(2, 0, 1).unsqueeze(0)
-            t = t.to(device='cuda', dtype=torch.float16, non_blocking=True)
+            t = t.to(device='cuda', dtype=(torch.float16 if _gpu_half[0] else torch.float32), non_blocking=True)
             t = t.contiguous(memory_format=torch.channels_last)
             tile_meta.append((y0c, x0c, y1, x1, th, tw, _submit_tile(t, sub_key)))
 
@@ -648,6 +678,7 @@ def get_models():
     return jsonify({
         'active': _active_model_key[0],
         'models': {k: v['label'] for k, v in MODEL_REGISTRY.items()},
+        'color': {k: bool(v.get('color')) for k, v in MODEL_REGISTRY.items()},
     })
 
 
@@ -826,6 +857,294 @@ def upscale_chapter():
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 
+def _switch_model(key):
+    """Cambia el modelo activo y reinicia el worker (misma lógica que /set_model).
+    Devuelve (ok, mensaje)."""
+    global _gpu_worker_thread
+    if key not in MODEL_REGISTRY:
+        return False, f'Modelo desconocido: {key}'
+    if key == _active_model_key[0] and _gpu_worker_ready.is_set():
+        return True, 'ya activo'
+    cfg = MODEL_REGISTRY[key]
+    missing = [m['file'] for m in cfg['models'] if not Path(m['file']).exists()]
+    if missing:
+        return False, f'Archivos de modelo no encontrados: {missing}'
+    _active_model_key[0] = key
+    with _gpu_worker_lock:
+        if _gpu_worker_thread and _gpu_worker_thread.is_alive():
+            _gpu_queue.put(None)
+            _gpu_worker_thread.join(timeout=10)
+        _gpu_worker_thread = None
+        _gpu_worker_ready.clear()
+        _gpu_worker_error[0] = None
+    return True, 'ok'
+
+
+def _color_prefix(chapter):
+    """Prefijo de archivo (ch####_) para un capítulo, como en upscale_chapter."""
+    chapter_norm = normalize_chapter(chapter)
+    try:
+        value = Decimal(chapter_norm)
+        int_part = int(value.to_integral_value(rounding='ROUND_FLOOR'))
+        if '.' in chapter_norm:
+            return chapter_norm, f"ch{int_part:04d}.{chapter_norm.split('.')[-1]}_"
+        return chapter_norm, f"ch{int_part:04d}_"
+    except (InvalidOperation, ValueError):
+        return chapter_norm, f"ch{chapter_norm}_"
+
+
+def _color_marker(output_folder, chapter_norm):
+    return output_folder / f'.color_done_{chapter_norm}'
+
+
+def _chapter_norm_of(filename):
+    """Extrae el capítulo normalizado del nombre 'ch0001_001.jpg' → '1', 'ch0012.5_003.jpg' → '12.5'.
+    Inverso de _color_prefix; se usa para agrupar páginas por capítulo en el flujo masivo."""
+    m = re.match(r'ch0*(\d+(?:\.\d+)?)_', filename)
+    if not m:
+        return ''
+    return normalize_chapter(m.group(1))
+
+
+def _run_color_job(input_folder, output_folder, images, upscale_id, chapter_norms):
+    """Ejecuta el escalado a color (síncrono en su hilo) y, si termina bien, deja un
+    marcador '.color_done_<cap>' en la carpeta 4K por CADA capítulo tocado → el botón de
+    color de ese capítulo desaparece (como el 4K). El marcador es verdad en disco (sobrevive
+    reinicios). `chapter_norms` = iterable de capítulos (uno, o varios en el flujo masivo)."""
+    run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=False, fast=False)
+    try:
+        if get_upscale_status(upscale_id).get('status') == 'complete':
+            for cn in chapter_norms:
+                if cn:
+                    _color_marker(output_folder, cn).touch()
+    except Exception:
+        pass
+
+
+def _detect_color(candidates):
+    """Devuelve la sublista de rutas que el detector considera a color."""
+    from PIL import Image
+    out = []
+    for p in candidates:
+        try:
+            if is_color_page(Image.open(p)):
+                out.append(p)
+        except Exception:
+            continue
+    return out
+
+
+def _start_color(actual_folder, input_folder, output_folder, images, chapter_norms, id_suffix, model_key):
+    """Arranca el hilo de escalado a color con estado inicial. Devuelve (json, code).
+    `chapter_norms` = lista de capítulos tocados (uno en el flujo por capítulo, varios en el
+    masivo); se usa para borrar/escribir los marcadores '.color_done_<cap>'."""
+    chapter_norms = [c for c in (chapter_norms or []) if c]
+    upscale_id = build_task_id(actual_folder, id_suffix, 'upscale')
+    current_status = get_upscale_status(upscale_id)
+    if current_status.get('status') in {'starting', 'started', 'upscaling'}:
+        return {'status': 'already_running', 'task_id': upscale_id}, 200
+    ok, msg = _switch_model(model_key)
+    if not ok:
+        return {'status': 'error', 'message': msg}, 404
+    output_folder.mkdir(parents=True, exist_ok=True)
+    # Un re-escalado a color rehace las páginas → borra los marcadores previos hasta que acabe.
+    for cn in chapter_norms:
+        try: _color_marker(output_folder, cn).unlink()
+        except OSError: pass
+    _clear_status_files(upscale_id)
+    set_upscale_status(upscale_id, {
+        'status': 'upscaling', 'current': 0, 'progress': 0, 'total': len(images),
+        'percent': 0, 'title': actual_folder,
+        'chapter': chapter_norms[0] if len(chapter_norms) == 1 else 'todo',
+        'model': MODEL_REGISTRY[model_key]['label'], 'scale': _gpu_scale[0], 'color': True,
+    })
+    _gpu_throttle_ms[0] = _FULL_THROTTLE_MS
+    _gpu_tile_throttle_ms[0] = 0
+    threading.Thread(
+        target=_run_color_job,
+        args=(input_folder, output_folder, images, upscale_id, chapter_norms),
+        daemon=True,
+    ).start()
+    return {'status': 'started', 'total': len(images), 'task_id': upscale_id,
+            'model': model_key, 'label': MODEL_REGISTRY[model_key]['label']}, 200
+
+
+def _color_ctx(data):
+    """Resuelve (actual_folder, input_folder, output_folder, model_key) o (None, error, code)."""
+    title = data.get('title')
+    if not title:
+        return None, ({'status': 'error', 'message': 'title requerido'}, 400)
+    color_default = next((k for k, v in MODEL_REGISTRY.items() if v.get('color')), _active_model_key[0])
+    model_key = data.get('model') or color_default
+    if not MODEL_REGISTRY.get(model_key, {}).get('color'):
+        return None, ({'status': 'error', 'message': f'{model_key} no es un modelo a color'}, 400)
+    from api.library import find_manga_folder
+    actual_folder = find_manga_folder(title)
+    input_folder = Path(manga_dir()) / actual_folder
+    output_folder = Path(upscaled_dir()) / actual_folder
+    if not input_folder.exists():
+        return None, ({'status': 'error', 'message': 'Folder not found'}, 404)
+    return (actual_folder, input_folder, output_folder, model_key), None
+
+
+@upscale_bp.route('/color_pages', methods=['GET'])
+def color_pages():
+    """Datos para el SELECTOR de páginas a color de un capítulo: cada página con su nombre,
+    URL y si el detector la considera a color (pre-marcada). `done` = ya escaladas a color."""
+    title = request.args.get('title')
+    chapter = request.args.get('chapter')
+    if not title or chapter is None:
+        return jsonify({'error': 'title y chapter requeridos'}), 400
+    from api.library import find_manga_folder
+    actual_folder = find_manga_folder(title)
+    input_folder = Path(manga_dir()) / actual_folder
+    output_folder = Path(upscaled_dir()) / actual_folder
+    if not input_folder.exists():
+        return jsonify({'error': 'Folder not found'}), 404
+    chapter_norm, prefix = _color_prefix(chapter)
+    imgs = sorted(input_folder.glob(prefix + '*.*'))
+    # Solo se muestran las páginas a COLOR (las B&N no son relevantes para este flujo).
+    color_imgs = _detect_color(imgs)
+    pages = [{'name': p.name, 'url': f'{actual_folder}/{p.name}', 'color': True} for p in color_imgs]
+    return jsonify({'folder': actual_folder, 'chapter': chapter_norm,
+                    'done': _color_marker(output_folder, chapter_norm).exists(), 'pages': pages})
+
+
+@upscale_bp.route('/color_pages_all', methods=['GET'])
+def color_pages_all():
+    """Como /color_pages pero para TODO el manga: devuelve, agrupadas por capítulo, SOLO las
+    páginas a color detectadas (las B&N se excluyen). Alimenta el selector masivo del MangaModal,
+    que reutiliza la misma selección manual que el selector de un capítulo."""
+    title = request.args.get('title')
+    if not title:
+        return jsonify({'error': 'title requerido'}), 400
+    from api.library import find_manga_folder
+    actual_folder = find_manga_folder(title)
+    input_folder = Path(manga_dir()) / actual_folder
+    output_folder = Path(upscaled_dir()) / actual_folder
+    if not input_folder.exists():
+        return jsonify({'error': 'Folder not found'}), 404
+    color_imgs = _detect_color(sorted(input_folder.glob('ch*_*.*')))
+    groups = {}
+    for p in color_imgs:
+        cn = _chapter_norm_of(p.name)
+        if not cn:
+            continue
+        groups.setdefault(cn, []).append(
+            {'name': p.name, 'url': f'{actual_folder}/{p.name}', 'color': True})
+    done_set = {m.name[len('.color_done_'):] for m in output_folder.glob('.color_done_*')} \
+        if output_folder.exists() else set()
+    chapters = [{'chapter': cn, 'done': cn in done_set, 'pages': groups[cn]}
+                for cn in sorted(groups, key=lambda c: Decimal(c) if c else Decimal(0))]
+    return jsonify({'folder': actual_folder, 'chapters': chapters})
+
+
+@upscale_bp.route('/color_status', methods=['GET'])
+def color_status():
+    """Capítulos con marcador de color hecho (para ocultar el botón en la lista de capítulos)."""
+    title = request.args.get('title')
+    if not title:
+        return jsonify({'done': []}), 200
+    from api.library import find_manga_folder
+    actual_folder = find_manga_folder(title)
+    output_folder = Path(upscaled_dir()) / actual_folder
+    done = []
+    if output_folder.exists():
+        for m in output_folder.glob('.color_done_*'):
+            done.append(m.name[len('.color_done_'):])
+    return jsonify({'done': done})
+
+
+@upscale_bp.route('/upscale_pages', methods=['POST'])
+def upscale_pages():
+    """Escala SOLO las páginas ELEGIDAS por el usuario (nombres de archivo) de un capítulo,
+    con el modelo a color. Es el flujo del selector del MangaModal."""
+    try:
+        data = request.get_json() or {}
+        chapter = data.get('chapter')
+        pages = data.get('pages') or []
+        if chapter is None or not pages:
+            return jsonify({'status': 'error', 'message': 'chapter y pages requeridos'}), 400
+        ctx, err = _color_ctx(data)
+        if err:
+            return jsonify(err[0]), err[1]
+        actual_folder, input_folder, output_folder, model_key = ctx
+        chapter_norm, prefix = _color_prefix(chapter)
+        wanted = {p if isinstance(p, str) else str(p) for p in pages}
+        images = [p for p in sorted(input_folder.glob(prefix + '*.*')) if p.name in wanted]
+        if not images:
+            return jsonify({'status': 'error', 'message': 'Ninguna de las páginas elegidas existe'}), 404
+        body, code = _start_color(actual_folder, input_folder, output_folder, images,
+                                  [chapter_norm], chapter_norm + '_color', model_key)
+        return jsonify(body), code
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@upscale_bp.route('/upscale_pages_multi', methods=['POST'])
+def upscale_pages_multi():
+    """Escala las páginas a color ELEGIDAS por el usuario a lo largo de VARIOS capítulos, en un
+    solo trabajo. `selections` = [{chapter, pages:[nombres]}]. Es el flujo masivo con la MISMA
+    selección manual que el selector de un capítulo. task_id sufijo 'all_color'."""
+    try:
+        data = request.get_json() or {}
+        selections = data.get('selections') or []
+        if not selections:
+            return jsonify({'status': 'error', 'message': 'selections requerido'}), 400
+        ctx, err = _color_ctx(data)
+        if err:
+            return jsonify(err[0]), err[1]
+        actual_folder, input_folder, output_folder, model_key = ctx
+        images, norms = [], []
+        for sel in selections:
+            chapter = sel.get('chapter')
+            wanted = {str(p) for p in (sel.get('pages') or [])}
+            if chapter is None or not wanted:
+                continue
+            chapter_norm, prefix = _color_prefix(chapter)
+            found = [p for p in sorted(input_folder.glob(prefix + '*.*')) if p.name in wanted]
+            if found:
+                images.extend(found)
+                norms.append(chapter_norm)
+        if not images:
+            return jsonify({'status': 'error', 'message': 'Ninguna de las páginas elegidas existe'}), 404
+        body, code = _start_color(actual_folder, input_folder, output_folder, images,
+                                  norms, 'all_color', model_key)
+        return jsonify(body), code
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
+@upscale_bp.route('/upscale_color', methods=['POST'])
+def upscale_color():
+    """Auto-detecta las páginas a COLOR y las escala con el modelo a color (APISR).
+    `chapter` opcional: un capítulo; si falta, TODO el manga. Es el flujo automático."""
+    try:
+        data = request.get_json() or {}
+        ctx, err = _color_ctx(data)
+        if err:
+            return jsonify(err[0]), err[1]
+        actual_folder, input_folder, output_folder, model_key = ctx
+        chapter = data.get('chapter')
+        if chapter is not None and str(chapter) != '':
+            chapter_norm, prefix = _color_prefix(chapter)
+            candidates = sorted(input_folder.glob(prefix + '*.*'))
+            id_suffix = chapter_norm + '_color'
+        else:
+            chapter_norm = None
+            candidates = sorted(input_folder.glob('ch*_*.*'))
+            id_suffix = 'all_color'
+        color_imgs = _detect_color(candidates)
+        if not color_imgs:
+            return jsonify({'status': 'none', 'total': 0, 'message': 'No se detectaron páginas a color'}), 200
+        norms = [chapter_norm] if chapter_norm else sorted({_chapter_norm_of(p.name) for p in color_imgs})
+        body, code = _start_color(actual_folder, input_folder, output_folder, color_imgs,
+                                  norms, id_suffix, model_key)
+        return jsonify(body), code
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 @upscale_bp.route('/upscale_manga', methods=['POST'])
 def upscale_manga():
     data = request.get_json()
@@ -918,9 +1237,25 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                 })
 
                 img = Image.open(img_path)
+                # Página ya a resolución de lectura (p.ej. resultado del trasplante con arte 4K):
+                # copiarla tal cual — re-escalarla 4x agotaría la RAM y tira el WSL (ver
+                # UPSCALE_MAX_INPUT_LONG_SIDE). Antes del posible downscale de `fast` para no perder
+                # la resolución del arte HD.
+                if is_already_hires(img):
+                    print(f"Copy hi-res (no upscale): {img_path.name} {img.width}x{img.height}", flush=True)
+                    out_path = output_folder / (img_path.stem + img_path.suffix)
+                    for _old in output_folder.glob(img_path.stem + '.*'):
+                        if _old.suffix.lower() != img_path.suffix.lower():
+                            try: _old.unlink()
+                            except OSError: pass
+                    shutil.copy2(img_path, out_path)
+                    processed += 1
+                    continue
                 if fast:
                     img = img.resize((max(1, img.width // 2), max(1, img.height // 2)), Image.LANCZOS)
-                if is_color_page(img):
+                # Solo los modelos B&N (1 canal) saltan páginas a color; un modelo a
+                # color (APISR, in_channels==3) SÍ debe escalarlas — es su propósito.
+                if in_channels == 1 and is_color_page(img):
                     print(f"Copy color (no upscale): {img_path.name}", flush=True)
                     out_path = output_folder / (img_path.stem + img_path.suffix)
                     shutil.copy2(img_path, out_path)
@@ -936,6 +1271,13 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                 _avg = sum(_page_times) / len(_page_times)
                 print(f"[bench] {'2x⚡' if fast else '4x '} {img_path.name} — {_dt:.2f}s  avg={_avg:.2f}s  (n={len(_page_times)})", flush=True)
                 out_path = output_folder / (img_path.stem + ".jpg")
+                # Evita que una copia previa con OTRA extensión (p.ej. el .png de una página a
+                # color que el modelo B&N copió tal cual) conviva con el .jpg recién escalado y
+                # lo duplique/ensombrezca en el lector.
+                for _old in output_folder.glob(img_path.stem + '.*'):
+                    if _old.suffix.lower() != '.jpg':
+                        try: _old.unlink()
+                        except OSError: pass
                 save_futures.append(_save_pool.submit(_resize_save, out_pil, out_path, OUTPUT_DOWNSCALE, JPEG_QUALITY))
                 processed += 1
             except Exception as e:
@@ -1009,7 +1351,14 @@ def run_upscale_all(input_folder, output_folder, images, upscale_id):
                 })
 
                 img = Image.open(img_path)
-                if is_color_page(img):
+                # Ya-4K (trasplante) → copiar sin re-escalar (evita OOM que crashea el WSL).
+                if is_already_hires(img):
+                    print(f"Copy hi-res (no upscale): {img_path.name} {img.width}x{img.height}", flush=True)
+                    out_path = output_folder / (img_path.stem + img_path.suffix)
+                    shutil.copy2(img_path, out_path)
+                    processed += 1
+                    continue
+                if in_channels == 1 and is_color_page(img):
                     out_path = output_folder / (img_path.stem + img_path.suffix)
                     shutil.copy2(img_path, out_path)
                     processed += 1

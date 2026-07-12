@@ -11,11 +11,12 @@
 
 use std::cell::{Cell, RefCell};
 use std::ffi::{c_void, CString};
+use std::time::Instant;
 use std::mem::size_of;
 use std::os::raw::c_char;
 
 use libmpv2::{
-    render::{OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType},
+    render::{mpv_render_update, OpenGLInitParams, RenderContext, RenderParam, RenderParamApiType},
     Mpv,
 };
 use windows::core::{s, Interface, PCSTR};
@@ -59,57 +60,34 @@ pub const TIMER_RENDER: usize = 2;
 
 const SHADER_DIR: &str = r"C:/Program Files (x86)/mpv/mpv/shaders";
 
-// Presets oficiales de Anime4K, de más ligero a más pesado.
-// "fast" = Modo A (M): CNN medio, buen coste; ideal en GPU compartida con el upscaler.
-const SHADERS_FAST: &[&str] = &[
-    "Anime4K_Clamp_Highlights.glsl",
-    "Anime4K_Restore_CNN_M.glsl",
-    "Anime4K_Upscale_CNN_x2_M.glsl",
-    "Anime4K_AutoDownscalePre_x2.glsl",
-    "Anime4K_AutoDownscalePre_x4.glsl",
-    "Anime4K_Upscale_CNN_x2_S.glsl",
-];
-// "medium" = Modo A+A (VL): restauración doble, más nitidez.
-const SHADERS_MEDIUM: &[&str] = &[
+// "high" = Anime4K Modo A (HQ), preset ESTÁNDAR — EXACTO al mpv.conf del usuario, que en
+// mpv.exe se ve limpio. UN SOLO pase de Restore (VL). Antes encadenábamos DOS restore
+// (Restore_CNN_UL + Restore_CNN_M): eso NO es un preset estándar, sobre-procesa y amplifica
+// el ruido en zonas oscuras → shimmer/parpadeo SUTIL de luminancia (confirmado en vivo:
+// con doble restore parpadea, con este preset de un solo restore NO). Ver
+// project_native_player_flicker en memoria.
+const SHADERS_HIGH: &[&str] = &[
     "Anime4K_Clamp_Highlights.glsl",
     "Anime4K_Restore_CNN_VL.glsl",
     "Anime4K_Upscale_CNN_x2_VL.glsl",
-    "Anime4K_Restore_CNN_M.glsl",
     "Anime4K_AutoDownscalePre_x2.glsl",
     "Anime4K_AutoDownscalePre_x4.glsl",
     "Anime4K_Upscale_CNN_x2_M.glsl",
 ];
-// "high" = Modo A+A (UL) "Max Quality" — EXACTO al CTRL+8 del usuario, que él validó
-// como el mejor resultado. SIN Thin_HQ: el thinning de líneas (CTRL+9) sobreprocesa y se
-// veía peor; por eso su CTRL+8 lucía "muchísimo superior" a nuestro antiguo "alto".
-// (El Modo GAN 4K —CTRL+7— sería aún mayor calidad, pero sus .glsl no están instalados.)
-const SHADERS_HIGH: &[&str] = &[
-    "Anime4K_Clamp_Highlights.glsl",
-    "Anime4K_Restore_CNN_UL.glsl",
-    "Anime4K_Upscale_CNN_x2_UL.glsl",
-    "Anime4K_AutoDownscalePre_x2.glsl",
-    "Anime4K_AutoDownscalePre_x4.glsl",
-    "Anime4K_Restore_CNN_M.glsl",
-    "Anime4K_Upscale_CNN_x2_M.glsl",
-];
-// "ultra" = Modo A+A (UL) + Thin — EXACTO al CTRL+9 del usuario ("Max Quality + Sharp
-// Lines"). Igual que "high" pero con Thin_HQ al final: bordes más nítidos (el usuario
-// notaba el mpv "más sharp en los bordes"). Se deja como opción aparte del CTRL+8.
+// "ultra" = Modo A (HQ) + Thin_HQ (bordes más nítidos). Igual que "high" (un solo restore,
+// sin doble pase que causaba el shimmer) más el thinning de líneas al final.
 const SHADERS_ULTRA: &[&str] = &[
     "Anime4K_Clamp_Highlights.glsl",
-    "Anime4K_Restore_CNN_UL.glsl",
-    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_VL.glsl",
     "Anime4K_AutoDownscalePre_x2.glsl",
     "Anime4K_AutoDownscalePre_x4.glsl",
-    "Anime4K_Restore_CNN_M.glsl",
     "Anime4K_Upscale_CNN_x2_M.glsl",
     "Anime4K_Thin_HQ.glsl",
 ];
 
 fn tier_shaders(tier: &str) -> &'static [&'static str] {
     match tier {
-        "fast" => SHADERS_FAST,
-        "medium" => SHADERS_MEDIUM,
         "high" => SHADERS_HIGH,
         "ultra" => SHADERS_ULTRA,
         _ => &[], // off / none / desconocido
@@ -385,6 +363,13 @@ pub struct Player {
     active: Cell<bool>,
     // Se registran los parámetros de render (colorspace/gamma/etc.) una vez por archivo.
     logged: Cell<bool>,
+    // Render gateado por frame nuevo (ver render()). `needs_render` fuerza al menos un
+    // dibujado tras load/resize aunque mpv aún no reporte FRAME. Los contadores instrumentan
+    // la cadencia (ticks del timer vs presents reales) para el diagnóstico del parpadeo.
+    needs_render: Cell<bool>,
+    tick_count: Cell<u64>,
+    present_count: Cell<u64>,
+    last_stat: Cell<Instant>,
 }
 
 impl Player {
@@ -611,13 +596,36 @@ impl Player {
             tier: RefCell::new(String::new()),
             active: Cell::new(false),
             logged: Cell::new(false),
+            needs_render: Cell::new(false),
+            tick_count: Cell::new(0),
+            present_count: Cell::new(0),
+            last_stat: Cell::new(Instant::now()),
         })
     }
 
     /// Un frame: mpv → FBO (interop lock) → CopyResource → Present.
+    ///
+    /// GATEADO POR FRAME NUEVO (fix del parpadeo sutil de luminancia): el timer de render
+    /// dispara ~120 Hz, pero SOLO renderizamos cuando mpv reporta un frame NUEVO
+    /// (`mpv_render_context_update()` con flag FRAME) o hay un redibujado forzado tras
+    /// load/resize. ANTES se llamaba a `render_ctx.render()` en CADA tick sobre frames
+    /// REPETIDOS: eso re-ejecutaba todo el pipeline temporal de mpv (incl. detección de
+    /// pico) ~5× por frame real, haciendo derivar la luminancia → parpadeo sutil en escenas
+    /// oscuras, ausente en mpv.exe (que dibuja 1× por frame). Los contadores instrumentan
+    /// la cadencia (ticks del timer vs presents reales), logueados 1×/s.
     pub fn render(&self) {
         if !self.active.get() {
             return; // motor pre-creado pero sin vídeo: no gastar GPU en reposo
+        }
+        self.tick_count.set(self.tick_count.get() + 1);
+        // ¿mpv tiene un frame nuevo listo? (poll del flag; no requiere update-callback)
+        let has_frame = matches!(
+            self.render_ctx.update(),
+            Ok(f) if f & mpv_render_update::Frame != 0
+        );
+        if !has_frame && !self.needs_render.get() {
+            self.log_cadence();
+            return; // nada nuevo que dibujar: NO re-renderizar el mismo frame
         }
         // Una vez por archivo, cuando ya hay parámetros de salida: fijar el colorspace
         // según el CONTENIDO (SDR sRGB vs PQ, igual que mpv.exe) y volcar params al log.
@@ -631,7 +639,7 @@ impl Player {
             }
         }
         let (Some(bb), Some(sr)) = (self.backbuffer.as_ref(), self.shared_res.as_ref()) else {
-            return; // en pleno resize
+            return; // en pleno resize (needs_render sigue puesto → se dibuja al reponerse)
         };
         let gl = &self.gl;
         let mut obj = self.gl_obj;
@@ -646,6 +654,26 @@ impl Player {
             (gl.dx_unlock_objects)(self.gl_dx_device, 1, &mut obj);
             self.context.CopyResource(bb, sr);
             let _ = self.swapchain.Present(1, DXGI_PRESENT(0));
+        }
+        self.needs_render.set(false);
+        self.present_count.set(self.present_count.get() + 1);
+        self.log_cadence();
+    }
+
+    /// Vuelca 1×/s la cadencia real: ticks del timer vs presents (frames dibujados). Con el
+    /// gateo, presents ≈ fps del vídeo (~24) frente a ticks ~120. Confirma que ya no
+    /// re-renderizamos frames repetidos (raíz del parpadeo de brillo).
+    fn log_cadence(&self) {
+        let now = Instant::now();
+        if now.duration_since(self.last_stat.get()).as_millis() >= 1000 {
+            log_line(&format!(
+                "[cadence] ticks/s={} presents/s={}",
+                self.tick_count.get(),
+                self.present_count.get()
+            ));
+            self.tick_count.set(0);
+            self.present_count.set(0);
+            self.last_stat.set(now);
         }
     }
 
@@ -724,6 +752,7 @@ impl Player {
         self.apply_content_colorspace();
         self.w = w;
         self.h = h;
+        self.needs_render.set(true); // redibujar ya al nuevo tamaño (aún sin FRAME nuevo)
     }
 
     pub fn load(&self, path: &str, start: f64) {
@@ -733,6 +762,7 @@ impl Player {
         let _ = self.mpv.set_property("start", s.as_str());
         self.logged.set(false); // volver a registrar params para el archivo nuevo
         self.active.set(true); // empezar a renderizar
+        self.needs_render.set(true); // garantizar el primer dibujado del archivo nuevo
         if mpv_command_args(&self.mpv, &["loadfile", path, "replace"]) < 0 {
             eprintln!("[player] loadfile falló: {path}");
         }
@@ -749,6 +779,7 @@ impl Player {
 
     pub fn seek_absolute(&self, secs: f64) {
         let _ = mpv_command_args(&self.mpv, &["seek", &secs.to_string(), "absolute"]);
+        self.needs_render.set(true); // en pausa, garantizar el redibujo del frame buscado
     }
 
     pub fn set_volume(&self, vol: f64) {
@@ -758,6 +789,7 @@ impl Player {
     pub fn set_track(&self, prop: &str, id: &str) {
         // prop = "aid" (audio) o "sid" (subtítulos); id numérico o "no"/"auto".
         let _ = mpv_command_args(&self.mpv, &["set", prop, id]);
+        self.needs_render.set(true); // el cambio de pista de subs debe verse ya en pausa
     }
 
     /// Añade un subtítulo externo (sidecar) como pista mpv, SIN seleccionarlo aún
@@ -772,6 +804,7 @@ impl Player {
     /// speed, sub-scale, sub-delay, etc. Un solo comando IPC para varios controles.
     pub fn set_prop(&self, name: &str, val: &str) {
         let _ = self.mpv.set_property(name, val);
+        self.needs_render.set(true); // reflejar sub-scale/sub-delay/etc. aunque esté en pausa
     }
 
     /// Aplica un tier de Anime4K en vivo (una ruta por comando; NUNCA unir con ':'
@@ -786,6 +819,7 @@ impl Player {
         // (Sin shader de ganancia: distorsionaba el color tras Anime4K —rojo/saturado— y
         // metía un pase extra que lagueaba. El match de brillo con mpv es ahora automático
         // vía el colorspace correcto por contenido, ver apply_content_colorspace.)
+        self.needs_render.set(true); // aplicar el tier al frame actual aunque esté en pausa
     }
 
     /// Ajuste de gamma del usuario, por el ecualizador NATIVO de mpv (propiedad `gamma`,
@@ -798,6 +832,7 @@ impl Player {
         let gamma = ((m - 1.0) * 50.0).round().clamp(-100.0, 100.0) as i64;
         let _ = self.mpv.set_property("gamma", gamma);
         log_line(&format!("[bright] mult={m:.3} -> gamma={gamma}"));
+        self.needs_render.set(true);
     }
 
     /// Ajuste de saturación (ecualizador NATIVO de mpv `saturation`, -100..100). Sirve
@@ -808,6 +843,7 @@ impl Player {
         let sat = ((m - 1.0) * 50.0).round().clamp(-100.0, 100.0) as i64;
         let _ = self.mpv.set_property("saturation", sat);
         log_line(&format!("[sat] mult={m:.3} -> saturation={sat}"));
+        self.needs_render.set(true);
     }
 
     /// Replica EXACTAMENTE la decisión de mpv.exe (medida en su log de vo/gpu-next sobre

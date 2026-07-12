@@ -22,6 +22,12 @@ export function imgProxy(url) {
  * proxyable hosts — returns null otherwise (card falls back to plain fade). */
 export function imgThumb(url, w = 28) {
   const proxied = imgProxy(url)
-  if (!proxied || !proxied.startsWith('/api/img?')) return null
-  return `${proxied}&w=${w}`
+  if (proxied && proxied.startsWith('/api/img?')) return `${proxied}&w=${w}`
+  // Portadas de biblioteca servidas por nuestro backend (/api/library/thumb/<folder>)
+  // también exponen micro-thumb con w= para el blur-up (paridad con /api/img). Respeta un
+  // posible `?v=<mtime>` ya presente (cache-bust) usando el separador correcto.
+  if (typeof url === 'string' && url.startsWith('/api/library/thumb/')) {
+    return `${url}${url.includes('?') ? '&' : '?'}w=${w}`
+  }
+  return null
 }

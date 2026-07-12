@@ -59,6 +59,9 @@ archive/
 docs/img/raw/
 hevc_test.mp4
 
+# URLs de modelos para fetch-models.sh (pueden ser privadas)
+scripts/model-urls.env
+
 # Local configuration and public repository metadata.
 /.*/
 !/.github/

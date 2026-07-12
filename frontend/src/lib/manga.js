@@ -36,10 +36,22 @@ export const MANGA_STATUS_ORDER = ['reading', 'plan_to_read', 'on_hold', 'comple
 // `w` (opcional): pide la página reescalada a ese ancho (el backend cachea) — el
 // lector la usa para no decodificar 4K completo cuando se muestra a ~1000px (lag
 // del WebView2). Sin w o en rutas remotas/absolutas → archivo íntegro.
+// Codifica la RUTA de una página conservando el sufijo de cache-bust `?v=<mtime>` que añade
+// el backend. Es IMPRESCINDIBLE: los nombres de carpeta/archivo pueden contener `?`, `#`, `&`
+// o espacios (p.ej. "So, Do You Want To Go Out, Or? (How Do We Relationship)") — sin codificar,
+// el `?` de la carpeta trunca la URL y la imagen da 404 (páginas "que no aparecen").
+const _encPagePath = (p) => {
+  const m = p.match(/^(.*)\?(v=\d+)$/)      // solo el `?v=<dígitos>` final es query real
+  const path = m ? m[1] : p
+  const q = m ? `?${m[2]}` : ''
+  return path.split('/').map(encodeURIComponent).join('/') + q
+}
 export const pageUrl = (p, w = 0) => {
   if (/^(https?:)?\/\//.test(p)) return p
-  const base = p.startsWith('/') ? p : `/uploads/${p}`
+  const base = p.startsWith('/') ? p : `/uploads/${_encPagePath(p)}`
   return w > 0 ? `${base}${base.includes('?') ? '&' : '?'}w=${w}` : base
 }
-export const pageUrlOriginal = (p) => `/uploads/original/${p}`
-export const pageUrlUpscaled = (p) => `/uploads/upscaled/${p}`
+export const pageUrlOriginal = (p) =>
+  (/^(https?:)?\/\//.test(p) || p.startsWith('/')) ? p : `/uploads/original/${_encPagePath(p)}`
+export const pageUrlUpscaled = (p) =>
+  (/^(https?:)?\/\//.test(p) || p.startsWith('/')) ? p : `/uploads/upscaled/${_encPagePath(p)}`

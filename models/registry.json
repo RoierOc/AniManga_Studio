@@ -12,5 +12,29 @@
       {"sub_key": "mj_1400", "file": "4x_MangaJaNai_1400p_V1_ESRGAN_105k.pth"}
     ],
     "adaptive": true
+  },
+  "apisr": {
+    "label": "APISR 4x (color, anime)",
+    "models": [
+      {"sub_key": "apisr", "file": "4x_APISR_GRL_GAN_generator.pth"}
+    ],
+    "color": true,
+    "half": false
+  },
+  "animesharp": {
+    "label": "AnimeSharp V4 2x (color, RCAN)",
+    "models": [
+      {"sub_key": "animesharp", "file": "2x-AnimeSharpV4_Fast_RCAN_PU.safetensors"}
+    ],
+    "color": true,
+    "half": false
+  },
+  "illustrationjanai": {
+    "label": "IllustrationJaNai 4x (color, DAT2)",
+    "models": [
+      {"sub_key": "illustjanai", "file": "4x_IllustrationJaNai_V1_DAT2_190k.pth"}
+    ],
+    "color": true,
+    "half": false
   }
 }

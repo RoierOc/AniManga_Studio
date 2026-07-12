@@ -19,6 +19,13 @@ fail() { printf '\033[1;31m[install]\033[0m %s\n' "$*" >&2; exit 1; }
 IS_WSL=false
 grep -qi "microsoft" /proc/version 2>/dev/null && IS_WSL=true
 
+# Modo "motor-solo" (lo usa el aprovisionamiento del Setup nativo, bootstrap-user.sh):
+# prepara deps + venv + frontend pero NO crea el lanzador/acceso directo de
+# PowerShell — en ese flujo el shell nativo del Setup ya ES el acceso directo, y
+# los assets (Suwayomi/modelos/.env) los baja bootstrap-user por su cuenta.
+ENGINE_ONLY=false
+[[ "${ANIMANGA_ENGINE_ONLY:-}" == "1" ]] && ENGINE_ONLY=true
+
 # ── 1. Dependencias del sistema ───────────────────────────────────────────────
 # Se comprueban COMANDOS (no nombres de paquete: java/qbittorrent pueden venir
 # de distintos paquetes). Las de build son obligatorias; las runtime opcionales
@@ -72,6 +79,21 @@ say "Compilando frontend…"
 # de pnpm: si el install falla, se regenera desde cero.
 ( cd frontend && { pnpm install --silent \
     || { rm -rf node_modules && pnpm install --silent; }; } && pnpm build ) >/dev/null
+
+if $ENGINE_ONLY; then
+    # El aprovisionamiento nativo pidió solo el motor: deps+venv+frontend ya están.
+    # Ni lanzador ni assets aquí (bootstrap-user.sh los gestiona).
+    say "✓ Motor listo (modo motor-solo): venv + frontend."
+    exit 0
+fi
+
+# ── Assets listos para usar (instalación manual, idempotente) ──────────────────
+# En el flujo del Setup nativo esto lo hace bootstrap-user.sh; aquí cubre a quien
+# instala a mano. No rompe si algo falla (cada asset es opcional).
+say "Preparando assets (.env, Suwayomi, modelos)…"
+bash "$ROOT/scripts/init-env.sh"       || say "  aviso: init-env falló."
+bash "$ROOT/scripts/fetch-suwayomi.sh" || say "  aviso: fetch-suwayomi falló."
+bash "$ROOT/scripts/fetch-models.sh"   || say "  aviso: fetch-models falló."
 
 if $IS_WSL; then
     # ── 4W. Lanzador de Windows (backend queda en esta distro WSL) ────────────

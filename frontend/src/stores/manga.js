@@ -3,7 +3,7 @@ import { api } from '@/lib/api'
 import { onStatus } from '@/lib/sse'
 import { useUiStore } from './ui'
 import { useVersionsStore } from './versions'
-import { taskId } from '@/lib/manga'
+import { taskId, pageUrl, pageUrlOriginal, pageUrlUpscaled } from '@/lib/manga'
 
 let statusBound = false
 let previewTimer = null
@@ -52,12 +52,19 @@ function _pct(progress, total, fallback = 0) {
   return fallback
 }
 // Backend status string → estado unificado del centro.
+// Los estados de RESULTADO FINAL deben mapearse a un terminal explícito; si no,
+// caen al `return 'running'` de abajo y la tarea "carga eternamente" (nunca sale
+// de Activas). download/upscale terminan con outcomes no-obvios (ok, no_chapters,
+// nothing_to_repair, already_running, not_found) además de complete/done.
+const _DONE_LIKE = new Set(['done', 'complete', 'ok', 'nothing_to_repair', 'already_running', 'downloaded', 'no_changes'])
+const _ERROR_LIKE = new Set(['error', 'not_found', 'no_chapters', 'failed'])
+const _CANCEL_LIKE = new Set(['cancelled', 'canceled', 'interrupted', 'cancelling', 'cancel_requested'])
 function _mapStatus(raw) {
-  if (raw === 'error') return 'error'
-  if (raw === 'cancelled' || raw === 'interrupted') return 'cancelled'
-  if (raw === 'done' || raw === 'complete') return 'done'
-  if (raw === 'starting') return 'queued'
-  return 'running'
+  if (_ERROR_LIKE.has(raw)) return 'error'
+  if (_CANCEL_LIKE.has(raw)) return 'cancelled'
+  if (_DONE_LIKE.has(raw)) return 'done'
+  if (raw === 'starting' || raw === 'queued') return 'queued'
+  return 'running'   // downloading/upscaling/discovering/running/… = genuinamente en curso
 }
 // One backend task entry → unified shape, or null to hide it.
 function normalizeTask(kind, id, v) {
@@ -244,7 +251,13 @@ export const useMangaStore = defineStore('manga', {
 
     // upscale model + mode
     models: {},                 // { key: label }
+    modelsColor: {},            // { key: bool } — qué modelos son a color (APISR)
     activeModel: 'eula',
+    colorDone: {},              // { chapterNorm: true } — capítulos ya escalados a color (marcador en disco)
+    // Selector de páginas a color. mode 'single' = un capítulo (pages[]); mode 'all' = todo el
+    // manga agrupado por capítulo (chapters[]). Ambos muestran SOLO páginas a color.
+    colorPicker: { open: false, mode: 'single', chapter: null, folder: '', pages: [], chapters: [], loading: false },
+    colorModel: localStorage.getItem('upscale-color-model') || '',  // modelo a color elegido (vacío = primero disponible)
     eco: localStorage.getItem('upscale-eco') !== '0',   // eco on by default (lets MPV run)
 
     // Modo QA de traducción (SOLO testing): conserva artefactos de debug por página al traducir
@@ -265,6 +278,20 @@ export const useMangaStore = defineStore('manga', {
     // times per binding and Vue failed to track — the rings stayed at 0%.
     downloadByChapter: (s) => buildProgressMap(s.dlTasks, s.downloads),
     upscaleByChapter: (s) => buildProgressMap(s.upTasks, s.upscale),
+    // Progreso del escalado a COLOR por capítulo — se lee de las tareas con flag `color`
+    // en el snapshot de upscale (task_id propio `_color`), keyed por número de capítulo.
+    colorByChapter: (s) => {
+      const out = {}
+      for (const v of Object.values(s.upscale)) {
+        if (!v || !v.color || v.chapter == null) continue
+        const total = v.total || 0, progress = v.progress || 0
+        out[String(v.chapter)] = {
+          status: v.status || 'upscaling', progress, total,
+          pct: total ? Math.min(100, Math.round((progress / total) * 100)) : (v.status === 'complete' ? 100 : 0),
+        }
+      }
+      return out
+    },
     sortedChapters: (s) => [...s.chapters].sort((a, b) => parseFloat(b.chapter) - parseFloat(a.chapter)),
     mdLangs: (s) => [...new Set(s.mdChapters.map(c => c.language).filter(Boolean))].sort(),
     // Filas LOCALES (archivos ya descargados), ocultando las que tienen una descarga EN VUELO
@@ -417,17 +444,19 @@ export const useMangaStore = defineStore('manga', {
       (s.reader?.source === 'upscaled' || s.upscaled[s.reader?.chapter] === true || s.upscaled[s.reader?.chapter] === 'partial'),
     // `http(s)` pass-through: las muestras de versiones (pestaña Versiones) son URLs
     // absolutas de Suwayomi, no rutas locales /uploads — no anteponer prefijo.
+    // pageUrlOriginal/Upscaled codifican la ruta (carpetas con `?`/espacios rompían la URL) y
+    // dejan pasar http(s)/rutas absolutas de las muestras de Versiones (Suwayomi) sin prefijo.
     pageOrigUrl: (s) => {
       const p = s.pages[s.page]; if (!p) return ''
-      return (p.startsWith('/') || p.startsWith('http')) ? p : '/uploads/original/' + p
+      return pageUrlOriginal(p)
     },
     pageUpUrl: (s) => {
       if (s.scanCompareMode && s.comparePages2.length) {
         const p2 = s.comparePages2[Math.min(s.page, s.comparePages2.length - 1)]
-        return p2 ? ((p2.startsWith('/') || p2.startsWith('http')) ? p2 : '/uploads/original/' + p2) : ''
+        return p2 ? pageUrlOriginal(p2) : ''
       }
       const p = s.pages[s.page]; if (!p) return ''
-      return (p.startsWith('/') || p.startsWith('http')) ? p : '/uploads/upscaled/' + p
+      return pageUrlUpscaled(p)
     },
 
     /* ── Centro de Actividad: modelo unificado ──────────────────────────────
@@ -492,6 +521,12 @@ export const useMangaStore = defineStore('manga', {
         this.exports = data.exports || {}
         this.transplant = data.transplant || {}
         this.subtitles = data.subtitles || {}
+        // Escalado a color completado → marca el capítulo como "color hecho" (oculta el botón,
+        // como el 4K). El marcador en disco (loadColorStatus) es la verdad persistente.
+        for (const v of Object.values(this.upscale)) {
+          if (v && v.color && v.chapter != null && (v.status === 'complete' || v.status === 'done') && !this.colorDone[String(v.chapter)])
+            this.colorDone = { ...this.colorDone, [String(v.chapter)]: true }
+        }
         // Drop cancelled ids once the backend has actually stopped them (terminal
         // status or gone), so the set can't grow unbounded.
         if (this.cancelledIds.length) {
@@ -754,13 +789,41 @@ export const useMangaStore = defineStore('manga', {
         return
       }
       this.sourceLoading = true
-      api.get(`/api/sources/manga/${src.mangaId}/chapters`)
-        .then(chs => {
-          this.sourceChapters = (chs || []).map(ch => ({
-            ...ch,
-            chapterNorm: String(ch.chapterNumber ?? '').replace(/\.0$/, ''),
-            name: ch.name || `Cap. ${ch.chapterNumber ?? '?'}`,
-          }))
+      const srcMangaId = src.mangaId
+      const mangaKey = this.current?.id
+      const applyChapters = (chs) => {
+        this.sourceChapters = (chs || []).map(ch => ({
+          ...ch,
+          chapterNorm: String(ch.chapterNumber ?? '').replace(/\.0$/, ''),
+          name: ch.name || `Cap. ${ch.chapterNumber ?? '?'}`,
+        }))
+      }
+      // SWR: el backend sirve la DB local de Suwayomi al instante (como MangaDex) y refresca
+      // la web de la fuente en 2º plano. `?meta=1` → {chapters, stale}. Si vino "stale" (había
+      // un refresco pendiente), re-consultamos UNA vez a los pocos segundos para recoger los
+      // capítulos nuevos sin bloquear la apertura, solo si el modal sigue en este mismo manga.
+      // Pasamos fuente+título para que el backend pueda RE-RESOLVER el mangaId si quedó
+      // obsoleto (la DB de Suwayomi reasigna ids al reconstruirse → los caps no cargaban).
+      const q = new URLSearchParams({ meta: '1' })
+      if (src.sourceId) q.set('sourceId', String(src.sourceId))
+      const srcTitle = this.current?.source_meta?.title || this.current?.name || ''
+      if (srcTitle) q.set('title', srcTitle)
+      api.get(`/api/sources/manga/${srcMangaId}/chapters?${q.toString()}`)
+        .then(res => {
+          applyChapters(res?.chapters)
+          // Si el backend re-resolvió a un id nuevo, actualiza source_meta para que lecturas/
+          // descargas (effectiveSource deriva de source_meta.mangaId) usen ya el id correcto.
+          if (res?.resolvedId && this.current?.id === mangaKey && this.current?.source_meta) {
+            this.current.source_meta = { ...this.current.source_meta, mangaId: res.resolvedId }
+          }
+          if (res?.stale) {
+            setTimeout(() => {
+              if (this.current?.id !== mangaKey || this.effectiveSource?.mangaId !== srcMangaId) return
+              api.get(`/api/sources/manga/${srcMangaId}/chapters?meta=1`)
+                .then(r2 => { if (this.current?.id === mangaKey) applyChapters(r2?.chapters) })
+                .catch(() => {})
+            }, 6000)
+          }
         })
         .catch(() => {})
         .finally(() => { this.sourceLoading = false })
@@ -783,6 +846,10 @@ export const useMangaStore = defineStore('manga', {
         artCands: [], esCands: [],
         artSel: meta?.art ? { ...meta.art, id: meta.art.mangaId } : null,
         esSel: meta?.es ? { ...meta.es, id: meta.es.mangaId } : null,
+        // Arte = mis páginas ya descargadas+escaladas (en vez de buscar fuente externa). Se
+        // fuerza en importados (CBZ: no hay fuente remota); opcional para descargados con
+        // capítulos locales. Recuerda la elección del último discover si la hubo.
+        artLocal: meta?.art?.local ?? !!this.current?.source_meta?.imported,
         chapters: [], chaptersLoading: false,
         preview: {},
         running: false, runStatus: null, taskId: null,
@@ -837,6 +904,14 @@ export const useMangaStore = defineStore('manga', {
       }
     },
 
+    // Cambia el origen del arte (local escalado ↔ fuente externa). Si ya se habían descubierto
+    // fuentes, re-descubre para aplicar el cambio; si aún no, solo fija el flag (el botón
+    // "Buscar" lo usará). No hace nada durante un discover/run en curso.
+    tpSetArtLocal(val) {
+      if (this.tp.loading || this.tp.running) return
+      this.tp.artLocal = !!val
+      if (this.tp.phase === 'ready') this.tpDiscover()
+    },
     async tpDiscover() {
       const ui = useUiStore()
       const title = this.current?.id
@@ -846,7 +921,8 @@ export const useMangaStore = defineStore('manga', {
       try {
         const res = await api.post('/api/transplant/discover', {
           title, anilistId: this.current?.al_id || null,
-          artLocal: !!this.current?.source_meta?.imported,
+          // Importados: siempre arte local. Descargados: según el toggle del usuario.
+          artLocal: !!this.current?.source_meta?.imported || !!this.tp.artLocal,
         })
         this._pollTpDiscover(res.task_id)
       } catch (e) {
@@ -1241,7 +1317,7 @@ export const useMangaStore = defineStore('manga', {
       md.setTab('search')
     },
     async loadModels() {
-      try { const d = await api.get('/api/upscale/models'); this.models = d.models || {}; this.activeModel = d.active || 'eula' } catch (_) {}
+      try { const d = await api.get('/api/upscale/models'); this.models = d.models || {}; this.modelsColor = d.color || {}; this.activeModel = d.active || 'eula' } catch (_) {}
     },
     async setModel(key) {
       try {
@@ -1726,6 +1802,108 @@ export const useMangaStore = defineStore('manga', {
       } catch (_) { useUiStore().toast('No se pudo abrir el capítulo', 'error'); this.reader = null }
       finally { this.readerLoading = false }
     },
+    /* ── Escalado a color (APISR) — gestionado desde el MangaModal, fuera del lector ──
+       Auto (todo el manga) o por capítulo con SELECTOR de páginas. El detector de
+       is_color_page pre-marca las páginas a color; el usuario ajusta y confirma. */
+    _colorResult(d, ui) {
+      if (d.status === 'started') ui.toast(`Escalando ${d.total} página(s) a color con ${d.label}`, 'success')
+      else if (d.status === 'already_running') ui.toast('Ya se está escalando a color', 'info')
+      else if (d.status === 'none') ui.toast('No se detectaron páginas a color', 'info')
+      else ui.toast(d.message || 'No se pudo iniciar el escalado a color', 'error')
+    },
+    // Modelo a color efectivo: el elegido por el usuario si sigue siendo válido, si no el primero.
+    _effectiveColorModel() {
+      const keys = Object.keys(this.modelsColor || {}).filter(k => this.modelsColor[k])
+      if (this.colorModel && keys.includes(this.colorModel)) return this.colorModel
+      return keys[0] || undefined
+    },
+    setColorModel(key) {
+      this.colorModel = key
+      localStorage.setItem('upscale-color-model', key || '')
+    },
+    // Auto: todo el manga (botón de nivel manga en Gestionar). Legado — se mantiene por si se
+    // quiere el flujo 100% automático, pero la UI ahora abre el selector masivo (openColorPickerAll).
+    async upscaleColorAuto(chapter = null) {
+      const ui = useUiStore(); const title = this.current?.id
+      if (!title) return
+      try { this._colorResult(await api.post('/api/upscale/upscale_color', { title, chapter, model: this._effectiveColorModel() }), ui) }
+      catch (_) { ui.toast('No se pudo iniciar el escalado a color', 'error') }
+    },
+    // Capítulos con marcador de "color hecho" (para ocultar el botón, como el 4K).
+    async loadColorStatus() {
+      const title = this.current?.id
+      if (!title) { this.colorDone = {}; return }
+      try {
+        const d = await api.get(`/api/upscale/color_status?title=${encodeURIComponent(title)}`)
+        this.colorDone = Object.fromEntries((d.done || []).map(ch => [String(ch), true]))
+      } catch (_) {}
+    },
+    // Abre el selector de páginas a color de UN capítulo (thumbnails; solo páginas a color,
+    // todas pre-seleccionadas).
+    async openColorPicker(chapter) {
+      const title = this.current?.id
+      if (!title) return
+      this.colorPicker = { open: true, mode: 'single', chapter, folder: '', pages: [], chapters: [], loading: true }
+      try {
+        const d = await api.get(`/api/upscale/color_pages?title=${encodeURIComponent(title)}&chapter=${encodeURIComponent(chapter)}`)
+        this.colorPicker = {
+          open: true, mode: 'single', chapter, folder: d.folder || '', chapters: [], loading: false,
+          pages: (d.pages || []).map(p => ({ ...p, sel: true })),   // solo llegan páginas a color → todas marcadas
+        }
+      } catch (_) {
+        this.closeColorPicker()
+        useUiStore().toast('No se pudieron cargar las páginas', 'error')
+      }
+    },
+    // Abre el selector MASIVO: páginas a color de TODOS los capítulos, agrupadas, con la misma
+    // selección manual (todas pre-marcadas). Reemplaza el antiguo "escalar todo automático".
+    async openColorPickerAll() {
+      const title = this.current?.id
+      if (!title) return
+      this.colorPicker = { open: true, mode: 'all', chapter: null, folder: '', pages: [], chapters: [], loading: true }
+      try {
+        const d = await api.get(`/api/upscale/color_pages_all?title=${encodeURIComponent(title)}`)
+        this.colorPicker = {
+          open: true, mode: 'all', chapter: null, folder: d.folder || '', pages: [], loading: false,
+          chapters: (d.chapters || []).map(c => ({
+            chapter: c.chapter, done: !!c.done,
+            pages: (c.pages || []).map(p => ({ ...p, sel: true })),
+          })),
+        }
+      } catch (_) {
+        this.closeColorPicker()
+        useUiStore().toast('No se pudieron cargar las páginas', 'error')
+      }
+    },
+    closeColorPicker() { this.colorPicker = { open: false, mode: 'single', chapter: null, folder: '', pages: [], chapters: [], loading: false } },
+    toggleColorPage(name, chapter = null) {
+      const list = chapter == null
+        ? this.colorPicker.pages
+        : (this.colorPicker.chapters.find(c => c.chapter === chapter)?.pages || [])
+      const p = list.find(x => x.name === name)
+      if (p) p.sel = !p.sel
+    },
+    async runColorPicker() {
+      const ui = useUiStore(); const title = this.current?.id
+      const { mode, chapter, pages, chapters } = this.colorPicker
+      const model = this._effectiveColorModel()
+      try {
+        let d
+        if (mode === 'all') {
+          const selections = chapters
+            .map(c => ({ chapter: c.chapter, pages: c.pages.filter(p => p.sel).map(p => p.name) }))
+            .filter(s => s.pages.length)
+          if (!title || !selections.length) { ui.toast('Marca al menos una página', 'info'); return }
+          d = await api.post('/api/upscale/upscale_pages_multi', { title, model, selections })
+        } else {
+          const sel = pages.filter(p => p.sel).map(p => p.name)
+          if (!title || chapter == null || !sel.length) { ui.toast('Marca al menos una página', 'info'); return }
+          d = await api.post('/api/upscale/upscale_pages', { title, chapter, pages: sel, model })
+        }
+        this._colorResult(d, ui)
+        if (d.status === 'started' || d.status === 'already_running') this.closeColorPicker()
+      } catch (_) { ui.toast('No se pudo iniciar el escalado a color', 'error') }
+    },
     openReaderRaw(title, pages, label = '') {
       this._resetView()
       this.reader = { title, chapter: label, source: '', kind: 'cbz' }
@@ -1817,7 +1995,7 @@ export const useMangaStore = defineStore('manga', {
     // Auto-detección webtoon vs manga por relación de aspecto de las páginas.
     // Se salta si la serie tiene override manual. No persiste (la detección es barata).
     _applyAutoMode(m) { this.mode = m },
-    _pageImgUrl(p) { return (/^(https?:)?\/\//.test(p) || p.startsWith('/')) ? p : '/uploads/' + p },
+    _pageImgUrl(p) { return pageUrl(p) },   // codifica la ruta (carpetas con `?`/espacios)
     _imgAspect(url) {
       return new Promise((resolve) => {
         const im = new Image()

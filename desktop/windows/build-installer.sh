@@ -49,7 +49,14 @@ cp "$EXE"                    "$STAGING/animanga.exe"
 cp "$DLL"                    "$STAGING/libmpv-2.dll"
 cp "$NATIVE_SRC/animanga.ico" "$STAGING/animanga.ico"
 printf '{"distro":"%s","linuxPath":"%s"}\n' "$DISTRO" "$LINUX_PATH" > "$STAGING/config.json"
-say "config.json baked: distro=$DISTRO linuxPath=$LINUX_PATH"
+say "config.json baked (fallback): distro=$DISTRO linuxPath=$LINUX_PATH"
+
+# Aprovisionamiento del motor (Fase 2): el Setup los lleva para arrancar en frío.
+# provision-engine.ps1 (orquestador Windows) + bootstrap-root.sh (in-distro, se
+# inyecta antes de que exista el checkout). El resto de scripts viven en el repo.
+cp "$ROOT/desktop/windows/provision-engine.ps1" "$STAGING/provision-engine.ps1"
+cp "$ROOT/desktop/wsl/bootstrap-root.sh"         "$STAGING/bootstrap-root.sh"
+say "staging del aprovisionamiento: provision-engine.ps1 + bootstrap-root.sh"
 
 # ── 3. Bootstrapper WebView2 (silencioso si el runtime falta) ──────────────────
 WV="$STAGING/MicrosoftEdgeWebview2Setup.exe"

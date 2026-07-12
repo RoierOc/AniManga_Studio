@@ -74,6 +74,154 @@ def _save_cover_cache(cache: dict):
         pass
 
 
+# ── Portadas servidas por el backend (paridad con /api/img de anime) ──────────
+# Las portadas de manga de fuentes Tachiyomi/Mihon eran URLs EN VIVO de Suwayomi
+# (localhost:4567/...): fallaban con la JVM apagada, id caducado o arranque en frío. Ahora
+# TODA portada sin archivo local se sirve por /api/library/thumb/<folder>, que la descarga
+# UNA vez (despertando Suwayomi y re-resolviendo el id si hace falta), la normaliza y la
+# persiste como cover.jpg local → resiliente, cacheada e instantánea a partir de entonces.
+_thumb_locks: dict = {}
+_thumb_locks_guard = threading.Lock()
+
+
+def _thumb_lock(folder: str) -> threading.Lock:
+    with _thumb_locks_guard:
+        lk = _thumb_locks.get(folder)
+        if lk is None:
+            lk = _thumb_locks[folder] = threading.Lock()
+        return lk
+
+
+def _cover_file_response(folder: Path):
+    """Sirve el cover.{jpg,png,webp} local si existe (normalizando en disco los heredados
+    demasiado grandes). Devuelve un Response o None si no hay archivo local."""
+    for ext in ('jpg', 'png', 'webp'):
+        p = folder / f'cover.{ext}'
+        if p.exists():
+            data = p.read_bytes()
+            if len(data) > 1_200_000:
+                norm = _normalize_cover_bytes(data)
+                if norm is not None and len(norm) < len(data):
+                    for e in ('jpg', 'png', 'webp'):
+                        (folder / f'cover.{e}').unlink(missing_ok=True)
+                    (folder / 'cover.jpg').write_bytes(norm)
+                    return Response(norm, mimetype='image/jpeg',
+                                    headers={'Cache-Control': 'public, max-age=86400'})
+            mime = {'jpg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp'}[ext]
+            return Response(data, mimetype=mime,
+                            headers={'Cache-Control': 'public, max-age=86400'})
+    return None
+
+
+def _first_page_bytes(folder: Path):
+    """Bytes de la PRIMERA página descargada (ch más bajo, página más baja). Portada de
+    respaldo local cuando la fuente no da miniatura (fuente rota/offline/id caduco)."""
+    imgs = [p for ext in ('jpg', 'jpeg', 'png', 'webp')
+            for p in folder.glob(f'ch*_*.{ext}')]
+    for p in sorted(imgs, key=lambda p: p.name):
+        try:
+            return p.read_bytes()
+        except Exception:
+            continue
+    return None
+
+
+def _try_fetch_bytes(url: str):
+    try:
+        r = _http.get(url, timeout=15)
+        if r.status_code == 200 and r.content:
+            return r.content
+    except Exception:
+        pass
+    return None
+
+
+def _remote_cover_url(title: str):
+    """Mejor portada oficial remota para un título, MISMAS fuentes que "elegir portada":
+    AniList (extraLarge, 1 oficial en alta) y, si no, la 1ª de MangaDex. Devuelve URL o None."""
+    # AniList — portada oficial en alta resolución
+    try:
+        from api.anilist import _ql
+        q = 'query($s:String){ Media(search:$s, type:MANGA){ coverImage{ extraLarge large } } }'
+        d = _ql(q, {'s': title})
+        ci = ((d or {}).get('Media') or {}).get('coverImage') or {}
+        u = ci.get('extraLarge') or ci.get('large')
+        if u:
+            return u
+    except Exception:
+        pass
+    # MangaDex — 1ª portada (resuelto por variantes de nombre, como el Tomo Builder)
+    try:
+        from api.mangadex import resolve_manga_by_title
+        m = resolve_manga_by_title(title)
+        mid = m['id'] if m else ''
+        if mid:
+            rc = _http.get('https://api.mangadex.org/cover',
+                           params={'manga[]': mid, 'limit': 1, 'order[volume]': 'asc'}, timeout=10)
+            if rc.ok:
+                for it in rc.json().get('data', []):
+                    fn = it.get('attributes', {}).get('fileName', '')
+                    if fn:
+                        return f"https://uploads.mangadex.org/covers/{mid}/{fn}"
+    except Exception:
+        pass
+    return None
+
+
+def _fetch_persist_cover(folder: Path) -> bool:
+    """Descarga la portada de la fuente y la guarda como cover.jpg. Para URLs de Suwayomi:
+    despierta la JVM y, si el mangaId está caducado, re-resuelve por título (reusa sources.py)
+    y actualiza .source_meta.json. Devuelve True si se persistió un cover local."""
+    meta = {}
+    meta_path = folder / '.source_meta.json'
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+        except Exception:
+            meta = {}
+    url = (meta or {}).get('thumbnailUrl') or _load_cover_cache().get(folder.name.lower().strip())
+    if not url or not str(url).startswith('http'):
+        return False
+
+    is_suwayomi = 'localhost:4567' in url or '127.0.0.1:4567' in url
+    if is_suwayomi:
+        try:
+            from api.sources import ensure_suwayomi
+            ensure_suwayomi()
+        except Exception:
+            pass
+
+    raw = _try_fetch_bytes(url)
+    # Suwayomi 404 → id caducado (DB reconstruida): re-resuelve por título y reintenta.
+    if raw is None and is_suwayomi and meta.get('sourceId') and meta.get('title'):
+        try:
+            from api.sources import _resolve_source_manga_id, _persist_source_meta_id, SUWAYOMI_BASE
+            new_id = _resolve_source_manga_id(str(meta['sourceId']), meta['title'])
+            if new_id and new_id != meta.get('mangaId'):
+                _persist_source_meta_id(meta.get('mangaId'), new_id, meta['title'])
+                raw = _try_fetch_bytes(f"{SUWAYOMI_BASE}/api/v1/manga/{new_id}/thumbnail")
+        except Exception:
+            pass
+    # Recurso preferente cuando la fuente no da miniatura (fuente rota/offline/id caduco): la
+    # portada OFICIAL de AniList/MangaDex (como "elegir portada"), mucho mejor que una página
+    # interior en B/N. Solo si eso también falla, la 1ª página descargada como último recurso.
+    if raw is None:
+        remote = _remote_cover_url(meta.get('title') or folder.name)
+        if remote:
+            raw = _try_fetch_bytes(remote)
+    if raw is None:
+        raw = _first_page_bytes(folder)
+    if raw is None:
+        return False
+
+    out = _normalize_cover_bytes(raw) or raw
+    try:
+        (folder / 'cover.jpg').write_bytes(out)
+        return True
+    except Exception:
+        return False
+
+
 def _chapter_sort_key(value):
     try:
         return float(Decimal(normalize_chapter(value)))
@@ -131,17 +279,24 @@ def get_library():
             except Exception:
                 pass
 
-        # Cover priority: local file → source_meta thumbnail → URL cache
+        # Portada SIEMPRE por nuestro /thumb (sirve el cover local si existe; si no lo baja de la
+        # fuente/AniList/MangaDex, lo persiste y lo cachea — resiliente a Suwayomi apagado/id
+        # caduco), nunca la URL en vivo de Suwayomi. La URL lleva `?v=<mtime>` para que al CAMBIAR
+        # la portada (reescribe cover.jpg → mtime nuevo) la URL cambie y el navegador recargue
+        # (si no, con Cache-Control de 1 día seguiría mostrando la vieja aunque el archivo cambió).
         local_cover = next(
             (p for p in (f / 'cover.jpg', f / 'cover.png', f / 'cover.webp') if p.exists()),
             None
         )
-        if local_cover:
-            cover = f"/api/library/cover/{quote(f.name, safe='')}"
+        if local_cover or (source_meta or {}).get('thumbnailUrl') or lib_covers.get(f.name.lower().strip()):
+            try:
+                stamp_src = local_cover or (meta_path if meta_path.exists() else f)
+                mtime = int(stamp_src.stat().st_mtime)
+            except Exception:
+                mtime = 0
+            cover = f"/api/library/thumb/{quote(f.name, safe='')}?v={mtime}"
         else:
-            cover = (source_meta or {}).get('thumbnailUrl')
-            if not cover:
-                cover = lib_covers.get(f.name.lower().strip())
+            cover = None
 
         folders.append({
             'id': f.name,
@@ -642,29 +797,58 @@ def find_manga_folder(query):
 _offline_cover_status = {"running": False, "done": 0, "total": 0, "errors": 0}
 
 
+def _micro_thumb(data: bytes, w: int):
+    """Miniatura minúscula (blur-up) desde bytes de portada. Devuelve JPEG o None."""
+    try:
+        from io import BytesIO
+        from PIL import Image
+        im = Image.open(BytesIO(data)); im.load()
+        ow, oh = im.size
+        w = max(8, min(96, w))
+        im = im.resize((w, max(1, round(oh * (w / float(ow))))), Image.LANCZOS)
+        out = BytesIO(); im.convert('RGB').save(out, format='JPEG', quality=70)
+        return out.getvalue()
+    except Exception:
+        return None
+
+
 @library_bp.route('/cover/<path:title>')
 def serve_local_cover(title):
     """Serve a locally-downloaded cover image."""
     folder = Path(manga_dir()) / title
-    for ext in ('jpg', 'png', 'webp'):
-        p = folder / f'cover.{ext}'
-        if p.exists():
-            data = p.read_bytes()
-            # Normaliza UNA vez en disco las portadas heredadas demasiado grandes (una página
-            # HD elegida como portada): reescala y reescribe como cover.jpg para que las
-            # siguientes lecturas sean rápidas y la tarjeta no se vea gigante.
-            if len(data) > 1_200_000:
-                norm = _normalize_cover_bytes(data)
-                if norm is not None and len(norm) < len(data):
-                    for e in ('jpg', 'png', 'webp'):
-                        (folder / f'cover.{e}').unlink(missing_ok=True)
-                    (folder / 'cover.jpg').write_bytes(norm)
-                    return Response(norm, mimetype='image/jpeg',
-                                    headers={'Cache-Control': 'public, max-age=86400'})
-            mime = {'jpg': 'image/jpeg', 'png': 'image/png', 'webp': 'image/webp'}[ext]
-            return Response(data, mimetype=mime,
-                            headers={'Cache-Control': 'public, max-age=86400'})
-    return 'not found', 404
+    return _cover_file_response(folder) or ('not found', 404)
+
+
+@library_bp.route('/thumb/<path:folder>')
+def serve_manga_thumb(folder):
+    """Portada de un manga servida SIEMPRE por el backend (paridad con /api/img de anime):
+    sirve el cover local si existe; si no, lo descarga UNA vez de la fuente (despierta Suwayomi
+    y re-resuelve el id si está caducado), lo persiste como cover.jpg y lo sirve. Resistente a
+    JVM apagada / id caducado / arranque lento. `?w=` → micro-thumb para el blur-up."""
+    base = Path(manga_dir()) / folder
+    if not base.is_dir():
+        return 'not found', 404
+    w = request.args.get('w', type=int)
+
+    resp = _cover_file_response(base)
+    if resp is None:
+        # Descarga+persiste una sola vez, con guarda anti-estampida por carpeta.
+        with _thumb_lock(folder):
+            resp = _cover_file_response(base)   # otro hilo pudo escribirla mientras esperábamos
+            if resp is None and _fetch_persist_cover(base):
+                resp = _cover_file_response(base)
+    if resp is None:
+        return 'not found', 404
+
+    # Blur-up: reescala a un thumb minúsculo desde el cover local recién servido.
+    if w:
+        p = next((base / f'cover.{e}' for e in ('jpg', 'png', 'webp') if (base / f'cover.{e}').exists()), None)
+        if p:
+            micro = _micro_thumb(p.read_bytes(), w)
+            if micro:
+                return Response(micro, mimetype='image/jpeg',
+                                headers={'Cache-Control': 'public, max-age=86400'})
+    return resp
 
 
 @library_bp.route('/offline_covers_status')

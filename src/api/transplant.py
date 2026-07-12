@@ -341,6 +341,23 @@ def _local_chapters_map(title: str) -> dict:
     return {chn: {"pageCount": len(files)} for chn, files in _local_chapter_files(title).items()}
 
 
+def _local_art_files(title: str) -> dict:
+    """Como `_local_chapter_files` pero PREFIRIENDO las páginas ya ESCALADAS (4K) por capítulo:
+    si un capítulo tiene versión en UPSCALED_DIR la usa como arte base; si no, cae a la original.
+    Es el arte cuando el usuario elige traducir sobre su copia ya descargada+escalada en vez de
+    volver a buscar una fuente externa (evita re-descargar arte de menor calidad)."""
+    orig = _local_chapter_files(title)
+    up_root = Path(upscaled_dir()) / title
+    if not up_root.is_dir():
+        return orig
+    out: dict = {}
+    for chn, files in orig.items():
+        prefix = _chapter_file_prefix(chn)
+        up = sorted(p for p in up_root.glob(prefix + "_*") if p.is_file())
+        out[chn] = up if up else files
+    return out
+
+
 # ── Tomos importados que abarcan varios capítulos reales ──────────────────────
 # Un CBZ/CBR puede ser un TOMO (varios capítulos). import_cbz.py guarda esas
 # páginas bajo un único prefijo "ch####" y registra el rango real en
@@ -2149,7 +2166,7 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict,
     from transplant_core import transplant_chapter
     _transplant_cancel[task_id] = False
     art_local = bool((art or {}).get("local"))
-    local_files = _local_chapter_files(title) if art_local else {}
+    local_files = _local_art_files(title) if art_local else {}
     art_map = None if art_local else _chapters_map(int(art["mangaId"]))
     # `es` global puede faltar cuando la traducción se lanza APOYÁNDOSE solo en las fuentes
     # ancladas por capítulo (chapter_sources): en ese caso cada capítulo resuelve su fuente ES

@@ -514,18 +514,33 @@ function close() {
   store.closePlayer()
 }
 
-function sendProgress(ended, flush = false) {
+function sendProgress(ended, flush = false, beacon = false) {
   const v = videoEl.value
   if (!v || !p.value) return
   // posición ABSOLUTA (streamBase + relativo) para reanudar correctamente
   const pos = ended ? (duration.value || 0) : time.value
   if (!ended && !flush && Math.abs(pos - lastSentPos) < 5) return
   lastSentPos = pos
-  api.post('/api/stream/progress', {
+  const body = {
     anime_id: p.value.anime.id, episode: p.value.ep.num,
     position: pos, duration: duration.value || 0, ended,
-  }).catch(() => {})
+  }
+  // Al descargar la página (cerrar pestaña/ventana) fetch se cancela; sendBeacon
+  // garantiza que el POST llegue aunque el documento se esté destruyendo.
+  if (beacon && navigator.sendBeacon) {
+    try {
+      navigator.sendBeacon('/api/stream/progress',
+        new Blob([JSON.stringify(body)], { type: 'application/json' }))
+      return
+    } catch (_) {}
+  }
+  api.post('/api/stream/progress', body).catch(() => {})
 }
+
+// Salvavidas: guarda el progreso si la ventana se oculta o se descarga (cierre de
+// pestaña, cambio de app) — casos donde close() nunca llega a ejecutarse.
+function onPageHide() { if (p.value) sendProgress(false, true, true) }
+function onVisibility() { if (document.visibilityState === 'hidden' && p.value) sendProgress(false, true, true) }
 
 /* ── salto instantáneo ──
  * Salta a un segundo ABSOLUTO: si cae en lo ya remuxado de la sesión actual es
@@ -773,13 +788,17 @@ watch(p, (val) => {
   if (val) {
     document.addEventListener('keydown', onKey)
     document.addEventListener('fullscreenchange', onFsChange)
+    window.addEventListener('pagehide', onPageHide)
+    document.addEventListener('visibilitychange', onVisibility)
   } else {
     document.removeEventListener('keydown', onKey)
     document.removeEventListener('fullscreenchange', onFsChange)
+    window.removeEventListener('pagehide', onPageHide)
+    document.removeEventListener('visibilitychange', onVisibility)
     teardownMedia()
   }
 })
-onBeforeUnmount(() => { teardownMedia() })
+onBeforeUnmount(() => { if (p.value) sendProgress(false, true, true); teardownMedia() })
 
 const fmt = (s) => {
   s = Math.max(0, Math.floor(s || 0))
@@ -941,13 +960,13 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
           <!-- menús -->
           <div class="wp__menuwrap" v-if="audioTracks.length > 1">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'audio' }" @click="menuOpen = menuOpen === 'audio' ? '' : 'audio'">Audio</button>
-            <div v-if="menuOpen === 'audio'" class="wp__menu">
+            <div v-if="menuOpen === 'audio'" class="wp__menu" @wheel.stop>
               <button v-for="(t, i) in audioTracks" :key="'a' + i" :class="{ 'is-sel': i === audioIndex }" @click="setAudioTrack(i)">{{ trackLabel(t, i) }}</button>
             </div>
           </div>
           <div class="wp__menuwrap">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'subs' }" @click="menuOpen = menuOpen === 'subs' ? '' : 'subs'">Subtítulos</button>
-            <div v-if="menuOpen === 'subs'" class="wp__menu">
+            <div v-if="menuOpen === 'subs'" class="wp__menu" @wheel.stop>
               <div v-if="!subTracks.length" class="wp__subsize wp__subnote" @click.stop>
                 <span>Este episodio no tiene pistas de subtítulos</span>
               </div>
@@ -973,20 +992,20 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
                     @click="menuOpen = menuOpen === 'a4k' ? '' : 'a4k'">
               <Icon name="spark" :size="13" /> {{ a4kMode === 'off' ? 'Anime4K' : 'A4K·' + a4kMode }}
             </button>
-            <div v-if="menuOpen === 'a4k'" class="wp__menu">
+            <div v-if="menuOpen === 'a4k'" class="wp__menu" @wheel.stop>
               <button v-for="m in A4K_MODES" :key="m.id" :class="{ 'is-sel': m.id === a4kMode }"
                       @click="setA4kMode(m.id)">{{ m.label }}</button>
             </div>
           </div>
           <div class="wp__menuwrap">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'speed' }" @click="menuOpen = menuOpen === 'speed' ? '' : 'speed'">{{ speed }}×</button>
-            <div v-if="menuOpen === 'speed'" class="wp__menu">
+            <div v-if="menuOpen === 'speed'" class="wp__menu" @wheel.stop>
               <button v-for="s in [0.5, 0.75, 1, 1.25, 1.5, 2]" :key="s" :class="{ 'is-sel': s === speed }" @click="setSpeed(s)">{{ s }}×</button>
             </div>
           </div>
 
           <button v-if="store.playerNext()" class="wp__ctl" title="Siguiente episodio" @click="goNext">
-            Siguiente <Icon name="chevron" :size="14" style="transform: rotate(-90deg)" />
+            Siguiente <Icon name="skip-next" :size="15" />
           </button>
           <button v-if="panelEps.length > 1" class="wp__ctl" :class="{ 'is-on': epPanel }"
                   title="Lista de episodios" @click="epPanel = !epPanel">
@@ -996,7 +1015,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
             <button class="wp__ic" :class="{ 'is-on': menuOpen === 'cast' }" title="Transmitir a otro monitor" @click="openScreenPicker">
               <Icon name="screen" :size="18" />
             </button>
-            <div v-if="menuOpen === 'cast'" class="wp__menu">
+            <div v-if="menuOpen === 'cast'" class="wp__menu" @wheel.stop>
               <div class="wp__menu-h">Reproducir en…</div>
               <button v-for="(s, i) in screens" :key="'sc' + i" @click="castToScreen(s)">
                 {{ s.label }}<small>{{ s.dims }}{{ s.primary ? ' · principal' : '' }}</small>
@@ -1011,7 +1030,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 
       <!-- panel de episodios: cambiar de episodio sin salir del player -->
       <Transition name="wp-eps">
-        <aside v-if="epPanel" class="wp__eps" @mousemove.stop="poke">
+        <aside v-if="epPanel" class="wp__eps" @mousemove.stop="poke" @wheel.stop>
           <header class="wp__eps-head">
             <h3>{{ p.anime.title }}</h3>
             <button class="wp__ic" title="Cerrar" @click="epPanel = false"><Icon name="close" :size="16" /></button>

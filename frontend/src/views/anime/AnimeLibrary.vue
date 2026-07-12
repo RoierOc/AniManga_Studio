@@ -1,7 +1,7 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
-import { ANIME_STATUS, STATUS_ORDER, nextUnwatchedEp } from '@/lib/anime'
+import { ANIME_STATUS, STATUS_ORDER, nextUnwatchedEp, currentSeason, isCurrentSeason, SEASON_ES } from '@/lib/anime'
 import { imgProxy } from '@/lib/img'
 import AnimeCard from '@/components/anime/AnimeCard.vue'
 import HeroBanner from '@/components/anime/HeroBanner.vue'
@@ -39,9 +39,14 @@ const SORTS = [
 // solo aparecen en su propia pestaña (viven ahí, no ensucian la lista principal).
 const INACTIVE = ['completed', 'dropped']
 
+// Temporada actual (recalculada por render → rueda sola cada trimestre).
+const season = computed(() => currentSeason())
+const seasonLabel = computed(() => `${SEASON_ES[season.value.season]} ${season.value.year}`)
+
 const filtered = computed(() => {
   let list = [...store.library]
-  if (store.libFilter !== 'all') list = list.filter(a => a.status === store.libFilter)
+  if (store.libFilter === 'season') list = list.filter(a => isCurrentSeason(a, season.value))
+  else if (store.libFilter !== 'all') list = list.filter(a => a.status === store.libFilter)
   else list = list.filter(a => !INACTIVE.includes(a.status))
   const q = store.libSearch.trim().toLowerCase()
   if (q) list = list.filter(a => (a.title || '').toLowerCase().includes(q))
@@ -63,8 +68,12 @@ const counts = computed(() => {
   // El contador de "Todo" refleja lo que realmente muestra: solo activos.
   const c = { all: store.library.filter(a => !INACTIVE.includes(a.status)).length }
   for (const k of STATUS_ORDER) c[k] = store.library.filter(a => a.status === k).length
+  c.season = store.library.filter(a => isCurrentSeason(a, season.value)).length
   return c
 })
+
+// Si la temporada rota (o se vacía) mientras el filtro está activo, vuelve a "Todo".
+watch(() => counts.value.season, (n) => { if (store.libFilter === 'season' && !n) store.libFilter = 'all' })
 
 // "Ver" desde la tarjeta hover: reproduce el próximo episodio no visto, o abre el detalle.
 function playFromCard(a) {
@@ -116,6 +125,10 @@ function playFromCard(a) {
       <div class="filters" style="--i:2">
         <button class="pill" :class="{ 'is-active': store.libFilter === 'all' }" @click="store.libFilter = 'all'">
           Todo <span class="pill__n">{{ counts.all }}</span>
+        </button>
+        <button v-if="counts.season" class="pill pill--season" :class="{ 'is-active': store.libFilter === 'season' }"
+                :title="seasonLabel" @click="store.libFilter = 'season'">
+          <Icon name="spark" :size="13" /> Temporada <span class="pill__n">{{ counts.season }}</span>
         </button>
         <button v-for="k in STATUS_ORDER" :key="k" v-show="counts[k]" class="pill"
                 :class="{ 'is-active': store.libFilter === k }" @click="store.libFilter = k"

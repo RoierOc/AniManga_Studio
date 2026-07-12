@@ -45,13 +45,16 @@ Name: "es"; MessagesFile: "compiler:Languages\Spanish.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "Crear un acceso directo en el Escritorio"; GroupDescription: "Accesos directos:"
-Name: "enginesetup"; Description: "Preparar/actualizar el motor en WSL (solo la primera vez o tras una actualizacion)"; GroupDescription: "Avanzado:"; Flags: unchecked
+Name: "enginesetup"; Description: "Preparar el motor: WSL2, dependencias, biblioteca (necesario la primera vez; puede tardar y pedir reiniciar)"; GroupDescription: "Motor:"
 
 [Files]
 Source: "{#Staging}\{#AppExe}";        DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Staging}\libmpv-2.dll";     DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Staging}\animanga.ico";     DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Staging}\config.json";      DestDir: "{localappdata}\AniMangaStudio"; Flags: ignoreversion
+; Aprovisionamiento del motor (Fase 2): orquestador Windows + bootstrap in-distro.
+Source: "{#Staging}\provision-engine.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Staging}\bootstrap-root.sh";    DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Staging}\MicrosoftEdgeWebview2Setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
@@ -63,8 +66,9 @@ Name: "{autodesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; IconFilename: "{
 [Run]
 ; 1) Runtime WebView2 (Evergreen) si falta - silencioso.
 Filename: "{tmp}\MicrosoftEdgeWebview2Setup.exe"; Parameters: "/silent /install"; StatusMsg: "Instalando el runtime WebView2..."; Check: NeedsWebView2; Flags: waituntilterminated
-; 2) Engine setup opcional (idempotente) - solo si el usuario marco la tarea y hay WSL.
-Filename: "{sys}\wsl.exe"; Parameters: "-d ""{#Distro}"" --cd ""{#LinuxPath}"" -e bash desktop/install.sh"; StatusMsg: "Preparando el motor (WSL)... puede tardar la primera vez"; Tasks: enginesetup; Check: WslAvailable; Flags: runhidden waituntilterminated
+; 2) Aprovisionamiento del motor (idempotente, resumible): habilita WSL2, instala
+;    la distro, clona el repo y prepara todo. El .ps1 gestiona elevacion y reinicio.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\provision-engine.ps1"" -BootstrapScript ""{app}\bootstrap-root.sh"" -Distro ""{#Distro}"""; StatusMsg: "Preparando el motor (WSL2, dependencias, biblioteca)... puede tardar la primera vez"; Tasks: enginesetup; Flags: waituntilterminated
 ; 3) Ofrecer abrir la app al terminar.
 Filename: "{app}\{#AppExe}"; Description: "Abrir {#AppName}"; Flags: nowait postinstall skipifsilent
 

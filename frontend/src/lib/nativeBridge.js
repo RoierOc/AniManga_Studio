@@ -55,6 +55,49 @@ export function send(cmd, payload = {}) {
   return true
 }
 
+/** Ajusta una propiedad de mpv en vivo (IPC 'setprop'). Para diagnóstico/A-B. */
+export function setProp(name, value) {
+  return send('setprop', { name, value: String(value) })
+}
+
+// ── Diagnóstico del parpadeo de brillo (root-cause por aislamiento en vivo) ──
+// Permite A/B durante el OP de Atelier SIN recompilar: cada llamada cambia una
+// propiedad de mpv y se observa si el parpadeo de luminancia desaparece. El
+// principal sospechoso es hdr-compute-peak (detección dinámica de pico → "pumping"
+// de brillo, colores intactos, peor en escenas oscuras). Uso desde la consola de
+// devtools del WebView:  __mpvDiag.noPeak()  /  __mpvDiag.peak()  /  __mpvDiag.set('dither-depth','no')
+if (typeof window !== 'undefined' && wv) {
+  window.__mpvDiag = {
+    set: (name, value) => { console.log('[mpvDiag] set', name, '=', value); return setProp(name, value) },
+    // Sospechoso #1: pico dinámico HDR. Apagarlo fija el pico y elimina el pumping.
+    noPeak: () => window.__mpvDiag.set('hdr-compute-peak', 'no'),
+    peak:   () => window.__mpvDiag.set('hdr-compute-peak', 'yes'),
+    // Sospechoso #2: tone-mapping activo. 'clip' = sin curva → descarta el tonemap.
+    noTonemap: () => window.__mpvDiag.set('tone-mapping', 'clip'),
+    tonemap:   () => window.__mpvDiag.set('tone-mapping', 'bt.2390'),
+    // Sospechoso #3: dither temporal en el swapchain de 8-bit.
+    noDither: () => window.__mpvDiag.set('dither-depth', 'no'),
+    dither:   () => window.__mpvDiag.set('dither-depth', 'auto'),
+    // Sospechoso #4: deband (grano aleatorio por frame en zonas planas oscuras).
+    noDeband: () => window.__mpvDiag.set('deband', 'no'),
+  }
+
+  // ── A/B de shaders Anime4K (el parpadeo aparece SOLO con shaders) ──
+  // En Windows el separador de listas de mpv es ';', así que los drive-letter (C:) no rompen.
+  const _SH = 'C:/Program Files (x86)/mpv/mpv/shaders'
+  const _list = (...names) => names.map((n) => `${_SH}/${n}.glsl`).join(';')
+  window.__mpvDiag.shadersOff = () => window.__mpvDiag.set('glsl-shaders', '')
+  // Preset Mode A (HQ) EXACTO del mpv.conf del usuario: UN solo restore (VL). Limpio en mpv.exe.
+  window.__mpvDiag.modeA = () => window.__mpvDiag.set('glsl-shaders', _list(
+    'Anime4K_Clamp_Highlights', 'Anime4K_Restore_CNN_VL', 'Anime4K_Upscale_CNN_x2_VL',
+    'Anime4K_AutoDownscalePre_x2', 'Anime4K_AutoDownscalePre_x4', 'Anime4K_Upscale_CNN_x2_M'))
+  // Nuestro tier "high" actual: DOBLE restore (UL + M) — sospechoso del shimmer.
+  window.__mpvDiag.ourHigh = () => window.__mpvDiag.set('glsl-shaders', _list(
+    'Anime4K_Clamp_Highlights', 'Anime4K_Restore_CNN_UL', 'Anime4K_Upscale_CNN_x2_UL',
+    'Anime4K_AutoDownscalePre_x2', 'Anime4K_AutoDownscalePre_x4',
+    'Anime4K_Restore_CNN_M', 'Anime4K_Upscale_CNN_x2_M'))
+}
+
 /** Suscríbete a los mensajes de Rust. Devuelve una función para desuscribirse. */
 export function onMessage(fn) {
   listeners.add(fn)

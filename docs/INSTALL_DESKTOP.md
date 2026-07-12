@@ -25,32 +25,61 @@ desde tu lanzador de aplicaciones.
   `ffmpeg`/`mkvtoolnix-cli` (subtítulos), modelos en `models/` (upscaling — docs/MODELS.md).
 - **Secretos**: copia `.env.example` a `.env` (MangaDex OAuth, TMDB…).
 
-## Windows con backend en WSL (recomendado para el PC principal)
+## Windows — instalación en un clic (recomendado)
 
-El backend (Python/CUDA, ffmpeg, Suwayomi) vive en tu distro WSL — donde ya
-funciona todo — y la ventana corre en Windows nativo: un Chromium de Windows en
-modo `--app` (D3D11 → HEVC por hardware y Anime4K WebGPU a plena GPU, sin el
-problema cross-GPU de los híbridos Linux).
+Para un equipo Windows nuevo, todo se instala con **`AniMangaStudio-Setup.exe`**.
+El instalador encapsula la complejidad de WSL: no hace falta preparar nada a mano.
+
+1. Descarga y ejecuta `AniMangaStudio-Setup.exe`.
+2. Deja marcada la tarea **"Preparar el motor"** (viene marcada por defecto).
+3. Si Windows pide **reiniciar** para activar WSL2, reinicia: al volver a iniciar
+   sesión la preparación **continúa sola** (un `RunOnce` la reanuda).
+4. Al terminar, abre **AniManga Studio** desde el Menú Inicio.
+
+Qué hace el instalador, en orden (todo idempotente y registrado en
+`%LOCALAPPDATA%\AniMangaStudio\provision.log`):
+
+- Instala el runtime **WebView2** si falta.
+- Copia el **shell nativo** (WebView2 + libmpv) y crea el acceso directo.
+- **Aprovisiona el motor** (`provision-engine.ps1`): habilita **WSL2**, instala la
+  distro **archlinux**, y dentro ejecuta el bootstrap (`bootstrap-root.sh` →
+  `bootstrap-user.sh`): dependencias (Python, Node/pnpm, ffmpeg, mkvtoolnix, Java,
+  mpv, qBittorrent), usuario + systemd + fix de interop, **clona el repo** en
+  `~/AniMangaStudio`, crea el **venv**, compila el **frontend**, instala **PyTorch
+  CUDA**, y prepara los assets: **Suwayomi**, **modelos** y **`.env`**.
+- Escribe `config.json` (`distro` + ruta real del checkout) para el shell nativo.
+
+**Requisito de GPU**: el escalado necesita una **GPU NVIDIA con su driver de
+Windows** instalado (WSL usa el driver del host). El instalador avisa si CUDA no
+está disponible, pero no puede instalar el driver por ti.
+
+**Arquitectura**: el backend (Python/CUDA, ffmpeg, Suwayomi) vive en la distro WSL;
+la ventana es un Chromium de Windows en modo `--app` (D3D11 → HEVC por hardware y
+Anime4K WebGPU a plena GPU, sin el problema cross-GPU de los híbridos Linux).
+
+- **Ciclo de vida**: abrir → arranca `start_server.sh` en WSL (watchdog incluido) →
+  espera `/health` → ventana. Cerrar → `POST /shutdown`. Si el server ya corría, lo
+  usa y no lo apaga.
+- **Navegador**: Brave → Chrome → Edge (Edge viene con Windows 11, siempre hay
+  fallback). Override: campo `"browser"` en `config.json`.
+- **qBittorrent/mpv de Windows**: se lanzan solos vía interop (`QBT_WIN_PATH` en
+  `.env` si tu ruta es distinta).
+- **Actualizar**: vuelve a ejecutar el Setup (o `git pull` + re-ejecutar el
+  aprovisionamiento) — es idempotente.
+
+### Alternativa manual (si ya tienes una distro WSL preparada)
+
+Si prefieres no usar el Setup y ya tienes tu WSL montada, desde DENTRO de WSL en la
+carpeta del proyecto:
 
 ```bash
-# DENTRO de WSL, en la carpeta del proyecto:
 bash desktop/install.sh
 ```
 
-El instalador detecta WSL automáticamente: prepara venv + frontend (recreándolos
-si la carpeta se copió de otra máquina), copia el lanzador a
-`%LOCALAPPDATA%\AniMangaStudio` y crea **AniManga Studio** en el Menú Inicio de
-Windows. No compila nada de Rust: el lanzador es PowerShell puro.
-
-- **Ciclo de vida**: abrir → arranca `start_server.sh` en WSL (watchdog incluido) →
-  espera `/health` → ventana `--app`. Cerrar la ventana → `POST /shutdown`.
-  Si el server ya estaba corriendo (lo levantaste a mano), lo usa y no lo apaga.
-- **Navegador**: Brave → Chrome → Edge, el primero instalado en Windows
-  (Edge viene con Windows 11, siempre hay fallback). Override: campo `"browser"`
-  en `%LOCALAPPDATA%\AniMangaStudio\config.json` (ruta al .exe).
-- **qBittorrent/mpv de Windows**: se lanzan solos vía interop, igual que siempre
-  (`QBT_WIN_PATH` en `.env` si tu ruta es distinta).
-- Para actualizar: reemplaza/actualiza la carpeta en WSL y re-ejecuta el instalador.
+Detecta WSL, prepara venv + frontend + assets y copia el lanzador PowerShell a
+`%LOCALAPPDATA%\AniMangaStudio` con acceso directo en el Menú Inicio (sin compilar
+Rust). Los scripts sueltos (`scripts/init-env.sh`, `scripts/fetch-suwayomi.sh`,
+`scripts/fetch-models.sh`) son reutilizables e idempotentes para migraciones.
 
 ## Windows (nativo, sin WSL)
 

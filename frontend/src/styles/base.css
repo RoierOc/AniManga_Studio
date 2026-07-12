@@ -31,6 +31,13 @@ body {
   padding-top: var(--titlebar-h);
 }
 
+/* Barra de título propia: visible SIEMPRE que la ventana esté normal (por encima de los
+   overlays inmersivos, para arrastrar/cerrar la ventana), y oculta en pantalla completa. */
+.native-shell.native-fs .tb { display: none; }
+/* En modo ventana, el lector reserva el alto de la barra para no quedar por debajo de ella
+   (su propia barra de herramientas arranca justo bajo la de título). En fullscreen cubre todo. */
+.native-shell:not(.native-fs) .rd { top: var(--titlebar-h); }
+
 /* ── Atmosphere: cosmos glow + analog noise grain ─────────────────────────
    Two fixed layers behind everything. The glow gives the "deep space with a
    warm core" feel; the grain kills the flat-gradient "AI" look.            */

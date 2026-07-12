@@ -22,8 +22,6 @@ let hideTimer = null
 
 const A4K_MODES = [
   { id: 'off', label: 'Desactivado' },
-  { id: 'fast', label: 'Rápido (Modo A · M)' },
-  { id: 'medium', label: 'Medio (A+A · VL)' },
   { id: 'high', label: 'A+A UL (Máx. calidad) · CTRL+8' },
   { id: 'ultra', label: 'A+A UL + Thin (Máx. + bordes) · CTRL+9' },
 ]
@@ -154,6 +152,51 @@ function playFromPanel(e) {
   store.playNative(np.value.anime, e)
 }
 
+// ── Avisos del reproductor (cues) — sistema extensible estilo Netflix ──────────
+// Cada cue declara cuándo aparece (segundos RESTANTES para el final), cuánto dura y si
+// aplica. Reutilizable para futuros avisos (créditos, fin de temporada, «te puede
+// gustar», etc.): basta añadir una entrada a PLAYER_CUES y un bloque de render en la
+// plantilla con v-if="activeCue === '<id>'". Se muestra como máximo uno a la vez, una
+// sola vez por episodio, y se auto-oculta salvo que el ratón esté encima.
+const PLAYER_CUES = [
+  { id: 'next-ep', remaining: 88, hold: 5000, applies: () => !!nextEp.value },
+]
+const activeCue = ref(null)          // id del aviso visible, o null
+const shownCues = ref(new Set())     // ids ya mostrados en este episodio (no repetir)
+const cueHover = ref(false)          // ratón sobre la tarjeta → no auto-ocultar
+let cueTimer = null
+
+function armCueTimer(ms) {
+  clearTimeout(cueTimer)
+  cueTimer = setTimeout(() => { if (!cueHover.value) activeCue.value = null }, ms)
+}
+function dismissCue() { clearTimeout(cueTimer); activeCue.value = null; cueHover.value = false }
+function cueEnter() { cueHover.value = true; clearTimeout(cueTimer) }
+function cueLeave(ms = 1500) { cueHover.value = false; if (activeCue.value) armCueTimer(ms) }
+function cuePlayNext() { dismissCue(); goNext() }
+
+function evalCues() {
+  if (!np.value || activeCue.value || !duration.value) return
+  const remaining = duration.value - pos.value
+  for (const cue of PLAYER_CUES) {
+    if (shownCues.value.has(cue.id)) continue
+    // Ventana estrecha: dispara al CRUZAR el umbral viendo normal; si saltas muy por
+    // debajo (p.ej. al final directo) no lo lanza tarde.
+    if (remaining <= cue.remaining && remaining >= cue.remaining - 6 && duration.value > cue.remaining + 8) {
+      if (cue.applies && !cue.applies()) continue
+      activeCue.value = cue.id
+      shownCues.value.add(cue.id)
+      armCueTimer(cue.hold)
+      break
+    }
+  }
+}
+// Reinicia el estado de cues al cambiar de episodio.
+watch(() => (np.value ? `${np.value.anime?.id}:${np.value.ep?.num}` : ''), () => {
+  shownCues.value = new Set(); dismissCue()
+})
+watch(pos, evalCues)
+
 // Atajos de teclado (como YouTube/mpv): espacio/k = pausa, ←/→ = ±5 s, ↑/↓ = volumen,
 // f = pantalla completa, m = silenciar, j/l = ±10 s. Solo actúa con vídeo cargado y
 // fuera de campos de texto. preventDefault evita el scroll de la página con espacio/flechas.
@@ -196,14 +239,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         <p>Cargando episodio…</p>
       </div>
 
-      <!-- botón grande de play cuando está en pausa -->
-      <button
-        v-if="!np.loading && np.paused"
-        class="wp__bigplay"
-        @click="togglePlay"
-      >
-        <Icon name="play" :size="34" />
-      </button>
+      <!-- Sin botón permanente de play: clic sobre el vídeo pausa/reanuda (estilo YouTube/
+           Netflix). La barra de controles ya se queda visible en pausa como referencia. -->
 
       <!-- cabecera -->
       <header class="wp__head">
@@ -258,7 +295,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           <div class="wp__menuwrap" v-if="np.audioTracks.length > 1">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'audio' }"
                     @click="menuOpen = menuOpen === 'audio' ? '' : 'audio'">Audio</button>
-            <div v-if="menuOpen === 'audio'" class="wp__menu">
+            <div v-if="menuOpen === 'audio'" class="wp__menu" @wheel.stop>
               <button v-for="(t, i) in np.audioTracks" :key="'a' + i"
                       :class="{ 'is-sel': i === audioIndex }" @click="setAudio(i)">{{ trackLabel(t, i) }}</button>
             </div>
@@ -267,7 +304,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           <div class="wp__menuwrap">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'subs' }"
                     @click="menuOpen = menuOpen === 'subs' ? '' : 'subs'">Subtítulos</button>
-            <div v-if="menuOpen === 'subs'" class="wp__menu">
+            <div v-if="menuOpen === 'subs'" class="wp__menu" @wheel.stop>
               <div v-if="!np.subTracks.length" class="wp__subsize wp__subnote" @click.stop>
                 <span>Este episodio no tiene pistas de subtítulos</span>
               </div>
@@ -295,7 +332,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
                     @click="menuOpen = menuOpen === 'a4k' ? '' : 'a4k'">
               <Icon name="spark" :size="13" /> {{ np.tier === 'off' ? 'Anime4K' : 'A4K·Alto' }}
             </button>
-            <div v-if="menuOpen === 'a4k'" class="wp__menu">
+            <div v-if="menuOpen === 'a4k'" class="wp__menu" @wheel.stop>
               <div class="wp__subsize" @click.stop title="Ajusta los medios tonos (gamma) para igualar tu mpv. Doble clic = neutro.">
                 <span>Gamma</span>
                 <button :disabled="np.bright <= 0.5" aria-label="Menos gamma" @click="bumpBright(-0.05)">−</button>
@@ -317,14 +354,14 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           <div class="wp__menuwrap">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'speed' }"
                     @click="menuOpen = menuOpen === 'speed' ? '' : 'speed'">{{ np.speed }}×</button>
-            <div v-if="menuOpen === 'speed'" class="wp__menu">
+            <div v-if="menuOpen === 'speed'" class="wp__menu" @wheel.stop>
               <button v-for="s in SPEEDS" :key="s" :class="{ 'is-sel': s === np.speed }"
                       @click="setSpeed(s)">{{ s }}×</button>
             </div>
           </div>
 
           <button v-if="nextEp" class="wp__ctl" title="Siguiente episodio" @click="goNext">
-            Siguiente <Icon name="chevron" :size="14" style="transform: rotate(-90deg)" />
+            Siguiente <Icon name="skip-next" :size="15" />
           </button>
           <button v-if="panelEps.length > 1" class="wp__ctl" :class="{ 'is-on': epPanel }"
                   title="Lista de episodios" @click="epPanel = !epPanel">
@@ -337,9 +374,23 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         </div>
       </footer>
 
+      <!-- Avisos del reproductor (cues). Extensible: añade más bloques v-if="activeCue === '<id>'"
+           para créditos, fin de temporada, etc. Por ahora: "Siguiente episodio" estilo Netflix. -->
+      <Transition name="wp-cue">
+        <div v-if="activeCue === 'next-ep' && nextEp" class="wp__cue"
+             @mouseenter="cueEnter" @mouseleave="cueLeave()" @click.stop>
+          <div class="wp__cue-info">
+            <span class="wp__cue-eyebrow">A continuación</span>
+            <span class="wp__cue-title">Episodio {{ nextEp.num }}<template v-if="nextEp.title"> · {{ nextEp.title }}</template></span>
+          </div>
+          <button class="wp__cue-btn" @click="cuePlayNext"><Icon name="skip-next" :size="15" /> Reproducir</button>
+          <button class="wp__cue-close" title="Descartar" @click="dismissCue"><Icon name="close" :size="14" /></button>
+        </div>
+      </Transition>
+
       <!-- panel de episodios -->
       <Transition name="wp-eps">
-        <aside v-if="epPanel" class="wp__eps" @click.stop @mousemove.stop="poke">
+        <aside v-if="epPanel" class="wp__eps" @click.stop @mousemove.stop="poke" @wheel.stop>
           <header class="wp__eps-head">
             <h3>{{ np.anime?.title }}</h3>
             <button class="wp__ic" title="Cerrar" @click="epPanel = false"><Icon name="close" :size="16" /></button>
@@ -382,14 +433,6 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   animation: wp-spin 0.8s linear infinite;
 }
 @keyframes wp-spin { to { transform: rotate(360deg); } }
-
-.wp__bigplay {
-  position: absolute; z-index: 3; width: 5rem; height: 5rem; border-radius: 50%;
-  display: grid; place-items: center; color: #fff;
-  background: color-mix(in srgb, var(--azure) 80%, transparent);
-  border: none; cursor: pointer; transition: transform var(--t-fast), background var(--t-fast);
-}
-.wp__bigplay:hover { transform: scale(1.08); background: var(--azure-bright); }
 
 .wp__head {
   position: absolute; z-index: 5; top: 0; left: 0; right: 0; display: flex; align-items: center;
@@ -546,6 +589,33 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .wp__ep-num { font-size: var(--fs-sm); font-weight: 600; color: #fff; }
 .wp__ep-meta { font-size: var(--fs-2xs); color: var(--ink-soft);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Aviso "Siguiente episodio" (Netflix-style). Flota abajo-derecha, sobre los controles,
+   visible aunque la UI esté oculta. Discreto y coherente con la estética del reproductor. */
+.wp__cue {
+  position: absolute; right: var(--s-5); bottom: 5.5rem; z-index: 6;
+  display: flex; align-items: center; gap: var(--s-3);
+  padding: var(--s-3) var(--s-3) var(--s-3) var(--s-4); border-radius: var(--r-md);
+  background: var(--glass-strong); backdrop-filter: blur(14px);
+  border: 1px solid var(--line-2); box-shadow: var(--shadow-lg);
+  max-width: min(24rem, 70vw);
+}
+.wp__cue-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.wp__cue-eyebrow { font-size: var(--fs-2xs); font-weight: 700; text-transform: uppercase;
+  letter-spacing: .06em; color: var(--azure-bright); }
+.wp__cue-title { font-size: var(--fs-sm); font-weight: 600; color: #fff;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wp__cue-btn { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px;
+  padding: var(--s-2) var(--s-4); border-radius: var(--r-sm); font-size: var(--fs-xs);
+  font-weight: 700; color: #0a0e18; background: #fff; transition: filter var(--t-fast); }
+.wp__cue-btn:hover { filter: brightness(.92); }
+.wp__cue-close { flex-shrink: 0; width: 26px; height: 26px; display: grid; place-items: center;
+  border-radius: var(--r-sm); color: var(--ink-soft); transition: color var(--t-fast); }
+.wp__cue-close:hover { color: #fff; }
+/* Aparición/desaparición suave y discreta */
+.wp-cue-enter-active { transition: transform var(--t-base) var(--ease-silk), opacity var(--t-base); }
+.wp-cue-leave-active { transition: transform var(--t-base) var(--ease-silk), opacity var(--t-base); }
+.wp-cue-enter-from, .wp-cue-leave-to { transform: translateY(1rem); opacity: 0; }
 </style>
 
 <style>
@@ -562,4 +632,9 @@ html.native-video body { overflow: hidden !important; }
 html.native-video body::before,
 html.native-video body::after { display: none !important; }
 html.native-video .shell { visibility: hidden !important; }
+/* …salvo la barra de título: en modo ventana (no fullscreen) sigue visible sobre el vídeo
+   para poder arrastrar/cerrar la ventana sin salir del reproductor. La cabecera del player
+   baja su alto para no solaparla. En fullscreen la barra se oculta (regla global .native-fs). */
+html.native-video.native-shell:not(.native-fs) .tb { visibility: visible !important; }
+html.native-video:not(.native-fs) .wp__head { top: var(--titlebar-h); }
 </style>

@@ -126,11 +126,11 @@
   --z-topbar:   45;
   --z-overlay:  90;
   --z-modal:    100;
-  /* La barra de título va por encima de modales (siempre se puede cerrar/mover la
-     ventana), pero por debajo del lector (110) y de los players (300), que son
-     inmersivos y la tapan. */
-  --z-titlebar: 105;
   --z-toast:    120;
+  /* La barra de título va por ENCIMA de todo (incluidos lector 110 y players 300) para
+     poder arrastrar/cerrar la ventana desde cualquier contexto cuando NO está en pantalla
+     completa; los overlays inmersivos reservan su alto arriba y ella se oculta en fullscreen. */
+  --z-titlebar: 305;
 }
 
 /* La shell nativa (WebView2 sin marco) reserva el alto de la barra propia. */
