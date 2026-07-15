@@ -637,6 +637,21 @@ def _extract_sub(mkv_path: str, sub_index: int, codec: str, tmpdir: str) -> str:
     return out
 
 
+def _es_marker_path(video_path: str) -> str:
+    """Ruta del marcador persistente '.es_injected' junto al vídeo. Su sola existencia
+    indica que ESTE reproductor inyectó subtítulos en español (no aplica a los que ya
+    venían en español dentro del contenedor)."""
+    return os.path.splitext(video_path)[0] + '.es_injected'
+
+
+def _mark_es_injected(video_path: str) -> None:
+    try:
+        with open(_es_marker_path(video_path), 'w') as f:
+            f.write('1')
+    except OSError:
+        pass
+
+
 def _save_sub_external(video_path: str, sub_path: str) -> str:
     """Save subtitle as a sidecar file next to the video (same basename, .srt/.ass).
     MPV auto-loads subtitle files that match the video filename.
@@ -647,6 +662,7 @@ def _save_sub_external(video_path: str, sub_path: str) -> str:
     out = f'{base}.spa{ext}'
     import shutil
     shutil.copy2(sub_path, out)
+    _mark_es_injected(video_path)
     return out
 
 
@@ -701,6 +717,7 @@ def _inject_sub(mkv_path: str, sub_path: str, n_existing_subs: int) -> str:
         raise RuntimeError(f'mkvmerge inject failed: {result.stderr[-500:]}')
 
     os.replace(tmp_out, mkv_path)
+    _mark_es_injected(mkv_path)
     return mkv_path
 
 

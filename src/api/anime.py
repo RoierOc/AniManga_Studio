@@ -118,6 +118,22 @@ def _history_append(anime_id: str, title: str, episode: int, cover: str = ''):
 
 _SUBTITLE_EXTS = {'.srt', '.ass', '.ssa', '.sub', '.vtt'}
 
+def _es_sub_injected(video_path: str) -> bool:
+    """True si ESTE reproductor inyectó subs en español a este vídeo. Barato (solo stat):
+    marcador '.es_injected' (inyección a MKV) o sidecar '<base>.spa.<ext>' (formatos no-MKV).
+    NO cuenta pistas ES que ya venían dentro del contenedor original."""
+    try:
+        base, _ = os.path.splitext(video_path)
+        if os.path.exists(base + '.es_injected'):
+            return True
+        for ext in ('.srt', '.ass', '.ssa', '.vtt'):
+            if os.path.exists(base + '.spa' + ext):
+                return True
+    except OSError:
+        pass
+    return False
+
+
 def _find_subtitles(video_path: str) -> list:
     video = _Path(video_path)
     if not video.exists():
@@ -218,7 +234,7 @@ def anime_preview():
     if err:
         return jsonify({'error': err[0]}), err[1]
     key = re.sub(r'[^\w.-]', '_', f"{data.get('anime_id', 'x')}_{data.get('episode', 0)}")
-    out = _PREVIEW_DIR / f'{key}.mp4'
+    out = _PREVIEW_DIR / f'{key}_hq.mp4'   # _hq: invalida los previews viejos de 640px
     if not out.exists():
         _PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
         try:
@@ -232,14 +248,16 @@ def anime_preview():
         with _preview_lock:
             if not out.exists():
                 tmp = out.with_suffix('.tmp.mp4')
+                # Hero preview en buena calidad: hasta 1080p (sin sobre-escalar fuentes menores)
+                # y CRF bajo → nítido al ocupar todo el hero. Sigue mudo, 14 s, cacheado una vez.
                 r = subprocess.run(
                     ['ffmpeg', '-nostdin', '-hide_banner', '-loglevel', 'error', '-y',
                      '-ss', str(int(start)), '-t', '14', '-i', video,
                      '-an', '-sn', '-dn', '-map', '0:v:0',
-                     '-vf', 'scale=640:-2,format=yuv420p',
-                     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '26',
-                     '-movflags', '+faststart', str(tmp)],
-                    capture_output=True, timeout=90)
+                     '-vf', "scale='min(1920,iw)':-2,format=yuv420p",
+                     '-c:v', 'libx264', '-preset', 'faster', '-crf', '20',
+                     '-pix_fmt', 'yuv420p', '-movflags', '+faststart', str(tmp)],
+                    capture_output=True, timeout=180)
                 if r.returncode != 0 or not tmp.exists():
                     return jsonify({'error': 'no se pudo generar el preview'}), 500
                 tmp.rename(out)
@@ -1360,8 +1378,8 @@ _qbt     = _http.Session()
 _qbt_url = ''
 _qbt_ok  = False
 
-# Shared session for Nyaa/AnimeTosho so the parallel title-variant searches reuse
-# pooled keep-alive connections instead of paying a fresh TLS handshake each time.
+# Shared session for Nyaa so the parallel title-variant searches reuse pooled
+# keep-alive connections instead of paying a fresh TLS handshake each time.
 _nyaa_http = _http.Session()
 _nyaa_http.headers.update({'User-Agent': 'Mozilla/5.0'})
 _nyaa_http.mount('https://', _http.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=8))
@@ -1695,85 +1713,6 @@ def get_torrents():
     return jsonify(merged)
 
 
-# ── Animetosho search (HTML scrape — JSON API discontinued) ───────────────────
-
-_TOSHO = 'https://animetosho.org'
-
-@anime_bp.route('/torrents_tosho')
-def get_torrents_tosho():
-    q = request.args.get('q', '').strip()
-    if not q:
-        return jsonify([])
-    try:
-        resp = _http.get(
-            f'{_TOSHO}/search',
-            params={'q': q},
-            headers={'User-Agent': _MAL_UA},
-            timeout=10,
-        )
-        html = resp.text
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-    # Split into entry blocks
-    raw_blocks = re.split(r'(?=<div class="home_list_entry)', html)
-
-    results = []
-    seen: set = set()
-
-    for block in raw_blocks[1:]:
-        # Title + view URL
-        link_m = re.search(r'<div class="link"><a href="([^"]+)">([^<]+)</a></div>', block)
-        if not link_m:
-            continue
-        view_url = link_m.group(1)
-        title    = _html_unescape(link_m.group(2).strip())
-
-        # Torrent URL — path contains hex info_hash
-        torrent_m = re.search(
-            r'href="(https?://animetosho\.org/storage/torrent/([a-f0-9]{40})/[^"]+\.torrent)"',
-            block,
-        )
-        info_hash   = torrent_m.group(2).lower() if torrent_m else ''
-        torrent_url = torrent_m.group(1)         if torrent_m else ''
-
-        if info_hash and info_hash in seen:
-            continue
-        if info_hash:
-            seen.add(info_hash)
-
-        # Magnet
-        mag_m  = re.search(r'href="(magnet:[^"]+)"', block)
-        magnet = _html_unescape(mag_m.group(1)) if mag_m else (_magnet(info_hash, title) if info_hash else '')
-
-        # Size (display string already formatted)
-        size_m = re.search(r'<div class="size"[^>]*>([^<]+)</div>', block)
-        size   = size_m.group(1).strip() if size_m else ''
-
-        # Date
-        date_m = re.search(r'<div class="date" title="Date/time submitted:\s*([^"]+)"', block)
-        date   = date_m.group(1).strip() if date_m else ''
-
-        results.append({
-            'title':       title,
-            'torrent_url': torrent_url,
-            'view_url':    view_url if view_url.startswith('http') else f'{_TOSHO}{view_url}',
-            'magnet':      magnet,
-            'info_hash':   info_hash,
-            'size':        size,
-            'seeders':     -1,   # not shown in search HTML
-            'leechers':    0,
-            'trusted':     False,
-            'date':        date,
-            'episode':     _parse_episode(title),
-            'quality':     _parse_quality(title),
-            'group':       _parse_group(title),
-            'source':      'tosho',
-        })
-
-    return jsonify(results)
-
-
 # ── qBittorrent ────────────────────────────────────────────────────────────────
 
 @anime_bp.route('/qbt/status')
@@ -2043,6 +1982,7 @@ def anime_library_get():
                     'duration':   durations_map.get(str(ep['num']), 0),
                     'ep_type':    ep.get('ep_type', 'episode'),
                     'filename':   ep.get('filename', _Path(ep['path']).name),
+                    'es_injected': _es_sub_injected(ep['path']),
                 }
                 for ep in local_eps
             ]
@@ -3639,6 +3579,133 @@ def anime_episode_info(mal_id, episode):
         return jsonify(result)
     except Exception:
         return jsonify({})
+
+
+@anime_bp.route('/episode_titles/<int:mal_id>')
+def anime_episode_titles(mal_id):
+    """Todos los títulos de episodio de una serie en UNA llamada (Jikan en bloque, 100/pág).
+    Devuelve { "titles": { "<num>": {title, filler, recap} } }. Cacheado en disco 7 días —
+    los títulos de MAL no cambian. Para pintar el título real bajo cada portada del detalle."""
+    from api.runtime import cache_get, cache_set
+    ck = str(mal_id)
+    disk = cache_get('ep_titles', ck, 7 * 24 * 3600)
+    if disk is not None:
+        return jsonify({'titles': disk})
+    titles = {}
+    try:
+        page = 1
+        while page <= 5:   # 5×100 = 500 episodios, tope de seguridad
+            r = _rhttp.get(f'{_JIKAN}/anime/{mal_id}/episodes',
+                           params={'page': page}, timeout=10,
+                           headers={'User-Agent': 'Mozilla/5.0'})
+            r.raise_for_status()
+            j = r.json()
+            for d in (j.get('data') or []):
+                num = d.get('mal_id')
+                t = (d.get('title') or '').strip()
+                if num and t:
+                    titles[str(num)] = {'title': t, 'filler': bool(d.get('filler')), 'recap': bool(d.get('recap'))}
+            if not (j.get('pagination') or {}).get('has_next_page'):
+                break
+            page += 1
+    except Exception:
+        pass
+    if titles:
+        cache_set('ep_titles', ck, titles, ttl=7 * 24 * 3600)
+    return jsonify({'titles': titles})
+
+
+import re as _re
+_PLACEHOLDER_TITLE = _re.compile(r'^(?:episodi?o|episode|épisode|folge|capítulo)\s*\d+$', _re.IGNORECASE)
+
+def _is_placeholder_title(t):
+    """TMDB rellena los nombres sin traducir con 'Episodio 7'/'Episode 7' (no vacío) →
+    hay que tratarlos como ausentes para caer al otro idioma / al título real."""
+    return not t or bool(_PLACEHOLDER_TITLE.match(t.strip()))
+
+
+def _tmdb_season_episodes(tmdb_id, season, lang):
+    """Un GET a /tv/{id}/season/{season} → {num: {title, overview, still, aired}} en `lang`.
+    TMDB deja vacío name/overview cuando no hay traducción para ese idioma."""
+    out = {}
+    r = _http.get(f'https://api.themoviedb.org/3/tv/{tmdb_id}/season/{season}',
+                  params={'api_key': _tmdb_key(), 'language': lang}, timeout=10).json()
+    for e in (r.get('episodes') or []):
+        num = e.get('episode_number')
+        if num is None:
+            continue
+        still = e.get('still_path')
+        out[str(num)] = {
+            'title':    (e.get('name') or '').strip(),
+            'overview': (e.get('overview') or '').strip(),
+            'still':    f'https://image.tmdb.org/t/p/w300{still}' if still else '',
+            'aired':    (e.get('air_date') or '').strip(),
+        }
+    return out
+
+
+@anime_bp.route('/episode_meta/<anime_id>')
+def anime_episode_meta(anime_id):
+    """Título + descripción (+ still) de cada episodio desde TMDB, para el detalle del anime.
+    Usa el tmdb_id/tmdb_type/season_year YA resueltos por el arte del hero; la temporada se
+    fija con _tmdb_season_by_year (misma lógica que evita confundir temporadas de la franquicia).
+    Español primero, rellenando huecos con inglés. Cacheado en disco 7 días por show+temporada.
+    Devuelve { source:'tmdb', season, meta:{ '<num>': {title, overview, still, aired} } } o
+    { source:null, meta:{} } cuando no hay match TMDB (el front cae a los títulos de MAL)."""
+    from api.runtime import cache_get, cache_set
+    lib = _lib_read()
+    v = lib.get(anime_id) or {}
+    tmdb_id = v.get('tmdb_id')
+    ttype = v.get('tmdb_type', 'tv')
+    year = v.get('season_year')
+    if not tmdb_id or not _tmdb_key() or ttype != 'tv':
+        return jsonify({'source': None, 'meta': {}})
+
+    season = _tmdb_season_by_year(tmdb_id, year)[0] or 1
+    ck = f'{tmdb_id}_s{season}_v3'   # _v3: consistencia de idioma (ES completo o todo EN)
+    # Los títulos de episodio son prácticamente inmutables una vez emitidos → caché larga
+    # (180 días) y sin desalojo por tamaño (max_entries alto), para que no se re-descarguen
+    # de TMDB una y otra vez con una biblioteca grande.
+    _EP_META_TTL = 180 * 24 * 3600
+    disk = cache_get('ep_meta', ck, _EP_META_TTL)
+    if disk is not None:
+        return jsonify({'source': 'tmdb', 'season': season, 'meta': disk})
+
+    meta = {}
+    try:
+        es = _tmdb_season_episodes(tmdb_id, season, 'es-ES')
+        # Rellenar con inglés cuando el español falte O sea un placeholder ('Episodio 7').
+        need_en = any(_is_placeholder_title(e['title']) or not e['overview'] for e in es.values()) or not es
+        en = _tmdb_season_episodes(tmdb_id, season, 'en-US') if need_en else {}
+
+        nums = set(es) | set(en)
+        # Consistencia de idioma en los TÍTULOS: si a algún episodio le falta el título real en
+        # español, TODOS van en inglés (evita mezclar ES/EN, que se ve raro en la cuadrícula).
+        all_spanish = bool(nums) and all(
+            not _is_placeholder_title(es.get(n, {}).get('title', '')) for n in nums)
+
+        def _pick_title(a, b):
+            if not _is_placeholder_title(a): return a
+            if not _is_placeholder_title(b): return b
+            return a or b
+
+        for num in nums:
+            e_es, e_en = es.get(num, {}), en.get(num, {})
+            if all_spanish:
+                title = e_es.get('title', '')
+            else:
+                title = _pick_title(e_en.get('title', ''), e_es.get('title', ''))  # inglés primero
+            meta[num] = {
+                'title':    title,
+                'overview': e_es.get('overview') or e_en.get('overview', ''),
+                'still':    e_es.get('still') or e_en.get('still', ''),
+                'aired':    e_es.get('aired') or e_en.get('aired', ''),
+            }
+    except Exception:
+        pass
+    if meta:
+        cache_set('ep_meta', ck, meta, ttl=_EP_META_TTL, max_entries=5000)
+    return jsonify({'source': 'tmdb', 'season': season, 'meta': meta})
 
 
 # ── Subtitle list endpoint ─────────────────────────────────────────────────────

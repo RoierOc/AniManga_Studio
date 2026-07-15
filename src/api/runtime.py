@@ -193,6 +193,39 @@ def cache_set(namespace: str, key: str, value, ttl: float = 0, max_entries: int 
         pass
 
 
+# ── Registro de actividad (para las gráficas de uso del panel de estadísticas) ──
+# Log append-only de eventos ligeros {t: unix, k: kind, n: título}. No requiere que el
+# usuario inicie sesión; se acumula solo con el uso. Se poda a los últimos ~4000 eventos.
+_activity_lock = threading.Lock()
+
+def _activity_path() -> Path:
+    return DATA_ROOT / "activity_log.json"
+
+def log_activity(kind: str, name: str = "") -> None:
+    """Anota un evento de uso (kind: 'upscale' | 'download' | 'translate' | 'watch').
+    Barato y tolerante a fallo — nunca debe romper el flujo que lo llama."""
+    try:
+        p = _activity_path()
+        with _activity_lock:
+            try:
+                data = _json.loads(p.read_text(encoding="utf-8")) if p.exists() else []
+            except Exception:
+                data = []
+            data.append({"t": int(_time.time()), "k": kind, "n": (name or "")[:120]})
+            if len(data) > 4000:
+                data = data[-4000:]
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+def read_activity() -> list:
+    try:
+        return _json.loads(_activity_path().read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+
 def cache_invalidate(namespace: str, key: str = None):
     """Borra una clave (o todo el namespace) — para forzar refresco."""
     p = _CACHE_DIR / f"{namespace}.json"

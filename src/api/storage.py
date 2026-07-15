@@ -194,6 +194,11 @@ def _safe_child(root: Path, name: str):
 @storage_bp.route("/summary", methods=["GET"])
 def summary():
     """Desglose de disco: por serie (original vs escalado) + totales + cachés."""
+    return jsonify(_build_summary())
+
+
+def _build_summary() -> dict:
+    """Cálculo compartido del desglose de disco (lo consume /summary y /stats)."""
     manga_root = Path(manga_dir())
     up_root = Path(upscaled_dir())
 
@@ -287,7 +292,7 @@ def summary():
     except Exception:
         pass
 
-    return jsonify({
+    return {
         "series": rows,
         "totals": {
             "original": total_original,
@@ -297,6 +302,96 @@ def summary():
             "qa": qa,
             "total": total_original + total_upscaled + total_anime + stream_cache + qa,
             **disk,
+        },
+    }
+
+
+@storage_bp.route("/stats", methods=["GET"])
+def stats():
+    """Panel de estadísticas ligero (biblioteca + actividad de anime del mes).
+    Reutiliza la medición cacheada de _build_summary + el historial de visionado."""
+    import time as _time
+    summ = _build_summary()
+    rows = summ["series"]
+    totals = summ["totals"]
+
+    manga_rows = [r for r in rows if r.get("kind") != "anime"]
+    anime_rows = [r for r in rows if r.get("kind") == "anime"]
+
+    # El nº de series de la biblioteca sale de los METADATOS (lo que el usuario sigue/
+    # registra), no de las carpetas en disco — muchas series se siguen sin descargar todo.
+    try:
+        from api.anime import _lib_read
+        anime_lib_count = len(_lib_read())
+    except Exception:
+        anime_lib_count = len(anime_rows)
+
+    lib = {
+        "manga_series": len(manga_rows),
+        "anime_series": anime_lib_count,
+        "chapters": sum(r.get("original_chapters", 0) for r in manga_rows),
+        "upscaled_chapters": sum(r.get("upscaled_chapters", 0) for r in manga_rows),
+        "translated_chapters": sum(r.get("translated_chapters", 0) for r in manga_rows),
+        "episodes": sum(r.get("episodes", 0) for r in anime_rows),
+    }
+
+    # Actividad de anime (historial con timestamps).
+    now = int(_time.time())
+    month_ago = now - 30 * 86400
+    try:
+        from api.anime import _history_read
+        history = _history_read()
+    except Exception:
+        history = []
+    eps_month = sum(1 for h in history if int(h.get("watched_at", 0)) >= month_ago)
+    series_month = len({h.get("anime_id") for h in history
+                        if int(h.get("watched_at", 0)) >= month_ago})
+    last_watched = history[0] if history else None
+
+    # Series diarias para las gráficas (últimos 14 días). Episodios vistos vienen del
+    # historial; escalados/traducidos del registro de actividad (se acumula con el uso).
+    from api.runtime import read_activity
+    activity = read_activity()
+    DAYS = 14
+    import datetime as _dt
+    today = _dt.date.fromtimestamp(now)
+    labels, watched_series, upscale_series = [], [], []
+    day_index = {}
+    for i in range(DAYS - 1, -1, -1):
+        d = today - _dt.timedelta(days=i)
+        day_index[d.isoformat()] = len(labels)
+        labels.append(d.isoformat())
+        watched_series.append(0)
+        upscale_series.append(0)
+
+    def _bucket(ts, arr):
+        try:
+            k = _dt.date.fromtimestamp(int(ts)).isoformat()
+        except Exception:
+            return
+        idx = day_index.get(k)
+        if idx is not None:
+            arr[idx] += 1
+
+    for h in history:
+        _bucket(h.get("watched_at", 0), watched_series)
+    for a in activity:
+        if a.get("k") == "upscale":
+            _bucket(a.get("t", 0), upscale_series)
+
+    return jsonify({
+        "library": lib,
+        "storage": totals,
+        "activity": {
+            "episodes_total": len(history),
+            "episodes_month": eps_month,
+            "series_month": series_month,
+            "last_watched": last_watched,
+        },
+        "daily": {
+            "labels": labels,
+            "watched": watched_series,
+            "upscaled": upscale_series,
         },
     })
 

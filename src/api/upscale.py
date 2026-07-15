@@ -130,9 +130,51 @@ _FULL_THROTTLE_MS = 0
 _gpu_throttle_ms = [GPU_THROTTLE_MS]   # mutable; worker reads this after each batch
 _gpu_tile_throttle_ms = [0]            # mutable; worker reads this between tiles
 
-# Eco concurrency limit: max 2 chapters at a time in eco mode.
-# Full mode is unlimited — chapters race for the GPU worker queue.
-_eco_semaphore = threading.Semaphore(4)
+# Límite de capítulos escalándose EN PARALELO (cualquier modo). Cada hilo de capítulo
+# mantiene sus PROPIOS buffers de reconstrucción (out_sum/out_wgt float32 ≈ 800MB para una
+# página B&N normal a 4x) además de sus tiles en VRAM. La RAM de WSL es ~6GB, así que varios
+# capítulos a la vez la agotan y tiran el WSL entero (OOM) — justo lo que pasa al "escalar un
+# manga" (upscaleChapters lanza /upscale_chapter en ráfaga, uno por capítulo). El worker GPU
+# es una cola ÚNICA, así que serializar capítulos NO baja el rendimiento real de la GPU: solo
+# acota el pico de RAM del sistema. Ajustable por env (subir solo si hay mucha RAM).
+_UPSCALE_MAX_PARALLEL = max(1, int(os.environ.get("UPSCALE_MAX_PARALLEL_CHAPTERS", "2")))
+_chapter_semaphore = threading.Semaphore(_UPSCALE_MAX_PARALLEL)
+
+# Guardarraíl por página: si UNA sola página proyecta más de esto en buffers de
+# reconstrucción, se copia sin escalar (como una página ya-hi-res) en vez de arriesgar el OOM.
+# Backstop para páginas patológicas por debajo del umbral de lado (UPSCALE_MAX_INPUT_LONG_SIDE).
+_MAX_RECON_MB = int(os.environ.get("UPSCALE_MAX_RECON_MB", "1600"))
+
+
+def _mem_snapshot():
+    """(avail_mb, total_mb, rss_mb) leyendo /proc — para loguear la presión de RAM y
+    diagnosticar los OOM que crashean el WSL (antes no se logueaba nada)."""
+    avail = total = rss = 0
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                if line.startswith('MemTotal:'):
+                    total = int(line.split()[1]) // 1024
+                elif line.startswith('MemAvailable:'):
+                    avail = int(line.split()[1]) // 1024
+    except Exception:
+        pass
+    try:
+        with open('/proc/self/status') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    rss = int(line.split()[1]) // 1024
+                    break
+    except Exception:
+        pass
+    return avail, total, rss
+
+
+def _projected_recon_mb(w, h, c, scale):
+    """MB aproximados de los buffers numpy de reconstrucción de una página al escalar:
+    out_sum(oh*ow*c*4) + out_wgt(oh*ow*4) + result_np(oh*ow*c) — el pico de RAM por página."""
+    oh, ow = h * scale, w * scale
+    return (oh * ow * (c * 4 + 4 + c)) / (1024 * 1024)
 
 # Cancel support — set contains task_ids awaiting cancellation
 _upscale_cancel_requested: set = set()
@@ -1197,14 +1239,25 @@ def upscale_manga():
 # ── Worker threads (chapter threads submit tiles to GPU worker) ───────────────
 
 def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=False, fast=False):
-    if eco:
-        # Only 1 eco chapter runs at a time — acquire before touching the GPU queue
-        _eco_semaphore.acquire()
+    # Acota los capítulos concurrentes (cualquier modo) → evita el OOM de RAM por buffers
+    # de reconstrucción en paralelo que crashea el WSL. Cola GPU única = sin pérdida de
+    # rendimiento real. Se bloquea aquí hasta que haya un hueco de los _UPSCALE_MAX_PARALLEL.
+    _chapter_semaphore.acquire()
+    _avail0, _total0, _rss0 = _mem_snapshot()
+    print(f"[upscale] inicio {upscale_id} — modelo={_active_model_key[0]} páginas={len(images)} "
+          f"RAM disp={_avail0}MB/{_total0}MB rss={_rss0}MB "
+          f"(máx {_UPSCALE_MAX_PARALLEL} cap. en paralelo)", flush=True)
     try:
         from PIL import Image
 
         _ensure_gpu_worker()
         in_channels = _gpu_in_channels[0]
+        # Saltar páginas a color depende de si el modelo activo es B&N (flag `color` del
+        # registro), NO de sus canales: MangaJaNai/DWTP son modelos B&N de manga pero cargan
+        # como 3 canales (in_channels==3), así que el viejo `in_channels==1` NO saltaba color
+        # con ellos → escalaba páginas a color (mal) y gastaba el triple de RAM. Los modelos a
+        # color (APISR/DAT/RCAN) SÍ deben escalar las páginas a color.
+        skip_color = not MODEL_REGISTRY.get(_active_model_key[0], {}).get('color', False)
 
         import time as _time
         processed = 0
@@ -1253,13 +1306,36 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                     continue
                 if fast:
                     img = img.resize((max(1, img.width // 2), max(1, img.height // 2)), Image.LANCZOS)
-                # Solo los modelos B&N (1 canal) saltan páginas a color; un modelo a
-                # color (APISR, in_channels==3) SÍ debe escalarlas — es su propósito.
-                if in_channels == 1 and is_color_page(img):
+                # Los modelos B&N saltan (copian) las páginas a color; un modelo a color
+                # (APISR/DAT/RCAN) SÍ las escala — es su propósito. Se decide por el flag del
+                # registro, no por los canales (MangaJaNai/DWTP son B&N pero de 3 canales).
+                if skip_color and is_color_page(img):
                     print(f"Copy color (no upscale): {img_path.name}", flush=True)
                     out_path = output_folder / (img_path.stem + img_path.suffix)
                     shutil.copy2(img_path, out_path)
                     skipped_color += 1
+                    processed += 1
+                    continue
+
+                # Guardarraíl de RAM (backstop ABSOLUTO, no relativo): las páginas realmente
+                # enormes ya las cubre is_already_hires (lado ≥3000). Esto solo atrapa un caso
+                # patológico que se cuele por debajo de ese umbral pero proyecte una reconstrucción
+                # descomunal (> _MAX_RECON_MB). NO se usa la RAM disponible como criterio: en un WSL
+                # con poca RAM libre eso copiaba páginas NORMALES sin escalar → "4K falso". Una
+                # página normal <3000px proyecta como mucho ~1.3GB y escala bien; solo se salta lo
+                # verdaderamente absurdo.
+                _proj = _projected_recon_mb(img.width, img.height, in_channels, _gpu_scale[0])
+                if _proj > _MAX_RECON_MB:
+                    _av, _tot, _rss = _mem_snapshot()
+                    print(f"[upscale] WARN página descomunal {img_path.name} {img.width}x{img.height} "
+                          f"→ recon~{_proj:.0f}MB > cap {_MAX_RECON_MB}MB (RAM disp={_av}MB): "
+                          f"se copia SIN escalar (backstop anti-OOM)", flush=True)
+                    out_path = output_folder / (img_path.stem + img_path.suffix)
+                    for _old in output_folder.glob(img_path.stem + '.*'):
+                        if _old.suffix.lower() != img_path.suffix.lower():
+                            try: _old.unlink()
+                            except OSError: pass
+                    shutil.copy2(img_path, out_path)
                     processed += 1
                     continue
 
@@ -1269,7 +1345,10 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                 _dt = _time.perf_counter() - _t0
                 _page_times.append(_dt)
                 _avg = sum(_page_times) / len(_page_times)
-                print(f"[bench] {'2x⚡' if fast else '4x '} {img_path.name} — {_dt:.2f}s  avg={_avg:.2f}s  (n={len(_page_times)})", flush=True)
+                _avN, _totN, _rssN = _mem_snapshot()
+                print(f"[bench] {'2x⚡' if fast else '4x '} {img_path.name} {img.width}x{img.height} "
+                      f"recon~{_proj:.0f}MB — {_dt:.2f}s avg={_avg:.2f}s (n={len(_page_times)})  "
+                      f"RAM disp={_avN}MB rss={_rssN}MB", flush=True)
                 out_path = output_folder / (img_path.stem + ".jpg")
                 # Evita que una copia previa con OTRA extensión (p.ej. el .png de una página a
                 # color que el modelo B&N copió tal cual) conviva con el .jpg recién escalado y
@@ -1327,8 +1406,9 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
     except Exception as e:
         set_upscale_status(upscale_id, {'status': 'error', 'error': str(e), 'model': MODEL_REGISTRY[_active_model_key[0]]['label']})
     finally:
-        if eco:
-            _eco_semaphore.release()
+        _avail1, _total1, _rss1 = _mem_snapshot()
+        print(f"[upscale] fin {upscale_id} — RAM disp={_avail1}MB rss={_rss1}MB", flush=True)
+        _chapter_semaphore.release()
 
 
 def run_upscale_all(input_folder, output_folder, images, upscale_id):
@@ -1337,6 +1417,8 @@ def run_upscale_all(input_folder, output_folder, images, upscale_id):
 
         _ensure_gpu_worker()
         in_channels = _gpu_in_channels[0]
+        # Ver run_upscale_chapter: el salto de color va por el flag B&N del registro, no por canales.
+        skip_color = not MODEL_REGISTRY.get(_active_model_key[0], {}).get('color', False)
         processed = 0
 
         for img_path in images:
@@ -1358,7 +1440,7 @@ def run_upscale_all(input_folder, output_folder, images, upscale_id):
                     shutil.copy2(img_path, out_path)
                     processed += 1
                     continue
-                if in_channels == 1 and is_color_page(img):
+                if skip_color and is_color_page(img):
                     out_path = output_folder / (img_path.stem + img_path.suffix)
                     shutil.copy2(img_path, out_path)
                     processed += 1
@@ -1385,6 +1467,11 @@ def run_upscale_all(input_folder, output_folder, images, upscale_id):
             'model': MODEL_REGISTRY[_active_model_key[0]]['label'],
             'scale': _gpu_scale[0],
         })
+        try:
+            from api.runtime import log_activity
+            log_activity('upscale', os.path.basename(str(output_folder)))
+        except Exception:
+            pass
 
     except Exception as e:
         set_upscale_status(upscale_id, {'status': 'error', 'error': str(e)})

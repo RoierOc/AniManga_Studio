@@ -125,6 +125,99 @@ def top_manga():
     return jsonify(res)
 
 
+_ANIME_SORTS = {
+    'SCORE_DESC', 'POPULARITY_DESC', 'TRENDING_DESC', 'FAVOURITES_DESC', 'START_DATE_DESC',
+}
+_ANIME_FORMATS = {'TV', 'TV_SHORT', 'MOVIE', 'SPECIAL', 'OVA', 'ONA', 'MUSIC'}
+_ANIME_STATUS = {'FINISHED', 'RELEASING', 'NOT_YET_RELEASED', 'CANCELLED', 'HIATUS'}
+_ANIME_SEASONS = {'WINTER', 'SPRING', 'SUMMER', 'FALL'}
+
+
+@anilist_bp.route('/anime_top')
+def top_anime():
+    """Browse anime by AniList filters (mirror of /top for ANIME).
+    Params: genre, tag, year(=seasonYear), season, format, status, sort, page."""
+    genre  = request.args.get('genre', '').strip()
+    tag    = request.args.get('tag', '').strip()
+    season = request.args.get('season', '').strip().upper()
+    fmt    = request.args.get('format', '').strip().upper()
+    status = request.args.get('status', '').strip().upper()
+    sort   = request.args.get('sort', 'SCORE_DESC').strip().upper()
+    page   = max(1, int(request.args.get('page', 1) or 1))
+    try:
+        year = int(request.args.get('year', 0) or 0)
+    except ValueError:
+        year = 0
+
+    if sort not in _ANIME_SORTS:
+        sort = 'SCORE_DESC'
+    if season not in _ANIME_SEASONS:
+        season = ''
+    if fmt not in _ANIME_FORMATS:
+        fmt = ''
+    if status not in _ANIME_STATUS:
+        status = ''
+
+    cache_key = f'A|g:{genre}|t:{tag}|y:{year}|s:{season}|f:{fmt}|st:{status}|{sort}|{page}'
+    if cache_key in _top_cache:
+        res, ts = _top_cache[cache_key]
+        if time.time() - ts < _TOP_TTL:
+            return jsonify(res)
+
+    q = '''
+    query ($genre: String, $tag: String, $year: Int, $season: MediaSeason,
+           $format: MediaFormat, $status: MediaStatus, $sort: [MediaSort], $page: Int) {
+      Page(page: $page, perPage: 30) {
+        pageInfo { hasNextPage }
+        media(type: ANIME, sort: $sort, genre: $genre, tag: $tag, seasonYear: $year,
+              season: $season, format: $format, status: $status, isAdult: false) {
+          id idMal
+          title { romaji english native }
+          meanScore popularity genres episodes format status seasonYear season
+          coverImage { large }
+          bannerImage
+        }
+      }
+    }
+    '''
+    variables: dict = {'sort': [sort], 'page': page}
+    if genre:  variables['genre'] = genre
+    if tag:    variables['tag'] = tag
+    if year:   variables['year'] = year
+    if season: variables['season'] = season
+    if fmt:    variables['format'] = fmt
+    if status: variables['status'] = status
+
+    d = _ql(q, variables)
+    if '_error' in d:
+        return jsonify({'results': [], 'hasNextPage': False, 'error': d['_error']}), 200
+
+    page_data = d.get('Page') or {}
+    results = []
+    for item in page_data.get('media') or []:
+        t = item.get('title') or {}
+        results.append({
+            'al_id':        item['id'],
+            'mal_id':       item.get('idMal'),
+            'title':        t.get('english') or t.get('romaji') or t.get('native') or '',
+            'title_romaji': t.get('romaji') or '',
+            'score':        item.get('meanScore'),
+            'popularity':   item.get('popularity'),
+            'genres':       (item.get('genres') or [])[:4],
+            'cover':        (item.get('coverImage') or {}).get('large'),
+            'banner':       item.get('bannerImage'),
+            'status':       item.get('status'),
+            'episodes':     item.get('episodes'),
+            'format':       item.get('format'),
+            'seasonYear':   item.get('seasonYear'),
+            'season':       item.get('season'),
+        })
+
+    res = {'results': results, 'hasNextPage': (page_data.get('pageInfo') or {}).get('hasNextPage', False)}
+    _top_cache[cache_key] = (res, time.time())
+    return jsonify(res)
+
+
 def title_variants(title: str | None = None, al_id: int | None = None,
                    media_type: str = 'MANGA') -> list[str]:
     """Return name variants for a series so multi-source search doesn't miss a

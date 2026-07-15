@@ -13,6 +13,26 @@
     ],
     "adaptive": true
   },
+  "dwtp": {
+    "label": "DWTP descreen (B&N)",
+    "models": [
+      {"sub_key": "dwtp", "file": "4x-DWTP-ds-esrgan-5.pth"}
+    ]
+  },
+  "wtp_omni": {
+    "label": "WTP Manga P Omni (B&N)",
+    "models": [
+      {"sub_key": "wtp_omni", "file": "4x_wtp_manga_p_omni.pth"}
+    ],
+    "half": false
+  },
+  "dwtp_dat2": {
+    "label": "DWTP DAT2 v3 (B&N)",
+    "models": [
+      {"sub_key": "dwtp_dat2", "file": "4x-DWTP-DS-dat2-v3.pth"}
+    ],
+    "half": false
+  },
   "apisr": {
     "label": "APISR 4x (color, anime)",
     "models": [

@@ -546,7 +546,11 @@ def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=
             # esto la convierte en la fuente real de descarga sin perder el resto del meta.
             meta = dict(existing)
             meta['sourceId'] = str(source_id)
-            meta['mangaId'] = int(manga_id)
+            # El mangaId de Suwayomi es numérico, pero el de MangaDex es un UUID (texto).
+            # Forzar int() reventaba el hilo (ValueError no capturado) → la descarga se
+            # quedaba en 0 al bajar un capítulo desde la fuente MangaDex de la cobertura.
+            _mid = str(manga_id)
+            meta['mangaId'] = int(_mid) if _mid.lstrip('-').isdigit() else _mid
             name = source_name or existing.get('sourceName')
             lang = source_lang or existing.get('sourceLang')
             if name:

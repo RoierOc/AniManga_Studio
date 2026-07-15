@@ -466,7 +466,10 @@ def get_manga(title):
 def get_chapters_from_folder(folder):
     chapter_data = []
     
-    has_subdirs = any(f.is_dir() for f in folder.iterdir())
+    # Los directorios OCULTOS (.original_art con el arte pre-traducción, etc.) son metadatos,
+    # no capítulos: si contaran como subdirectorio, un manga de páginas planas se tomaría por
+    # uno de carpeta-por-capítulo y su lista de capítulos saldría vacía.
+    has_subdirs = any(f.is_dir() and not f.name.startswith('.') for f in folder.iterdir())
     has_files = any(f.is_file() for f in folder.glob('*'))
     
     if has_files and not has_subdirs:
@@ -487,7 +490,7 @@ def get_chapters_from_folder(folder):
             })
     else:
         for ch_folder in sorted(folder.iterdir(), reverse=True):
-            if not ch_folder.is_dir():
+            if not ch_folder.is_dir() or ch_folder.name.startswith('.'):
                 continue
             ch_name = ch_folder.name
             if ch_name.startswith('ch'):
