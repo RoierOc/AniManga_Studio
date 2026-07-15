@@ -526,10 +526,13 @@ def _aligned_es_region(en_g, esw_g, es_w, coords):
     return es_full, dxdy
 
 
-def precise_bubbles(en, es_w, de_b, ds_b, H):
+def precise_bubbles(en, es_w, de_b, ds_b, H, warp_ok=None):
     """Compone los globos sobre `en` con el pipeline preciso. Devuelve (res, stats, es_leftover).
     Los globos emparejados (Hungarian) y los de fallback usan EXACTAMENTE el mismo
-    composite (ECC + contorno exacto); la diferencia es sólo el origen del globo."""
+    composite (ECC + contorno exacto); la diferencia es sólo el origen del globo.
+
+    `warp_ok`: ¿la homografía de la página es de fiar? (medida directa del arte, ver
+    homography_unreliable). None = sin medida -> se cae al criterio antiguo por tasa de globos."""
     res = [en.astype(np.float32).copy()]   # lista para mutar dentro del helper anidado
     en_g = cv2.cvtColor(en, cv2.COLOR_RGB2GRAY); esw_g = cv2.cvtColor(es_w, cv2.COLOR_RGB2GRAY)
     de_b = dedup(de_b); ds_b = dedup(ds_b)
@@ -566,7 +569,14 @@ def precise_bubbles(en, es_w, de_b, ds_b, H):
     # composite pero EXIGIENDO ECC ajustado (require_ecc) para no pegar texto corrido. GATE
     # DE CONFIANZA: sólo si la homografía de la página es confiable (>=50% globos compuestos);
     # en páginas con homografía rota (p024) el warp global da basura -> FALLBACK-ES de página.
-    if stats['composed'] / max(1, len(de_b)) >= FALLBACK_BUBBLE_MIN_CONF:
+    # ¿Es de fiar el warp? Con `warp_ok` se responde MIDIENDO EL ARTE. El criterio antiguo era la
+    # TASA DE GLOBOS YA COMPUESTOS, y además de ser un proxy (mismo error que el gate de texto
+    # libre, ver homography_unreliable) tenía una pescadilla que se muerde la cola: este fallback
+    # existe PARA rescatar globos que el detector ES perdió, pero se condicionaba a que ya se
+    # hubieran emparejado globos. Si los perdió TODOS, composed=0 -> el rescate se bloquea solo.
+    # Medido: ch0001_045 (Sakamoto) = 1 globo EN, 0 globos ES -> conf 0.00 -> cobertura 0.000,
+    # con art_mae 21.9 (página perfectamente alineada).
+    if warp_ok if warp_ok is not None else (stats['composed'] / max(1, len(de_b)) >= FALLBACK_BUBBLE_MIN_CONF):
         for i in range(len(de_b)):
             if i in matched_en: continue
             x0, y0, x1, y1 = interior_mask(en, de_b[i])[1] or (0, 0, 0, 0)
@@ -800,19 +810,16 @@ def _transplant_page(es, en):
         return en.copy(), "arte EN (sin homografía)", False, dbg
     es_w = cv2.warpPerspective(es, H, (en.shape[1], en.shape[0]), flags=cv2.INTER_CUBIC, borderMode=cv2.BORDER_REPLICATE)
     de, ds = detect(en), detect(es)
-    res, st, es_leftover = precise_bubbles(en, es_w, de[0], ds[0], H)
+    # UNA sola medida de "¿está bien alineado este warp?" para los DOS gates de la página (el
+    # fallback de globos y el de texto libre). Antes cada uno usaba su propio proxy por tasa de
+    # globos compuestos, con los fallos descritos en homography_unreliable.
+    tf_skipped, art_mae = homography_unreliable(en, es_w, de, ds, H)
+    res, st, es_leftover = precise_bubbles(en, es_w, de[0], ds[0], H,
+                                           warp_ok=(None if art_mae is None else not tf_skipped))
     # Candidatos de texto libre = text_free ES + burbujas ES no emparejadas
     # (cubre la asimetría de clase caption<->burbuja entre los dos scans).
     en_tf = dedup(de[2]); es_tf_mapped = [map_box(H, b) for b in dedup(ds[2])] + es_leftover
-    # GATE DE CONFIANZA DE HOMOGRAFÍA. Si el warp es malo, text_free estamparía captions ES
-    # corridas/rotadas sobre el arte (QA: How Do We Relationship cap10 p004) -> mejor arte EN
-    # limpio que un parche desalineado. Lo que hay que saber es "¿está bien alineado?", así que
-    # se MIDE EL ARTE directamente (ver page_art_mae_masked). Antes se usaba como proxy la TASA
-    # DE GLOBOS COMPUESTOS (st['composed']/st['en'] < 0.50), y fallaba en silencio: si los globos
-    # de la página son viñetas japonesas que ningún scan traduce, conf=0 sin que el warp tenga
-    # nada de malo -> se tiraba TODO el texto libre. Medido: el proxy erraba 2 de 5 páginas; la
-    # medida directa acierta las 5. Ver PAGE_ART_MAE_MAX.
-    tf_skipped, art_mae = homography_unreliable(en, es_w, de, ds, H, st)
+    # `tf_skipped` ya viene medido arriba (una sola medida para los dos gates de la página).
     if tf_skipped:
         matched, tf_skips = 0, []
     else:
