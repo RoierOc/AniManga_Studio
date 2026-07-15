@@ -32,7 +32,10 @@ rm -f "$PID_FILE"
 
 mkdir -p "$DATA_DIR"
 
-JAVA_ARGS=(-Xmx512m
+# Heap 2g (antes 512m): margen para 559 extensiones + Chromium embebido + barridos multi-fuente.
+# NOTA: 512m no está demostrado que causara caídas — las que investigué el 2026-07-14 eran el
+# reaper por inactividad de sources.py, no OOM. Override con SUWAYOMI_XMX.
+JAVA_ARGS=("-Xmx${SUWAYOMI_XMX:-2g}"
   -Dsuwayomi.tachidesk.config.server.rootDir="$DATA_DIR"
   -Dsuwayomi.tachidesk.config.server.ip="0.0.0.0"
   -Dsuwayomi.tachidesk.config.server.port="4567"

@@ -21,8 +21,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from difflib import SequenceMatcher
 from urllib.parse import quote
 import json as _json
+import os
 import re
 import shutil
+import sys
 import tempfile
 import threading
 import time
@@ -32,8 +34,8 @@ import numpy as np
 import cv2
 from api.resilient_http import http as http_requests  # retry + backoff + per-host rate limiting
 
-from api.runtime import (manga_dir, upscaled_dir, QA_DIR, normalize_chapter, build_task_id, push_sse_event,
-                         cache_get, cache_set, cache_invalidate)
+from api.runtime import (manga_dir, upscaled_dir, QA_DIR, DATA_ROOT, normalize_chapter, build_task_id,
+                         push_sse_event, cache_get, cache_set, cache_invalidate)
 from api.sources import _gql, SUWAYOMI_URL, SUWAYOMI_BASE, ensure_suwayomi
 from api.download import _fetch_with_retry, _dl_semaphore, _chapter_file_prefix
 from api.anilist import title_variants
@@ -77,6 +79,7 @@ _SHARP_REF = 500.0     # varianza Laplaciana de referencia (nitidez "buena")
 _BPP_REF   = 0.10      # bytes/px de referencia (calidad de compresión "buena")
 _FUZZY_MIN = 0.60      # ratio mínimo título-candidato vs variante (descubrimiento/Versiones)
 _RANK_CAP = 15         # máx candidatos a muestrear (acota descargas de calidad)
+_RANK_HARD_CAP = 40    # tope duro de seguridad al rankear por match de título (coste de páginas)
 # Cobertura/completado/actualizaciones (Capítulos multi-fuente): a diferencia de Versiones
 # (que muestra TODO lo que pasa _FUZZY_MIN y deja que el usuario juzgue con "Leer muestra"),
 # aquí el usuario pidió explícitamente un filtro más estricto — así una fuente con match de
@@ -345,15 +348,21 @@ def _local_art_files(title: str) -> dict:
     """Como `_local_chapter_files` pero PREFIRIENDO las páginas ya ESCALADAS (4K) por capítulo:
     si un capítulo tiene versión en UPSCALED_DIR la usa como arte base; si no, cae a la original.
     Es el arte cuando el usuario elige traducir sobre su copia ya descargada+escalada en vez de
-    volver a buscar una fuente externa (evita re-descargar arte de menor calidad)."""
+    volver a buscar una fuente externa (evita re-descargar arte de menor calidad).
+
+    Un capítulo YA TRADUCIDO es el caso delicado: sus páginas (y su copia escalada, re-generada
+    después) están en ESPAÑOL, así que usarlas como arte trasplantaría español sobre español.
+    Para esos manda `.original_art/` — el arte pre-traducción — que por eso se conserva."""
     orig = _local_chapter_files(title)
     up_root = Path(upscaled_dir()) / title
-    if not up_root.is_dir():
-        return orig
     out: dict = {}
     for chn, files in orig.items():
         prefix = _chapter_file_prefix(chn)
-        up = sorted(p for p in up_root.glob(prefix + "_*") if p.is_file())
+        pristine = original_art_files(title, prefix)
+        if pristine:
+            out[chn] = pristine            # capítulo ya traducido -> arte original guardado
+            continue
+        up = sorted(p for p in up_root.glob(prefix + "_*") if p.is_file()) if up_root.is_dir() else []
         out[chn] = up if up else files
     return out
 
@@ -791,38 +800,113 @@ def _md_get(path, **params):
         return None
 
 
+_md_feed_cache: dict = {}          # uuid -> (ts, feed) — memoiza el feed durante un barrido
+_MD_FEED_TTL = 300                  # 5 min: el feed apenas cambia dentro de una sesión
+
 def _md_feed(manga_uuid) -> list:
-    """Capítulos de una obra MangaDex: [{id, number, lang}] (paginado)."""
+    """Capítulos de una obra MangaDex: [{id, number, lang, group, groupName}] (paginado).
+    Incluye el GRUPO de scanlation para poder separar cada versión (p.ej. cada grupo ES) como
+    candidato propio. Memoizado por uuid — durante un ranking se pide el mismo feed muchas veces."""
+    manga_uuid = str(manga_uuid).split("@@")[0]
+    hit = _md_feed_cache.get(manga_uuid)
+    if hit and (time.time() - hit[0]) < _MD_FEED_TTL:
+        return hit[1]
     out, offset = [], 0
     while True:
         d = _md_get(f"/manga/{manga_uuid}/feed", **{
             "limit": 500, "offset": offset, "order[chapter]": "asc",
-            "translatedLanguage[]": list(_MD_LANGS_OK), "contentRating[]": _MD_RATINGS})
+            "translatedLanguage[]": list(_MD_LANGS_OK), "contentRating[]": _MD_RATINGS,
+            "includes[]": ["scanlation_group"]})
         data = (d or {}).get("data", []) if d else []
         for ch in data:
             a = ch.get("attributes", {})
+            gid, gname = "", ""
+            for rel in (ch.get("relationships") or []):
+                if rel.get("type") == "scanlation_group":
+                    gid = rel.get("id") or ""
+                    gname = ((rel.get("attributes") or {}).get("name")) or ""
+                    break
             out.append({"id": ch["id"], "number": a.get("chapter"),
                         "lang": (a.get("translatedLanguage") or "").lower(),
+                        "group": gid, "groupName": gname,
                         "publishedAt": a.get("publishAt")})
         if len(data) < 500:
             break
         offset += 500
+    _md_feed_cache[manga_uuid] = (time.time(), out)
     return out
 
 
-def _md_pick_chapter(manga_uuid, lang=None, want_num=None):
-    """Elige un capítulo (preferente del idioma dado, con número, ~el primero)."""
+def _md_feed_subset(manga_uuid, lang=None, group=None) -> list:
+    """Feed filtrado por idioma/grupo (con fallback a todo si el filtro deja vacío)."""
     feed = _md_feed(manga_uuid)
     if lang:
         same = [c for c in feed if c["lang"] == lang.lower()]
         feed = same or feed
+    if group:
+        g = [c for c in feed if (c.get("group") or "") == group]
+        feed = g or feed
+    return feed
+
+
+def _split_part_units(entries, num_of) -> list:
+    """Colapsa las PARTES de un mismo capítulo en una sola unidad (agnóstico de fuente).
+
+    Fuentes (MangaDex, Suwayomi…) suben a menudo el mismo capítulo troceado (45, 45.1, 45.2 …).
+    Aquí se agrupan esas partes contiguas (.1/.2/.3…) bajo su nº entero para tratarlas como UN
+    capítulo (páginas concatenadas). Un decimal suelto que NO es parte contigua (típico omake
+    `.5`) se conserva aparte. `num_of(e)` extrae el nº de cada entrada. Devuelve
+    [{number, members:[e,...]}] ordenado ascendente.
+
+    La familia se parte en dos: el PREFIJO contiguo (el entero si está, más .1, .2, .3… sin
+    huecos) = las partes del capítulo; y el resto = capítulos propios. Mirar sólo el prefijo
+    (en vez de exigir que TODA la familia sea contigua) permite que un omake convivan con las
+    partes: `4.1` + `4.5` da "4" (la parte 1) y "4.5" (el omake) — antes la familia entera se
+    declaraba no-contigua y el capítulo 4 DESAPARECÍA de la lista."""
+    by_base: dict = {}
+    for e in entries:
+        n = num_of(e)
+        if n is None or n == "":
+            continue
+        by_base.setdefault(int(_chnum(n)), []).append(e)
+    units = []
+    for base, fam in by_base.items():
+        fam = sorted(fam, key=lambda e: _chnum(num_of(e)))
+        members, rest, nxt = [], [], 1
+        for e in fam:
+            frac = round(_chnum(num_of(e)) - base, 3)
+            if frac == 0:                                    # el entero (45)
+                members.append(e)
+            elif abs(frac - round(nxt / 10, 3)) < 1e-6:      # la siguiente parte contigua
+                members.append(e); nxt += 1
+            else:
+                rest.append(e)                               # omake/decimal suelto
+        if members:
+            units.append({"number": str(base), "members": members})
+        for e in rest:
+            units.append({"number": num_of(e), "members": [e]})
+    return sorted(units, key=lambda u: _chnum(u["number"]))
+
+
+def _md_chapter_units(manga_uuid, lang=None, group=None) -> list:
+    """Unidades de capítulo de MangaDex con partes fusionadas → [{number, ids:[...]}]."""
+    feed = _md_feed_subset(manga_uuid, lang, group)
+    return [{"number": u["number"], "ids": [c["id"] for c in u["members"]]}
+            for u in _split_part_units(feed, lambda c: c.get("number"))]
+
+
+def _md_pick_chapter(manga_uuid, lang=None, want_num=None, group=None):
+    """Ids de las páginas que componen un capítulo (fusiona partes). Devuelve (ids, number).
+    Sin want_num: la primera unidad numerada (representativa para muestreo de calidad)."""
+    units = _md_chapter_units(manga_uuid, lang, group)
     if want_num is not None:
-        for c in feed:
-            if c["number"] and _chnum(c["number"]) == _chnum(str(want_num)):
-                return c["id"], c["number"]
-    numbered = [c for c in feed if c["number"]]
-    pick = (numbered or feed or [None])[0]
-    return (pick["id"], pick["number"]) if pick else (None, None)
+        wn = _chnum(str(want_num))
+        for u in units:
+            if _chnum(u["number"]) == wn:
+                return u["ids"], u["number"]
+        return [], None
+    pick = units[0] if units else None
+    return (pick["ids"], pick["number"]) if pick else ([], None)
 
 
 def _md_page_urls(chapter_id) -> list:
@@ -835,9 +919,14 @@ def _md_page_urls(chapter_id) -> list:
     return [f"{base}/data/{h}/{p}" for p in pages] if base and h else []
 
 
-def _md_candidate_chapter_urls(manga_uuid, lang, want_num):
-    cid, num = _md_pick_chapter(manga_uuid, lang, want_num)
-    return (num, _md_page_urls(cid)) if cid else (None, [])
+def _md_candidate_chapter_urls(manga_uuid, lang, want_num, group=None):
+    ids, num = _md_pick_chapter(manga_uuid, lang, want_num, group)
+    if not ids:
+        return (None, [])
+    urls = []
+    for cid in ids:            # concatena las partes (45, 45.1, 45.2 …) en orden
+        urls += _md_page_urls(cid)
+    return (num, urls)
 
 
 def _md_search(query) -> list:
@@ -881,11 +970,24 @@ def _md_candidates(variants, cur_lang="") -> list:
                 seen[m["id"]] = (m, round(best, 3))
     cands = []
     for uuid, (m, match) in list(seen.items())[:2]:   # como mucho 2 obras MangaDex
-        langs = {}
+        langs = {}          # idioma NO-español -> 1er capítulo numerado (uno por idioma)
+        es_groups = {}      # (lang, groupId) -> {id, count, name} — español separado por GRUPO
         for c in _md_feed(uuid):
-            if c["lang"] in _MD_LANGS_OK and c["number"]:
-                langs.setdefault(c["lang"], c["id"])   # 1er capítulo numerado de ese idioma
-        # panorama completo: idioma actual PRIMERO + el resto de idiomas disponibles (acotado)
+            l = c["lang"]
+            if l not in _MD_LANGS_OK or not c["number"]:
+                continue
+            if l in _ES_LANGS:
+                # El español NO se colapsa a un candidato: cada grupo de scanlation (Platinum
+                # Lily, etc.) es una versión distinta con su propia calidad → un candidato cada
+                # uno, para que Traducir los liste TODOS ordenados por calidad, no solo el mejor.
+                gid = c.get("group") or ""
+                g = es_groups.setdefault((l, gid), {"id": c["id"], "count": 0, "name": c.get("groupName") or ""})
+                g["count"] += 1
+                if not g["name"] and c.get("groupName"):
+                    g["name"] = c["groupName"]
+            else:
+                langs.setdefault(l, c["id"])   # 1er capítulo numerado de ese idioma
+        # Idiomas no-español: idioma actual PRIMERO + el resto (acotado), uno por idioma.
         cur = (cur_lang or "").lower()
         wanted = [l for l in langs if l == cur] + [l for l in langs if l != cur]
         for l in wanted[:4]:
@@ -895,6 +997,16 @@ def _md_candidates(variants, cur_lang="") -> list:
             cands.append({"sourceId": "__mangadex__", "id": f"{uuid}@@{l}", "sourceName": "MangaDex",
                           "sourceLang": l, "title": m["title"], "match": match,
                           "_mdChapterId": langs[l]})
+        # Español: un candidato POR GRUPO, los más completos primero (cap 8 por coste de ranking).
+        # El grupo va como 3ª parte del id (`uuid@@lang@@grupo`) → viaja opaco por front y descarga.
+        es_sorted = sorted(es_groups.items(), key=lambda kv: kv[1]["count"], reverse=True)[:8]
+        for (l, gid), g in es_sorted:
+            gname = g["name"] or "Sin grupo"
+            cands.append({"sourceId": "__mangadex__",
+                          "id": f"{uuid}@@{l}@@{gid}" if gid else f"{uuid}@@{l}",
+                          "sourceName": f"MangaDex · {gname}",
+                          "sourceLang": l, "title": m["title"], "match": match,
+                          "_mdChapterId": g["id"], "_group": gid, "_groupName": gname})
     return cands
 
 
@@ -902,11 +1014,16 @@ def _score_md(manga_uuid, lang=None, chapter_id=None) -> dict | None:
     """Puntúa una versión de MangaDex con el MISMO motor exhaustivo: capítulos
     DISTRIBUIDOS del feed (de ese idioma) + penalización de irregularidad."""
     try:
-        manga_uuid = str(manga_uuid).split("@@")[0]   # id puede venir como `uuid@@lang`
+        parts = str(manga_uuid).split("@@")   # id puede venir como `uuid@@lang@@grupo`
+        manga_uuid = parts[0]
+        grp = parts[2] if len(parts) > 2 else None
         feed = _md_feed(manga_uuid)
         if lang:
             same = [c for c in feed if c["lang"] == lang.lower()]
             feed = same or feed
+        if grp:   # puntuar SOLO los capítulos de ese grupo (su calidad propia)
+            g = [c for c in feed if (c.get("group") or "") == grp]
+            feed = g or feed
         numbered = [c for c in feed if c["number"]] or feed
         chapter_urls = []
         for i, ch in enumerate(_spread_pick(numbered)):
@@ -914,7 +1031,7 @@ def _score_md(manga_uuid, lang=None, chapter_id=None) -> dict | None:
             if sl:
                 chapter_urls.append(sl)
         if not chapter_urls:   # fallback al capítulo representativo
-            cid = chapter_id or _md_pick_chapter(manga_uuid, lang)[0]
+            cid = chapter_id or (_md_pick_chapter(manga_uuid, lang)[0] or [None])[0]
             sl = _deep_slice(_md_page_urls(cid), _SCORE_PAGES + _COLOR_MARGIN) if cid else []
             if sl:
                 chapter_urls.append(sl)
@@ -1023,17 +1140,34 @@ def _candidate_chapter_urls(cand, title, want_num=None):
         key = key or next((k for k in keys if chfiles[k]), keys[0])
         return (key, [f"{title}/{f.name}" for f in chfiles[key]])
     if sid == "__mangadex__":
-        uuid = str(mid).split("@@")[0]   # id viene como `uuid@@lang`
-        return _md_candidate_chapter_urls(uuid, cand.get("sourceLang"), want_num)
+        parts = str(mid).split("@@")   # id viene como `uuid@@lang` o `uuid@@lang@@grupo`
+        uuid = parts[0]
+        group = parts[2] if len(parts) > 2 else None
+        return _md_candidate_chapter_urls(uuid, cand.get("sourceLang"), want_num, group)
     cmap = _chapters_map(int(mid), timeout=_SAMPLE_TIMEOUT)
     if not cmap:
         return (None, [])
-    ch = cmap.get(normalize_chapter(str(want_num))) if want_num is not None else None
-    if not ch:
-        ordered = sorted(cmap.values(),
-                         key=lambda c: float(c["number"]) if c["number"] is not None else 0)
-        with_pages = [c for c in ordered if (c.get("pageCount") or 1) > 0] or ordered
-        ch = with_pages[0] if with_pages else None
+    if want_num is not None:
+        # El capítulo pedido puede venir troceado en la fuente (45, 45.1, 45.2 …): fusiona sus
+        # partes contiguas y concatena sus páginas. Si no existe → vacío (NUNCA sustituir por
+        # otro capítulo; antes caía al 1º → trasplantaba el capítulo equivocado).
+        wn = _chnum(str(want_num))
+        unit = next((u for u in _split_part_units(cmap.values(), lambda c: c.get("number"))
+                     if _chnum(u["number"]) == wn), None)
+        if not unit:
+            return (None, [])
+        urls = []
+        for c in unit["members"]:
+            try:
+                urls += _chapter_page_urls(c["id"], timeout=_SAMPLE_TIMEOUT)
+            except Exception:
+                pass
+        return (unit["number"], urls)
+    # Sin capítulo pedido (muestreo de calidad): uno representativo.
+    ordered = sorted(cmap.values(),
+                     key=lambda c: float(c["number"]) if c["number"] is not None else 0)
+    with_pages = [c for c in ordered if (c.get("pageCount") or 1) > 0] or ordered
+    ch = with_pages[0] if with_pages else None
     if not ch:
         return (None, [])
     try:
@@ -1048,18 +1182,16 @@ def _candidate_chapter_numbers(cand, title) -> list:
     if str(mid) == "__local__" or sid == "__local__":
         return sorted(_local_chapter_files(title).keys(), key=_chnum)
     if sid == "__mangadex__":
-        uuid = str(mid).split("@@")[0]
+        parts = str(mid).split("@@")
+        uuid = parts[0]
+        group = parts[2] if len(parts) > 2 else None
         lang = (cand.get("sourceLang") or "").lower()
-        nums, seen = [], set()
-        for c in sorted(_md_feed(uuid), key=lambda c: _chnum(c.get("number") or "0")):
-            n = c.get("number")
-            if n and (not lang or c.get("lang") == lang) and n not in seen:
-                seen.add(n); nums.append(n)
-        return nums
+        # unidades ya fusionadas: las partes 45/45.1/45.2 salen como un único "45"
+        return [u["number"] for u in _md_chapter_units(uuid, lang, group)]
     cmap = _chapters_map(int(mid), timeout=_SAMPLE_TIMEOUT)
-    ordered = sorted((c for c in (cmap or {}).values() if (c.get("pageCount") or 1) > 0),
-                     key=lambda c: float(c["number"]) if c["number"] is not None else 0)
-    return [c["number"] for c in ordered if c.get("number") is not None]
+    withp = [c for c in (cmap or {}).values() if (c.get("pageCount") or 1) > 0 and c.get("number") is not None]
+    # fusiona partes 45/45.1/45.2 en un único "45"
+    return [u["number"] for u in _split_part_units(withp, lambda c: c.get("number"))]
 
 
 def _distributed_picks(seq, fracs=(0.25, 0.5, 0.75)) -> list:
@@ -1364,6 +1496,31 @@ def coverage_cached():
 
 # ── Endpoint: discover ────────────────────────────────────────────────────────
 
+_ES_LIST_CAP = 30          # cuántas fuentes ES ofrecer en el selector de Traducir
+_ES_UNSCORED_MIN_MATCH = 0.6   # match mínimo para incluir una fuente ES SIN puntuar (anti-ruido)
+
+def _append_unscored_es(es_ranked: list, es_cands: list) -> list:
+    """Añade al final las fuentes ES que el ranking NO pudo puntuar (scrapers que fallan al
+    bajar muestras) para que el usuario las VEA y pueda elegirlas igualmente — antes se
+    descartaban y solo sobrevivía 1. Las puntuadas van primero (por calidad); las no
+    puntuadas después, por parecido de título, y filtrando ruido de match muy bajo."""
+    scored_keys = {(c["sourceId"], c["id"]) for c in es_ranked}
+    seen_names = set()   # evita 10 filas del mismo scraper (varias entradas de la misma obra)
+    extra = []
+    for c in sorted(es_cands, key=lambda c: c.get("match", 0), reverse=True):
+        key = (c["sourceId"], c["id"])
+        if key in scored_keys:
+            continue
+        if c.get("match", 0) < _ES_UNSCORED_MIN_MATCH:
+            continue
+        nkey = (c.get("sourceName") or "").lower()
+        if nkey in seen_names:
+            continue
+        seen_names.add(nkey)
+        extra.append(dict(c, quality=None, unscored=True))
+    return es_ranked + extra
+
+
 def _run_discover(task_id: str, title: str, al_id, source_ids, art_local: bool = False):
     """Descubre + rankea en un hilo; escribe el progreso y el resultado final en el
     estado (la UI sondea /status). Cachea en `.transplant_meta.json`.
@@ -1387,6 +1544,7 @@ def _run_discover(task_id: str, title: str, al_id, source_ids, art_local: bool =
             if es_cands:
                 _set_status(task_id, phase="ranking", rankTotal=len(es_cands), ranked=0)
                 es_ranked = _rank(es_cands, on_progress=lambda d, t: _set_status(task_id, phase="ranking", ranked=d, rankTotal=t))
+                es_ranked = _append_unscored_es(es_ranked, es_cands)
             es_best = es_ranked[0] if es_ranked else None
             meta = _read_meta(title)
             meta.update({
@@ -1407,7 +1565,7 @@ def _run_discover(task_id: str, title: str, al_id, source_ids, art_local: bool =
                     pass
             _set_status(task_id, status="done", phase=("ranked" if es_best else "empty"), variants=variants,
                         art={"candidates": [], "best": art_best},
-                        es={"candidates": es_ranked[:12], "best": es_best},
+                        es={"candidates": es_ranked[:_ES_LIST_CAP], "best": es_best},
                         resolvedVolumes=vol_result["resolved"], unresolvedVolumes=vol_result["unresolved"])
             return
 
@@ -1432,6 +1590,7 @@ def _run_discover(task_id: str, title: str, al_id, source_ids, art_local: bool =
         es_ranked = [scored[(c["sourceId"], c["id"])] for c in es_cands
                      if (c["sourceId"], c["id"]) in scored]
         es_ranked.sort(key=lambda c: c["quality"]["score"], reverse=True)
+        es_ranked = _append_unscored_es(es_ranked, es_cands)
 
         art_best = art_ranked[0] if art_ranked else None
         es_best = es_ranked[0] if es_ranked else None
@@ -1448,7 +1607,7 @@ def _run_discover(task_id: str, title: str, al_id, source_ids, art_local: bool =
         _write_meta(title, meta)
         _set_status(task_id, status="done", phase="ranked", variants=variants,
                     art={"candidates": art_ranked[:12], "best": art_best},
-                    es={"candidates": es_ranked[:12], "best": es_best})
+                    es={"candidates": es_ranked[:_ES_LIST_CAP], "best": es_best})
     except Exception as e:
         _set_status(task_id, status="error", phase="error", error=str(e))
 
@@ -1514,11 +1673,14 @@ def _compute_versions_payload(title: str, al_id, source_ids, cur_lang: str, refr
     if not candidates:
         return {"variants": variants, "versions": [], "byLang": {}, "local": local, "currentLang": cur_lang}, True
     cur = (cur_lang or "").lower()
-    # COSTE: el ranking baja 2-3 páginas por candidato. Acotar a los mejores por
-    # parecido de título (top _RANK_CAP) + TODOS los del idioma actual del usuario
-    # (su caso estrella: varias versiones en su mismo idioma, cuál es la mejor).
+    # Selección a rankear: MISMO criterio de match de título que Cobertura
+    # (match >= _COVERAGE_MATCH_MIN) en lugar del viejo tope top-_RANK_CAP por
+    # parecido — ese tope dejaba FUERA fuentes legítimas que simplemente no
+    # entraban en el top 15 (el usuario reportó "no encuentra todas las fuentes").
+    # Ahora aparece toda fuente con parecido de título suficiente; el coste (baja
+    # 2-3 páginas por candidato) se acota con un tope duro de seguridad.
     by_match = sorted(candidates, key=lambda c: c.get("match", 0), reverse=True)
-    to_rank = by_match[:_RANK_CAP]
+    to_rank = [c for c in by_match if (c.get("match") or 0) >= _COVERAGE_MATCH_MIN][:_RANK_HARD_CAP]
     seen = {(c["sourceId"], c["id"]) for c in to_rank}
     for c in candidates:
         # incluir SIEMPRE: (a) todas las versiones del idioma actual del usuario (su caso
@@ -1961,7 +2123,13 @@ def list_chapters(title):
         return jsonify({"error": str(e)}), 500
     translated = set(meta.get("translated", []))
     failed = set(meta.get("failed", []))
-    common = sorted(set(art_map) & set(es_map), key=_chnum)
+    # Fusiona las partes (45.1/45.2 → "45") en AMBOS lados antes de cruzar: si no, un capítulo
+    # troceado en una fuente y entero en la otra no intersecta y DESAPARECE de la lista.
+    def _units(m):
+        return {u["number"]: u for u in _split_part_units([{"number": k} for k in m],
+                                                          lambda e: e["number"])}
+    art_u, es_u = _units(art_map), _units(es_map)
+    common = sorted(set(art_u) & set(es_u), key=_chnum)
     chapters = [{
         "chapter": chn,
         "status": ("done" if chn in translated else "failed" if chn in failed else "pending"),
@@ -2111,6 +2279,20 @@ def get_status():
 
 # ── Endpoint: run (descarga EN+ES, compone, escribe, limpia) ──────────────────
 
+def _work_root() -> Path:
+    """Dónde montar el staging de un capítulo (páginas EN + ES + salida compuesta: cientos de MB).
+
+    En DISCO, nunca en `tempfile.mkdtemp()` a secas: en WSL/Arch `/tmp` es **tmpfs = RAM** (3.4G
+    aquí). Un capítulo entero en RAM compite con el modelo de detección y con la JVM de Suwayomi
+    —que muere por OOM sin dejar rastro, tirando la descarga ES a media faena— y al llenarse
+    corrompe las escrituras a mitad ("libpng error: Write Error"). Mismo criterio que el caché de
+    streaming (`stream.py:_pick_cache_root`). `TRANSPLANT_WORK_DIR` permite forzarlo."""
+    override = os.environ.get("TRANSPLANT_WORK_DIR")
+    root = Path(override).expanduser() if override else (DATA_ROOT / "_tp_staging")
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
 def _download_chapter_to(tmp: Path, urls: list, prefix: str) -> int:
     tmp.mkdir(parents=True, exist_ok=True)
     n = 0
@@ -2127,10 +2309,48 @@ def _download_chapter_to(tmp: Path, urls: list, prefix: str) -> int:
 _IMG_EXT = ("jpg", "jpeg", "png", "webp")
 
 
+ORIG_ART_DIR = ".original_art"   # arte pre-traducción, dentro de la carpeta del manga
+
+
+def _orig_art_dir(out_dir: Path) -> Path:
+    return out_dir / ORIG_ART_DIR
+
+
+def original_art_files(title: str, prefix: str) -> list:
+    """Páginas del arte ORIGINAL (pre-traducción) de un capítulo, si se conservaron."""
+    d = _orig_art_dir(Path(manga_dir()) / title)
+    if not d.is_dir():
+        return []
+    return sorted(p for ext in _IMG_EXT for p in d.glob(f"{prefix}_*.{ext}"))
+
+
+def _preserve_original_art(out_dir: Path, prefix: str):
+    """Guarda el arte original del capítulo en `.original_art/` ANTES de pisarlo.
+
+    La traducción reemplaza las páginas EN SITIO, así que sin esto el arte original se
+    PIERDE: no se puede re-traducir (se trasplantaría español sobre español), ni comparar,
+    ni revertir, sin volver a descargarlo de la fuente. Sólo copia la primera vez — si ya
+    hay un original guardado NO se sobrescribe (lo de dentro sería ya una traducción)."""
+    dest = _orig_art_dir(out_dir)
+    if any(dest.glob(f"{prefix}_*")):
+        return
+    cur = [p for ext in _IMG_EXT for p in out_dir.glob(f"{prefix}_*.{ext}")]
+    if not cur:
+        return
+    dest.mkdir(parents=True, exist_ok=True)
+    for p in cur:
+        try:
+            shutil.copy2(p, dest / p.name)
+        except OSError:
+            pass
+
+
 def _replace_chapter_in_place(out_dir: Path, prefix: str, stage_dir: Path, page_names: list):
     """REEMPLAZO EN SITIO atómico-por-capítulo: borra las páginas existentes del
     capítulo (cualquier extensión = el idioma original) y mueve las traducidas del
-    staging. Solo se llama cuando el capítulo se compuso COMPLETO."""
+    staging. Solo se llama cuando el capítulo se compuso COMPLETO.
+    El arte original se conserva antes en `.original_art/` (ver _preserve_original_art)."""
+    _preserve_original_art(out_dir, prefix)
     for ext in _IMG_EXT:
         for old in out_dir.glob(f"{prefix}_*.{ext}"):
             old.unlink(missing_ok=True)
@@ -2162,6 +2382,79 @@ def _persist_run_meta(title: str, translated: set, failed: set, task_id=None, st
     _write_meta(title, meta)
 
 
+RESCUE_MAX_SOURCES = 3   # fuentes ES alternativas que se prueban por capítulo con páginas en inglés.
+                         # Sólo se tocan las páginas YA fallidas (1-3 de ~35), así que el coste es
+                         # una descarga extra de capítulo, y sólo cuando hace falta.
+
+
+def _rescue_alt_es(task_id, title, chn, tmp_dir, stage, res, used_es, ci, total):
+    """Rescata las páginas que quedaron en INGLÉS buscándolas en otras fuentes ES.
+
+    Una fuente ES puede sencillamente NO TENER una página (paginación propia, huecos): medido en
+    Amayo ch36 p024, donde NINGUNA de las 37 págs de LeerCapitulo alinea. Otra fuente sí puede
+    traerla. No arriesga precisión: decide la homografía SIFT (ver `rescue_english_pages`); si
+    ninguna alternativa es la misma página, todo se queda como estaba."""
+    from transplant_core import rescue_english_pages
+    pend = list(res.get("english_pages") or [])
+    if not pend:
+        return res
+    meta = _read_meta(title)
+    variants = meta.get("variants") or title_variants(title, None)
+    try:
+        cands = _candidates_cached(title, meta.get("al_id"), variants, None)
+    except Exception:
+        return res
+    used = {(str((used_es or {}).get("sourceId")), str((used_es or {}).get("mangaId")))}
+    # Sólo fuentes REALMENTE instaladas: la lista de candidatos está cacheada en disco y arrastra
+    # fuentes ya desinstaladas; pedirles capítulos lanza SourceNotInstalledException y gasta
+    # intentos del cupo sin poder rescatar nada.
+    try:
+        installed = {str(s["id"]) for s in _all_sources()}
+    except Exception:
+        installed = None
+    alts = [c for c in cands
+            if (c.get("sourceLang") or "").lower() in _ES_LANGS
+            and (str(c.get("sourceId")), str(c.get("id"))) not in used
+            and (installed is None or str(c.get("sourceId")) in installed)]
+    rescued = 0
+    for alt in alts[:RESCUE_MAX_SOURCES]:
+        if not pend or _transplant_cancel.get(task_id):
+            break
+        alt_dir = Path(tmp_dir) / f"es_alt_{alt.get('sourceId')}_{alt.get('id')}"
+        try:
+            # Los candidatos del barrido traen la manga en `id`; `_candidate_chapter_urls` la
+            # espera en `mangaId` (mismo mapeo que hace discover al guardar el meta).
+            ref = {"sourceId": alt.get("sourceId"), "mangaId": alt.get("id"),
+                   "sourceLang": alt.get("sourceLang")}
+            urls = _candidate_chapter_urls(ref, title, want_num=chn)[1]
+            if not urls:
+                continue
+            with _dl_semaphore:
+                if not _download_chapter_to(alt_dir, urls, "es"):
+                    continue
+            _set_status(task_id, phase="rescue", chapter=chn, chapterDone=ci, chapterTotal=total,
+                        note=f"{len(pend)} pág. en inglés → probando {alt.get('sourceName')}")
+            before = len(pend)
+            pend = rescue_english_pages(pend, alt_dir, stage,
+                                        should_cancel=lambda: bool(_transplant_cancel.get(task_id)))
+            rescued += before - len(pend)
+        except Exception as e:
+            # Una fuente alternativa que falle no rompe el capítulo, pero NO se traga el error:
+            # un except mudo aquí ocultó que el rescate no funcionaba en absoluto (los candidatos
+            # traen `id`, no `mangaId`) y reportaba "0 rescatadas" como si fuese normal.
+            print(f"[transplant] rescate: fuente {alt.get('sourceName')} falló en cap {chn}: {e!r}",
+                  file=sys.stderr, flush=True)
+            continue
+        finally:
+            shutil.rmtree(alt_dir, ignore_errors=True)
+    if rescued:
+        res = dict(res)
+        res["english"] = len(pend)
+        res["english_pages"] = pend
+        res["rescued"] = rescued
+    return res
+
+
 def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict, qa: bool = False):
     from transplant_core import transplant_chapter
     _transplant_cancel[task_id] = False
@@ -2172,6 +2465,16 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict,
     # ancladas por capítulo (chapter_sources): en ese caso cada capítulo resuelve su fuente ES
     # desde su asignación (abajo). El es_map global sigue siendo el respaldo por defecto.
     es_map = _chapters_map(int(es["mangaId"])) if es and es.get("mangaId") else {}
+    # La fuente ES puede subir el capítulo TROCEADO (45.1, 45.2 …) sin un "45" entero: fusiona
+    # esas partes en una unidad por nº entero (páginas concatenadas), igual que en el discover.
+    es_units = {_chnum(u["number"]): u
+                for u in _split_part_units(es_map.values(), lambda c: c.get("number"))}
+    # El ARTE también puede venir troceado (descargas locales ch48.1/ch48.2 o una fuente EN que
+    # partió el capítulo): misma fusión por nº entero, páginas concatenadas en orden.
+    _art_keys = list(local_files) if art_local else list(art_map or {})
+    art_units = {_chnum(u["number"]): [m["number"] for m in u["members"]]
+                 for u in _split_part_units([{"number": k} for k in _art_keys],
+                                            lambda e: e["number"])}
     out_dir = Path(manga_dir()) / title
     out_dir.mkdir(parents=True, exist_ok=True)
     done_ch, translated, failed = [], set(), set()
@@ -2186,7 +2489,8 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict,
             cancelled = True
             break
         chn = normalize_chapter(ch)
-        e_ch = es_map.get(chn)
+        e_unit = es_units.get(_chnum(chn))   # unidad ES (una o varias partes fusionadas)
+        e_ch = es_map.get(chn) or (e_unit["members"][0] if e_unit else None)
         # Fuente ANCLADA por capítulo (chapter_sources) — la que el usuario fijó en el grid de
         # Cobertura. Según su idioma juega uno de dos papeles para ESTE capítulo:
         #  • NO-española → fuente de ARTE (mejor calidad en inglés/otro) en vez del arte global.
@@ -2199,8 +2503,13 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict,
         per_ch_es = per_ch if per_ch_is_es else None
         use_override = bool(per_ch_art)
         has_es = bool(e_ch) or bool(per_ch_es)
-        a_local = local_files.get(chn) if art_local else None
-        a_ch = a_local if art_local else art_map.get(chn)
+        a_keys = art_units.get(_chnum(chn)) or ([chn] if chn in _art_keys else [])
+        if art_local:
+            a_local = [f for k in a_keys for f in local_files[k]] or None
+            a_ch = a_local
+        else:
+            a_local = None
+            a_ch = art_map.get(chn) or (art_map.get(a_keys[0]) if a_keys else None)
         if not use_override and not a_ch:
             failed.add(chn)
             _set_status(task_id, phase="skip", chapter=chn, note="falta capítulo en arte",
@@ -2213,7 +2522,7 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict,
                         chapterDone=ci, chapterTotal=total)
             _persist_run_meta(title, translated, failed)
             continue
-        tmp = Path(tempfile.mkdtemp(prefix="transplant_"))
+        tmp = Path(tempfile.mkdtemp(prefix="transplant_", dir=str(_work_root())))
         try:
             en_dir = tmp / "en"; es_dir = tmp / "es"; stage = tmp / "out"
             _set_status(task_id, phase="download", chapter=chn, chapterDone=ci, chapterTotal=total)
@@ -2226,7 +2535,10 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict,
                     for f in a_local:
                         shutil.copy2(f, en_dir / f.name)
                 elif a_ch:
-                    _download_chapter_to(en_dir, _chapter_page_urls(a_ch["id"]), "en")
+                    urls = []
+                    for k in (a_keys if len(a_keys) > 1 else []):
+                        urls += _chapter_page_urls(art_map[k]["id"])
+                    _download_chapter_to(en_dir, urls or _chapter_page_urls(a_ch["id"]), "en")
                 else:
                     # asignación por capítulo sin páginas Y sin arte global de respaldo
                     failed.add(chn)
@@ -2237,8 +2549,16 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict,
                 if _cancelled():
                     cancelled = True
                 else:
-                    # ES desde la fuente anclada por capítulo si la hay; si no, desde el ES global.
-                    es_urls = _candidate_chapter_urls(per_ch_es, title, want_num=chn)[1] if per_ch_es else _chapter_page_urls(e_ch["id"])
+                    # ES desde la fuente anclada por capítulo si la hay; si no, desde el ES global
+                    # (concatenando las partes 45.1/45.2 … cuando el capítulo viene troceado).
+                    if per_ch_es:
+                        es_urls = _candidate_chapter_urls(per_ch_es, title, want_num=chn)[1]
+                    elif e_unit and len(e_unit["members"]) > 1:
+                        es_urls = []
+                        for m in e_unit["members"]:
+                            es_urls += _chapter_page_urls(m["id"])
+                    else:
+                        es_urls = _chapter_page_urls(e_ch["id"])
                     if not es_urls:
                         failed.add(chn)
                         _set_status(task_id, phase="skip", chapter=chn, note="sin páginas ES disponibles",
@@ -2263,10 +2583,27 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict,
             if res.get("cancelled"):
                 cancelled = True            # staging se descarta en finally -> sin capítulo a medias
             elif res.get("pages"):
+                # 2ª pasada: las páginas que la fuente ES no cubre se buscan en OTRAS fuentes ES
+                # (sobre el MISMO staging, antes de instalar el capítulo).
+                res = _rescue_alt_es(task_id, title, chn, tmp, stage, res,
+                                     per_ch_es or es, ci, total)
                 _replace_chapter_in_place(out_dir, prefix, stage, res["pages"])
                 _invalidate_upscaled(title, prefix)
                 translated.add(chn)
-                done_ch.append({"chapter": chn, **{k: res[k] for k in ("trans", "fallback") if k in res}})
+                done_ch.append({"chapter": chn, **{k: res[k] for k in
+                                ("trans", "fallback", "english", "en_pages", "es_pages", "rescued") if k in res}})
+                # AVISO de incompletitud: la fuente ES no cubre el capítulo → el usuario debería
+                # elegir otra (no es un fallo del algoritmo).
+                # NO se dispara por `eng > 0`: casi TODO capítulo acaba con 1-2 páginas en inglés
+                # que son la HOJA DE CRÉDITOS del grupo del scan EN — no existe en el ES (es de otro
+                # grupo) y dejarla intacta es lo CORRECTO (traducirla atribuiría el trabajo al equipo
+                # equivocado). Medido: HDWR ch7-12, 1 pág/cap, siempre la última. Con `eng > 0` el
+                # aviso saltaba en casi todos los capítulos y el usuario aprendía a ignorarlo.
+                # El síntoma FIABLE de fuente incompleta es el DÉFICIT DE PÁGINAS.
+                enp, esp, eng = res.get("en_pages", 0), res.get("es_pages", 0), res.get("english", 0)
+                if enp and esp < 0.85 * enp:
+                    _set_status(task_id, phase="warn", chapter=chn, chapterDone=ci, chapterTotal=total,
+                                note=f"fuente ES incompleta: {esp}/{enp} pág, {eng} sin traducir (elige otra fuente ES)")
             else:
                 failed.add(chn)
         except Exception as e:
