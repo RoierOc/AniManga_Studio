@@ -1,8 +1,9 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { ANIME_STATUS, animeFormatLabel, fmtCountdown } from '@/lib/anime'
 import { imgProxy, imgThumb } from '@/lib/img'
+import { coverRGB, vivid } from '@/lib/coverColor'
 import { vtTag } from '@/lib/vt'
 import Icon from '@/components/ui/Icon.vue'
 
@@ -15,6 +16,14 @@ const store = useAnimeStore()
 function openCard(ev) {
   vtTag(ev.currentTarget?.closest?.('.acard') || ev.currentTarget, '.acard__img')
   emit('open', props.anime)
+}
+
+// Glow del color dominante de la portada al hover (perezoso + cacheado). Solo sombra/borde.
+const glow = ref('')
+async function ensureGlow() {
+  if (glow.value || !props.anime.cover) return
+  const rgb = await coverRGB(imgProxy(props.anime.cover))
+  if (rgb) { const v = vivid(rgb); glow.value = `${v.r}, ${v.g}, ${v.b}` }
 }
 
 const thumb = computed(() => imgThumb(props.anime.cover))
@@ -64,7 +73,8 @@ const dots = computed(() =>
 </script>
 
 <template>
-  <article class="acard" tabindex="0" @click="openCard" @keydown.enter="openCard">
+  <article class="acard" :class="{ 'has-glow': glow }" :style="glow ? { '--cardglow': glow } : {}"
+           tabindex="0" @click="openCard" @keydown.enter="openCard" @mouseenter="ensureGlow" @focus="ensureGlow">
     <div class="acard__poster">
       <img v-if="thumb" :src="thumb" class="blurup" aria-hidden="true" alt="" />
       <img v-if="anime.cover" :src="imgProxy(anime.cover)" :alt="anime.title" loading="lazy" class="acard__img"
@@ -115,6 +125,10 @@ const dots = computed(() =>
   transition: box-shadow var(--t-base) var(--ease-silk), border-color var(--t-base);
 }
 .acard:hover .acard__poster { border-color: var(--azure-glow); box-shadow: var(--shadow-lg), 0 0 0 1px var(--azure-glow); }
+.acard.has-glow:hover .acard__poster, .acard.has-glow:focus-visible .acard__poster {
+  border-color: rgba(var(--cardglow), .55);
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(var(--cardglow), .55), 0 8px 34px rgba(var(--cardglow), .45);
+}
 
 .acard__img { width: 100%; height: 100%; object-fit: cover; opacity: 0;
   transition: opacity var(--t-slow), transform var(--t-cine) var(--ease-silk), filter var(--t-base) var(--ease-silk); }

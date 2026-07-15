@@ -1,9 +1,10 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onUnmounted } from 'vue'
 import { useMangaStore } from '@/stores/manga'
 import { formatChapter, MANGA_STATUS, pageUrl } from '@/lib/manga'
 import { formatBytes } from '@/lib/format'
 import { imgProxy } from '@/lib/img'
+import { coverRGB, vivid } from '@/lib/coverColor'
 import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import Icon from '@/components/ui/Icon.vue'
@@ -28,6 +29,72 @@ const colorModelLabel = computed(() => {
   const k = (store.colorModel && colorModelKeys.value.includes(store.colorModel)) ? store.colorModel : colorModelKeys.value[0]
   return store.models[k] || 'el modelo a color'
 })
+// ── Selector de modelo de escalado (desplegable propio, con distintivo Color/B&N) ──
+// Sustituye el <select> nativo: cada modelo lleva una etiqueta clara de si es a COLOR
+// (APISR/DAT/RCAN, 3 canales) o B&N (eula/MangaJaNai, 1 canal) para no confundirlos.
+const modelOpen = ref(false)
+const modelRef = ref(null)      // el botón (.mmodel__btn)
+const menuRef = ref(null)       // el menú teletransportado
+const menuPos = ref({ top: 0, left: 0, width: 0, up: false })
+const modelEntries = computed(() =>
+  Object.entries(store.models).map(([key, label]) => ({ key, label, color: !!store.modelsColor[key] })))
+const activeModelEntry = computed(() =>
+  modelEntries.value.find(e => e.key === store.activeModel) || modelEntries.value[0] || null)
+function pickModel(key) { store.setModel(key); modelOpen.value = false }
+// El menú se teletransporta al body con posición FIJA (el panel Gestionar tiene overflow:hidden
+// para su animación de colapso y recortaría un menú absolute). Se coloca bajo el botón, o encima
+// si no cabe abajo — nunca se recorta.
+function placeMenu() {
+  const btn = modelRef.value
+  if (!btn) return
+  const r = btn.getBoundingClientRect()
+  const rows = modelEntries.value.length
+  const estH = Math.min(260, rows * 40 + 12)
+  const below = window.innerHeight - r.bottom
+  const up = below < estH + 8 && r.top > below
+  menuPos.value = {
+    left: r.left,
+    width: r.width,
+    top: up ? r.top - 6 : r.bottom + 6,
+    up,
+  }
+}
+function onModelDocClick(e) {
+  if (modelRef.value?.contains(e.target)) return
+  if (menuRef.value?.contains(e.target)) return
+  modelOpen.value = false
+}
+function onModelDocKey(e) { if (e.key === 'Escape') modelOpen.value = false }
+function onModelReflow(e) {
+  if (!modelOpen.value) return
+  // No cerrar cuando el scroll nace DENTRO del propio menú (tiene scroll interno)
+  if (e && e.type === 'scroll' && menuRef.value?.contains(e.target)) return
+  modelOpen.value = false
+}
+function toggleModel() {
+  if (!modelOpen.value) placeMenu()
+  modelOpen.value = !modelOpen.value
+}
+watch(modelOpen, (v) => {
+  if (v) {
+    document.addEventListener('mousedown', onModelDocClick)
+    document.addEventListener('keydown', onModelDocKey)
+    window.addEventListener('resize', onModelReflow)
+    window.addEventListener('scroll', onModelReflow, true)
+  } else {
+    document.removeEventListener('mousedown', onModelDocClick)
+    document.removeEventListener('keydown', onModelDocKey)
+    window.removeEventListener('resize', onModelReflow)
+    window.removeEventListener('scroll', onModelReflow, true)
+  }
+})
+onUnmounted(() => {
+  document.removeEventListener('mousedown', onModelDocClick)
+  document.removeEventListener('keydown', onModelDocKey)
+  window.removeEventListener('resize', onModelReflow)
+  window.removeEventListener('scroll', onModelReflow, true)
+})
+
 const colorPickerSelCount = computed(() => {
   const cp = store.colorPicker
   if (cp.mode === 'all') return cp.chapters.reduce((n, c) => n + c.pages.filter(p => p.sel).length, 0)
@@ -40,6 +107,23 @@ const colorPickerTotal = computed(() => {
 })
 const colorPickerEmpty = computed(() => colorPickerTotal.value === 0)
 const upState = (ch) => store.upscaled[ch]          // true | 'partial' | undefined
+
+// Ambiente por portada (solo FONDO, nunca sobre texto/controles): color dominante para
+// el aura + resplandor del póster, y la propia portada esmerilada de backdrop en la
+// cabecera. Se limpia al cerrar/cambiar de serie. Cross-origin/ilegible → sin ambiente.
+const coverArt = ref(null)   // { css, art } | null
+watch(() => store.current?.cover, async (cover) => {
+  coverArt.value = null
+  if (!cover) return
+  const url = imgProxy(cover)
+  const rgb = await coverRGB(url)
+  if (!rgb) return
+  const v = vivid(rgb)
+  coverArt.value = { css: `${v.r}, ${v.g}, ${v.b}`, art: `url("${url}")` }
+}, { immediate: true })
+const coverStyle = computed(() => coverArt.value
+  ? { '--cv': coverArt.value.css, '--cvart': coverArt.value.art }
+  : {})
 
 // Tamaño en disco de esta serie (original vs 4K) — se muestra en el panel Gestionar.
 const seriesSize = ref(null)
@@ -340,10 +424,11 @@ async function doExport(toDrive = false) {
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="m" class="ov" @click.self="closeModal">
-        <div class="modal">
+        <div class="modal" :class="{ 'modal--art': !!coverArt }" :style="coverStyle">
           <button class="modal__x" @click="closeModal"><Icon name="close" :size="18" /></button>
 
           <header class="modal__head">
+            <div class="modal__ambient" aria-hidden="true" />
             <img v-if="m.cover" :src="imgProxy(m.cover)" class="modal__cover" :alt="m.name" />
             <div v-else class="modal__cover modal__cover--ph"><Icon name="library" :size="30" /></div>
             <div class="modal__info">
@@ -452,11 +537,30 @@ async function doExport(toDrive = false) {
               <section class="manage__sect manage__sect--up">
                 <span class="manage__label">Escalado 4K <em>· se aplica al instante</em></span>
                 <div class="manage__row">
-                  <label class="mf"><span>Modelo</span>
-                    <select :value="store.activeModel" @change="store.setModel($event.target.value)">
-                      <option v-for="(label, key) in store.models" :key="key" :value="key">{{ label }}</option>
-                    </select>
-                  </label>
+                  <div class="mf mmodel">
+                    <span>Modelo</span>
+                    <button type="button" class="mmodel__btn" :class="{ open: modelOpen }" ref="modelRef" @click="toggleModel" :aria-expanded="modelOpen">
+                      <span v-if="activeModelEntry" class="mmodel__tag" :class="activeModelEntry.color ? 'is-color' : 'is-bw'">
+                        <i class="mmodel__dot" />{{ activeModelEntry.color ? 'Color' : 'B&N' }}
+                      </span>
+                      <span class="mmodel__name">{{ activeModelEntry?.label || 'Modelo' }}</span>
+                      <Icon name="chevron" :size="14" class="mmodel__chev" />
+                    </button>
+                    <Teleport to="body">
+                      <Transition name="mmodel-pop">
+                        <ul v-if="modelOpen" ref="menuRef" class="mmodel__menu" :class="{ 'is-up': menuPos.up }"
+                            :style="{ top: menuPos.top + 'px', left: menuPos.left + 'px', width: menuPos.width + 'px' }">
+                          <li v-for="e in modelEntries" :key="e.key">
+                            <button type="button" class="mmodel__opt" :class="{ 'is-sel': e.key === store.activeModel }" @click="pickModel(e.key)">
+                              <span class="mmodel__tag" :class="e.color ? 'is-color' : 'is-bw'"><i class="mmodel__dot" />{{ e.color ? 'Color' : 'B&N' }}</span>
+                              <span class="mmodel__name">{{ e.label }}</span>
+                              <Icon v-if="e.key === store.activeModel" name="check" :size="14" class="mmodel__ck" />
+                            </button>
+                          </li>
+                        </ul>
+                      </Transition>
+                    </Teleport>
+                  </div>
                   <label class="mf mf--chk"><span>Modo eco <em>(deja correr MPV al escalar)</em></span>
                     <input type="checkbox" :checked="store.eco" @change="store.setEco($event.target.checked)" />
                   </label>
@@ -674,6 +778,7 @@ async function doExport(toDrive = false) {
                           <span v-else-if="c === verBest" class="vr__badge vr__badge--best">★ mejor calidad</span>
                         </span>
                         <span class="vr__q">{{ c.quality?.height }}px · score {{ c.quality?.score }}</span>
+                        <span v-if="c.match != null" class="vg__match" :class="{ 'vg__match--low': c.match < 0.95 }" :title="'Parecido de título con &quot;' + m?.name + '&quot; — mismo match que la Cobertura por capítulo'">{{ Math.round(c.match * 100) }}% título</span>
                         <span v-if="isIrregular(c.quality)" class="vr__irr" :title="`Calidad irregular entre capítulos (${c.quality.heightMin}–${c.quality.heightMax}px). Algún capítulo es notablemente peor — penalizado en el ranking.`">⚠ irregular</span>
                       </div>
                       <div class="vr__acts">
@@ -866,7 +971,7 @@ async function doExport(toDrive = false) {
                       <span v-if="tp.esSel.quality" class="tl__q">{{ tp.esSel.quality.height }}px</span>
                     </div>
                     <select v-if="tp.esCands.length" class="tl__sel" :value="store._candKey(tp.esSel)" @change="onEs">
-                      <option v-for="c in tp.esCands" :key="store._candKey(c)" :value="store._candKey(c)">{{ c.sourceName }} ({{ c.sourceLang }}) — {{ c.quality?.height }}px</option>
+                      <option v-for="c in tp.esCands" :key="store._candKey(c)" :value="store._candKey(c)">{{ c.sourceName }} ({{ c.sourceLang }}){{ c.quality ? ` — ${c.quality.height}px` : ' — sin medir' }}</option>
                     </select>
                   </div>
                 </div>
@@ -1178,11 +1283,30 @@ async function doExport(toDrive = false) {
 .modal__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 2; width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); transition: all var(--t-fast); }
 .modal__x:hover { color: var(--ink); border-color: var(--line-strong); }
 
-.modal__head { display: flex; gap: var(--s-4); padding: var(--s-5); border-bottom: 1px solid var(--line); flex-shrink: 0; }
+.modal__head { position: relative; overflow: hidden; display: flex; gap: var(--s-4); padding: var(--s-5); border-bottom: 1px solid var(--line); flex-shrink: 0; }
+/* Ambiente por portada (solo cabecera): backdrop de la propia portada esmerilada +
+   aura del color dominante. Puramente decorativo, detrás del texto/póster (que suben
+   con z-index:1). Sin ambiente disponible → oculto. */
+.modal__ambient { display: none; }
+.modal--art .modal__ambient { display: block; position: absolute; inset: 0; z-index: 0; pointer-events: none; }
+.modal--art .modal__ambient::before {   /* portada esmerilada */
+  content: ''; position: absolute; inset: 0;
+  background-image: var(--cvart); background-size: cover; background-position: center 22%;
+  filter: blur(28px) saturate(1.25); transform: scale(1.25); opacity: .22;
+}
+.modal--art .modal__ambient::after {    /* aura de color + desvanecido a la superficie */
+  content: ''; position: absolute; inset: 0;
+  background:
+    radial-gradient(120% 90% at 18% 0%, rgba(var(--cv), .30), transparent 62%),
+    linear-gradient(180deg, transparent 30%, var(--glass-strong) 96%);
+}
+.modal__head > :not(.modal__ambient) { position: relative; z-index: 1; }
 /* align-self:flex-start stops the flex row from stretching the cover to the (taller)
    info column's height. Keep the natural aspect ratio (width fixed, height auto) so the
    cover is shown whole — no cropping the sides, no distortion. */
 .modal__cover { width: 132px; height: auto; align-self: flex-start; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
+/* Resplandor del póster en su propio color dominante (#2). */
+.modal--art .modal__cover { box-shadow: var(--shadow-md), 0 6px 30px rgba(var(--cv), .45); }
 .modal__cover--ph { display: grid; place-items: center; background: var(--surface-2); color: var(--ink-ghost); width: 132px; aspect-ratio: 2/3; }
 .modal__info { min-width: 0; padding-right: var(--s-7); }
 .modal__title { font-size: var(--fs-xl); line-height: var(--lh-snug); }
@@ -1251,6 +1375,56 @@ async function doExport(toDrive = false) {
 .mf select:hover { border-color: var(--line-strong); }
 .mf select:focus { outline: none; border-color: var(--azure); box-shadow: 0 0 0 3px var(--azure-haze); }
 .mf select option { background: var(--surface-2); color: var(--ink); }
+
+/* ── Selector de modelo propio (distintivo Color/B&N) ─────────────────────── */
+.mmodel { position: relative; }
+.mmodel__btn {
+  display: flex; align-items: center; gap: var(--s-2); width: 100%;
+  padding: var(--s-2) var(--s-3); border-radius: var(--r-sm);
+  background: var(--surface); border: 1px solid var(--line-2); color: var(--ink);
+  font-size: var(--fs-sm); cursor: pointer; text-align: left;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.mmodel__btn:hover { border-color: var(--line-strong); }
+.mmodel__btn.open { border-color: var(--azure); box-shadow: 0 0 0 3px var(--azure-haze); }
+.mmodel__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mmodel__chev { color: var(--ink-ghost); transition: transform var(--t-fast); flex-shrink: 0; }
+.mmodel__btn.open .mmodel__chev { transform: rotate(180deg); }
+/* Etiqueta Color / B&N */
+.mmodel__tag {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  padding: 2px 8px 2px 6px; border-radius: var(--r-pill);
+  font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .02em;
+  border: 1px solid var(--line-2);
+}
+.mmodel__dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+.mmodel__tag.is-color { color: #ffd5a3; border-color: color-mix(in srgb, #ff8a4d 45%, transparent); background: color-mix(in srgb, #ff8a4d 12%, transparent); }
+.mmodel__tag.is-color .mmodel__dot { background: conic-gradient(from 210deg, #ff6b6b, #ffd93d, #6bcb77, #4d8dff, #b06bff, #ff6b6b); }
+.mmodel__tag.is-bw { color: var(--ink-soft); border-color: var(--line-strong); background: color-mix(in srgb, var(--ink) 6%, transparent); }
+.mmodel__tag.is-bw .mmodel__dot { background: linear-gradient(135deg, #f2f2f2 0%, #f2f2f2 49%, #2b2b2b 51%, #2b2b2b 100%); border: 1px solid var(--line-strong); }
+/* Menú — teletransportado al body con posición FIJA (el panel Gestionar tiene overflow:hidden y
+   lo recortaría); JS calcula top/left/width y voltea con .is-up si no cabe abajo. */
+.mmodel__menu {
+  position: fixed; z-index: 200;
+  padding: var(--s-1); border-radius: var(--r-md);
+  background: var(--glass-strong); backdrop-filter: blur(18px);
+  border: 1px solid var(--line-2); box-shadow: var(--shadow-lg);
+  max-height: 260px; overflow-y: auto;
+}
+.mmodel__menu.is-up { transform: translateY(-100%); }
+.mmodel__opt {
+  display: flex; align-items: center; gap: var(--s-2); width: 100%;
+  padding: var(--s-2) var(--s-2); border-radius: var(--r-sm);
+  color: var(--ink-soft); font-size: var(--fs-sm); cursor: pointer; text-align: left;
+}
+.mmodel__opt:hover { background: color-mix(in srgb, var(--azure) 14%, transparent); color: var(--ink); }
+.mmodel__opt.is-sel { color: var(--ink); }
+.mmodel__ck { color: var(--azure); flex-shrink: 0; }
+/* Solo opacidad: el posicionamiento (incl. translateY(-100%) del volteo) lo lleva JS/.is-up,
+   así la animación no pisa el transform de colocación. */
+.mmodel-pop-enter-active, .mmodel-pop-leave-active { transition: opacity var(--t-fast); }
+.mmodel-pop-enter-from, .mmodel-pop-leave-to { opacity: 0; }
+
 .manage__actions { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-3); }
 .manage__spacer { flex: 1; }
 .delbtn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--coral); border: 1px solid color-mix(in srgb, var(--coral) 35%, transparent); background: transparent; transition: all var(--t-fast); }

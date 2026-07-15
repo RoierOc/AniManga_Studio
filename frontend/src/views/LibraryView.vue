@@ -11,9 +11,25 @@ import Spinner from '@/components/ui/Spinner.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import MangaRecRail from '@/components/manga/MangaRecRail.vue'
+import ContextMenu from '@/components/ui/ContextMenu.vue'
 
 const ui = useUiStore()
 const manga = useMangaStore()
+
+// Menú contextual (clic derecho) sobre las tarjetas de manga.
+const cm = ref({ open: false, x: 0, y: 0, items: [] })
+function openMenu(e, m) {
+  cm.value = {
+    open: true, x: e.clientX, y: e.clientY,
+    items: [
+      { label: 'Abrir', icon: 'library', action: () => manga.open(m) },
+      { label: 'Continuar leyendo', icon: 'play', action: () => manga.resumeManga(m) },
+      { label: 'Escalar todo a 4K', icon: 'spark', action: async () => { await manga.open(m); manga.upscaleAll() } },
+      { sep: true },
+      { label: 'Quitar de biblioteca', icon: 'trash', danger: true, action: async () => { await manga.open(m); manga.deleteManga() } },
+    ],
+  }
+}
 const items = ref([])
 const loading = ref(true)
 const error = ref(false)
@@ -292,7 +308,8 @@ watch(() => manga.libraryDirty, () => load())
                 :hint="items.length ? '' : 'Descarga capítulos desde MangaDex o tus fuentes para empezar.'" />
 
     <div v-else class="grid">
-      <MangaCard v-for="m in filtered" :key="m.id" :manga="m" :updates="manga.updatesByTitle[m.name]?.new_count || 0" @click="manga.open(m)" />
+      <MangaCard v-for="m in filtered" :key="m.id" :manga="m" :updates="manga.updatesByTitle[m.name]?.new_count || 0"
+                 @click="manga.open(m)" @contextmenu.prevent="openMenu($event, m)" />
     </div>
 
     <!-- Para ti: recomendaciones basadas en tu biblioteca (AniList) — al final del todo -->
@@ -302,6 +319,7 @@ watch(() => manga.libraryDirty, () => load())
                   @select="manga.discoverRec" />
 
     <HistoryPanel :open="showHistory" @close="showHistory = false" />
+    <ContextMenu v-model:open="cm.open" :x="cm.x" :y="cm.y" :items="cm.items" />
   </div>
 </template>
 

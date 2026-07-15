@@ -1,12 +1,14 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useUiStore, VIEWS } from '@/stores/ui'
 import { useAnimeStore } from '@/stores/anime'
 import Icon from '@/components/ui/Icon.vue'
 import ActivityIndicator from '@/components/ui/ActivityIndicator.vue'
+import StatsPanel from '@/components/layout/StatsPanel.vue'
 
 const ui = useUiStore()
 const anime = useAnimeStore()
+const statsOpen = ref(false)
 const current = computed(() => {
   if (ui.currentView === 'settings') return { label: 'Ajustes', icon: 'settings' }
   if (ui.currentView === 'workshop') return { label: 'Importar', icon: 'upload' }   // se abre desde Biblioteca
@@ -29,6 +31,17 @@ const current = computed(() => {
 
     <div class="topbar__actions">
       <ActivityIndicator />
+      <div class="topbar__stats-wrap">
+        <button
+          class="topbar__gear"
+          :class="{ 'is-active': statsOpen }"
+          title="Estadísticas"
+          @click.stop="statsOpen = !statsOpen"
+        >
+          <Icon name="chart" :size="18" />
+        </button>
+        <StatsPanel v-if="statsOpen" @close="statsOpen = false" />
+      </div>
       <button
         class="topbar__gear"
         :class="{ 'is-active': ui.currentView === 'settings' }"
@@ -62,6 +75,7 @@ const current = computed(() => {
 .topbar__title h2 { font-size: var(--fs-lg); font-weight: 600; }
 
 .topbar__actions { margin-left: auto; display: flex; align-items: center; gap: var(--s-2); }
+.topbar__stats-wrap { position: relative; display: flex; }
 .topbar__gear {
   color: var(--ink-faint);
   width: 38px; height: 38px; display: grid; place-items: center;

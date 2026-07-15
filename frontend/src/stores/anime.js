@@ -17,7 +17,7 @@ export const useAnimeStore = defineStore('anime', {
     library: [],
     loading: false,
     // Guard against a stale localStorage value landing on the placeholder fallback.
-    sub: ['library', 'search', 'seasonal', 'schedule', 'downloads', 'history'].includes(localStorage.getItem('anime-sub'))
+    sub: ['library', 'search', 'explore', 'seasonal', 'schedule', 'downloads', 'history'].includes(localStorage.getItem('anime-sub'))
       ? localStorage.getItem('anime-sub') : 'library',   // library | search | seasonal | downloads | history
     detailId: null,            // open anime detail id (library entry)
     previewAnime: null,        // non-library anime open in detail (recommendations)
@@ -29,6 +29,7 @@ export const useAnimeStore = defineStore('anime', {
 
     skipTimes: {},             // `${animeId}_${ep}` -> {op_start, op_end, ed_start, ed_end}
     epInfo: {},                // `${malId}_${ep}` -> {title, synopsis, ...} | null(loading)
+    epMeta: {},                // anime.id -> { '<num>': {title, overview, still, aired} }  (TMDB, o MAL de reserva)
     epInfoOpen: null,          // currently expanded ep-info key
     nextAiring: {},            // al_id -> {episode, airing_at}
     airing: {},                // al_id -> {status, next_episode, next_airing_at, last_episode, last_aired_at} — fresh airing schedule
@@ -86,6 +87,17 @@ export const useAnimeStore = defineStore('anime', {
     year: 0,
     seasonSort: 'score',         // score | popularity | trending
     seasonGenre: '',
+
+    // explore (AniList browse: popularidad / año / género / formato)
+    explore: [],
+    exploreLoading: false,
+    exploreSort: 'score',        // score | popularity | trending
+    exploreGenre: '',
+    exploreYear: 0,              // 0 = cualquier año
+    exploreFormat: '',           // '' = todos
+    explorePage: 1,
+    exploreHasNext: false,
+    exploreGenreList: [],        // {name,type} desde /api/anilist/genres
 
     // search + torrents
     searchQuery: '',
@@ -386,6 +398,7 @@ export const useAnimeStore = defineStore('anime', {
         this.epInfoOpen = null
         this.linkTorrent = { show: false, list: [], loading: false, subpath: '' }
         if (anime.al_id) { this.loadTags(anime); this.loadRecs(anime); this.loadSynopsis(anime); this.loadFranchise(anime) }
+        this.loadEpMeta(anime)
         useUiStore().pushNav()
       })
     },
@@ -846,9 +859,9 @@ export const useAnimeStore = defineStore('anime', {
       this.nativePlayer.sid = idx + 1   // 0 = off
       nativeSend('track', { sid: idx < 0 ? 'no' : String(idx + 1) })
     },
-    nativeSkipOp() {                // salto de opening: 86 s (2 s menos que antes, para no
-      if (!this.nativePlayer) return  // comerse el primer par de segundos tras el OP)
-      this.nativeSeek((this.nativePlayer.pos || 0) + 86)
+    nativeSkipOp() {                // salto de opening: 82 s (ajustado para no comerse el
+      if (!this.nativePlayer) return  // primer par de segundos tras el OP)
+      this.nativeSeek((this.nativePlayer.pos || 0) + 82)
     },
     setNative4kTier(tier) {
       this.native4kTier = tier
@@ -979,14 +992,43 @@ export const useAnimeStore = defineStore('anime', {
     },
 
     async loadEpInfo(anime, ep) {
+      // Solo alterna el panel; la descripción sale de epMeta (TMDB). Se conserva epInfo como
+      // reserva (filler/recap y sinopsis de MAL) para animes sin match TMDB.
+      const key = `${anime.id}_${ep.num}`
+      this.epInfoOpen = this.epInfoOpen === key ? null : key
+      // Si TMDB ya nos dio descripción para este episodio, no pedimos nada a MAL.
+      if (this.epMeta[anime.id]?.[ep.num]?.overview) return
       const malId = anime?.mal_id
       if (!malId) return
-      const key = `${malId}_${ep.num}`
-      this.epInfoOpen = this.epInfoOpen === key ? null : key
-      if (this.epInfo[key] !== undefined) return
-      this.epInfo[key] = null
-      try { this.epInfo[key] = await api.get(`/api/anime/episode_info/${malId}/${ep.num}`) || {} }
-      catch (_) { this.epInfo[key] = {} }
+      const jkey = `${malId}_${ep.num}`
+      if (this.epInfo[jkey] !== undefined) return
+      this.epInfo[jkey] = null
+      try { this.epInfo[jkey] = await api.get(`/api/anime/episode_info/${malId}/${ep.num}`) || {} }
+      catch (_) { this.epInfo[jkey] = {} }
+    },
+
+    // Título + descripción de cada episodio para el detalle, en UNA carga. Prefiere TMDB
+    // (mejores nombres/descripciones, temporada correcta vía season_by_year); si no hay match
+    // TMDB, cae a los títulos de MAL. Cacheado en el store por anime; backend cachea 7 días.
+    async loadEpMeta(anime) {
+      if (!anime?.id || this.epMeta[anime.id] !== undefined) return
+      this.epMeta[anime.id] = {}
+      try {
+        const d = await api.get(`/api/anime/episode_meta/${anime.id}`)
+        if (d?.source === 'tmdb' && d.meta && Object.keys(d.meta).length) {
+          this.epMeta[anime.id] = d.meta
+          return
+        }
+      } catch (_) { /* cae a MAL */ }
+      // Reserva: títulos de MAL (solo title).
+      if (anime.mal_id) {
+        try {
+          const t = (await api.get(`/api/anime/episode_titles/${anime.mal_id}`))?.titles || {}
+          const m = {}
+          for (const [num, v] of Object.entries(t)) m[num] = { title: v.title || '', overview: '' }
+          this.epMeta[anime.id] = m
+        } catch (_) { /* deja {} */ }
+      }
     },
 
     /* ── Auto-play ──────────────────────────────────────────────────────── */
@@ -1153,6 +1195,39 @@ export const useAnimeStore = defineStore('anime', {
         })
         if (d.ok) { useUiStore().toast(`"${anime.title}" añadido a Mi Anime`, 'ok'); await this.loadLibrary(true) }
       } catch (_) { useUiStore().toast('Error al añadir a biblioteca', 'error') }
+    },
+
+    /* ── Explore (AniList browse) ───────────────────────────────────────── */
+    _exploreSortKey() {
+      return { score: 'SCORE_DESC', popularity: 'POPULARITY_DESC', trending: 'TRENDING_DESC' }[this.exploreSort] || 'SCORE_DESC'
+    },
+    async loadExplore(append = false) {
+      this.exploreLoading = true
+      try {
+        if (!append) this.explorePage = 1
+        const p = new URLSearchParams({ sort: this._exploreSortKey(), page: String(this.explorePage) })
+        // género o tag: la lista combina ambos, así que resolvemos el tipo
+        if (this.exploreGenre) {
+          const g = this.exploreGenreList.find(x => x.name === this.exploreGenre)
+          p.set(g?.type === 'tag' ? 'tag' : 'genre', this.exploreGenre)
+        }
+        if (this.exploreYear) p.set('year', String(this.exploreYear))
+        if (this.exploreFormat) p.set('format', this.exploreFormat)
+        const d = await api.get(`/api/anilist/anime_top?${p}`)
+        const rows = d.results || []
+        this.explore = append ? [...this.explore, ...rows] : rows
+        this.exploreHasNext = !!d.hasNextPage
+      } catch (_) { if (!append) this.explore = [] }
+      finally { this.exploreLoading = false }
+    },
+    async loadExploreMore() {
+      if (this.exploreLoading || !this.exploreHasNext) return
+      this.explorePage += 1
+      await this.loadExplore(true)
+    },
+    async loadExploreGenres() {
+      if (this.exploreGenreList.length) return
+      try { this.exploreGenreList = (await api.get('/api/anilist/genres')) || [] } catch (_) { this.exploreGenreList = [] }
     },
 
     /* ── Search + torrents ──────────────────────────────────────────────── */
@@ -1352,14 +1427,6 @@ export const useAnimeStore = defineStore('anime', {
       finally { this.torrentsLoading = false }
       if (!custom && this.targetEp) this.fetchEpisodeTorrents(this.targetEp)
     },
-    async searchTosho() {
-      const q = this.torrentQuery.trim()
-      if (!q) return
-      this.torrentsLoading = true; this.torrents = []
-      try { this.torrents = await api.get(`/api/anime/torrents_tosho?q=${encodeURIComponent(q)}`) || [] }
-      catch (_) { useUiStore().toast('Error buscando en Animetosho', 'error') }
-      finally { this.torrentsLoading = false }
-    },
 
     isAdding(key) { return this.addingHashes.includes(key) },
     isAdded(key) {
@@ -1410,6 +1477,7 @@ export const useAnimeStore = defineStore('anime', {
       const ui = useUiStore()
       const key = this.subKey(anime, ep)
       this.subFetching = key
+      const loadId = ui.toast('Buscando subtítulos en español…', 'loading', 0)
       const p = new URLSearchParams({
         info_hash: ep.info_hash || '', episode: ep.num, anime_id: anime.id,
         ep_type: ep.ep_type || 'episode', ...(ep.local_path ? { local_path: ep.local_path } : {}),
@@ -1419,12 +1487,13 @@ export const useAnimeStore = defineStore('anime', {
         const tracks = d.tracks || [], ext = d.external_tracks || [], spa = d.spanish_tracks || []
         if (spa.length || tracks.length || ext.length) {
           this.subTrackModal = { anime, ep, tracks, externalTracks: ext, spanishTracks: spa, missingKeys: d.sources_missing_key || [] }
+          if (spa.length) ui.toast(`Ya hay ${spa.length} subtítulo(s) en español`, 'ok', 3000)
           return
         }
         const hint = (d.sources_missing_key || []).length ? ` (sin API key: ${d.sources_missing_key.join(', ')})` : ''
         ui.toast(`No se encontraron subtítulos${hint}`, 'warn', 7000)
       } catch (_) { ui.toast('Error obteniendo pistas de subtítulos', 'error') }
-      finally { this.subFetching = null }
+      finally { this.subFetching = null; ui.dismissToast(loadId) }
     },
 
     async directInject(anime, ep, subInfo) {

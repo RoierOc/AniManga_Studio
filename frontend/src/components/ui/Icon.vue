@@ -16,6 +16,8 @@ const PATHS = {
   play:    '<path d="M7 5.5v13a1 1 0 0 0 1.5.87l11-6.5a1 1 0 0 0 0-1.74l-11-6.5A1 1 0 0 0 7 5.5Z"/>',
   download:'<path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>',
   spark:   '<path d="M12 3v4M12 17v4M3 12h4M17 12h4"/><path d="m6 6 2.5 2.5M15.5 15.5 18 18M18 6l-2.5 2.5M8.5 15.5 6 18"/>',
+  // Barras ascendentes → panel de estadísticas.
+  chart:   '<path d="M4 20V4"/><path d="M4 20h16"/><rect x="7" y="13" width="3" height="4" rx="0.5"/><rect x="12" y="9" width="3" height="8" rx="0.5"/><rect x="17" y="5" width="3" height="12" rx="0.5"/>',
   close:   '<path d="m6 6 12 12M18 6 6 18"/>',
   check:   '<path d="m5 12 4.5 4.5L19 7"/>',
   settings:'<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M4.2 7l2.6 1.5M17.2 15.5l2.6 1.5M4.2 17l2.6-1.5M17.2 8.5l2.6-1.5"/>',

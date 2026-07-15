@@ -1,7 +1,7 @@
 <script setup>
 // Barra de título PROPIA para la shell nativa de Windows (WebView2 sin marco).
 // Sustituye a la barra de título del sistema por una integrada con "Midnight
-// Atelier": misma marca (愛 AniManga Studio) + controles minimizar/maximizar/
+// Atelier": misma marca (青 AniManga Studio) + controles minimizar/maximizar/
 // cerrar al estilo Windows. Solo se monta cuando corremos dentro de la shell
 // nativa (App.vue la envuelve en v-if="isNative()"), así el player web no la ve.
 import { ref, onMounted, onUnmounted } from 'vue'
@@ -45,7 +45,7 @@ function close() { windowControl('close') }
     <!-- Zona arrastrable: marca + relleno. Los controles quedan fuera de ella. -->
     <div class="tb__drag" @mousedown="onDragDown">
       <div class="tb__brand">
-        <span class="tb__mark"><span class="tb__kanji">愛</span></span>
+        <span class="tb__mark"><span class="tb__kanji">青</span></span>
         <span class="tb__word">AniManga<b>Studio</b></span>
       </div>
     </div>

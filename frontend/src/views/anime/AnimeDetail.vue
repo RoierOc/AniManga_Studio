@@ -5,6 +5,7 @@ import { useUiStore } from '@/stores/ui'
 import { api } from '@/lib/api'
 import { ANIME_STATUS, animeFormatLabel, animeEpLabel, batchInfo, fmtCountdown, nextUnwatchedEp } from '@/lib/anime'
 import { imgProxy } from '@/lib/img'
+import { coverRGB, vivid } from '@/lib/coverColor'
 import { formatBytes } from '@/lib/format'
 import EpisodeCard from '@/components/anime/EpisodeCard.vue'
 import EpisodeRow from '@/components/anime/EpisodeRow.vue'
@@ -13,6 +14,16 @@ import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useAnimeStore()
 const anime = computed(() => store.detail)
+
+// Resplandor del póster en su color dominante (solo decorativo, detrás del póster).
+// El hero ya aporta el ambiente de fondo (banner); esto le da identidad al póster.
+const posterGlow = ref({})
+watch(() => store.detail?.cover, async (cover) => {
+  posterGlow.value = {}
+  if (!cover) return
+  const rgb = await coverRGB(imgProxy(cover))
+  if (rgb) { const v = vivid(rgb); posterGlow.value = { '--pglow': `0 10px 44px rgba(${v.r}, ${v.g}, ${v.b}, .5)` } }
+}, { immediate: true })
 // Preview = anime no-biblioteca (temporada/recomendación/estrenos). Solo "Agregar" + Torrents.
 const isPreview = computed(() => !!store.previewAnime)
 const inLibrary = computed(() => store.isInLibrary(anime.value))
@@ -150,6 +161,20 @@ onMounted(schedulePreview)
 watch(() => anime.value?.id, schedulePreview)
 onBeforeUnmount(() => clearTimeout(previewTimer))
 
+// ── Selector de estado (Viendo / Por ver / …) — desplegable propio ──────────
+// Reemplaza el <select> nativo (menú del SO, feo y fuera de estilo) por un menú
+// con la estética de la app. Cierra al elegir, con Escape o clic fuera.
+const statusOpen = ref(false)
+const statusRef = ref(null)
+const curStatus = computed(() => ANIME_STATUS[anime.value?.status] || null)
+function pickStatus(k) { store.setStatus(anime.value, k); statusOpen.value = false }
+function onDocClick(e) { if (statusRef.value && !statusRef.value.contains(e.target)) statusOpen.value = false }
+function onDocKey(e) { if (e.key === 'Escape') statusOpen.value = false }
+onMounted(() => { document.addEventListener('click', onDocClick); document.addEventListener('keydown', onDocKey) })
+onBeforeUnmount(() => { document.removeEventListener('click', onDocClick); document.removeEventListener('keydown', onDocKey) })
+// Cerrar si se cambia de anime.
+watch(() => anime.value?.id, () => { statusOpen.value = false })
+
 const PICKER_TABS = [
   { key: 'cover', label: 'Portada' },
   { key: 'banner_detail', label: 'Fondo de esta página' },
@@ -178,7 +203,8 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
       </div>
 
       <div class="dhero__inner stagger">
-        <img v-if="anime.cover && !posterFailed" class="dhero__poster" :src="imgProxy(anime.cover)" :alt="anime.title" style="--i:0" @error="posterFailed = true" />
+        <img v-if="anime.cover && !posterFailed" class="dhero__poster" :src="imgProxy(anime.cover)" :alt="anime.title"
+             :style="[{ '--i': 0 }, posterGlow]" @error="posterFailed = true" />
 
         <div class="dhero__col" style="--i:1">
           <span class="dhero__fmt">{{ animeFormatLabel(anime.format) }}</span>
@@ -202,12 +228,30 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
           </div>
 
           <div class="dhero__row">
-            <select class="dhero__status" :value="anime.status || ''"
-                    :style="{ color: ANIME_STATUS[anime.status]?.color || 'var(--ink-faint)' }"
-                    @change="store.setStatus(anime, $event.target.value)">
-              <option value="">Sin estado</option>
-              <option v-for="(v, k) in ANIME_STATUS" :key="k" :value="k">{{ v.label }}</option>
-            </select>
+            <div class="dstatus" ref="statusRef">
+              <button class="dstatus__btn" :class="{ 'is-open': statusOpen }" @click.stop="statusOpen = !statusOpen"
+                      aria-haspopup="listbox" :aria-expanded="statusOpen">
+                <span class="dstatus__dot" :style="{ background: curStatus?.color || 'var(--ink-ghost)' }" />
+                <span class="dstatus__lbl" :style="{ color: curStatus?.color || 'var(--ink-soft)' }">{{ curStatus?.label || 'Sin estado' }}</span>
+                <Icon name="chevron" :size="14" class="dstatus__chev" :style="{ transform: statusOpen ? 'rotate(90deg)' : 'rotate(-90deg)' }" />
+              </button>
+              <Transition name="dstatus-pop">
+                <ul v-if="statusOpen" class="dstatus__menu" role="listbox">
+                  <li v-for="(v, k) in ANIME_STATUS" :key="k" role="option" :aria-selected="anime.status === k"
+                      class="dstatus__opt" :class="{ 'is-sel': anime.status === k }" @click="pickStatus(k)">
+                    <span class="dstatus__dot" :style="{ background: v.color }" />
+                    <span :style="{ color: v.color }">{{ v.label }}</span>
+                    <Icon v-if="anime.status === k" name="check" :size="14" class="dstatus__ck" />
+                  </li>
+                  <li role="option" :aria-selected="!anime.status" class="dstatus__opt dstatus__opt--none"
+                      :class="{ 'is-sel': !anime.status }" @click="pickStatus('')">
+                    <span class="dstatus__dot dstatus__dot--none" />
+                    <span>Sin estado</span>
+                    <Icon v-if="!anime.status" name="check" :size="14" class="dstatus__ck" />
+                  </li>
+                </ul>
+              </Transition>
+            </div>
             <a v-if="anime.al_id" :href="`https://anilist.co/anime/${anime.al_id}`" target="_blank" rel="noopener" class="dhero__link">AniList</a>
             <a v-if="anime.mal_id" :href="`https://myanimelist.net/anime/${anime.mal_id}`" target="_blank" rel="noopener" class="dhero__link">MAL</a>
             <a v-if="malUrl" :href="malUrl + '/userrec'" target="_blank" rel="noopener" class="dhero__link" title="Recomendaciones de la comunidad MAL">Comunidad</a>
@@ -496,7 +540,8 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .dhero__inner { position: relative; z-index: 1; height: 100%; display: flex; align-items: flex-end;
   gap: var(--s-5); max-width: 900px; padding: var(--s-6) var(--s-7); }
 /* natural aspect (height auto) + flex-shrink:0 → poster shown whole, not cropped or squeezed. */
-.dhero__poster { width: 168px; height: auto; border-radius: var(--r-md); box-shadow: var(--shadow-lg); border: 1px solid rgba(255,255,255,.16); flex-shrink: 0;
+.dhero__poster { width: 168px; height: auto; border-radius: var(--r-md); box-shadow: var(--shadow-lg), var(--pglow, 0 0 0 transparent); border: 1px solid rgba(255,255,255,.16); flex-shrink: 0;
+  transition: box-shadow var(--t-slow) var(--ease-silk);
   view-transition-name: detail-poster;   /* destino del morph desde la card (lib/vt.js) */ }
 .dhero__col { display: flex; flex-direction: column; gap: var(--s-3); min-width: 0; }
 .dhero__fmt { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--cyan); }
@@ -522,8 +567,32 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .dhero__airing-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); box-shadow: var(--glow-cyan); animation: pulse-live 2s var(--ease-drift) infinite; }
 
 .dhero__row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
-.dhero__status { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: rgba(255,255,255,.12);
-  border: 1px solid rgba(255,255,255,.16); backdrop-filter: blur(8px); font-size: var(--fs-sm); font-weight: 500; cursor: pointer; }
+/* Selector de estado propio (reemplaza el <select> nativo) */
+.dstatus { position: relative; }
+.dstatus__btn { display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-sm); background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.16);
+  backdrop-filter: blur(8px); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; transition: all var(--t-fast); }
+.dstatus__btn:hover { border-color: var(--azure); background: rgba(255,255,255,.2); }
+.dstatus__btn.is-open { border-color: var(--azure); background: rgba(255,255,255,.2); }
+.dstatus__dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 8px currentColor; }
+.dstatus__dot--none { background: var(--ink-ghost); box-shadow: none; }
+.dstatus__lbl { white-space: nowrap; }
+.dstatus__chev { color: var(--ink-soft); transition: transform var(--t-fast); }
+
+/* Se abre HACIA ARRIBA: el botón vive pegado al borde inferior del hero, que tiene
+   overflow:hidden — hacia abajo el menú quedaría recortado. */
+.dstatus__menu { position: absolute; z-index: 20; bottom: calc(100% + var(--s-1)); left: 0; min-width: 12rem;
+  list-style: none; margin: 0; padding: var(--s-1); border-radius: var(--r-md);
+  background: rgba(12,16,26,.97); border: 1px solid var(--line-2); backdrop-filter: blur(14px); box-shadow: var(--shadow-xl); }
+.dstatus__opt { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-sm); font-size: var(--fs-sm); font-weight: 500; cursor: pointer; transition: background var(--t-fast); }
+.dstatus__opt:hover { background: rgba(255,255,255,.08); }
+.dstatus__opt.is-sel { background: var(--azure-haze); }
+.dstatus__opt--none span:not(.dstatus__dot) { color: var(--ink-soft); }
+.dstatus__ck { margin-left: auto; color: var(--azure-bright); }
+
+.dstatus-pop-enter-active, .dstatus-pop-leave-active { transition: opacity var(--t-fast), transform var(--t-fast) var(--ease-silk); transform-origin: bottom left; }
+.dstatus-pop-enter-from, .dstatus-pop-leave-to { opacity: 0; transform: translateY(4px) scale(.97); }
 .dhero__link { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: rgba(255,255,255,.12);
   border: 1px solid rgba(255,255,255,.16); backdrop-filter: blur(8px); color: var(--ink); font-size: var(--fs-sm); transition: all var(--t-fast); }
 .dhero__link:hover { color: #fff; border-color: var(--azure); background: rgba(255,255,255,.2); }

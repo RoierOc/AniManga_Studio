@@ -129,6 +129,13 @@ ul, ol { list-style: none; }
   animation-duration: .38s;
   animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
 }
+/* Crossfade del cambio de sección (root): un pelín más largo y suave que el default
+   del navegador para que se sienta premium, no brusco. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: .30s;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
 @media (prefers-reduced-motion: reduce) {
   ::view-transition-group(*),
   ::view-transition-old(*),

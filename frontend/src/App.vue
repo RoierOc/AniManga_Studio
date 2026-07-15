@@ -8,6 +8,7 @@ import Sidebar from '@/components/layout/Sidebar.vue'
 import TopBar from '@/components/layout/TopBar.vue'
 import TitleBar from '@/components/layout/TitleBar.vue'
 import { isNative, onMessage } from '@/lib/nativeBridge'
+import { supportsVT } from '@/lib/vt'
 import Toaster from '@/components/ui/Toaster.vue'
 import ActivityDrawer from '@/components/ui/ActivityDrawer.vue'
 import ShortcutsModal from '@/components/ui/ShortcutsModal.vue'
@@ -146,6 +147,14 @@ watch(() => ui.currentView, () => { crash.value = null })
           </div>
           <p class="crash__hint">O elige otra sección en la barra lateral.</p>
         </div>
+        <!-- Con View Transitions el swap entre secciones lo anima el navegador
+             (crossfade + morph de elementos compartidos como el póster); la
+             <Transition out-in> de Vue retrasaría el montaje y la captura del
+             "después" saldría vacía. Sin soporte, swap Vue como antes. -->
+        <template v-else-if="supportsVT">
+          <component :is="activeComponent" v-if="activeComponent" :key="ui.currentView + '_' + crashKey" />
+          <PlaceholderView v-else :key="ui.currentView" :label="meta?.label" :icon="meta?.icon" />
+        </template>
         <Transition v-else name="view" mode="out-in">
           <component :is="activeComponent" v-if="activeComponent" :key="ui.currentView + '_' + crashKey" />
           <PlaceholderView v-else :key="ui.currentView" :label="meta?.label" :icon="meta?.icon" />

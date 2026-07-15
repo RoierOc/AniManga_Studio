@@ -22,7 +22,7 @@ const isActive = (item) =>
     <!-- Brand -->
     <div class="brand">
       <div class="brand__mark">
-        <span class="brand__kanji jp">愛</span>
+        <span class="brand__kanji jp">青</span>
         <span class="brand__pulse" />
       </div>
       <div class="brand__text">

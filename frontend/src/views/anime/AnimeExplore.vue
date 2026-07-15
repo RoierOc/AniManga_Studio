@@ -1,0 +1,113 @@
+<script setup>
+import { computed, onMounted } from 'vue'
+import { useAnimeStore } from '@/stores/anime'
+import DiscoverCard from '@/components/anime/DiscoverCard.vue'
+import Icon from '@/components/ui/Icon.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+
+const store = useAnimeStore()
+
+const SORTS = [
+  { id: 'score', label: 'Mejor puntuados' },
+  { id: 'popularity', label: 'Más populares' },
+  { id: 'trending', label: 'Tendencia' },
+]
+const FORMATS = [
+  { id: '', label: 'Todo' },
+  { id: 'TV', label: 'TV' },
+  { id: 'MOVIE', label: 'Película' },
+  { id: 'OVA', label: 'OVA' },
+  { id: 'ONA', label: 'ONA' },
+  { id: 'SPECIAL', label: 'Especial' },
+]
+const years = computed(() => {
+  const cur = new Date().getFullYear(); const arr = []
+  for (let y = cur + 1; y >= 1970; y--) arr.push(y)
+  return arr
+})
+// Solo géneros "reales" (no tags) para el chip-rail; los tags saturan la lista.
+const genres = computed(() => store.exploreGenreList.filter(g => g.type === 'genre').map(g => g.name))
+
+function reload() { store.loadExplore(false) }
+function setSort(id) { store.exploreSort = id; reload() }
+function setGenre(g) { store.exploreGenre = store.exploreGenre === g ? '' : g; reload() }
+
+onMounted(() => {
+  store.loadExploreGenres()
+  if (!store.explore.length) store.loadExplore(false)
+})
+</script>
+
+<template>
+  <div class="expl">
+    <header class="expl__head">
+      <div>
+        <p class="eyebrow"><span class="tick" /> EXPLORAR</p>
+        <h1>Descubre anime</h1>
+      </div>
+
+      <div class="expl__controls">
+        <select class="sel" :value="store.exploreYear" @change="store.exploreYear = Number($event.target.value); reload()">
+          <option :value="0">Cualquier año</option>
+          <option v-for="y in years" :key="y" :value="y">{{ y }}</option>
+        </select>
+        <select class="sel" :value="store.exploreFormat" @change="store.exploreFormat = $event.target.value; reload()">
+          <option v-for="f in FORMATS" :key="f.id" :value="f.id">{{ f.label }}</option>
+        </select>
+        <div class="segm">
+          <button v-for="s in SORTS" :key="s.id" :class="{ 'is-active': store.exploreSort === s.id }" @click="setSort(s.id)">{{ s.label }}</button>
+        </div>
+      </div>
+    </header>
+
+    <div v-if="genres.length" class="genres">
+      <button class="gchip" :class="{ 'is-active': !store.exploreGenre }" @click="setGenre(store.exploreGenre)">Todos</button>
+      <button v-for="g in genres" :key="g" class="gchip" :class="{ 'is-active': store.exploreGenre === g }" @click="setGenre(g)">{{ g }}</button>
+    </div>
+
+    <div v-if="store.exploreLoading && !store.explore.length" class="grid">
+      <div v-for="n in 12" :key="n" class="skeleton" />
+    </div>
+    <EmptyState v-else-if="!store.explore.length" icon="spark" title="Sin resultados con estos filtros." />
+    <template v-else>
+      <div class="grid">
+        <DiscoverCard v-for="a in store.explore" :key="a.al_id" :anime="a" />
+      </div>
+      <div v-if="store.exploreHasNext" class="more">
+        <button class="morebtn" :disabled="store.exploreLoading" @click="store.loadExploreMore()">
+          <Icon name="chevron" :size="15" :style="{ transform: 'rotate(90deg)' }" />
+          {{ store.exploreLoading ? 'Cargando…' : 'Cargar más' }}
+        </button>
+      </div>
+    </template>
+  </div>
+</template>
+
+<style scoped>
+.expl { max-width: var(--content-max); margin: 0 auto; padding: 0 var(--s-6) var(--s-8); }
+.expl__head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: var(--s-4); padding: var(--s-5) 0; }
+.eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
+.tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
+
+.expl__controls { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.sel { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); cursor: pointer; }
+.segm { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
+.segm button { padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--ink-faint); transition: all var(--t-fast); }
+.segm button:hover { color: var(--ink); }
+.segm button.is-active { background: var(--surface-3); color: var(--ink); }
+
+.genres { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-bottom: var(--s-5); }
+.gchip { padding: 5px 12px; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
+.gchip:hover { color: var(--ink); border-color: var(--line-strong); }
+.gchip.is-active { background: var(--azure-haze); border-color: var(--azure); color: var(--azure-bright); }
+
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.875rem, 1fr)); gap: var(--s-5); }
+.skeleton { aspect-ratio: 2/3; border-radius: var(--r-md); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
+
+.more { display: flex; justify-content: center; padding: var(--s-6) 0 0; }
+.morebtn { display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-3) var(--s-5); border-radius: var(--r-pill); border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 600; transition: all var(--t-fast); }
+.morebtn:hover:not(:disabled) { color: var(--ink); border-color: var(--azure); background: var(--azure-haze); }
+.morebtn:disabled { opacity: .6; cursor: default; }
+
+@media (max-width: 640px) { .expl { padding: 0 var(--s-4) var(--s-8); } .grid { grid-template-columns: repeat(auto-fill, minmax(8.75rem, 1fr)); } }
+</style>

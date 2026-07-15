@@ -10,6 +10,7 @@ import History from './History.vue'
 import Seasonal from './Seasonal.vue'
 import Schedule from './Schedule.vue'
 import Search from './Search.vue'
+import AnimeExplore from './AnimeExplore.vue'
 import AutoplayModal from '@/components/anime/AutoplayModal.vue'
 import SubTrackModal from '@/components/anime/SubTrackModal.vue'
 import ScanPathsModal from '@/components/anime/ScanPathsModal.vue'
@@ -21,6 +22,7 @@ const store = useAnimeStore()
 const TABS = [
   { id: 'library',   label: 'Mi Anime',  icon: 'film' },
   { id: 'search',    label: 'Buscar',    icon: 'search' },
+  { id: 'explore',   label: 'Explorar',  icon: 'globe' },
   { id: 'seasonal',  label: 'Temporada', icon: 'spark' },
   { id: 'schedule',  label: 'Estrenos',  icon: 'clock' },
   { id: 'downloads', label: 'Descargas', icon: 'download' },
@@ -45,7 +47,7 @@ function selectTab(id) {
 // Con View Transitions el swap lo anima el navegador (crossfade + morph del
 // póster); la <Transition out-in> de Vue retrasaría el montaje del DOM nuevo
 // y la captura del "después" saldría vacía. Sin soporte, swap Vue como antes.
-const VIEW_MAP = { library: AnimeLibrary, search: Search, seasonal: Seasonal,
+const VIEW_MAP = { library: AnimeLibrary, search: Search, explore: AnimeExplore, seasonal: Seasonal,
                    schedule: Schedule, downloads: Downloads, history: History }
 const current = computed(() => {
   if (store.detail) return { c: AnimeDetail, key: 'detail', props: {} }

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { isNative, send as nativeSend } from '@/lib/nativeBridge'
+import { vtGo } from '@/lib/vt'
 import { useAnimeStore } from './anime'
 import { useMangaStore } from './manga'
 
@@ -29,6 +30,7 @@ export const VIEWS = [
     items: [
       { id: 'anime', sub: 'library',   label: 'Mi Anime',     icon: 'film' },
       { id: 'anime', sub: 'search',    label: 'Buscar Anime', icon: 'search' },
+      { id: 'anime', sub: 'explore',   label: 'Explorar',     icon: 'globe' },
       { id: 'anime', sub: 'seasonal',  label: 'Temporada',    icon: 'spark' },
       { id: 'anime', sub: 'downloads', label: 'Descargas',    icon: 'download' },
     ],
@@ -166,13 +168,17 @@ export const useUiStore = defineStore('ui', {
 
     goto(view) {
       const v = LEGACY_VIEWS[view] || view
-      if (VALID.has(v)) this.currentView = v
-      this.sidebarMobileOpen = false
-      this.activityOpen = false   // navigating away closes the activity drawer
-      // switching to a top-level view closes any open detail/modal
-      try { const a = useAnimeStore(); a.detailId = null; a.torrentAnime = null } catch {}
-      try { const m = useMangaStore(); m.current = null } catch {}
-      this.pushNav()
+      // Envolver el cambio de sección en una View Transition (crossfade + morph de
+      // elementos compartidos). vtGo cae a mutación directa si no hay soporte.
+      vtGo(() => {
+        if (VALID.has(v)) this.currentView = v
+        this.sidebarMobileOpen = false
+        this.activityOpen = false   // navigating away closes the activity drawer
+        // switching to a top-level view closes any open detail/modal
+        try { const a = useAnimeStore(); a.detailId = null; a.torrentAnime = null } catch {}
+        try { const m = useMangaStore(); m.current = null } catch {}
+        this.pushNav()
+      })
     },
 
     toggleSidebar() {

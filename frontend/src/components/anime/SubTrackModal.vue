@@ -22,7 +22,7 @@ const SRC = { jimaku: 'Jimaku', opensubtitles: 'OpenSubtitles', subdl: 'Subdl', 
           <div class="modal__body">
             <!-- Ready-made Spanish subs: inject directly -->
             <section v-if="m.spanishTracks.length">
-              <h3 class="sec"><Icon name="check" :size="13" /> Listos para inyectar</h3>
+              <h3 class="sec"><Icon name="check" :size="13" /> Ya en español · listos para usar</h3>
               <button v-for="(t, i) in m.spanishTracks" :key="'s' + i" class="trk trk--ready" @click="store.directInject(m.anime, m.ep, t)">
                 <span class="trk__lang">ES</span>
                 <span class="trk__name">{{ t.title || t.release_name || 'Subtítulo español' }}</span>

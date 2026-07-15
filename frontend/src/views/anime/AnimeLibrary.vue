@@ -7,6 +7,7 @@ import AnimeCard from '@/components/anime/AnimeCard.vue'
 import HeroBanner from '@/components/anime/HeroBanner.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ContextMenu from '@/components/ui/ContextMenu.vue'
 
 const store = useAnimeStore()
 
@@ -80,6 +81,32 @@ function playFromCard(a) {
   const ep = nextUnwatchedEp(a)
   if (ep) store.play(a, ep); else store.openDetail(a)
 }
+
+// Menú contextual (clic derecho) sobre las tarjetas de anime.
+const cm = ref({ open: false, x: 0, y: 0, items: [] })
+// Menú del riel "Seguir viendo": ir a la serie sin bajar a buscarla en la biblioteca.
+function openCwMenu(e, cw) {
+  cm.value = {
+    open: true, x: e.clientX, y: e.clientY,
+    items: [
+      { label: 'Ver serie', icon: 'film', action: () => store.openDetail(cw.anime) },
+      { label: `Reproducir ep. ${cw.ep.num}`, icon: 'play', action: () => store.play(cw.anime, cw.ep) },
+    ],
+  }
+}
+function openMenu(e, a) {
+  cm.value = {
+    open: true, x: e.clientX, y: e.clientY,
+    items: [
+      { label: 'Abrir', icon: 'film', action: () => store.openDetail(a) },
+      { label: 'Ver ahora', icon: 'play', action: () => playFromCard(a) },
+      { label: 'Buscar torrents', icon: 'download', action: () => store.openTorrents(a) },
+      { sep: true },
+      { label: 'Borrar episodios', icon: 'trash', action: () => store.clearEpisodes(a) },
+      { label: 'Quitar de biblioteca', icon: 'close', danger: true, action: () => store.removeFromLibrary(a.id) },
+    ],
+  }
+}
 </script>
 
 <template>
@@ -102,7 +129,8 @@ function playFromCard(a) {
     <section v-if="store.continueWatching.length" class="cw">
       <h3 class="cw__title">Seguir viendo</h3>
       <div class="cw__row">
-        <article v-for="cw in store.continueWatching" :key="cw.anime.id" class="cwc" @click="store.play(cw.anime, cw.ep)">
+        <article v-for="cw in store.continueWatching" :key="cw.anime.id" class="cwc"
+                 @click="store.play(cw.anime, cw.ep)" @contextmenu.prevent="openCwMenu($event, cw)">
           <div class="cwc__thumb">
             <img v-if="cw.ep.in_local || (cw.ep.in_qbt && cw.ep.progress >= 100)"
                  :src="`/api/anime/thumb/${cw.anime.id}/${cw.ep.num}`"
@@ -155,8 +183,10 @@ function playFromCard(a) {
                 :title="store.library.length ? 'Sin resultados.' : 'Aún no has añadido anime.'"
                 :hint="store.library.length ? '' : 'Busca una serie y añádela para seguir sus episodios aquí.'" />
     <div v-else class="grid">
-      <AnimeCard v-for="a in filtered" :key="a.id" :anime="a" @open="store.openDetail($event)" @play="playFromCard" />
+      <AnimeCard v-for="a in filtered" :key="a.id" :anime="a" @open="store.openDetail($event)" @play="playFromCard"
+                 @contextmenu.prevent="openMenu($event, a)" />
     </div>
+    <ContextMenu v-model:open="cm.open" :x="cm.x" :y="cm.y" :items="cm.items" />
   </div>
 </template>
 

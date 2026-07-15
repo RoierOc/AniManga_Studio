@@ -46,15 +46,11 @@ function toggle(ep) {
 const isOpen = (ep) => expanded.value.has(ep)
 const epLoading = (ep) => store.epFetch[ep] === 'loading'
 
-// Seed the expanded state when results change: few groups (e.g. opened from a
-// specific episode) start expanded for convenience, but the user can still collapse
-// them — the toggle is no longer overridden by the template.
-watch(() => store.groupedEpisodes, (groups) => {
-  const few = groups.length && groups.length <= 3
-  expanded.value = few ? new Set(groups.map(g => g.episode)) : new Set()
-  // Auto-expanded episode groups get deep-fetched too, so opening on a specific episode (or a
-  // result set with only a couple of episodes) loads the full torrent list without a manual click.
-  if (few) for (const g of groups) if (g.episode > 0) store.fetchEpisodeTorrents(g.episode)
+// Al entrar en cualquier vista de torrents (episodio único o todos) los grupos arrancan
+// COLAPSADOS — el usuario despliega el que quiera. El deep-fetch por episodio ocurre en toggle()
+// al expandir, así que colapsar además evita peticiones a Nyaa que no se van a mirar.
+watch(() => store.groupedEpisodes, () => {
+  expanded.value = new Set()
 }, { immediate: true })
 const epLabel = (n) => n === 0 ? 'Batch / Completo' : n === -1 ? 'Sin clasificar' : `Episodio ${n}`
 const keyOf = (t) => t.info_hash || t.torrent_url
@@ -81,7 +77,6 @@ const keyOf = (t) => t.info_hash || t.torrent_url
         <div class="tp__searchbar">
           <input v-model="store.torrentQuery" @keyup.enter="store.searchTorrents()" placeholder="Refinar búsqueda en Nyaa…" />
           <button class="tp__sbtn" @click="store.searchTorrents()"><Icon name="search" :size="14" /> Nyaa</button>
-          <button class="tp__sbtn tp__sbtn--alt" @click="store.searchTosho()">Animetosho</button>
         </div>
         <div v-if="store.torrentVariants.length > 1" class="tp__alias" title="Alias de AniList que se buscan en Nyaa">
           <Icon name="search" :size="11" />
@@ -195,7 +190,6 @@ const keyOf = (t) => t.info_hash || t.torrent_url
 .tp__searchbar input { flex: 1; min-width: 180px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); }
 .tp__searchbar input:focus { outline: none; border-color: var(--azure); }
 .tp__sbtn { display: inline-flex; align-items: center; gap: 5px; padding: var(--s-2) var(--s-4); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-size: var(--fs-sm); font-weight: 600; }
-.tp__sbtn--alt { background: var(--surface-2); border: 1px solid var(--line-2); color: var(--ink-soft); }
 .tp__alias { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: var(--s-2); color: var(--ink-faint); }
 .tp__alias-lbl { font-size: var(--fs-2xs); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
 .tp__chip { padding: 2px 8px; border-radius: var(--r-pill); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink-soft); font-size: var(--fs-2xs); transition: all var(--t-fast); }

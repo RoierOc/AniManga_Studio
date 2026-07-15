@@ -1,10 +1,20 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { MANGA_STATUS } from '@/lib/manga'
 import { imgProxy, imgThumb } from '@/lib/img'
+import { coverRGB, vivid } from '@/lib/coverColor'
 import Icon from '@/components/ui/Icon.vue'
 
 const props = defineProps({ manga: { type: Object, required: true }, updates: { type: Number, default: 0 } })
+
+// Glow del color dominante de la portada al pasar el ratón (perezoso: se muestrea la
+// primera vez que se hace hover y queda cacheado). Solo afecta a la sombra/borde.
+const glow = ref('')
+async function ensureGlow() {
+  if (glow.value || !props.manga.cover) return
+  const rgb = await coverRGB(imgProxy(props.manga.cover))
+  if (rgb) { const v = vivid(rgb); glow.value = `${v.r}, ${v.g}, ${v.b}` }
+}
 const hasCover = computed(() => !!props.manga.cover)
 const thumb = computed(() => imgThumb(props.manga.cover))
 const upscaled = computed(() => (props.manga.upscaled || 0) > 0)
@@ -17,7 +27,8 @@ const initials = computed(() =>
 </script>
 
 <template>
-  <article class="card" tabindex="0">
+  <article class="card" :class="{ 'has-glow': glow }" :style="glow ? { '--cardglow': glow } : {}"
+           tabindex="0" @mouseenter="ensureGlow" @focus="ensureGlow">
     <div class="card__poster">
       <img v-if="thumb" :src="thumb" class="blurup" aria-hidden="true" alt="" />
       <img v-if="hasCover" :src="imgProxy(manga.cover)" :alt="manga.name" loading="lazy" class="card__img"
@@ -78,6 +89,11 @@ const initials = computed(() =>
 .card:hover .card__poster {
   border-color: var(--azure-glow);
   box-shadow: var(--shadow-lg), 0 0 0 1px var(--azure-glow);
+}
+/* Glow del color de la portada (si se muestreó): tiñe borde+halo al hover/foco. */
+.card.has-glow:hover .card__poster, .card.has-glow:focus-visible .card__poster {
+  border-color: rgba(var(--cardglow), .55);
+  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(var(--cardglow), .55), 0 8px 34px rgba(var(--cardglow), .45);
 }
 
 .card__img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-slow) var(--ease-silk), transform var(--t-cine) var(--ease-silk); }

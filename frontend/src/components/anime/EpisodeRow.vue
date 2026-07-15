@@ -24,14 +24,24 @@ const resumePct = computed(() => {
   return Math.min(100, (props.ep.resume_pos / props.ep.duration) * 100)
 })
 
-const infoKey = computed(() => `${props.anime.mal_id}_${props.ep.num}`)
-const infoOpen = computed(() => store.epInfoOpen === infoKey.value)
-const info = computed(() => store.epInfo[infoKey.value])
+const meta = computed(() => store.epMeta[props.anime.id]?.[props.ep.num] || null)
+const infoOpen = computed(() => store.epInfoOpen === `${props.anime.id}_${props.ep.num}`)
+const jikanInfo = computed(() => store.epInfo[`${props.anime.mal_id}_${props.ep.num}`])
+const info = computed(() => {
+  if (meta.value?.overview) return { title: meta.value.title, synopsis: meta.value.overview, aired: meta.value.aired }
+  return jikanInfo.value
+})
 
 const subKey = computed(() => store.subKey(props.anime, props.ep))
 const subTask = computed(() => store.subTasks[subKey.value])
 const subRunning = computed(() => subTask.value && ['starting', 'injecting', 'translating', 'downloading', 'running'].includes(subTask.value.status))
 const subFetching = computed(() => store.subFetching === subKey.value)
+
+// Título real del episodio (TMDB/MAL) si lo tenemos; si no, la etiqueta derivada del archivo.
+const epTitle = computed(() => {
+  if (props.ep.ep_type !== 'special' && meta.value?.title) return meta.value.title
+  return animeEpLabel(props.anime, props.ep)
+})
 
 function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 </script>
@@ -45,9 +55,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
         <img v-if="playable || ep.has_thumb" class="eprow__img" :src="`/api/anime/thumb/${anime.id}/${ep.num}${ep.ep_type === 'special' ? '?special=1' : ''}`"
              loading="lazy" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
         <div class="eprow__num"><span class="eprow__num-k">{{ ep.ep_type === 'special' ? 'SP' : 'EP' }}</span><span class="eprow__num-v">{{ String(ep.num).padStart(2, '0') }}</span></div>
-        <div v-if="ep.watched" class="eprow__seen-veil" />
-        <div v-if="ep.watched" class="eprow__seen"><Icon name="check" :size="13" /></div>
-        <!-- resume / download bar -->
+        <!-- resume / download / finished bar -->
         <div v-if="resumePct" class="eprow__bar eprow__bar--resume"><span :style="{ width: resumePct + '%' }" /></div>
         <div v-else-if="downloading" class="eprow__bar eprow__bar--dl"><span :style="{ width: dlPct + '%' }" /></div>
         <div v-if="playable" class="eprow__play"><Icon name="play" :size="24" /></div>
@@ -56,7 +64,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
       <div class="eprow__body">
         <div class="eprow__titrow">
           <span v-if="current" class="eprow__badge">EN CURSO</span>
-          <span class="eprow__title">{{ animeEpLabel(anime, ep) }}</span>
+          <span class="eprow__title">{{ epTitle }}</span>
         </div>
 
         <!-- subtitle translation progress -->
@@ -84,7 +92,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
                   @click.stop="store.translateSubs(anime, ep)">
             <Icon name="spark" :size="13" />
           </button>
-          <button v-if="anime.mal_id" class="eprow__icon" :class="{ 'is-on': infoOpen }" title="Descripción"
+          <button v-if="anime.mal_id || meta?.overview" class="eprow__icon" :class="{ 'is-on': infoOpen }" title="Descripción"
                   @click.stop="store.loadEpInfo(anime, ep)">
             <span class="eprow__i">i</span>
           </button>
@@ -110,7 +118,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 
     <!-- expandable episode info -->
     <Transition name="info">
-      <div v-if="anime.mal_id && infoOpen" class="eprow__info">
+      <div v-if="infoOpen" class="eprow__info">
         <div v-if="info === null" class="eprow__info-load"><span class="dot" /><span class="dot" /><span class="dot" /></div>
         <template v-else-if="info?.synopsis">
           <div v-if="info.title" class="eprow__info-title">{{ info.title }}</div>
@@ -128,7 +136,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 </template>
 
 <style scoped>
-.eprow { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden;
+.eprow { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden;
   transition: border-color var(--t-base) var(--ease-silk), box-shadow var(--t-base); }
 .eprow:hover { border-color: var(--line-strong); box-shadow: var(--shadow-sm); }
 .eprow--current { border-color: var(--azure); box-shadow: inset 0 0 0 1px var(--azure-glow); }
@@ -142,11 +150,13 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 .eprow__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-slow), transform var(--t-cine) var(--ease-silk); }
 .eprow__img.is-loaded { opacity: 1; }
 .eprow__thumb:hover .eprow__img { transform: scale(1.06); }
+/* Episodio visto → portada atenuada (nítida pero apagada), sin blur; al hover recupera vida. */
+.eprow--watched .eprow__img { filter: brightness(.45) saturate(.55); transition: opacity var(--t-slow), transform var(--t-cine) var(--ease-silk), filter var(--t-base) var(--ease-silk); }
+.eprow--watched .eprow__thumb:hover .eprow__img { filter: brightness(.85) saturate(.9); }
+.eprow--watched .eprow__num-v { opacity: .75; }
 .eprow__num { position: absolute; bottom: 3px; left: var(--s-2); display: flex; flex-direction: column; align-items: flex-start; color: #fff; z-index: 3; pointer-events: none; }
 .eprow__num-k { font-family: var(--font-mono); font-size: 8px; font-weight: 600; color: var(--ice); letter-spacing: .14em; line-height: 1; }
 .eprow__num-v { font-family: var(--font-display); font-weight: 700; font-size: 1.5rem; line-height: 1; text-shadow: 0 2px 12px rgba(0,0,0,.95); }
-.eprow__seen-veil { position: absolute; inset: 0; z-index: 2; background: rgba(7,10,18,.5); backdrop-filter: saturate(.6) brightness(.8); }
-.eprow__seen { position: absolute; top: 4px; right: 4px; z-index: 3; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--jade) 85%, transparent); color: #fff; }
 .eprow__bar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 3px; background: rgba(0,0,0,.4); }
 .eprow__bar span { position: absolute; left: 0; top: 0; bottom: 0; transition: width .5s var(--ease-silk); }
 .eprow__bar--resume span { background: var(--azure-bright); box-shadow: 0 0 8px var(--azure-glow); }
