@@ -8,6 +8,7 @@ import { useSettingsStore } from '@/stores/settings'
 import { formatBytes } from '@/lib/format'
 import Icon from '@/components/ui/Icon.vue'
 import SubStyleCard from '@/components/anime/SubStyleCard.vue'
+import IntegrityCard from '@/components/anime/IntegrityCard.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import FolderPicker from '@/components/anime/FolderPicker.vue'
 
@@ -453,6 +454,9 @@ async function onImportFile(e) {
             <span class="set__catic"><Icon name="folder" :size="18" /></span>
             <div><h2>Almacenamiento</h2><p>Uso de disco por serie y limpieza de cachés prescindibles.</p></div>
           </div>
+
+    <IntegrityCard />
+    <div class="sep" />
 <!-- Almacenamiento -->
     <section class="card">
       <div class="card__title">

@@ -191,6 +191,75 @@ def _safe_child(root: Path, name: str):
     return target
 
 
+# ── Integridad: ¿lo que hay en disco sigue siendo lo que el torrent dice? ─────────────────────
+def _qbt_wsl_path(win_path: str) -> str:
+    from api.anime import _win_to_wsl
+    from api.platform import is_wsl
+    if is_wsl() and re.match(r"^[A-Za-z]:[/\\]", win_path or ""):
+        return _win_to_wsl(win_path)
+    return win_path
+
+
+def torrent_integrity() -> dict:
+    """Compara el tamaño en disco con el que DECLARA cada torrent, fichero a fichero.
+
+    Por qué existe: los vídeos de la biblioteca son el contenido que qBittorrent siembra, y
+    cualquier escritura sobre ellos rompe el hash EN SILENCIO — qBittorrent sigue diciendo
+    `stalledUP` como si nada, y sólo te enteras cuando un `recheck` te obliga a re-descargar
+    varios GB. Este chequeo encontró 2 archivos rotos (de 75) que llevaban semanas así.
+
+    Fichero a fichero y NO por carpeta a propósito: los sidecars que dejamos al traducir
+    (`<vídeo>.spa.ass`) viven junto al vídeo, así que sumar la carpeta los contaría como bytes
+    de más y daría falsos positivos. Lo que el torrent no declara, no se mira.
+
+    Sólo LEE. Nunca dispara un recheck: eso lo decide el usuario (implica re-descargar).
+    """
+    from api.anime import _q
+
+    try:
+        r = _q("get", "/torrents/info")
+        torrents = r.json()
+    except Exception as e:
+        return {"available": False, "reason": f"qBittorrent no responde: {e}"}
+
+    checked = ok = 0
+    skipped = 0
+    bad = []
+    for t in torrents:
+        cp = _qbt_wsl_path(t.get("content_path", ""))
+        entries = []
+        if cp and os.path.isfile(cp):
+            entries = [(cp, t.get("total_size") or 0)]            # torrent de 1 archivo
+        else:
+            try:                                                   # multi-archivo: pedir su lista
+                files = _q("get", "/torrents/files", params={"hash": t.get("hash", "")}).json()
+                root = _qbt_wsl_path(t.get("save_path", ""))
+                entries = [(os.path.join(root, f["name"].replace("/", os.sep)), f["size"])
+                           for f in files]
+            except Exception:
+                skipped += 1
+                continue
+        for path, declared in entries:
+            if not os.path.isfile(path):
+                skipped += 1                     # movido/borrado: no es corrupción, no alarmar
+                continue
+            checked += 1
+            actual = os.path.getsize(path)
+            if actual == declared:
+                ok += 1
+            else:
+                bad.append({"name": t.get("name", ""), "file": os.path.basename(path),
+                            "declared": declared, "actual": actual,
+                            "diff": actual - declared, "state": t.get("state", "")})
+    return {"available": True, "checked": checked, "ok": ok,
+            "skipped": skipped, "mismatched": bad}
+
+
+@storage_bp.route("/integrity", methods=["GET"])
+def integrity_route():
+    return jsonify(torrent_integrity())
+
+
 @storage_bp.route("/summary", methods=["GET"])
 def summary():
     """Desglose de disco: por serie (original vs escalado) + totales + cachés."""

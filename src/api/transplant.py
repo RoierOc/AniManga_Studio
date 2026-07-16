@@ -2467,26 +2467,40 @@ def _rescue_alt_es(task_id, title, chn, tmp_dir, stage, res, used_es, ci, total)
         return res      # sólo créditos pendientes -> no gastar 3 descargas en algo irrescatable
     meta = _read_meta(title)
     variants = meta.get("variants") or title_variants(title, None)
+    # REGLA: "falló" y "no había nada que rescatar" NO pueden devolver lo mismo. Devolver `res`
+    # a secas ante un error es indistinguible de un rescate que miró y no encontró — y eso ya
+    # costó una conclusión falsa (E-12: el banco reportó 0/11 con Suwayomi MUERTA, y como
+    # `rescued=0` es lo que sale también cuando no hay nada, se leyó como "el rescate no sirve").
+    # `rescue_error` / `rescue_tried` dejan esa diferencia por escrito para quien mida.
     try:
         cands = _candidates_cached(title, meta.get("al_id"), variants, None)
-    except Exception:
-        return res
+    except Exception as e:
+        print(f"[transplant] rescate: no se pudieron listar candidatos para {title!r}: {e!r}",
+              file=sys.stderr, flush=True)
+        return {**res, "rescue_error": f"candidatos: {e}"}
     used = {(str((used_es or {}).get("sourceId")), str((used_es or {}).get("mangaId")))}
     # Sólo fuentes REALMENTE instaladas: la lista de candidatos está cacheada en disco y arrastra
     # fuentes ya desinstaladas; pedirles capítulos lanza SourceNotInstalledException y gasta
     # intentos del cupo sin poder rescatar nada.
     try:
         installed = {str(s["id"]) for s in _all_sources()}
-    except Exception:
+    except Exception as e:
+        # No saber qué hay instalado NO es "no hay nada instalado": se sigue con el filtro
+        # desactivado (installed=None), pero quedando constancia de que se está a ciegas.
+        print(f"[transplant] rescate: no se pudo listar fuentes instaladas ({e!r}) — "
+              f"se prueban todas las candidatas", file=sys.stderr, flush=True)
         installed = None
     alts = [c for c in cands
             if (c.get("sourceLang") or "").lower() in _ES_LANGS
             and (str(c.get("sourceId")), str(c.get("id"))) not in used
             and (installed is None or str(c.get("sourceId")) in installed)]
     rescued = 0
+    tried = 0
+    errors = []
     for alt in alts[:RESCUE_MAX_SOURCES]:
         if not pend or _transplant_cancel.get(task_id):
             break
+        tried += 1
         alt_dir = Path(tmp_dir) / f"es_alt_{alt.get('sourceId')}_{alt.get('id')}"
         try:
             # Los candidatos del barrido traen la manga en `id`; `_candidate_chapter_urls` la
@@ -2511,14 +2525,20 @@ def _rescue_alt_es(task_id, title, chn, tmp_dir, stage, res, used_es, ci, total)
             # traen `id`, no `mangaId`) y reportaba "0 rescatadas" como si fuese normal.
             print(f"[transplant] rescate: fuente {alt.get('sourceName')} falló en cap {chn}: {e!r}",
                   file=sys.stderr, flush=True)
+            errors.append(f"{alt.get('sourceName')}: {e}")
             continue
         finally:
             shutil.rmtree(alt_dir, ignore_errors=True)
+    res = dict(res)
     if rescued:
-        res = dict(res)
         res["english"] = len(pend)
         res["english_pages"] = pend
         res["rescued"] = rescued
+    # Siempre, aunque no se rescatara nada: sin esto, "probé 3 fuentes y ninguna tenía la página"
+    # y "no pude probar ninguna porque el servidor estaba caído" son el MISMO dato.
+    res["rescue_tried"] = tried
+    if errors and not rescued:
+        res["rescue_error"] = "; ".join(errors[:3])
     return res
 
 
