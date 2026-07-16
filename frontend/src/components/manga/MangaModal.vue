@@ -278,7 +278,6 @@ watch(codec, () => { if (quality.value < qMin.value) quality.value = qMin.value 
 // management panel
 const showManage = ref(false)
 const renameVal = ref('')
-const coverUrlVal = ref('')
 const tomoCover = ref('')      // b64 cover for the exported tomo
 
 // Traducir (trasplante)
@@ -427,7 +426,7 @@ function submitManualSplit() {
 
 watch(m, (v) => {
   tab.value = 'chapters'; sel.value = new Set(); volName.value = v?.name || ''
-  showManage.value = false; renameVal.value = v?.name || ''; coverUrlVal.value = ''
+  showManage.value = false; renameVal.value = v?.name || ''
   tomoCover.value = ''; clearBatch(); tpSel.value = new Set()
   // NO tocar `vg` aquí: su ciclo de vida (resetForManga + loadAssignedMap) lo gestiona
   // store.open() en la apertura del manga. Llamar `vg.reset()` aquí borraba en carrera el mapa
@@ -456,7 +455,7 @@ function onTomoCover(e) {
 }
 
 async function saveMeta() {
-  const ok = await store.editMeta({ newTitle: renameVal.value.trim(), coverUrl: coverUrlVal.value.trim() })
+  const ok = await store.editMeta({ newTitle: renameVal.value.trim() })
   if (ok) showManage.value = false
 }
 function onCoverFile(e) {
@@ -548,7 +547,6 @@ async function doExport(toDrive = false) {
                 </div>
                 <div class="manage__row">
                   <label class="mf"><span>Renombrar</span><input v-model="renameVal" type="text" /></label>
-                  <label class="mf"><span>Portada (URL)</span><input v-model="coverUrlVal" type="text" placeholder="https://…" /></label>
                 </div>
 
                 <!-- Selector visual de portada (AniList + MangaDex) -->
@@ -577,7 +575,7 @@ async function doExport(toDrive = false) {
                       </button>
                     </div>
                     <p v-if="!store.coverPicker.anilist.length && !store.coverPicker.mangadex.length" class="cvp__empty">
-                      No se encontraron portadas online. Pega una URL arriba o usa "Subir portada".
+                      No se encontraron portadas online para esta serie. Usa "Subir portada" (en Gestionar) para poner una tuya.
                     </p>
                   </template>
                 </div>
