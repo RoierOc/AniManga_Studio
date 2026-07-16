@@ -2387,6 +2387,39 @@ RESCUE_MAX_SOURCES = 3   # fuentes ES alternativas que se prueban por capítulo 
                          # una descarga extra de capítulo, y sólo cuando hace falta.
 
 
+def only_trailing_pages(pend, pages) -> bool:
+    """¿Las páginas pendientes son EXCLUSIVAMENTE el bloque FINAL contiguo del capítulo?
+
+    Si lo son, casi con certeza es la HOJA DE CRÉDITOS del grupo del scan EN (a veces 2-3 páginas):
+    no existe en NINGÚN release ES porque el ES es de otro grupo, así que el rescate no puede
+    salvarla y descargar 3 capítulos alternativos para intentarlo es puro gasto. Medido sobre el
+    corpus (870 págs, 3 títulos): **17/17**: las 16 hojas de créditos caen todas en el bloque final
+    y la ÚNICA página real fallida (`ch0036_024`) está en mitad del capítulo.
+
+    NO se usa "la página es a COLOR" como condición aunque los créditos suelan serlo: medido, **5 de
+    las 16 son en B/N** (Amayo ch36 p033-034, ch40 p034, ch42 p035) y exigir color las dejaría
+    disparando descargas. El color corrobora, no decide.
+
+    Función con NOMBRE y no un `if` embebido a propósito: es una decisión que se va a medir, y
+    parchear el call-site en vez de la decisión es como se falseó el A/B de `bg` (E-1).
+
+    Modo de fallo: si `pages` no viene (llamadas que no lo pasan), devuelve False -> se rescata como
+    siempre. Prefiere gastar descargas antes que perder un rescate.
+
+    COSTE ACEPTADO: una página de HISTORIA real que fuese la última del capítulo ya no se
+    rescataría (se quedaría en inglés, igual que antes de existir el rescate). No se ha observado
+    ni una vez en el corpus.
+    """
+    if not pages or not pend:
+        return False
+    order = list(pages)
+    idx = {f: i for i, f in enumerate(order)}
+    pend_i = {idx[p["file"]] for p in pend if p.get("file") in idx}
+    if not pend_i or len(pend_i) != len(pend):
+        return False        # alguna pendiente no está en el listado -> no arriesgar, rescatar
+    return min(pend_i) + len(pend_i) == len(order)   # bloque contiguo que llega hasta el final
+
+
 def _rescue_alt_es(task_id, title, chn, tmp_dir, stage, res, used_es, ci, total):
     """Rescata las páginas que quedaron en INGLÉS buscándolas en otras fuentes ES.
 
@@ -2398,6 +2431,8 @@ def _rescue_alt_es(task_id, title, chn, tmp_dir, stage, res, used_es, ci, total)
     pend = list(res.get("english_pages") or [])
     if not pend:
         return res
+    if only_trailing_pages(pend, res.get("pages")):
+        return res      # sólo créditos pendientes -> no gastar 3 descargas en algo irrescatable
     meta = _read_meta(title)
     variants = meta.get("variants") or title_variants(title, None)
     try:
