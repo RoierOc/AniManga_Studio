@@ -10,9 +10,11 @@ import zipfile
 import urllib.request as _ur
 import urllib.parse as _up
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
 from flask import Blueprint, request, jsonify
 
 from api.config_store import get_secret  # runtime-editable API keys (Ajustes)
+from api.platform import first_windows_user_dir
 
 subtitle_bp = Blueprint('subtitle', __name__)
 
@@ -867,12 +869,13 @@ def unmask_ass_tags(text: str, tags: list, original: str = '') -> str:
     return out
 
 
-# ── Estilo de NUESTRA pista en español ───────────────────────────────────────
-# Por defecto la pista traducida hereda los estilos de la pista fuente. El usuario prefiere el
-# look que vio por accidente cuando se tradujo desde la pista árabe (bug index/sub_index):
-# Adobe Arabic 26 en negrita, borde 1, sin sombra — frente al Trebuchet MS 24 del inglés.
-# Se puede desactivar (SUB_STYLE_FONT="") o cambiar por env sin tocar código: es GUSTO, no lógica.
-_STYLE_FONT    = os.environ.get('SUB_STYLE_FONT', 'Adobe Arabic')
+# ── Estilo HORNEADO en nuestra pista en español — APAGADO por defecto ─────────────────────────
+# El estilo lo pone el REPRODUCTOR en vivo (`sub-ass-style-overrides`, ver `ass_style_overrides`),
+# que es lo que el usuario eligió: se cambia al momento desde Ajustes, sin re-inyectar, y aplica
+# también a las pistas que NO tradujimos nosotros. Tener además el horneado daría dos dueños al
+# mismo píxel, así que aquí sólo queda como opción para quien quiera un archivo autosuficiente
+# (que se vea igual en la TV o en otro reproductor): SUB_STYLE_FONT="Adobe Arabic" lo reactiva.
+_STYLE_FONT    = os.environ.get('SUB_STYLE_FONT', '')
 _STYLE_SIZE    = os.environ.get('SUB_STYLE_SIZE', '26')
 _STYLE_BOLD    = os.environ.get('SUB_STYLE_BOLD', '-1')     # -1 = sí, 0 = no
 _STYLE_OUTLINE = os.environ.get('SUB_STYLE_OUTLINE', '1')
@@ -936,6 +939,201 @@ def restyle_ass_header(header: list) -> list:
                 vals[cols.index(name)] = val
         out.append('Style: ' + ','.join(vals) + eol)
     return out
+
+
+# ── Fuentes instaladas (para el selector de estilo de Ajustes) ────────────────────────────────
+# libass resuelve por NOMBRE DE FAMILIA ('Adobe Arabic'), no por nombre de fichero
+# ('AdobeArabic-Regular.otf'), así que hay que abrir cada fuente y leer su tabla de nombres.
+# El escaneo cuesta ~1s con 300 fuentes → se cachea hasta que cambia el mtime de las carpetas.
+_fonts_cache: dict = {"key": None, "list": []}
+_fonts_lock = threading.Lock()
+
+
+def _font_dirs() -> list:
+    """Carpetas donde Windows guarda las fuentes que libass podrá resolver."""
+    dirs = []
+    sys_fonts = Path('/mnt/c/Windows/Fonts')
+    if sys_fonts.exists():
+        dirs.append(sys_fonts)
+    user = first_windows_user_dir()
+    if user:
+        u = user / 'AppData/Local/Microsoft/Windows/Fonts'   # instaladas "sólo para mí"
+        if u.exists():
+            dirs.append(u)
+    return dirs
+
+
+def list_installed_fonts() -> list:
+    """Familias tipográficas instaladas, ordenadas. [{family, styles:[…]}]
+
+    Sólo informativo: el usuario elige una familia y libass la resuelve en el reproductor. Si
+    la fuente no estuviera, libass cae a una de reserva en silencio — por eso listamos lo que
+    HAY de verdad en vez de dejar escribir un nombre a mano.
+    """
+    dirs = _font_dirs()
+    key = tuple((str(d), int(d.stat().st_mtime)) for d in dirs)
+    with _fonts_lock:
+        if _fonts_cache["key"] == key:
+            return _fonts_cache["list"]
+    try:
+        from PIL import ImageFont
+    except Exception:
+        return []
+    fams: dict = {}
+    for d in dirs:
+        for f in sorted(d.iterdir()):
+            if f.suffix.lower() not in ('.ttf', '.otf', '.ttc'):
+                continue
+            try:
+                fam, style = ImageFont.truetype(str(f), 12).getname()
+            except Exception:
+                continue                    # .ttc con varias caras, fuente rota: se ignora
+            if not fam:
+                continue
+            fams.setdefault(fam, set()).add(style or 'Regular')
+    out = [{"family": k, "styles": sorted(v)} for k, v in sorted(fams.items(), key=lambda x: x[0].lower())]
+    with _fonts_lock:
+        _fonts_cache.update(key=key, list=out)
+    return out
+
+
+@subtitle_bp.route('/fonts', methods=['GET'])
+def fonts_route():
+    return jsonify({"fonts": list_installed_fonts()})
+
+
+# ── Estilo en vivo: qué estilos del archivo son diálogo y cuáles carteles ──────────────────────
+def _parse_style_names(ass_path: str) -> list:
+    """Nombres de los Style: de una cabecera ASS ya extraída."""
+    names, cols = [], None
+    try:
+        for line in open(ass_path, encoding='utf-8', errors='replace'):
+            s = line.strip()
+            low = s.lower()
+            if low.startswith('[events]'):
+                break
+            if low.startswith('format:') and 'name' in low:
+                cols = [c.strip().lower() for c in s.split(':', 1)[1].split(',')]
+            elif low.startswith('style:') and cols:
+                vals = [v.strip() for v in s.split(':', 1)[1].split(',')]
+                if len(vals) == len(cols) and 'name' in cols:
+                    names.append(vals[cols.index('name')])
+    except OSError:
+        return []
+    return names
+
+
+def _ass_headers(path: str, sub_indexes: list) -> dict:
+    """Cabeceras ASS de varias pistas: {sub_index: [nombres de estilo]}.
+
+    Dos optimizaciones, ambas MEDIDAS sobre un episodio real de la biblioteca (21 pistas, en un
+    disco de Windows vía WSL):
+
+      1. `-t 0` — la cabecera vive en el CodecPrivate del MKV, así que el muxer la escribe al
+         inicializar y no hace falta demuxar ni un diálogo: 3511 ms -> 68 ms por pista.
+      2. UNA sola llamada a ffmpeg con varias salidas — el coste real es abrir el archivo por
+         9p, no decodificar: 7,47 s -> 0,91 s. Contenido idéntico byte a byte.
+
+    Junto: de inservible (llamada por episodio) a instantáneo. No se reutiliza `_extract_sub` a
+    propósito: ese camino lo usa la traducción, que SÍ necesita los diálogos enteros.
+    """
+    if not sub_indexes:
+        return {}
+    with tempfile.TemporaryDirectory() as td:
+        cmd = ['ffmpeg', '-y', '-v', 'error', '-i', path]
+        outs = {}
+        for i in sub_indexes:
+            o = os.path.join(td, f'{i}.ass')
+            outs[i] = o
+            cmd += ['-map', f'0:s:{i}', '-t', '0', o]
+        subprocess.run(cmd, capture_output=True, env={**os.environ, 'LC_ALL': 'C.UTF-8'})
+        # Sin comprobar returncode: si UNA pista falla, ffmpeg devuelve != 0 pero el resto de
+        # salidas sí se escribieron. Se toma lo que haya.
+        return {i: _parse_style_names(o) for i, o in outs.items() if os.path.exists(o)}
+
+
+_styles_cache: dict = {}
+_styles_lock = threading.Lock()
+
+
+def ass_style_split(path: str) -> dict:
+    """Estilos de TODAS las pistas ASS del archivo, partidos en diálogo vs cartel.
+
+    Se mira el archivo entero y no sólo la pista que sonará, porque el override de libass va por
+    NOMBRE de estilo y no por pista: da igual cuál acabe eligiendo mpv con `slang`. Un nombre que
+    sea cartel en CUALQUIER pista se trata como cartel en todas (fallo seguro: ante la duda no se
+    toca, que es peor pasarse que quedarse corto).
+
+    Cacheado por (ruta, mtime): el archivo no cambia mientras lo ves, y al mover un deslizador de
+    Ajustes esto se pide en cada cambio.
+    """
+    try:
+        key = (path, os.path.getmtime(path))
+    except OSError:
+        key = (path, 0)
+    with _styles_lock:
+        if key in _styles_cache:
+            return _styles_cache[key]
+
+    dialogue, signs = set(), set()
+    idxs = [t['sub_index'] for t in _ffprobe_tracks(path) if t['codec'] in ('ass', 'ssa')]
+    for names in _ass_headers(path, idxs).values():
+        for n in names:
+            (signs if _is_sign_style(n) else dialogue).add(n)
+    dialogue -= signs
+    res = {"dialogue": sorted(dialogue), "signs": sorted(signs)}
+    with _styles_lock:
+        if len(_styles_cache) > 64:         # cota: es un cache de conveniencia, no un índice
+            _styles_cache.clear()
+        _styles_cache[key] = res
+    return res
+
+
+def ass_style_overrides(styles: list, font: str = '', size: str = '',
+                        bold: str = '', outline: str = '', shadow: str = '') -> str:
+    """Construye el valor de `sub-ass-style-overrides` de mpv para los estilos dados.
+
+    MEDIDO sobre archivos reales: `Default.Fontname=X` deja los carteles BYTE A BYTE idénticos,
+    mientras que `Fontname=X` (sin prefijo de estilo) se los lleva por delante. De ahí que se
+    emita una entrada POR ESTILO de diálogo en vez de una global: es la única forma de respetar
+    el tipografiado que el grupo casó con el arte del vídeo.
+
+    OJO: no se pueden usar estilos cuyo nombre lleve ',' o '=' (romperían el parseo de la opción
+    y libass parte por el ÚLTIMO '='). La ',' es imposible en ASS (el formato es CSV), pero el
+    '=' no, así que se descartan.
+    """
+    fields = [(k, v) for k, v in (('Fontname', font), ('Fontsize', size), ('Bold', bold),
+                                  ('Outline', outline), ('Shadow', shadow)) if v != '']
+    if not fields:
+        return ''
+    out = []
+    for st in styles:
+        if ',' in st or '=' in st:
+            continue
+        for k, v in fields:
+            out.append(f'{st}.{k}={v}')
+    return ','.join(out)
+
+
+@subtitle_bp.route('/styles', methods=['GET'])
+def styles_route():
+    """Estilos del vídeo clasificados + el override listo para mandarle al player.
+
+    El front lo pide al empezar un episodio y cada vez que tocas el estilo en Ajustes; el player
+    lo aplica con un `setprop sub-ass-style-overrides` (surte efecto EN CALIENTE, verificado).
+    """
+    path = _resolve_video_path(request.args.get('info_hash', ''),
+                               int(request.args.get('episode', 1)),
+                               request.args.get('anime_id', ''),
+                               request.args.get('local_path', ''))
+    if not path or not os.path.exists(path):
+        return jsonify({'error': 'Archivo no encontrado'}), 404
+    split = ass_style_split(path)
+    return jsonify({**split, "overrides": ass_style_overrides(
+        split['dialogue'],
+        font=request.args.get('font', ''), size=request.args.get('size', ''),
+        bold=request.args.get('bold', ''), outline=request.args.get('outline', ''),
+        shadow=request.args.get('shadow', ''))})
 
 
 def _rebuild_ass(header: list, events: list, translated: list) -> str:

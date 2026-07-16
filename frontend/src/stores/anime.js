@@ -6,6 +6,20 @@ import { nextUnwatchedEp, isSpanishOrMulti, isEnglishSub } from '@/lib/anime'
 import { vtGo } from '@/lib/vt'
 import { isNative, send as nativeSend, onMessage as onNativeMessage } from '@/lib/nativeBridge'
 
+// Estilo de subtítulos: lo aplica el PLAYER en vivo con `sub-ass-style-overrides` de mpv, NO se
+// hornea en el archivo. Por defecto, el estilo que traían las pistas árabes (Adobe Arabic 26,
+// negrita, borde 1, sin sombra), que es el que gustó. '' en un campo = no tocar ese campo.
+// Bold/Outline/Shadow van en la escala de ASS: Bold -1 = sí, 0 = no.
+export const SUB_STYLE_DEFAULT = { font: 'Adobe Arabic', size: '26', bold: '-1', outline: '1', shadow: '0' }
+
+function _loadSubStyle() {
+  try {
+    return { ...SUB_STYLE_DEFAULT, ...JSON.parse(localStorage.getItem('anime-sub-style') || '{}') }
+  } catch (_) {
+    return { ...SUB_STYLE_DEFAULT }
+  }
+}
+
 let autoplayTimer = null
 let nowTimer = null
 let sseBound = false
@@ -126,6 +140,8 @@ export const useAnimeStore = defineStore('anime', {
       ? localStorage.getItem('anime-native-4k') : 'high',
     nativeVol: Number(localStorage.getItem('anime-native-vol') ?? 100), // 0..100
     nativeSubScale: Number(localStorage.getItem('anime-native-subscale') ?? 1), // 0.5..2
+    nativeSubStyle: _loadSubStyle(),   // {font,size,bold,outline,shadow} — ver SUB_STYLE_DEFAULT
+    subFonts: [],                      // familias instaladas, para el selector de Ajustes
     nativeBright: Number(localStorage.getItem('anime-native-bright') ?? 1), // 0.5..3 gamma (HDR)
     nativeSat: Number(localStorage.getItem('anime-native-sat') ?? 1), // 0.5..3 saturación (HDR)
   }),
@@ -748,6 +764,9 @@ export const useAnimeStore = defineStore('anime', {
       if (this.nativeSubScale !== 1) {
         nativeSend('setprop', { name: 'sub-scale', value: String(this.nativeSubScale) })
       }
+      // Estilo propio de subtítulos. Va tras loadfile (necesita el archivo cargado) y sin await:
+      // tiene que leer los estilos del MKV, y no merece retrasar la imagen por ello.
+      this._applyNativeSubStyle()
       // Ajustes de imagen HDR (ecualizadores nativos de mpv): gamma + saturación.
       if (this.nativeBright !== 1) nativeSend('bright', { value: this.nativeBright })
       if (this.nativeSat !== 1) nativeSend('sat', { value: this.nativeSat })
@@ -821,6 +840,49 @@ export const useAnimeStore = defineStore('anime', {
       localStorage.setItem('anime-native-subscale', String(v))
       if (this.nativePlayer) this.nativePlayer.subScale = v
       nativeSend('setprop', { name: 'sub-scale', value: String(v) })
+    },
+
+    // ── Estilo de subtítulos (fuente/cuerpo/borde), en vivo ───────────────────────────────
+    // El backend devuelve el override ya construido porque necesita leer los ESTILOS del
+    // archivo: mpv aplica por nombre de estilo (`Default.Fontname=…`), y sólo así se puede
+    // dejar en paz a los carteles, que el grupo casó con el arte del vídeo.
+    async loadSubFonts() {
+      if (this.subFonts.length) return this.subFonts
+      try {
+        const d = await api.get('/api/subtitle/fonts')
+        this.subFonts = d.fonts || []
+      } catch (_) { this.subFonts = [] }
+      return this.subFonts
+    },
+
+    async _applyNativeSubStyle() {
+      const np = this.nativePlayer
+      if (!np?.ep) return
+      const s = this.nativeSubStyle
+      const p = new URLSearchParams({
+        anime_id: String(np.anime?.id ?? ''),
+        episode: String(np.ep.num ?? 1),
+        ...(np.ep.in_local ? { local_path: np.ep.local_path || '' } : { info_hash: np.ep.info_hash || '' }),
+        font: s.font || '', size: s.size || '', bold: s.bold || '',
+        outline: s.outline || '', shadow: s.shadow || '',
+      })
+      let d
+      try { d = await api.get(`/api/subtitle/styles?${p}`) } catch (_) { return }
+      if (this.nativePlayer !== np) return          // cambió de episodio mientras se pedía
+      // '' es válido y significativo: limpia un override anterior (volver al estilo del archivo).
+      nativeSend('setprop', { name: 'sub-ass-style-overrides', value: d.overrides || '' })
+    },
+
+    setNativeSubStyle(patch) {
+      this.nativeSubStyle = { ...this.nativeSubStyle, ...patch }
+      localStorage.setItem('anime-sub-style', JSON.stringify(this.nativeSubStyle))
+      this._applyNativeSubStyle()
+    },
+
+    resetNativeSubStyle() {
+      this.nativeSubStyle = { ...SUB_STYLE_DEFAULT }
+      localStorage.removeItem('anime-sub-style')
+      this._applyNativeSubStyle()
     },
     setNativeSubSync(v) {
       v = Math.round(v * 10) / 10

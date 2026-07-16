@@ -7,6 +7,7 @@ import { useAnimeStore } from '@/stores/anime'
 import { useSettingsStore } from '@/stores/settings'
 import { formatBytes } from '@/lib/format'
 import Icon from '@/components/ui/Icon.vue'
+import SubStyleCard from '@/components/anime/SubStyleCard.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import FolderPicker from '@/components/anime/FolderPicker.vue'
 
@@ -353,8 +354,11 @@ async function onImportFile(e) {
         <div v-show="tab === 'anime'" class="set__cat">
           <div class="set__cathead">
             <span class="set__catic"><Icon name="film" :size="18" /></span>
-            <div><h2>Anime</h2><p>Carpeta de descargas y conexión con qBittorrent.</p></div>
+            <div><h2>Anime</h2><p>Carpeta de descargas, conexión con qBittorrent y estilo de subtítulos.</p></div>
           </div>
+
+    <SubStyleCard />
+    <div class="sep" />
 <!-- Anime downloads -->
     <section class="card">
       <div class="card__title"><Icon name="download" :size="16" /> Descargas de anime</div>

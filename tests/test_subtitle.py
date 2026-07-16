@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from api.subtitle import (  # noqa: E402
     _is_sign_style,
+    ass_style_overrides,
     is_ass_drawing,
     mask_ass_tags,
     restyle_ass_header,
@@ -104,7 +105,21 @@ def _styles(header):
             for l in header if l.startswith('Style:')}
 
 
-def test_restyle_touches_dialogue_only():
+@pytest.fixture()
+def baked(monkeypatch):
+    """El horneado está APAGADO por defecto (el estilo lo pone el player en vivo). Los tests que
+    comprueban CÓMO hornea tienen que encenderlo a mano."""
+    monkeypatch.setattr('api.subtitle._STYLE_FONT', 'Adobe Arabic')
+
+
+def test_baked_restyle_is_off_by_default():
+    """Si esto falla, hay DOS dueños del estilo (horneado + player) pisándose."""
+    import api.subtitle as S
+    assert S._STYLE_FONT == ''
+    assert restyle_ass_header(HEADER) == HEADER
+
+
+def test_restyle_touches_dialogue_only(baked):
     st = _styles(restyle_ass_header(HEADER))
     assert st['Default'][1] == 'Adobe Arabic' and st['Default'][2] == '26'
     assert st['Italics'][1] == 'Adobe Arabic'
@@ -113,12 +128,12 @@ def test_restyle_touches_dialogue_only():
     assert st['sign_7436_74_childlike'][2] == '24'
 
 
-def test_restyle_keeps_each_styles_own_colour():
+def test_restyle_keeps_each_styles_own_colour(baked):
     st = _styles(restyle_ass_header(HEADER))
     assert st['Default'][3] == '&H00FFFFFF'
 
 
-def test_restyle_reads_columns_by_name_not_position():
+def test_restyle_reads_columns_by_name_not_position(baked):
     """Un Format: en otro orden no debe hacer que escribamos el tamaño encima del color."""
     header = [
         '[V4+ Styles]\n',
@@ -131,16 +146,55 @@ def test_restyle_reads_columns_by_name_not_position():
     assert st['Default'][3] == '&H00FFFFFF'
 
 
-def test_restyle_leaves_malformed_rows_alone():
+def test_restyle_leaves_malformed_rows_alone(baked):
     header = ['[V4+ Styles]\n',
               'Format: Name, Fontname, Fontsize\n',
               'Style: Roto,Arial\n']                 # menos campos que columnas
     assert 'Style: Roto,Arial\n' in restyle_ass_header(header)
 
 
-def test_restyle_disabled_by_empty_font(monkeypatch):
+def test_restyle_disabled_by_empty_font(monkeypatch, baked):
     monkeypatch.setattr('api.subtitle._STYLE_FONT', '')
     assert restyle_ass_header(HEADER) == HEADER
+
+
+# --------------------------------------------------------------------------- estilo en vivo
+def test_overrides_are_emitted_per_style_never_global():
+    """LA razón de ser de esto. MEDIDO con mpv sobre un fotograma con SÓLO un cartel en pantalla:
+    `Default.Fontname=X` lo deja byte a byte idéntico; `Fontname=X` (sin prefijo) lo destroza.
+    Si algún día sale una entrada sin prefijo, los carteles se descuadran del arte del vídeo."""
+    ov = ass_style_overrides(['Default', 'Italics'], font='Adobe Arabic', size='26')
+    assert ov == ('Default.Fontname=Adobe Arabic,Default.Fontsize=26,'
+                  'Italics.Fontname=Adobe Arabic,Italics.Fontsize=26')
+    for entry in ov.split(','):
+        assert '.' in entry.split('=')[0], f'entrada sin prefijo de estilo: {entry}'
+
+
+def test_empty_fields_are_left_alone_not_blanked():
+    """'' = 'no toques este campo'. Mandar `Fontsize=` pondría basura en el estilo."""
+    ov = ass_style_overrides(['Default'], font='Arial', size='', bold='', outline='2', shadow='')
+    assert ov == 'Default.Fontname=Arial,Default.Outline=2'
+
+
+def test_no_fields_means_no_override():
+    assert ass_style_overrides(['Default']) == ''
+
+
+def test_no_styles_means_no_override():
+    assert ass_style_overrides([], font='Arial') == ''
+
+
+@pytest.mark.parametrize('bad', ['Weird=Name', 'With,Comma'])
+def test_styles_that_would_break_the_option_syntax_are_skipped(bad):
+    """mpv separa por ',' y libass parte por el ÚLTIMO '=': un nombre así corrompería el resto
+    de entradas. Se descarta ese estilo en vez de emitir algo que rompa a los demás."""
+    ov = ass_style_overrides(['Default', bad], font='Arial')
+    assert ov == 'Default.Fontname=Arial'
+
+
+def test_zero_is_a_real_value_not_absence():
+    """Shadow=0 ('sin sombra') es justo lo que el usuario quiere; no puede tratarse como vacío."""
+    assert ass_style_overrides(['Default'], shadow='0') == 'Default.Shadow=0'
 
 
 # --------------------------------------------------------------------------- prioridad
