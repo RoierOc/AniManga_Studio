@@ -1348,18 +1348,6 @@ export const useMangaStore = defineStore('manga', {
       } catch (_) { useUiStore().toast('Error al cambiar modelo', 'error') }
     },
     setEco(v) { this.eco = v; localStorage.setItem('upscale-eco', v ? '1' : '0'); api.post('/api/upscale/mode', { eco: v }).catch(() => {}) },
-    async upscaleAll(opts = {}) {
-      const chapters = this.chapters.map(c => c.chapter).filter(ch => this.upscaled[ch] !== true)
-      if (!chapters.length) { useUiStore().toast('Todos los capítulos ya están en 4K', 'info'); return }
-      for (const ch of chapters) this.upTasks[String(ch)] = taskId(this.current.id, String(ch), 'upscale')
-      try {
-        await api.post('/api/upscale/upscale_manga', {
-          title: this.current.id, chapters, eco: opts.eco ?? this.eco,
-          ...(opts.excludePages?.length ? { exclude_pages: opts.excludePages } : {}),
-        })
-        useUiStore().toast(`Escalando ${chapters.length} capítulos a 4K`, 'info')
-      } catch (_) { useUiStore().toast('No se pudo iniciar', 'error'); this.upTasks = {} }
-    },
     async repairChapter(chapter) {
       const chKey = String(chapter)
       this.upTasks[chKey] = taskId(this.current.id, chKey, 'upscale')
@@ -1566,19 +1554,6 @@ export const useMangaStore = defineStore('manga', {
         const d = await api.get(`/api/library/chapter_health/${encodeURIComponent(this.current.id)}`)
         const m = {}; for (const h of (Array.isArray(d) ? d : [])) m[h.chapter] = h; this.health = m
       } catch (_) {}
-    },
-    async upscaleRange(from, to, fast = false, excludePages = []) {
-      const lo = Math.min(parseFloat(from), parseFloat(to)), hi = Math.max(parseFloat(from), parseFloat(to))
-      if (isNaN(lo) || isNaN(hi)) return
-      const chapters = this.chapters.map(c => c.chapter).filter(ch => { const n = parseFloat(ch); return !isNaN(n) && n >= lo && n <= hi && this.upscaled[ch] !== true })
-      if (!chapters.length) { useUiStore().toast('Nada que escalar en ese rango', 'info'); return }
-      try {
-        await api.post('/api/upscale/upscale_manga', {
-          title: this.current.id, chapters, eco: this.eco, fast,
-          ...(excludePages?.length ? { exclude_pages: excludePages } : {}),
-        })
-        useUiStore().toast(`Escalando ${chapters.length} capítulos`, 'info')
-      } catch (_) { useUiStore().toast('No se pudo iniciar', 'error') }
     },
     // ── Acciones por lote (casillas de la lista de Capítulos) ──────────────────────
     // Escala a 4K una lista EXPLÍCITA de capítulos (los que el usuario marcó). Solo tienen
@@ -1876,14 +1851,16 @@ export const useMangaStore = defineStore('manga', {
         useUiStore().toast('No se pudieron cargar las páginas', 'error')
       }
     },
-    // Abre el selector MASIVO: páginas a color de TODOS los capítulos, agrupadas, con la misma
-    // selección manual (todas pre-marcadas). Reemplaza el antiguo "escalar todo automático".
-    async openColorPickerAll() {
+    // Abre el selector MASIVO: páginas a color agrupadas por capítulo, con la misma selección
+    // manual (todas pre-marcadas). Sin `chapters` mira el manga entero; con ellos, sólo los
+    // capítulos MARCADOS en la lista (es lo que usa la barra del lote).
+    async openColorPickerAll(chapters = null) {
       const title = this.current?.id
       if (!title) return
       this.colorPicker = { open: true, mode: 'all', chapter: null, folder: '', pages: [], chapters: [], loading: true }
       try {
-        const d = await api.get(`/api/upscale/color_pages_all?title=${encodeURIComponent(title)}`)
+        const q = chapters?.length ? `&chapters=${encodeURIComponent(chapters.join(','))}` : ''
+        const d = await api.get(`/api/upscale/color_pages_all?title=${encodeURIComponent(title)}${q}`)
         this.colorPicker = {
           open: true, mode: 'all', chapter: null, folder: d.folder || '', pages: [], loading: false,
           chapters: (d.chapters || []).map(c => ({

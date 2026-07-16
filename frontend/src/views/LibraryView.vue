@@ -24,7 +24,6 @@ function openMenu(e, m) {
     items: [
       { label: 'Abrir', icon: 'library', action: () => manga.open(m) },
       { label: 'Continuar leyendo', icon: 'play', action: () => manga.resumeManga(m) },
-      { label: 'Escalar todo a 4K', icon: 'spark', action: async () => { await manga.open(m); manga.upscaleAll() } },
       { sep: true },
       { label: 'Quitar de biblioteca', icon: 'trash', danger: true, action: async () => { await manga.open(m); manga.deleteManga() } },
     ],

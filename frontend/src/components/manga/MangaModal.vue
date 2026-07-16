@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch, onUnmounted } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount, onUnmounted } from 'vue'
 import { useMangaStore } from '@/stores/manga'
 import { formatChapter, MANGA_STATUS, pageUrl } from '@/lib/manga'
 import { formatBytes } from '@/lib/format'
@@ -177,11 +177,60 @@ const flag = (l) => LANG_FLAG[l] || l
 // Descargar (capítulos remotos) o Escalar 4K (capítulos locales). Se limpia al cambiar de
 // pestaña/manga.
 const batchSel = ref(new Set())
-function toggleBatch(ch) {
-  const s = new Set(batchSel.value); const k = String(ch)
-  s.has(k) ? s.delete(k) : s.add(k); batchSel.value = s
+function clearBatch() { batchSel.value = new Set(); lastTouched.value = null }
+
+// ── Selección múltiple: shift+clic (rango) y clic-arrastre (pincel) ───────────────────────────
+// Las dos, porque cubren cosas distintas: arrastrar va bien para rachas cortas y adyacentes, pero
+// para marcar 50 capítulos tendrías que arrastrar por una lista que scrollea. Shift+clic lo hace
+// en dos clics y es el estándar que todo el mundo ya conoce (Explorador, Gmail).
+const lastTouched = ref(null)      // ancla del rango: último capítulo marcado con un clic normal
+const painting = ref(null)         // null | true (pintando selección) | false (pintando borrado)
+
+function _order() { return store.collectionChapters.map(c => String(c.chapter)) }
+
+function _applyRange(from, to, on) {
+  const order = _order()
+  const i = order.indexOf(String(from)), j = order.indexOf(String(to))
+  if (i < 0 || j < 0) return
+  const s = new Set(batchSel.value)
+  for (const k of order.slice(Math.min(i, j), Math.max(i, j) + 1)) on ? s.add(k) : s.delete(k)
+  batchSel.value = s
 }
-function clearBatch() { batchSel.value = new Set() }
+
+function _setSel(ch, on) {
+  const s = new Set(batchSel.value)
+  on ? s.add(String(ch)) : s.delete(String(ch))
+  batchSel.value = s
+}
+
+// mousedown (no click): hay que empezar a pintar ANTES de soltar el botón.
+function batchDown(ch, ev) {
+  if (ev.shiftKey && lastTouched.value != null) {
+    // Rango: extiende con el mismo estado que tenga el ancla, como en un explorador.
+    _applyRange(lastTouched.value, ch, batchSel.value.has(String(lastTouched.value)))
+    ev.preventDefault()          // evita que shift+clic seleccione texto de la lista
+    return
+  }
+  const on = !batchSel.value.has(String(ch))
+  _setSel(ch, on)
+  lastTouched.value = ch
+  painting.value = on            // arrastrar sigue haciendo LO MISMO que el primer clic
+}
+
+// Al entrar en otra fila con el botón pulsado, se pinta igual que el primero: si empezaste
+// marcando, marcas; si empezaste desmarcando, desmarcas. Nunca alterna (eso haría que pasar por
+// encima dos veces deshiciera el trabajo).
+function batchOver(ch) {
+  if (painting.value === null) return
+  _setSel(ch, painting.value)
+  lastTouched.value = ch
+}
+
+// El mouseup se escucha en window, no en la lista: si sueltas fuera (muy fácil al arrastrar hasta
+// el borde para scrollear) el pincel se quedaría pegado y seguirías seleccionando sin pulsar.
+function endPaint() { painting.value = null }
+onMounted(() => window.addEventListener('mouseup', endPaint))
+onBeforeUnmount(() => window.removeEventListener('mouseup', endPaint))
 // De lo marcado: cuántos son locales (escalables) vs remotos (descargables).
 const batchStats = computed(() => {
   let local = 0, remote = 0
@@ -198,6 +247,13 @@ function batchDownload() {
 function batchUpscale() {
   const excludePages = store.current?.source_meta?.imported ? store.excludedPages : []
   store.upscaleChapters([...batchSel.value], { excludePages }); clearBatch()
+}
+// El escalado 4K usa el modelo B&N y SALTA las páginas a color (se copian tal cual), así que
+// éstas necesitan su propia pasada con el modelo de color. Antes sólo se podía lanzar sobre el
+// manga ENTERO desde "Gestionar"; aquí va sobre lo que hayas marcado.
+function batchColor() {
+  const chapters = [...batchSel.value]
+  store.openColorPickerAll(chapters); clearBatch()
 }
 function toggleAllBatch() {
   const all = store.collectionChapters.map(c => String(c.chapter))
@@ -463,7 +519,6 @@ async function doExport(toDrive = false) {
                 </span>
               </div>
               <div class="modal__hacts">
-                <button class="hbtn hbtn--accent" @click="store.upscaleAll(m.source_meta?.imported ? { excludePages: store.excludedPages } : {})"><Icon name="spark" :size="13" /> Escalar todo 4K</button>
                 <button class="hbtn" @click="showManage = !showManage" :class="{ 'is-on': showManage }">Gestionar</button>
                 <button class="hbtn" @click="store.scanCorrupt()">Verificar</button>
               </div>
@@ -1048,7 +1103,7 @@ async function doExport(toDrive = false) {
                   <span v-if="store.excludedPages.includes(cp.filename)" class="colorpg__x"><Icon name="close" :size="12" /></span>
                 </button>
               </div>
-              <p v-else-if="!store.colorLoading" class="colors__hint">Detecta y excluye páginas a color antes de pulsar "Escalar todo 4K".</p>
+              <p v-else-if="!store.colorLoading" class="colors__hint">Detecta y excluye páginas a color antes de escalar los capítulos marcados.</p>
             </div>
             <div class="modal__chhead">
               <span>Capítulos</span>
@@ -1081,9 +1136,10 @@ async function doExport(toDrive = false) {
 
             <ul class="chaps">
               <template v-for="c in store.collectionChapters" :key="c.chapter">
-              <li class="chap" :class="{ 'chap--4k': upState(c.chapter) === true, 'chap--part': upState(c.chapter) === 'partial', 'chap--src': c._sourceId || c._mdChapterId || c._covMulti, 'chap--md': !!c._mdChapterId, 'chap--read': store.isChapterRead(c.chapter), 'chap--sel': batchSel.has(String(c.chapter)) }">
+              <li class="chap" :class="{ 'chap--4k': upState(c.chapter) === true, 'chap--part': upState(c.chapter) === 'partial', 'chap--src': c._sourceId || c._mdChapterId || c._covMulti, 'chap--md': !!c._mdChapterId, 'chap--read': store.isChapterRead(c.chapter), 'chap--sel': batchSel.has(String(c.chapter)) }" @mouseenter="batchOver(c.chapter)">
                 <!-- Casilla de selección por lote -->
-                <button class="chap__check" @click.stop="toggleBatch(c.chapter)" :title="batchSel.has(String(c.chapter)) ? 'Quitar de la selección' : 'Añadir a la selección'">
+                <button class="chap__check" @mousedown.stop.left="batchDown(c.chapter, $event)" @click.stop
+                        :title="batchSel.has(String(c.chapter)) ? 'Quitar de la selección' : 'Añadir · shift+clic marca hasta aquí · arrastra para marcar varios'">
                   <span class="batchbox" :class="{ 'is-on': batchSel.has(String(c.chapter)) }"><Icon v-if="batchSel.has(String(c.chapter))" name="check" :size="11" /></span>
                 </button>
                 <!-- Downloaded chapter: clic = leer · clic derecho = marcar/desmarcar leído -->
@@ -1213,6 +1269,10 @@ async function doExport(toDrive = false) {
                   </button>
                   <button v-if="batchStats.local" class="hbtn" @click="batchUpscale">
                     <Icon name="spark" :size="14" /> Escalar 4K {{ batchStats.local }}
+                  </button>
+                  <button v-if="batchStats.local" class="hbtn" @click="batchColor"
+                          title="El escalado 4K salta las páginas a color: éstas van con el modelo de color, y eliges cuáles">
+                    <Icon name="palette" :size="14" /> Páginas a color
                   </button>
                   <button class="hbtn batchbar__clear" @click="clearBatch"><Icon name="close" :size="14" /></button>
                 </div>
