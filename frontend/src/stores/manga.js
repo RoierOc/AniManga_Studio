@@ -56,6 +56,10 @@ function _pct(progress, total, fallback = 0) {
 // caen al `return 'running'` de abajo y la tarea "carga eternamente" (nunca sale
 // de Activas). download/upscale terminan con outcomes no-obvios (ok, no_chapters,
 // nothing_to_repair, already_running, not_found) además de complete/done.
+// Estados en los que una descarga SIGUE viva (download.py). La cadena considera terminal todo lo
+// demás — al revés (listar los terminales) un estado no previsto como 'no_chapters' la dejaría
+// esperando para siempre a un capítulo que ya acabó. Fallo seguro: ante lo desconocido, seguir.
+const _DL_ACTIVE = new Set(['starting', 'started', 'downloading', 'cancel_requested'])
 const _DONE_LIKE = new Set(['done', 'complete', 'ok', 'nothing_to_repair', 'already_running', 'downloaded', 'no_changes'])
 const _ERROR_LIKE = new Set(['error', 'not_found', 'no_chapters', 'failed'])
 const _CANCEL_LIKE = new Set(['cancelled', 'canceled', 'interrupted', 'cancelling', 'cancel_requested'])
@@ -126,6 +130,13 @@ function groupByManga(tasks, coverCache) {
     g.anyActive = g.tasks.some(t => t.status === 'running' || t.status === 'queued')
   }
   return [...map.values()]
+}
+
+const CHAIN_DEFAULT = { upscale: true, translate: false }
+
+function _loadChain() {
+  try { return { ...CHAIN_DEFAULT, ...JSON.parse(localStorage.getItem('manga-chain') || '{}') } }
+  catch (_) { return { ...CHAIN_DEFAULT } }
 }
 
 export const useMangaStore = defineStore('manga', {
@@ -248,6 +259,10 @@ export const useMangaStore = defineStore('manga', {
 
     // Selector de portada (cambiar la del manga si está corrupta/baja calidad)
     coverPicker: { open: false, loading: false, current: null, anilist: [], mangadex: [], applying: null },
+    // Cadena tras descargar. Por defecto escalar (el flujo normal del usuario); traducir es la
+    // excepción y se marca a mano. Ver setChain/_reconcileChain.
+    chain: _loadChain(),
+    chainJob: null,
 
     // upscale model + mode
     models: {},                 // { key: label }
@@ -587,6 +602,8 @@ export const useMangaStore = defineStore('manga', {
         // Rebuild dlTasks for any active chapter downloads of the open manga that aren't
         // tracked yet — handles page-refresh (dlTasks starts empty) and modal re-open.
         this._reconcileDownloads()
+        // Avanza la cadena descargar→(traducir)→escalar de los capítulos marcados.
+        this._reconcileChain()
       })
     },
 
@@ -594,6 +611,56 @@ export const useMangaStore = defineStore('manga', {
     // from the live `downloads` snapshot. Needed on page-refresh (dlTasks starts empty) and
     // modal re-open after navigating away mid-download (partial pages on disk hide the source
     // chapter in mergedChapters unless dlTasks is current).
+    // ── Cadena: qué pasa DESPUÉS de descargar ────────────────────────────────────────────
+    // El flujo real del usuario es descargar+escalar; traducir es la excepción. Se arma al
+    // pulsar el botón y avanza sola con el snapshot SSE (mismo patrón que _reconcileExports:
+    // vive en el store, así que sigue aunque cierres el modal o te vayas de la vista).
+    //
+    // El ORDEN no es negociable: traducir reescribe el arte e invalida el 4K, así que si hay
+    // traducción se escala DESPUÉS. Hacerlo al revés tira las horas de GPU (ver upscale_cost).
+    setChain(patch) {
+      this.chain = { ...this.chain, ...patch }
+      try { localStorage.setItem('manga-chain', JSON.stringify(this.chain)) } catch (_) {}
+    },
+
+    armChain(chapters) {
+      const { upscale, translate } = this.chain
+      if (!upscale && !translate) { this.chainJob = null; return }
+      this.chainJob = {
+        title: this.current.id,
+        chapters: chapters.map(String),
+        waiting: new Set(chapters.map(String)),
+        upscale, translate, stage: 'downloading',
+      }
+    },
+
+    _reconcileChain() {
+      const j = this.chainJob
+      if (!j || j.stage !== 'downloading') return
+      for (const v of Object.values(this.downloads)) {
+        if (v.title !== j.title) continue
+        const ch = String(v.chapter || '')
+        if (!ch || !j.waiting.has(ch)) continue
+        if (_DL_ACTIVE.has(v.status)) continue      // sigue en marcha: esperar
+        // OJO: las descargas terminan en 'complete', NO en 'done' (download.py). Comparar con
+        // 'done' a pelo hace que la cadena no salte JAMÁS y, peor, que cada descarga buena
+        // caiga en la rama de fallo. `_DONE_LIKE` es el criterio del repo para "acabó bien".
+        j.waiting.delete(ch)
+        if (_DONE_LIKE.has(v.status)) {
+          // Sin traducción de por medio se escala YA, capítulo a capítulo: la GPU trabaja
+          // mientras el resto sigue bajando. El worker GPU es una cola única, así que
+          // encolarlos según llegan no compite con nada.
+          if (!j.translate && j.upscale) this.upscaleChapter(ch, { silent: true })
+        } else {
+          j.chapters = j.chapters.filter(x => x !== ch)   // lo que no bajó no se encadena
+        }
+      }
+      if (j.waiting.size) return
+      if (!j.chapters.length) { this.chainJob = null; return }
+      if (j.translate) { j.stage = 'translating'; this.tpRun(j.chapters) }
+      else this.chainJob = null        // los escalados ya se lanzaron uno a uno
+    },
+
     _reconcileDownloads() {
       const curId = this.current?.id
       if (!curId) return
@@ -632,6 +699,12 @@ export const useMangaStore = defineStore('manga', {
     // Terminal handler for a translation run (replaces the old _pollTpRun terminal branch).
     _onTranslateDone(st) {
       const ui = useUiStore()
+      // Cierre de la cadena: el 4K va DESPUÉS de traducir, nunca antes.
+      const j = this.chainJob
+      if (j && j.stage === 'translating' && j.title === st.title) {
+        this.chainJob = null
+        if (j.upscale && st.status === 'done') this.upscaleChapters(j.chapters)
+      }
       const n = (st.chapters || []).length
       if (st.status === 'cancelled') ui.toast('Traducción detenida', 'info')
       else if (st.status === 'error') ui.toast('Falló la traducción', 'error')
@@ -1584,7 +1657,7 @@ export const useMangaStore = defineStore('manga', {
       const vg = useVersionsStore()
       const wanted = new Set(chapters.map(String))
       const rows = this.collectionChapters.filter(c => wanted.has(String(c.chapter)))
-      let started = 0
+      const started = []
       for (const c of rows) {
         // capítulo ya local (no es fila de fuente/MD/multi) → nada que descargar
         if (!c._sourceId && !c._mdChapterId && !c._covMulti) continue
@@ -1593,10 +1666,13 @@ export const useMangaStore = defineStore('manga', {
         else if (c._sourceId) this.downloadSourceChapter(c)
         else if (c._mdChapterId) this.downloadMdChapter(c)
         else continue
-        started++
+        started.push(String(c.chapter))
       }
-      if (!started) ui.toast('Nada que descargar en la selección (ya están descargados)', 'info')
-      else ui.toast(`Descargando ${started} capítulo(s)`, 'info')
+      if (!started.length) ui.toast('Nada que descargar en la selección (ya están descargados)', 'info')
+      else ui.toast(`Descargando ${started.length} capítulo(s)`, 'info')
+      // Devuelve los que REALMENTE arrancaron: la cadena sólo puede esperar por éstos. Armarla
+      // con los "marcados" la dejaría esperando eternamente por capítulos sin tarea.
+      return started
     },
     async loadColorPages(chapters) {
       this.colorLoading = true; this.excludedPages = []

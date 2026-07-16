@@ -241,9 +241,29 @@ const batchStats = computed(() => {
   }
   return { local, remote }
 })
-function batchDownload() {
-  store.downloadChapters([...batchSel.value]); clearBatch()
+// Descargar es sólo el primer paso: la cadena (escalar / traducir+escalar) se arma ANTES de
+// lanzar las descargas y avanza sola con el SSE, aunque cierres el modal.
+async function batchDownload() {
+  const sel = [...batchSel.value]
+  clearBatch()
+  // La cadena se arma con lo que downloadChapters ARRANCÓ de verdad, no con lo marcado: los ya
+  // locales o ya en curso no generan tarea, y esperarlos dejaría la cadena colgada.
+  const started = await store.downloadChapters(sel)
+  store.armChain(started || [])
 }
+// Traducir necesita fuentes elegidas (pestaña Traducir). Sin ellas el chip se deshabilita en vez
+// de dejarte armar una cadena que fallaría al llegar a ese paso.
+const tpReady = computed(() => !!(store.tp.artSel && store.tp.esSel))
+// El botón dice lo que VA A PASAR, no "Descargar" a secas: es lo único que ve el usuario del
+// encadenado, así que si el texto no lo cuenta, el encadenado es invisible.
+const chainLabel = computed(() => {
+  const c = store.chain
+  const tr = c.translate && tpReady.value
+  if (tr && c.upscale) return 'Descargar, traducir y escalar'
+  if (tr) return 'Descargar y traducir'
+  if (c.upscale) return 'Descargar y escalar'
+  return 'Descargar'
+})
 function batchUpscale() {
   const excludePages = store.current?.source_meta?.imported ? store.excludedPages : []
   store.upscaleChapters([...batchSel.value], { excludePages }); clearBatch()
@@ -1262,8 +1282,24 @@ async function doExport(toDrive = false) {
               <div v-if="batchSel.size" class="batchbar">
                 <span class="batchbar__n">{{ batchSel.size }} seleccionado(s)</span>
                 <div class="batchbar__acts">
+                  <!-- La cadena: qué pasa cuando la descarga acabe. Chips y no un menú porque el
+                       estado tiene que verse SIN abrir nada: es lo que decide qué hará el botón. -->
+                  <div v-if="batchStats.remote" class="chain">
+                    <span class="chain__lbl">luego</span>
+                    <button class="chain__chip" :class="{ 'is-on': store.chain.upscale }"
+                            @click="store.setChain({ upscale: !store.chain.upscale })"
+                            title="Escalar a 4K los capítulos al terminar de descargarlos">
+                      <Icon v-if="store.chain.upscale" name="check" :size="11" /> 4K
+                    </button>
+                    <button class="chain__chip" :class="{ 'is-on': store.chain.translate && tpReady }"
+                            :disabled="!tpReady"
+                            @click="store.setChain({ translate: !store.chain.translate })"
+                            :title="tpReady ? 'Traducir antes de escalar (traducir invalida el 4K, así que el orden importa)' : 'Elige fuente de arte y de español en la pestaña Traducir'">
+                      <Icon v-if="store.chain.translate && tpReady" name="check" :size="11" /> ES
+                    </button>
+                  </div>
                   <button v-if="batchStats.remote" class="hbtn hbtn--accent" @click="batchDownload">
-                    <Icon name="download" :size="14" /> Descargar {{ batchStats.remote }}
+                    <Icon name="download" :size="14" /> {{ chainLabel }} {{ batchStats.remote }}
                   </button>
                   <button v-if="batchStats.local" class="hbtn" @click="batchUpscale">
                     <Icon name="spark" :size="14" /> Escalar 4K {{ batchStats.local }}
@@ -1778,6 +1814,15 @@ async function doExport(toDrive = false) {
   background: var(--glass-strong); border: 1px solid var(--azure); box-shadow: var(--shadow-lg); backdrop-filter: blur(8px); }
 .batchbar__n { font-size: var(--fs-sm); font-weight: 600; color: var(--azure-bright); }
 .batchbar__acts { display: flex; align-items: center; gap: var(--s-2); }
+/* Cadena: se lee como una frase ("luego · 4K · ES") pegada al botón que la ejecuta. */
+.chain { display: flex; align-items: center; gap: 4px; padding-right: var(--s-2); margin-right: 2px; border-right: 1px solid var(--line); }
+.chain__lbl { font-size: var(--fs-2xs); color: var(--ink-ghost); text-transform: lowercase; margin-right: 2px; }
+.chain__chip { display: inline-flex; align-items: center; gap: 3px; padding: 3px 8px; border-radius: var(--r-pill);
+               font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .03em;
+               color: var(--ink-faint); border: 1px solid var(--line-2); transition: all var(--t-fast); }
+.chain__chip:hover:not(:disabled) { color: var(--ink); border-color: var(--line-strong); }
+.chain__chip.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
+.chain__chip:disabled { opacity: .4; cursor: not-allowed; }
 .batchbar__clear { padding: 6px 8px; }
 .chap--4k { border-left: 2px solid var(--cyan); }
 .chap--part { border-left: 2px solid var(--gold); }
