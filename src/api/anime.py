@@ -118,17 +118,63 @@ def _history_append(anime_id: str, title: str, episode: int, cover: str = ''):
 
 _SUBTITLE_EXTS = {'.srt', '.ass', '.ssa', '.sub', '.vtt'}
 
-def _es_sub_injected(video_path: str) -> bool:
-    """True si ESTE reproductor inyectó subs en español a este vídeo. Barato (solo stat):
-    marcador '.es_injected' (inyección a MKV) o sidecar '<base>.spa.<ext>' (formatos no-MKV).
-    NO cuenta pistas ES que ya venían dentro del contenedor original."""
+_ES_SIDE_EXTS = ('.srt', '.ass', '.ssa', '.vtt')
+# Carpeta -> (mtime, {nombres de marcador/sidecar ES}). Sólo se guardan los nombres que CASAN
+# con el patrón, no el listado entero: son un puñado de cadenas por carpeta, no un índice.
+_es_marks: dict = {}
+_es_marks_at: dict = {}      # carpeta -> última vez que se comprobó su mtime
+_ES_MARKS_MAX = 256          # cota dura: es un caché de conveniencia, no una fuente de verdad
+
+
+def _es_marks_in(folder: str) -> set:
+    """Marcadores/sidecars ES de una carpeta, con UN listdir cacheado por mtime.
+
+    Antes se hacían hasta 5 `os.path.exists` POR EPISODIO. El docstring decía "barato (solo
+    stat)" — falso sobre DrvFS/9p, donde cada stat cuesta ~0,7 ms: con 601 episodios eran ~3000
+    stats = **2,1 s en CADA carga** de /api/anime/library (y el front la repite cada 15 s
+    mientras descargas). Un listdir por carpeta es O(carpetas) en vez de O(episodios×5).
+
+    El TTL importa tanto como el listdir: sin él se hacía un `os.stat` por EPISODIO sólo para
+    mirar el mtime (601 stats ≈ 440 ms), y el arreglo se quedaba a medias. Misma constante que
+    `_scan_local_episodes`, que resuelve exactamente el mismo problema unas líneas más abajo.
+
+    Invalida por mtime de la carpeta: crear/borrar un `.spa.ass` o un `.es_injected` lo cambia,
+    que es justo lo que hay que detectar.
+    """
+    now = time.time()
+    hit = _es_marks.get(folder)
+    if hit and now - _es_marks_at.get(folder, 0) < _FOLDER_MTIME_TTL:
+        return hit[1]
     try:
-        base, _ = os.path.splitext(video_path)
-        if os.path.exists(base + '.es_injected'):
+        mt = os.stat(folder).st_mtime
+    except OSError:
+        return set()
+    _es_marks_at[folder] = now
+    if hit and hit[0] == mt:
+        return hit[1]
+    try:
+        names = {n for n in os.listdir(folder)
+                 if n.endswith('.es_injected') or '.spa.' in n}
+    except OSError:
+        names = set()
+    if len(_es_marks) >= _ES_MARKS_MAX:
+        _es_marks.clear(); _es_marks_at.clear()
+    _es_marks[folder] = (mt, names)
+    return names
+
+
+def _es_sub_injected(video_path: str) -> bool:
+    """True si ESTE reproductor inyectó subs en español a este vídeo:
+    marcador '.es_injected' (inyección a MKV, histórico) o sidecar '<base>.spa.<ext>' (lo que
+    se escribe hoy). NO cuenta pistas ES que ya venían dentro del contenedor original."""
+    try:
+        names = _es_marks_in(os.path.dirname(video_path))
+        if not names:
+            return False
+        base = os.path.basename(os.path.splitext(video_path)[0])
+        if base + '.es_injected' in names:
             return True
-        for ext in ('.srt', '.ass', '.ssa', '.vtt'):
-            if os.path.exists(base + '.spa' + ext):
-                return True
+        return any(base + '.spa' + e in names for e in _ES_SIDE_EXTS)
     except OSError:
         pass
     return False
@@ -841,6 +887,17 @@ def _folder_mtime(p: _Path) -> float:
         return 0.0
 
 
+def _size_of(f) -> int:
+    """Tamaño de un archivo ya localizado por el escaneo. Se toma AQUÍ, dentro del recorrido que
+    de todos modos abre la carpeta, y viaja en el resultado cacheado: el endpoint sumaba
+    `Path(ep['path']).stat().st_size` por episodio y eso eran 599 stats sobre DrvFS (~690 ms) en
+    CADA carga de la biblioteca, incluida la que el front repite cada 15 s al descargar."""
+    try:
+        return f.stat().st_size
+    except OSError:
+        return 0
+
+
 def _scan_local_episodes(folder_path: str, overrides: dict = None) -> list:
     """Scan a local folder for video files.
     overrides: {filename: 'special'|'hidden'|'episode'} — manual type assignments.
@@ -891,7 +948,8 @@ def _scan_local_episodes(folder_path: str, overrides: dict = None) -> list:
 
         if ep_type == 'special':
             sp_counter += 1
-            episodes.append({'num': sp_counter, 'path': str(f), 'ep_type': 'special', 'filename': f.name})
+            episodes.append({'num': sp_counter, 'path': str(f), 'ep_type': 'special',
+                             'filename': f.name, 'size': _size_of(f)})
             continue
 
         ep_num = _parse_episode(f.stem)
@@ -900,7 +958,8 @@ def _scan_local_episodes(folder_path: str, overrides: dict = None) -> list:
         while ep_num in seen:
             ep_num += 1
         seen.add(ep_num)
-        episodes.append({'num': ep_num, 'path': str(f), 'ep_type': 'episode', 'filename': f.name})
+        episodes.append({'num': ep_num, 'path': str(f), 'ep_type': 'episode',
+                         'filename': f.name, 'size': _size_of(f)})
 
     result = sorted(episodes, key=lambda e: (e['ep_type'] != 'episode', e['num']))
     _scan_cache[wsl_path] = (fmtime, overrides_key, result)
@@ -1995,13 +2054,9 @@ def anime_library_get():
             series_total = anime.get('total_episodes')
             series_total = series_total if isinstance(series_total, int) else 0
 
-            # Espacio en disco: tamaño real de cada archivo local (stat directo).
-            disk_size = 0
-            for ep in local_eps:
-                try:
-                    disk_size += _Path(ep['path']).stat().st_size
-                except OSError:
-                    pass
+            # Espacio en disco: el tamaño ya viene del escaneo (que lo toma en el mismo recorrido
+            # y lo cachea). Hacer aquí un stat por episodio costaba ~690 ms por carga sobre DrvFS.
+            disk_size = sum(ep.get('size') or 0 for ep in local_eps)
 
             # Add placeholder entries for episodes not yet downloaded
             if series_total > 0:
