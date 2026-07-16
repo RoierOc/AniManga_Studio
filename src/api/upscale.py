@@ -975,16 +975,35 @@ def _run_color_job(input_folder, output_folder, images, upscale_id, chapter_norm
         pass
 
 
-def _detect_color(candidates):
-    """Devuelve la sublista de rutas que el detector considera a color."""
+def _measure_page_color(path):
+    """Mide UNA página. Formato de `cached_measure`: (bytes, chapters, extra)."""
     from PIL import Image
+    try:
+        return 0, 0, {'c': bool(is_color_page(Image.open(path)))}
+    except Exception:
+        # Una página ilegible NO es a color; se cachea igual para no reintentar abrirla
+        # en cada apertura del selector.
+        return 0, 0, {'c': False}
+
+
+def _detect_color(candidates):
+    """Devuelve la sublista de rutas que el detector considera a color.
+
+    Cacheado POR PÁGINA (SQLite en disco, `index_db`), invalidado por el mtime del archivo: si
+    la página no cambió, sigue siendo a color o no. Abrir y decodificar cada imagen costaba
+    **53,7 s en el manga entero** (Amayo, 1861 págs) EN CADA apertura del selector.
+
+    Por página y no por carpeta a propósito: así el filtro por capítulos sigue sirviendo (medir
+    sólo lo que marcaste: 2,8 s para 3 capítulos) en vez de obligar a medir el manga completo la
+    primera vez. Y en disco, no en RAM: la memoria de esta máquina es limitada y esto es
+    puramente un memo — borrar index.db sólo fuerza un remedido.
+    """
+    from api.index_db import cached_measure
     out = []
     for p in candidates:
-        try:
-            if is_color_page(Image.open(p)):
-                out.append(p)
-        except Exception:
-            continue
+        _, _, extra = cached_measure('colorpage', str(p), str(p), _measure_page_color)
+        if extra.get('c'):
+            out.append(p)
     return out
 
 

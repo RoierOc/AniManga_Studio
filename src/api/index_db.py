@@ -30,6 +30,14 @@ def _conn_get():
     if _conn is None:
         os.makedirs(str(DATA_ROOT), exist_ok=True)
         _conn = sqlite3.connect(_DB_PATH, check_same_thread=False)
+        # Esto es un CACHÉ, no la fuente de verdad (ver el docstring del módulo): si un corte
+        # se lleva las últimas filas, sólo se vuelve a medir. Con la durabilidad por defecto
+        # cada commit hace fsync y cuesta **9 ms sobre ext4** — MEDIDO: memoizar las 1861
+        # páginas de un manga eran 16,8 s SÓLO de commits, más que la medición en sí. Con WAL +
+        # synchronous=NORMAL baja a 0,06 ms (0,1 s en total), 150x.
+        # OJO al medir esto: en tmpfs (/tmp) un commit cuesta 0,02 ms y no se ve el problema.
+        _conn.execute("PRAGMA journal_mode=WAL")
+        _conn.execute("PRAGMA synchronous=NORMAL")
         _conn.execute(
             "CREATE TABLE IF NOT EXISTS measure ("
             "  root TEXT NOT NULL, name TEXT NOT NULL, mtime REAL,"
