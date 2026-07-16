@@ -20,6 +20,20 @@ const SRC = { jimaku: 'Jimaku', opensubtitles: 'OpenSubtitles', subdl: 'Subdl', 
           </header>
 
           <div class="modal__body">
+            <!-- Español que YA viene dentro del archivo. Va primero y sin botón a propósito: no
+                 hay nada que hacer, el player lo elige solo por `slang`. Antes salía en la lista
+                 de "traducir" y te invitaba a traducir español a español. -->
+            <section v-if="m.embeddedSpanish?.length">
+              <h3 class="sec"><Icon name="check" :size="13" /> Ya en el archivo · no hay que hacer nada</h3>
+              <div v-for="t in m.embeddedSpanish" :key="'emb' + t.sub_index" class="trk trk--have">
+                <span class="trk__lang">{{ (t.language || 'spa').toUpperCase().slice(0,3) }}</span>
+                <span class="trk__name">{{ t.title || `Pista ${t.sub_index + 1}` }} <em>{{ t.codec }}</em></span>
+                <span class="trk__src">incrustado</span>
+              </div>
+              <p class="note">El reproductor la selecciona sola (prioriza latino). Traducir con IA
+                crearía otra pista, probablemente peor que ésta.</p>
+            </section>
+
             <!-- Ready-made Spanish subs: inject directly -->
             <section v-if="m.spanishTracks.length">
               <h3 class="sec"><Icon name="check" :size="13" /> Ya en español · listos para usar</h3>
@@ -75,6 +89,10 @@ const SRC = { jimaku: 'Jimaku', opensubtitles: 'OpenSubtitles', subdl: 'Subdl', 
 .trk { display: flex; align-items: center; gap: var(--s-3); width: 100%; padding: var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface); margin-bottom: var(--s-2); transition: all var(--t-fast); text-align: left; }
 .trk:hover { border-color: var(--azure); background: var(--surface-2); }
 .trk--ready:hover { border-color: var(--jade); }
+/* Sin :hover ni cursor: es informativo, no un botón. */
+.trk--have { border-color: color-mix(in srgb, var(--jade) 30%, var(--line)); cursor: default; }
+.trk--have .trk__lang { background: color-mix(in srgb, var(--jade) 20%, transparent); color: var(--jade); }
+.note { font-size: var(--fs-2xs); color: var(--ink-faint); line-height: 1.45; margin-top: 2px; }
 .trk__lang { font-family: var(--font-mono); font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: var(--r-xs); background: var(--azure-haze); color: var(--azure-bright); flex-shrink: 0; }
 .trk--ready .trk__lang { background: color-mix(in srgb, var(--jade) 20%, transparent); color: var(--jade); }
 .trk__name { flex: 1; font-size: var(--fs-sm); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

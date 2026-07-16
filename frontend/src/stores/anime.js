@@ -1547,9 +1547,14 @@ export const useAnimeStore = defineStore('anime', {
       try {
         const d = await api.get(`/api/subtitle/tracks?${p}`)
         const tracks = d.tracks || [], ext = d.external_tracks || [], spa = d.spanish_tracks || []
-        if (spa.length || tracks.length || ext.length) {
-          this.subTrackModal = { anime, ep, tracks, externalTracks: ext, spanishTracks: spa, missingKeys: d.sources_missing_key || [] }
-          if (spa.length) ui.toast(`Ya hay ${spa.length} subtítulo(s) en español`, 'ok', 3000)
+        const embedded = d.embedded_spanish || []
+        if (spa.length || tracks.length || ext.length || embedded.length) {
+          this.subTrackModal = { anime, ep, tracks, externalTracks: ext, spanishTracks: spa,
+                                 embeddedSpanish: embedded, missingKeys: d.sources_missing_key || [] }
+          // El español que YA viene dentro del archivo manda sobre lo que se pueda descargar:
+          // suele ser el oficial del grupo y el player lo elige solo.
+          if (embedded.length) ui.toast(`Este episodio ya trae ${embedded.length} pista(s) en español`, 'ok', 3500)
+          else if (spa.length) ui.toast(`Ya hay ${spa.length} subtítulo(s) en español`, 'ok', 3000)
           return
         }
         const hint = (d.sources_missing_key || []).length ? ` (sin API key: ${d.sources_missing_key.join(', ')})` : ''
@@ -1574,22 +1579,39 @@ export const useAnimeStore = defineStore('anime', {
       } catch (_) { this.subTasks[key] = { status: 'error', progress: 0, message: 'Error' }; ui.toast('Error al inyectar', 'error') }
     },
 
-    async startTranslate(anime, ep, subIndex = 0, externalSub = null) {
+    // `force` NO se manda a ciegas. El backend responde 409 si el episodio ya tiene español —
+    // una guarda pensada justo para esto que este método anulaba mandando force:true SIEMPRE,
+    // dejándola en código muerto. Ahora el 409 se convierte en una pregunta: sólo se fuerza si
+    // el usuario dice que sí, sabiendo que ya tiene español.
+    async startTranslate(anime, ep, subIndex = 0, externalSub = null, force = false) {
       const ui = useUiStore()
       const key = this.subKey(anime, ep)
       this.subTrackModal = null
       this.subTasks[key] = { status: 'starting', progress: 0, message: 'Iniciando…' }
+      const body = {
+        info_hash: ep.info_hash || '', episode: ep.num, ep_type: ep.ep_type || 'episode',
+        anime_id: anime.id, sub_index: subIndex, force,
+        ...(ep.local_path ? { local_path: ep.local_path } : {}),
+        ...(externalSub ? { external_sub: externalSub } : {}),
+      }
       try {
-        const d = await api.post('/api/subtitle/translate', {
-          info_hash: ep.info_hash || '', episode: ep.num, ep_type: ep.ep_type || 'episode',
-          anime_id: anime.id, sub_index: subIndex, force: true,
-          ...(ep.local_path ? { local_path: ep.local_path } : {}),
-          ...(externalSub ? { external_sub: externalSub } : {}),
-        })
+        const d = await api.post('/api/subtitle/translate', body)
         if (d.error) { this.subTasks[key] = { status: 'error', progress: 0, message: d.error }; ui.toast(d.error, 'error'); return }
         this.subTasks[key] = { ...this.subTasks[key], task_id: d.task_id }
         this._subPoll(key, d.task_id)
-      } catch (e) { this.subTasks[key] = { status: 'error', progress: 0, message: e.body || 'Error' }; ui.toast(e.body || 'Error al traducir', 'error') }
+      } catch (e) {
+        if (e?.status === 409 && !force) {
+          delete this.subTasks[key]
+          if (window.confirm('Este episodio ya tiene subtítulos en español.\n\n' +
+                             'Traducir con IA creará otra pista, probablemente peor que la que ya ' +
+                             'tienes (si es oficial del grupo).\n\n¿Traducir de todas formas?')) {
+            return this.startTranslate(anime, ep, subIndex, externalSub, true)
+          }
+          return
+        }
+        this.subTasks[key] = { status: 'error', progress: 0, message: e.body || 'Error' }
+        ui.toast(e.body || 'Error al traducir', 'error')
+      }
     },
 
     _subPoll(key, taskId) {

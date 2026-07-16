@@ -122,6 +122,15 @@ def _build_prompt(src_lang: str = 'eng') -> str:
 
 _TEXT_SUB_CODECS = {'ass', 'ssa', 'subrip', 'srt', 'webvtt', 'mov_text', 'text', 'jacosub', 'microdvd', 'realtext', 'subviewer', 'vplayer'}
 
+# Qué cuenta como "ya está en español". Estaba copiado en 5 sitios; con un solo criterio no
+# pueden desincronizarse el que OFRECE traducir, el que lo BLOQUEA y el que elige la pista fuente.
+_ES_LANGS = ('spa', 'es')
+
+
+def is_es_track(t: dict) -> bool:
+    return (t.get('language') or '') in _ES_LANGS
+
+
 def _ffprobe_tracks(path: str) -> list:
     """Return list of text subtitle stream dicts from an MKV (image-based codecs excluded)."""
     cmd = ['ffprobe', '-v', 'quiet', '-print_format', 'json',
@@ -713,7 +722,7 @@ def _inject_sub(mkv_path: str, sub_path: str, n_existing_subs: int) -> str:
     # Keep existing subtitle tracks except any prior Spanish track (we replace it)
     keep_sub_ids   = [str(t['id']) for t in tracks
                       if t.get('type') == 'subtitles'
-                      and t.get('properties', {}).get('language', '') not in ('spa', 'es')]
+                      and t.get('properties', {}).get('language', '') not in _ES_LANGS]
 
     cmd = ['mkvmerge', '-o', tmp_out]
     if keep_video_ids:
@@ -1804,7 +1813,13 @@ def subtitle_tracks():
     if not path or not os.path.exists(path):
         return jsonify({'error': 'Archivo no encontrado', 'path': path}), 404
 
-    tracks = _ffprobe_tracks(path)
+    # Las pistas que YA están en español no son candidatas a traducir: se anuncian aparte para que
+    # el modal no invite a traducir español a español. Antes salían en la lista de "traducir" y el
+    # backend las rechazaba después — o peor, se traducían igual porque el front mandaba force=true.
+    all_tracks = _ffprobe_tracks(path)
+    embedded_spanish = [t for t in all_tracks if is_es_track(t)]
+    tracks = [t for t in all_tracks if not is_es_track(t)]
+
     titles = _get_anime_titles(anime_id)
     external_tracks = []
     spanish_tracks  = []
@@ -1819,7 +1834,9 @@ def subtitle_tracks():
         # Always search for pre-made Spanish subs (no GPU needed)
         spanish_tracks = _ext_find_spanish_subs(titles, effective_episode)
 
-    if not tracks:
+    # OJO: la condición mira `all_tracks`, no `tracks`. Un archivo que sólo trae subtítulos en
+    # español TIENE pistas y no necesita nada; salir a buscar subs externos ahí sería absurdo.
+    if not all_tracks:
         # No internal text tracks — also search English external sources for translation
         if not get_secret('JIMAKU_API_KEY'):
             sources_missing_key.append('jimaku')
@@ -1830,6 +1847,7 @@ def subtitle_tracks():
     return jsonify({
         'path': path,
         'tracks': tracks,
+        'embedded_spanish': embedded_spanish,
         'external_tracks': external_tracks,
         'spanish_tracks': spanish_tracks,
         'sources_missing_key': sources_missing_key,
@@ -1924,7 +1942,7 @@ def subtitle_translate():
         return jsonify({'error': 'El archivo no tiene pistas de subtítulos de texto'}), 400
 
     # Block re-translation unless force=true
-    if not force and any(t['language'] in ('spa', 'es') for t in tracks):
+    if not force and any(is_es_track(t) for t in tracks):
         return jsonify({'error': 'El archivo ya tiene subtítulos en español. Usa force=true para reemplazar.'}), 409
 
     # Find the requested subtitle track (skip existing spa tracks).
@@ -1933,7 +1951,7 @@ def subtitle_translate():
     # mandaba ése y pedir "inglés" (index 2) traducía la pista ÁRABE (sub_index 2), con su
     # puntuación RTL al principio y todo. El fallo era MUDO porque el índice equivocado casaba con
     # OTRA pista real.
-    src_tracks = [t for t in tracks if t['language'] not in ('spa', 'es')]
+    src_tracks = [t for t in tracks if not is_es_track(t)]
     if not src_tracks:
         return jsonify({'error': 'No hay pista de subtítulo fuente disponible'}), 400
     track = next((t for t in src_tracks if t['sub_index'] == sub_index), None)
@@ -1975,7 +1993,7 @@ def subtitle_reinject():
         return jsonify({'error': 'Archivo de video no encontrado'}), 404
 
     tracks = _ffprobe_tracks(path)
-    spa = next((t for t in tracks if t['language'] in ('spa', 'es')), None)
+    spa = next((t for t in tracks if is_es_track(t)), None)
     if not spa:
         return jsonify({'error': 'No hay track español que re-inyectar'}), 400
 
@@ -2003,7 +2021,7 @@ def subtitle_reinject():
             with open(out_path, 'w', encoding='utf-8') as f:
                 f.write(clean)
 
-            n_non_spa = len([t for t in tracks if t['language'] not in ('spa', 'es')])
+            n_non_spa = len([t for t in tracks if not is_es_track(t)])
             _inject_sub(path, out_path, n_non_spa)
 
         return jsonify({'status': 'ok', 'file': os.path.basename(path)})

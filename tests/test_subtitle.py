@@ -197,6 +197,25 @@ def test_zero_is_a_real_value_not_absence():
     assert ass_style_overrides(['Default'], shadow='0') == 'Default.Shadow=0'
 
 
+# --------------------------------------------------------------------------- ya está en español
+@pytest.mark.parametrize('lang, es', [
+    ('spa', True), ('es', True),
+    ('eng', False), ('por', False), ('ara', False), ('und', False), ('', False), (None, False),
+])
+def test_is_es_track(lang, es):
+    from api.subtitle import is_es_track
+    assert is_es_track({'language': lang}) is es
+
+
+def test_es_criterion_is_shared_by_every_caller():
+    """El criterio de "ya está en español" decide TRES cosas: qué se ofrece traducir, qué se
+    bloquea (409) y cuál es la pista fuente. Si vuelve a copiarse a mano, se desincronizan y
+    acabas ofreciendo algo que el backend rechaza (o peor, traduciendo español a español)."""
+    src = open(os.path.join(REPO, 'src/api/subtitle.py'), encoding='utf-8').read()
+    assert "('spa', 'es')" not in src.replace("_ES_LANGS = ('spa', 'es')", ''), \
+        'hay una comprobación de español a mano: usa is_es_track()/_ES_LANGS'
+
+
 # --------------------------------------------------------------------------- no tocar el vídeo
 def _fake(tmp_path):
     mkv = tmp_path / 'Ep10.mkv'
