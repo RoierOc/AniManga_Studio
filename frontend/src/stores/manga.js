@@ -972,9 +972,30 @@ export const useMangaStore = defineStore('manga', {
       catch (_) {}
     },
 
+    // Traducir reescribe el arte, así que el backend invalida (borra) el capítulo ya escalado a
+    // 4K y hay que re-escalarlo desde cero. Pasaba en silencio: se podían tirar horas de GPU sin
+    // enterarse. Se avisa ANTES, con la cuenta real de páginas que se van a perder.
+    async _tpConfirmUpscaleLoss(chapters) {
+      let cost
+      try {
+        cost = await api.post('/api/transplant/upscale_cost', { title: this.current.id, chapters: chapters || 'all' })
+      } catch (_) {
+        return true       // si no se puede contar, no bloqueamos la traducción por el aviso
+      }
+      if (!cost?.pages) return true
+      const chs = Object.keys(cost.byChapter || {}).sort()
+      const lista = chs.length > 6 ? `${chs.slice(0, 6).join(', ')}… (+${chs.length - 6})` : chs.join(', ')
+      return window.confirm(
+        `Esto va a invalidar ${cost.pages} página(s) ya escaladas a 4K en ${cost.chapters} capítulo(s).\n\n` +
+        `${lista}\n\n` +
+        'Al traducir cambia el arte, así que el 4K deja de servir y habrá que volver a escalar ' +
+        '(horas de GPU). Lo recomendable es traducir primero y escalar después.\n\n¿Traducir igualmente?')
+    },
+
     async tpRun(chapters) {
       const ui = useUiStore(); const t = this.tp
       if (!t.artSel || !t.esSel) { ui.toast('Elige fuente de arte y de español', 'error'); return }
+      if (!await this._tpConfirmUpscaleLoss(chapters)) return
       await this._tpConfirm()
       try {
         const res = await api.post('/api/transplant/run', { title: this.current.id, chapters: chapters || 'all', qa: this.qaMode })

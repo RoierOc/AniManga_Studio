@@ -2360,14 +2360,46 @@ def _replace_chapter_in_place(out_dir: Path, prefix: str, stage_dir: Path, page_
             shutil.move(str(src), str(out_dir / name))
 
 
+def _upscaled_folders(title: str):
+    """Las dos convenciones de nombre del mirror upscaled (con '_' y con espacios)."""
+    return {Path(upscaled_dir()) / title, Path(upscaled_dir()) / title.replace("_", " ")}
+
+
 def _invalidate_upscaled(title: str, prefix: str):
     """El arte cambió → el capítulo escalado quedó obsoleto: se borra para que se
     re-escale. Cubre las dos convenciones de nombre del mirror upscaled."""
-    for folder in {Path(upscaled_dir()) / title, Path(upscaled_dir()) / title.replace("_", " ")}:
+    for folder in _upscaled_folders(title):
         if folder.exists():
             for ext in _IMG_EXT:
                 for f in folder.glob(f"{prefix}_*.{ext}"):
                     f.unlink(missing_ok=True)
+
+
+def upscaled_cost(title: str, chapters=None) -> dict:
+    """Cuántas páginas 4K se van a TIRAR si se traduce `chapters` (None/'all' = todo el título).
+
+    Traducir reescribe el arte, así que `_invalidate_upscaled` borra el escalado del capítulo y
+    hay que re-escalar desde cero. Escalar ANTES de traducir tira las horas de GPU, y hasta ahora
+    pasaba EN SILENCIO. Esto es lo que el front usa para avisar antes de lanzar la traducción.
+
+    Cuenta exactamente los ficheros que `_invalidate_upscaled` borraría: mismo glob, mismas
+    carpetas, mismo prefijo. Si una cambia sin la otra, el aviso miente — por eso viven juntas.
+    """
+    prefixes = None
+    if isinstance(chapters, list) and chapters:
+        prefixes = {_chapter_file_prefix(c) for c in chapters}
+    per: dict = {}
+    for folder in _upscaled_folders(title):
+        if not folder.exists():
+            continue
+        for ext in _IMG_EXT:
+            for f in folder.glob(f"*.{ext}"):
+                pre = f.name.rsplit("_", 1)[0]      # ch0036_024.jpg -> ch0036
+                if prefixes is not None and pre not in prefixes:
+                    continue
+                per[pre] = per.get(pre, 0) + 1
+    return {"pages": sum(per.values()), "chapters": len(per),
+            "byChapter": dict(sorted(per.items()))}
 
 
 def _persist_run_meta(title: str, translated: set, failed: set, task_id=None, status=None):
@@ -2668,6 +2700,22 @@ def cancel():
     _transplant_cancel[tid] = True
     _set_status(tid, status="cancelling", phase="cancelling")
     return jsonify({"ok": True, "task_id": tid})
+
+
+@transplant_bp.route("/upscale_cost", methods=["POST"])
+def upscale_cost_route():
+    """Páginas 4K que se perderían al traducir. El front avisa con esto ANTES de lanzar /run.
+
+    NO toca Suwayomi ni resuelve 'all' contra las fuentes: sólo mira el disco, así que es
+    instantáneo y sirve para pintar un diálogo sin hacer esperar al usuario. Con chapters=None
+    o 'all' cuenta TODO el escalado del título, que es justo lo que /run acabaría invalidando.
+    """
+    body = request.get_json(silent=True) or {}
+    title = (body.get("title") or "").strip()
+    if not title:
+        return jsonify({"error": "title required"}), 400
+    chapters = body.get("chapters")
+    return jsonify(upscaled_cost(title, None if chapters == "all" else chapters))
 
 
 @transplant_bp.route("/run", methods=["POST"])
