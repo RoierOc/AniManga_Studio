@@ -197,6 +197,64 @@ def test_zero_is_a_real_value_not_absence():
     assert ass_style_overrides(['Default'], shadow='0') == 'Default.Shadow=0'
 
 
+# --------------------------------------------------------------------------- no tocar el vídeo
+def _fake(tmp_path):
+    mkv = tmp_path / 'Ep10.mkv'
+    mkv.write_bytes(b'x' * 4096)          # no hace falta un MKV real: el camino sidecar sólo copia
+    sub = tmp_path / 'translated.ass'
+    sub.write_text('[Script Info]\n', encoding='utf-8')
+    return mkv, sub
+
+
+def test_translating_never_rewrites_the_video(tmp_path):
+    """EL PUNTO. Los .mkv son el contenido que qBittorrent siembra: reescribirlos cambia el hash
+    y rompe el torrent en silencio (medido: ep10 quedó +35.677 B sobre lo que declara el suyo).
+    Traducir NO puede tocar el archivo del usuario."""
+    import api.subtitle as S
+    mkv, sub = _fake(tmp_path)
+    before = (mkv.read_bytes(), mkv.stat().st_mtime_ns)
+
+    out = S._inject_sub(str(mkv), str(sub), 0)
+
+    assert (mkv.read_bytes(), mkv.stat().st_mtime_ns) == before, 'el vídeo fue modificado'
+    assert out == str(tmp_path / 'Ep10.spa.ass')
+    assert os.path.exists(out)
+
+
+def test_sidecar_is_named_so_the_player_finds_it(tmp_path):
+    """El nombre no es cosmético: `_sidecar_subs` (anime.py) exige que empiece por el stem del
+    vídeo y saca el idioma del sufijo. Si cambia, el sidecar deja de ser una pista."""
+    import api.subtitle as S
+    mkv, sub = _fake(tmp_path)
+    out = os.path.basename(S._inject_sub(str(mkv), str(sub), 0))
+    assert out.startswith('Ep10')
+    assert '.spa.' in out
+    assert out.endswith('.ass')          # conserva ASS: si cayera a .srt se perderían los estilos
+
+
+def test_marker_is_written(tmp_path):
+    import api.subtitle as S
+    mkv, sub = _fake(tmp_path)
+    S._inject_sub(str(mkv), str(sub), 0)
+    assert (tmp_path / 'Ep10.es_injected').exists()
+
+
+def test_retranslating_replaces_the_sidecar_not_accumulates(tmp_path):
+    import api.subtitle as S
+    mkv, sub = _fake(tmp_path)
+    S._inject_sub(str(mkv), str(sub), 0)
+    sub.write_text('[Script Info]\n; v2\n', encoding='utf-8')
+    S._inject_sub(str(mkv), str(sub), 0)
+    assert len(list(tmp_path.glob('Ep10*.ass'))) == 1
+    assert '; v2' in (tmp_path / 'Ep10.spa.ass').read_text()
+
+
+def test_embedding_is_opt_in(monkeypatch, tmp_path):
+    """Por defecto NO se incrusta. Si esto falla, hemos vuelto a romper torrents."""
+    import api.subtitle as S
+    assert S._EMBED_IN_MKV is False
+
+
 # --------------------------------------------------------------------------- prioridad
 def test_sub_lang_priority_matches_player_rs():
     """anime.py y player.rs DEBEN listar los idiomas igual: si divergen, la pista que elige

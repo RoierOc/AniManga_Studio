@@ -671,13 +671,32 @@ def _save_sub_external(video_path: str, sub_path: str) -> str:
     return out
 
 
+# Incrustar en el .mkv REESCRIBE el archivo, y esos archivos SON el contenido que qBittorrent
+# siembra: al cambiar de tamaño el hash deja de casar y el torrent queda roto EN SILENCIO.
+#
+# MEDIDO (ep10 de Agents of the Four Seasons, traducido el 15/07): el torrent declara
+# 1.456.610.283 B y el disco tenía 1.456.645.960 (+35.677) — y qBittorrent seguía en 'stalledUP'
+# creyendo que sembraba. Un `recheck` lo daría por incompleto y re-descargaría 1,4 GB. El ep09,
+# intacto, casa byte a byte con el suyo.
+#
+# Por defecto NO se toca el contenedor: la traducción va como sidecar `<vídeo>.spa.ass`, que NO es
+# un ciudadano de segunda — `_sidecar_subs`/`_probe_tracks` (anime.py) lo listan y la shell lo carga
+# con `sub-add`, así que se comporta como una pista incrustada (delay, estilo, selección).
+# Efecto extra: el original del usuario queda intacto y traducir deja de ser destructivo.
+#
+# SUB_EMBED_IN_MKV=1 recupera el incrustado para quien quiera un archivo autosuficiente y no
+# esté sembrando.
+_EMBED_IN_MKV = os.environ.get('SUB_EMBED_IN_MKV', '') == '1'
+
+
 def _inject_sub(mkv_path: str, sub_path: str, n_existing_subs: int) -> str:
-    """Insert translated subtitle into the original MKV in-place using mkvmerge.
-    For non-MKV files, saves a sidecar subtitle file instead (MPV auto-loads it).
-    mkvmerge writes proper cue entries (index) so MPV can seek all subtitle packets.
-    ffmpeg -c copy omits the cue index, causing MPV to only read the first packet.
+    """Deja el subtítulo traducido junto al vídeo (sidecar) o, si SUB_EMBED_IN_MKV=1, dentro del
+    .mkv con mkvmerge.
+
+    Al incrustar se usa mkvmerge y no `ffmpeg -c copy`: ffmpeg omite el índice de cues del MKV y
+    MPV acaba leyendo sólo el primer paquete de subtítulos.
     """
-    if not mkv_path.lower().endswith('.mkv'):
+    if not _EMBED_IN_MKV or not mkv_path.lower().endswith('.mkv'):
         return _save_sub_external(mkv_path, sub_path)
     tmp_out = mkv_path + '._tmp_spa.mkv'
 
