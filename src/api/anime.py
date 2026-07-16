@@ -1076,7 +1076,13 @@ _SKIP_WINDOW = int(os.environ.get('ANIME_SKIP_WINDOW', '240'))  # show button fo
 _OSC_HIDE_MS = int(os.environ.get('ANIME_OSC_HIDE_MS', '1000'))
 # Preferred subtitle languages, Latin-American Spanish first, then generic Spanish. mpv
 # matches these against each track's language tag and picks the first that exists.
-_SUB_LANGS = 'es-419,es-LA,lat,spa,es,esp,spanish,castellano'
+# Lista de PRIORIDAD para --slang de mpv: se queda con la PRIMERA que case, no con la mejor.
+# Mismo orden que el player nativo (player.rs), que es el que usa el usuario: latino → genérico
+# (nuestra pista inyectada es `spa` y es latino neutro) → España → inglés. Mantener ambos a la par.
+_SUB_LANGS = ('es-419,es-la,es-mx,es-ar,es-co,lat,latino,spa-419,spa-mx,'
+              'spa,es,esp,spanish,español,'
+              'es-es,spa-es,cas,castellano,castilian,'
+              'eng,en,english')
 
 
 def _skip_args(dest_dir_linux: str, script_path_for_mpv: str) -> list:

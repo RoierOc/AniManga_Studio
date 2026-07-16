@@ -867,6 +867,51 @@ def unmask_ass_tags(text: str, tags: list, original: str = '') -> str:
     return out
 
 
+# ── Estilo de NUESTRA pista en español ───────────────────────────────────────
+# Por defecto la pista traducida hereda los estilos de la pista fuente. El usuario prefiere el
+# look que vio por accidente cuando se tradujo desde la pista árabe (bug index/sub_index):
+# Adobe Arabic 26 en negrita, borde 1, sin sombra — frente al Trebuchet MS 24 del inglés.
+# Se puede desactivar (SUB_STYLE_FONT="") o cambiar por env sin tocar código: es GUSTO, no lógica.
+_STYLE_FONT    = os.environ.get('SUB_STYLE_FONT', 'Adobe Arabic')
+_STYLE_SIZE    = os.environ.get('SUB_STYLE_SIZE', '26')
+_STYLE_BOLD    = os.environ.get('SUB_STYLE_BOLD', '-1')     # -1 = sí, 0 = no
+_STYLE_OUTLINE = os.environ.get('SUB_STYLE_OUTLINE', '1')
+_STYLE_SHADOW  = os.environ.get('SUB_STYLE_SHADOW', '0')
+
+
+def restyle_ass_header(header: list) -> list:
+    """Reescribe fuente/cuerpo/negrita/borde/sombra de TODOS los Style: del ASS.
+
+    Se leen las columnas del `Format:` de [V4+ Styles] en vez de asumir posiciones fijas: el
+    orden no es idéntico en todos los scripts (v4 vs v4+), y escribir a ciegas en el índice
+    equivocado te cambia un color por un tamaño.
+
+    Sólo toca los Style:. Los carteles con `\\fn…` inline mandan sobre el estilo, así que
+    conservan su tipografía original — no se pisan los signs."""
+    if not _STYLE_FONT:
+        return header
+    cols, out = None, []
+    for line in header:
+        s = line.strip()
+        if s.lower().startswith('format:') and cols is None and any(
+                'fontname' in c.strip().lower() for c in s.split(':', 1)[1].split(',')):
+            cols = [c.strip().lower() for c in s.split(':', 1)[1].split(',')]
+            out.append(line); continue
+        if not (cols and s.lower().startswith('style:')):
+            out.append(line); continue
+        eol = line[len(line.rstrip('\r\n')):]
+        vals = [v.strip() for v in s.split(':', 1)[1].split(',')]
+        if len(vals) != len(cols):
+            out.append(line); continue          # fila rara -> no tocar
+        for name, val in (('fontname', _STYLE_FONT), ('fontsize', _STYLE_SIZE),
+                          ('bold', _STYLE_BOLD), ('outline', _STYLE_OUTLINE),
+                          ('shadow', _STYLE_SHADOW)):
+            if name in cols:
+                vals[cols.index(name)] = val
+        out.append('Style: ' + ','.join(vals) + eol)
+    return out
+
+
 def _rebuild_ass(header: list, events: list, translated: list) -> str:
     out = ''.join(header)
     t_iter = iter(translated)
@@ -1410,7 +1455,7 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
             upd('injecting', 90, 'Añadiendo track español al MKV…')
 
             if is_ass:
-                out_content = _rebuild_ass(header, events, translated)
+                out_content = _rebuild_ass(restyle_ass_header(header), events, translated)
                 out_sub = os.path.join(tmpdir, 'translated.ass')
             else:
                 out_content = _rebuild_srt(blocks, translated)

@@ -519,10 +519,23 @@ impl Player {
             init.set_property("hwdec", "auto-safe")?;
             init.set_property("keep-open", "yes")?;
             // Selección automática de pista: SIEMPRE audio japonés + subtítulos español.
-            // mpv elige la primera pista cuyo idioma coincida (probando varios códigos ISO
-            // y etiquetas comunes de fansubs). Si no hay match, cae a su default.
+            // `slang` es una lista de PRIORIDAD: mpv se queda con la PRIMERA entrada que case
+            // con alguna pista, no con la "mejor". Por eso el orden es la feature entera.
+            //
+            // Orden pedido por el usuario: 1) español LATINO  2) español de España  3) inglés.
+            // Antes empezaba por "spa", que es el genérico (y en muchos releases = castellano),
+            // así que ganaba SIEMPRE y es-419/es-LA no llegaban a mirarse nunca.
+            //
+            // El genérico va TERCERO a propósito: nuestra propia pista traducida se inyecta como
+            // `spa` (subtitle.py --language 0:spa) y es latino neutro, así que si no hay ninguna
+            // latina explícita, el genérico es la mejor apuesta antes de caer al castellano.
             let _ = init.set_property("alang", "jpn,ja,japanese,jp");
-            let _ = init.set_property("slang", "spa,es,esp,spanish,español,lat,es-419,es-la");
+            let _ = init.set_property("slang", concat!(
+                "es-419,es-la,es-mx,es-ar,es-co,lat,latino,spa-419,spa-mx,",  // 1º latino
+                "spa,es,esp,spanish,español,",                                 // 2º genérico (el nuestro)
+                "es-es,spa-es,cas,castellano,castilian,",                      // 3º España
+                "eng,en,english",                                              // 4º inglés
+            ));
             // Carga de sidecars: NO automática. La app enumera los sidecar (backend
             // _sidecar_subs) y los añade explícitamente por IPC 'subadd' → así el sid que
             // asigna mpv coincide con el índice de la lista del gestor. Si dejáramos
