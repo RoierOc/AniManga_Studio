@@ -99,8 +99,11 @@ def _build_prompt(src_lang: str = 'eng') -> str:
         '══ CARACTERES INTOCABLES (copia byte a byte) ══\n'
         r'• \N            → salto de línea de subtítulo, NO lo conviertas en salto real'
         '\n'
-        r'• {cualquier_cosa}  → tags ASS (\an8, \i1, \pos, \t, \move, \alpha…) — NO los toques'
-        '\n'
+        # Los tags ASS ya NO llegan aquí: se sustituyen por marcadores antes de enviar
+        # (mask_ass_tags) y se reponen después. Pedir "no toques {\an8}" no funcionaba.
+        '• ⁢0⁢ ⁢1⁢ ⁢2⁢…   → marcadores de formato. Cópialos EXACTOS y en el mismo sitio de la\n'
+        '                   frase donde estaban. No los numeres de nuevo, no los inventes, no los\n'
+        '                   borres. Si uno va pegado a una palabra, déjalo pegado a su traducción.\n'
         '• ♪ ♫ … — « »  → símbolos especiales, cópialos idénticos\n'
         '• Líneas que solo contienen ♪, puntuación o están vacías → devuélvelas sin cambios\n\n'
 
@@ -808,6 +811,62 @@ def _parse_ass(content: str):
     return header, events
 
 
+# ── Protección de tags ASS ───────────────────────────────────────────────────
+# El diseño anterior mandaba los tags {\…} al LLM y le pedía POR PROMPT que no los tocara.
+# No es fiable y se midió el destrozo (Agents of the Four Seasons ep10): un {\p1…} de DIBUJO
+# perdido -> los comandos vectoriales se renderizaban como texto en pantalla ("m 0 0 l 230 0…"),
+# un {\t(18,8735,\fs30)} con el parámetro interior borrado, y títulos con los tags reordenados.
+# La cura no es más prompt: es NO enseñárselos.
+
+_ASS_TAG_RE = re.compile(r'\{[^}]*\}')
+# \p1..\p9 = modo DIBUJO. Ojo: \pos, \pbo también empiezan por \p -> exigir dígito y que no siga
+# una letra. \p0 apaga el dibujo, así que sólo 1-9 marcan una línea como vectorial.
+_ASS_DRAW_RE = re.compile(r'\\p[1-9](?![a-zA-Z0-9])')
+_PH_RE = re.compile(r'⁢(\d+)⁢')
+
+
+def is_ass_drawing(text: str) -> bool:
+    """¿La línea es un DIBUJO vectorial (\\p1) en vez de texto? Entonces no se traduce jamás:
+    su "texto" son coordenadas (`m 0 0 l 230 0 …`) y traducirlo no significa nada; perder el tag
+    hace que se pinten como letras encima del vídeo."""
+    return bool(_ASS_DRAW_RE.search(text or ''))
+
+
+def mask_ass_tags(text: str):
+    """Sustituye cada bloque {\\…} por un marcador invisible y estable. Devuelve (texto, tags).
+
+    El marcador usa U+2062 (INVISIBLE TIMES): no existe en subtítulos reales, no se traduce y
+    los tokenizadores lo respetan mejor que un `{…}` lleno de barras. Función con NOMBRE porque
+    es una decisión que se mide (y se puede parchear en un A/B) — ver E-1."""
+    tags = []
+
+    def _grab(m):
+        tags.append(m.group(0))
+        return f'⁢{len(tags) - 1}⁢'
+
+    return _ASS_TAG_RE.sub(_grab, text or ''), tags
+
+
+def unmask_ass_tags(text: str, tags: list, original: str = '') -> str:
+    """Reinserta los tags. Un marcador que el modelo se comió = ese tag se pierde, NO el texto.
+
+    Excepción: si el original ABRÍA con un tag (estilo/posición: \\an8, \\pos, colores…) y el
+    modelo lo perdió, se repone al principio — es el que decide dónde y cómo se ve la línea, y
+    sin él la frase aparece descolocada en mitad de la pantalla."""
+    seen = set()
+
+    def _put(m):
+        i = int(m.group(1))
+        seen.add(i)
+        return tags[i] if 0 <= i < len(tags) else ''
+
+    out = _PH_RE.sub(_put, text or '')
+    out = _PH_RE.sub('', out)          # marcadores rotos/inventados -> fuera
+    if tags and 0 not in seen and (original or '').startswith('{'):
+        out = tags[0] + out
+    return out
+
+
 def _rebuild_ass(header: list, events: list, translated: list) -> str:
     out = ''.join(header)
     t_iter = iter(translated)
@@ -915,7 +974,12 @@ _PARALLEL_WORKERS = 6  # concurrent batch requests
 
 
 def _translate_batch_with_fallback(texts: list, client, src_lang: str = 'eng') -> list:
-    """Try each model in order; return translated list."""
+    """Try each model in order; return translated list. Los tags ASS se protegen aquí (igual que
+    en Ollama) para que ambos motores compartan EXACTAMENTE la misma garantía de formato."""
+    return translate_with_tag_protection(texts, lambda p: _translate_batch_raw(p, client, src_lang))
+
+
+def _translate_batch_raw(texts: list, client, src_lang: str = 'eng') -> list:
     last_err = None
     for mn in _MODELS:
         try:
@@ -984,12 +1048,40 @@ def _ollama_unload():
         print(f'[subtitle] _ollama_unload error: {e}')
 
 
+def translate_with_tag_protection(texts: list, engine) -> list:
+    """Envuelve a CUALQUIER motor: enmascara los tags ASS, traduce sólo el texto y los repone.
+
+    Punto ÚNICO donde se protege el formato, para que Ollama y Gemini no puedan divergir.
+    Las líneas de dibujo (\\p1) ni se mandan: se devuelven intactas."""
+    idx, payload, masks = [], [], []
+    out = list(texts)
+    for i, t in enumerate(texts):
+        if is_ass_drawing(t):
+            continue                      # dibujo vectorial -> intacto, nunca al modelo
+        masked, tags = mask_ass_tags(t)
+        if not masked.strip():
+            continue                      # sólo tags/vacío -> nada que traducir
+        idx.append(i); payload.append(masked); masks.append(tags)
+    if not payload:
+        return out
+    got = engine(payload)
+    for i, tr, tags in zip(idx, got, masks):
+        out[i] = unmask_ass_tags(tr, tags, texts[i])
+    return out
+
+
 def _translate_batch_ollama(texts: list, src_lang: str = 'eng') -> list:
     """Translate a batch via local Ollama. Retries once if model returns < 85% of lines.
 
     Uses system/user message split so Ollama reuses the KV cache for the instruction
     prompt across all batches of the same job (only the user portion changes).
     """
+    if not texts:
+        return []
+    return translate_with_tag_protection(texts, lambda p: _translate_batch_ollama_raw(p, src_lang))
+
+
+def _translate_batch_ollama_raw(texts: list, src_lang: str = 'eng') -> list:
     if not texts:
         return []
     import urllib.request as _ur
