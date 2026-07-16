@@ -483,6 +483,66 @@ def _ring_mae(en_g, esw_g, x0, y0, x1, y1, pad=ONLYEN_RING_PAD):
     return float(np.mean(np.abs(a[mask] - b[mask])))
 
 
+# ── A1: igualar el TONO del parche con el de la página de destino ─────────────────────────────
+# El pegado era `es*α + en*(1-α)`: los píxeles del scan ES entran con SU curva. Si ese scan tiene
+# el blanco en 242 y el EN en 255, el parche se ve como un recuadro más oscuro. MEDIDO sobre el
+# corpus (672 págs / 7170 cajas, `data/_qa_translate/ring_tone.py`):
+#
+#   |delta| en el anillo:  p50=1   p75=5   p90=16,5   p95=25   p99=43   máx=242
+#   · 30% de las cajas pasan de 4 niveles (umbral en que el ojo lo ve); 12% pasan de 15.
+#   · el texto libre es peor que los globos en toda la cola (p99 66 vs 37).
+#   · depende del SCAN, no del algoritmo: "So, Do You Want…" p90=3 (nada que arreglar),
+#     Amayo p90=23.
+#
+# Se corrige con un OFFSET y no con ganancia+offset porque la pendiente NO es medible: el anillo
+# suele ser blanco plano y `polyfit` devuelve ruido (7,4% de las cajas daban pendientes
+# físicamente imposibles, <0,5). Donde sí hay grises con que medir, el 48,6% cae en 0,95-1,05:
+# la pendiente es 1 y basta con desplazar.
+#
+# Tampoco se corrige por PÁGINA: la dispersión del delta entre cajas de la misma página es
+# p50=3,9 / p90=13,2, así que un ajuste único dejaría residuos en pleno rango visible.
+TONE_MIN_DELTA = 4.0        # por debajo no se ve. Tocar el 70% que ya está bien sólo puede
+                            # empeorarlo (y arriesga recortar el blanco a 255).
+TONE_MAX_RING_MAE = ONLYEN_RING_MAE   # si el anillo NO casa, la diferencia no es de tono: es que
+                            # la homografía está torcida ahí y estaríamos comparando otro dibujo.
+                            # Ante la duda, no tocar.
+
+
+def tone_offset(en_g, esw_g, x0, y0, x1, y1, pad=ONLYEN_RING_PAD):
+    """Cuánto hay que SUMAR al parche ES para que su tono case con el de la página EN. 0 = no tocar.
+
+    Se mide en el ANILLO de `pad` px por fuera de la caja: ahí no hay texto (el detector lo acotó
+    dentro), así que es el MISMO dibujo en ambos escaneos y toda diferencia es la curva del scan.
+    Mediana y no media: aguanta 1-2 px de desalineación sin envenenarse.
+    """
+    h, w = en_g.shape[:2]
+    rx0, ry0 = max(0, x0 - pad), max(0, y0 - pad)
+    rx1, ry1 = min(w, x1 + pad), min(h, y1 + pad)
+    a = en_g[ry0:ry1, rx0:rx1].astype(np.float32)
+    b = esw_g[ry0:ry1, rx0:rx1].astype(np.float32)
+    if a.size == 0 or a.shape != b.shape:
+        return 0.0
+    mask = np.ones(a.shape, bool)
+    ix0, iy0 = x0 - rx0, y0 - ry0
+    mask[max(0, iy0):max(0, iy0 + (y1 - y0)), max(0, ix0):max(0, ix0 + (x1 - x0))] = False
+    if np.count_nonzero(mask) < 64:
+        return 0.0
+    av, bv = a[mask], b[mask]
+    d = float(np.median(av) - np.median(bv))
+    if abs(d) < TONE_MIN_DELTA:
+        return 0.0
+    # La guarda se mide sobre el RESIDUO, es decir, con el offset YA quitado. Medir el MAE crudo
+    # era un error de bulto: un desplazamiento uniforme de 60 niveles produce un MAE de 60 y la
+    # guarda lo habría descartado por "el anillo no casa" — matando el arreglo justo en los casos
+    # peores (el corpus llega a p99=43 y máx=242), que son los únicos que el usuario ve.
+    # Lo que hay que preguntar no es "¿se parecen?", sino "¿se parecerían si les igualo el tono?".
+    # Si tras compensar sigue sin casar, la diferencia es de DIBUJO (homografía torcida, otra
+    # página) y ahí no se toca nada.
+    if float(np.mean(np.abs((bv + d) - av))) > TONE_MAX_RING_MAE:
+        return 0.0
+    return d
+
+
 def art_not_erased(en, es_w, x0, y0, x1, y1, max_extra=11):
     ae = cv2.cvtColor(en[y0:y1, x0:x1], cv2.COLOR_RGB2GRAY)
     be = cv2.cvtColor(es_w[y0:y1, x0:x1], cv2.COLOR_RGB2GRAY)
@@ -493,9 +553,14 @@ def art_not_erased(en, es_w, x0, y0, x1, y1, max_extra=11):
     return (a.std() - b.std()) <= max_extra
 
 
-def _compose_exact(res, en_shape, mm, coords, es_src):
+def _compose_exact(res, en_shape, mm, coords, es_src, tone=0.0):
     """Pega es_src sobre res usando máscara de CONTORNO EXACTO (open + erode 1px +
-    feather σ=1) en la caja `coords`. mm = interior relleno del globo en coords-crop."""
+    feather σ=1) en la caja `coords`. mm = interior relleno del globo en coords-crop.
+
+    `tone`: offset de tono a sumar al parche (ver tone_offset). Se aplica como `+ tone*alpha`
+    en vez de sumarlo a es_src: es la misma operación —(es+t)*a + res*(1-a) = es*a + res*(1-a)
+    + t*a— pero sin copiar la página entera por cada globo. El recorte a 0-255 lo hace una
+    sola vez el final de la composición de la página."""
     x0, y0, x1, y1 = coords
     alpha = np.zeros(en_shape[:2], np.float32)
     ell = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
@@ -504,7 +569,7 @@ def _compose_exact(res, en_shape, mm, coords, es_src):
     sub = cv2.GaussianBlur(mm2.astype(np.float32), (0, 0), 1.0)/255.0
     alpha[y0:y1, x0:x1] = sub
     a = alpha[:, :, None]
-    return es_src.astype(np.float32) * a + res * (1 - a)
+    return es_src.astype(np.float32) * a + res * (1 - a) + (tone * a if tone else 0.0)
 
 
 def _aligned_es_region(en_g, esw_g, es_w, coords):
@@ -557,7 +622,10 @@ def precise_bubbles(en, es_w, de_b, ds_b, H, warp_ok=None):
         es_full, dxdy = _aligned_es_region(en_g, esw_g, es_w, coords)
         if require_ecc and dxdy is None:
             return False   # el ECC no pudo confirmar alineación ajustada -> no arriesgar
-        res[0] = _compose_exact(res[0], en.shape, mm, coords, es_full)
+        # Tono medido contra el es_full que REALMENTE se pega (puede venir realineado por ECC).
+        es_full_g = cv2.cvtColor(np.clip(es_full, 0, 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        res[0] = _compose_exact(res[0], en.shape, mm, coords, es_full,
+                                tone=tone_offset(en_g, es_full_g, x0, y0, x1, y1))
         if dxdy is not None: shifts.append(dxdy)
         return True
 
@@ -702,7 +770,9 @@ def _erase_onlyen(res, en_g, esw_g, es_w, x0, y0, x1, y1, area, page_area, feath
     h, w = en_g.shape[:2]
     m = cv2.GaussianBlur(np.full((y1-y0, x1-x0), 255, np.uint8), (0, 0), feather)
     a = np.zeros((h, w), np.float32); a[y0:y1, x0:x1] = m / 255.0; a = a[:, :, None]
-    return es_full.astype(np.float32) * a + res * (1 - a), None, best_mae
+    t = tone_offset(en_g, cv2.cvtColor(np.clip(es_full, 0, 255).astype(np.uint8), cv2.COLOR_RGB2GRAY),
+                    x0, y0, x1, y1)
+    return es_full.astype(np.float32) * a + res * (1 - a) + (t * a if t else 0.0), None, best_mae
 
 
 def text_free(res, en, es_w, en_tf, es_tf_mapped, feather=4):
@@ -768,7 +838,11 @@ def text_free(res, en, es_w, en_tf, es_tf_mapped, feather=4):
             src = es_full
         m = cv2.GaussianBlur(np.full((y1-y0, x1-x0), 255, np.uint8), (0, 0), feather)
         a = np.zeros((h, w), np.float32); a[y0:y1, x0:x1] = m / 255.0; a = a[:, :, None]
-        res = src.astype(np.float32) * a + res * (1 - a)
+        # El tono se mide contra el MISMO src que se va a pegar (puede ser es_w o la version
+        # realineada por ECC): medirlo sobre otro daria un offset que no corresponde.
+        src_g = esw_g if src is es_w else cv2.cvtColor(np.clip(src, 0, 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
+        t = tone_offset(en_g, src_g, x0, y0, x1, y1)
+        res = src.astype(np.float32) * a + res * (1 - a) + (t * a if t else 0.0)
         matched += n_en
     return res, matched, skips
 
