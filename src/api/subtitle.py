@@ -1547,11 +1547,23 @@ def subtitle_translate():
     if not force and any(t['language'] in ('spa', 'es') for t in tracks):
         return jsonify({'error': 'El archivo ya tiene subtítulos en español. Usa force=true para reemplazar.'}), 409
 
-    # Find the requested subtitle track (skip existing spa tracks)
+    # Find the requested subtitle track (skip existing spa tracks).
+    # `sub_index` es el índice ENTRE SUBTÍTULOS (0,1,2…), que es lo que consume `ffmpeg -map 0:s:N`.
+    # NO confundir con `index`, el índice absoluto del stream en el contenedor (2,3,4…): el modal
+    # mandaba ése y pedir "inglés" (index 2) traducía la pista ÁRABE (sub_index 2), con su
+    # puntuación RTL al principio y todo. El fallo era MUDO porque el índice equivocado casaba con
+    # OTRA pista real.
     src_tracks = [t for t in tracks if t['language'] not in ('spa', 'es')]
-    track = next((t for t in src_tracks if t['sub_index'] == sub_index), src_tracks[0] if src_tracks else None)
-    if not track:
+    if not src_tracks:
         return jsonify({'error': 'No hay pista de subtítulo fuente disponible'}), 400
+    track = next((t for t in src_tracks if t['sub_index'] == sub_index), None)
+    if not track:
+        # NO caer a src_tracks[0] en silencio: traducir una pista que el usuario no pidió es
+        # peor que fallar, y es indistinguible de un acierto hasta que ves el resultado.
+        avail = ', '.join(f"{t['sub_index']}={t['language']}" for t in src_tracks)
+        return jsonify({'error': f'No existe la pista fuente sub_index={sub_index}. Disponibles: {avail}'}), 400
+    print(f"[subtitle] pista fuente elegida: sub_index={track['sub_index']} "
+          f"lang={track.get('language')} title={track.get('title')!r}", flush=True)
 
     codec    = track['codec']
     n_subs   = len(tracks)
