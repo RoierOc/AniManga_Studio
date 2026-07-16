@@ -103,7 +103,7 @@ function openMenu(ev) {
       <img v-if="playable || ep.has_thumb" class="ep__img" :src="`/api/anime/thumb/${anime.id}/${ep.num}${ep.ep_type === 'special' ? '?special=1' : ''}`"
            loading="lazy" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
 
-      <!-- Bloque inferior sobre la portada: nº grande a la izq + título al lado, tipo Netflix -->
+      <!-- Sobre la portada se queda SÓLO el nº (y el "Visto"). El título vive debajo. -->
       <div class="ep__overlay">
         <div class="ep__num">
           <span class="ep__num-k">
@@ -111,7 +111,6 @@ function openMenu(ev) {
           </span>
           <span class="ep__num-v">{{ String(ep.num).padStart(2, '0') }}</span>
         </div>
-        <div class="ep__eptitle">{{ epTitle }}</div>
       </div>
 
       <!-- resume progress bar (partially watched) — como YouTube -->
@@ -124,8 +123,11 @@ function openMenu(ev) {
       <span v-else-if="subRunning" class="ep__subtag">✨ {{ subTask?.progress || 0 }}%</span>
     </div>
 
-    <div v-if="metaLine" class="ep__foot">
-      <div class="ep__meta" :class="metaLine.cls">{{ metaLine.text }}</div>
+    <!-- Título BAJO la miniatura (Crunchyroll/Netflix): misma tipografía, ahora sin competir
+         con el arte de la portada. El nº se queda arriba sobre la imagen. -->
+    <div class="ep__foot">
+      <div class="ep__eptitle" :title="epTitle">{{ epTitle }}</div>
+      <div v-if="metaLine" class="ep__meta" :class="metaLine.cls">{{ metaLine.text }}</div>
     </div>
 
     <!-- expandable episode info (desde el menú → Descripción) -->
@@ -158,7 +160,9 @@ function openMenu(ev) {
   border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line);
   transition: border-color var(--t-base) var(--ease-silk), box-shadow var(--t-base); }
 .ep:hover .ep__thumb { border-color: var(--line-strong); box-shadow: var(--shadow-md); }
-.ep__thumb::after { content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: linear-gradient(0deg, rgba(5,7,13,.92) 0%, rgba(5,7,13,.55) 22%, transparent 52%); }
+/* Degradado más corto que antes: ya sólo tiene que dar contraste al nº, no a un título de 2
+   líneas. Así se ve más portada. */
+.ep__thumb::after { content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: linear-gradient(0deg, rgba(5,7,13,.88) 0%, rgba(5,7,13,.34) 20%, transparent 44%); }
 .ep--missing .ep__thumb, .ep--dl .ep__thumb { cursor: default; }
 .ep__bg { position: absolute; inset: 0; background-size: cover; background-position: center; filter: blur(18px) brightness(.4); transform: scale(1.2); }
 .ep__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-slow), transform var(--t-cine) var(--ease-silk), filter var(--t-base) var(--ease-silk); }
@@ -169,8 +173,8 @@ function openMenu(ev) {
 .ep--watched .ep__img { filter: brightness(.45) saturate(.55); }
 .ep--watched:hover .ep__img { filter: brightness(.85) saturate(.9); }
 
-/* Bloque inferior sobre la portada (Netflix): nº grande a la izq + título al lado. */
-.ep__overlay { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; display: flex; align-items: flex-end; gap: var(--s-3);
+/* Sobre la portada queda sólo el nº (el título se fue debajo, estilo Crunchyroll). */
+.ep__overlay { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; display: flex; align-items: flex-end;
   padding: var(--s-3); color: #fff; pointer-events: none; }
 .ep__num { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-start; line-height: 1; }
 .ep__num-k { font-family: var(--font-mono); font-size: 9px; font-weight: 600; color: var(--ice); letter-spacing: .14em;
@@ -178,11 +182,7 @@ function openMenu(ev) {
 .ep__num-seen { color: var(--azure-bright); letter-spacing: .1em; }
 .ep__num-v { font-family: var(--font-display); font-weight: 700; font-size: 2.3rem; line-height: .9;
   text-shadow: 0 2px 16px rgba(0,0,0,.95), 0 0 40px rgba(0,0,0,.6); }
-.ep__eptitle { min-width: 0; padding-bottom: 3px; font-family: var(--font-display); font-weight: 600; font-size: 1rem; line-height: 1.14;
-  color: #fff; text-shadow: 0 2px 14px rgba(0,0,0,.95), 0 1px 3px rgba(0,0,0,.85);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .ep--watched .ep__num-v { opacity: .82; }
-.ep--watched .ep__eptitle { opacity: .85; }
 
 .ep__resumebar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 3px; background: rgba(0,0,0,.4); }
 .ep__resumebar span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--azure-bright); box-shadow: 0 0 8px var(--azure-glow); transition: width .6s var(--ease-silk); }
@@ -203,8 +203,15 @@ function openMenu(ev) {
 .ep__subtag--load { color: var(--ice); }
 .ep__spin { width: 10px; height: 10px; border-radius: 50%; border: 2px solid rgba(255,255,255,.28); border-top-color: #fff; animation: spin .7s linear infinite; }
 
+/* Pie de la tarjeta: título + estado. Mismo font-display de siempre (al usuario le gusta la
+   tipografía), pero ya sobre fondo sólido: sin sombras y con el color de tinta del tema. */
 .ep__foot { padding: var(--s-2) var(--s-1) 0; }
-.ep__meta { font-size: var(--fs-2xs); font-family: var(--font-mono); color: var(--cyan); }
+.ep__eptitle { font-family: var(--font-display); font-weight: 600; font-size: var(--fs-sm); line-height: 1.3;
+  color: var(--ink); transition: color var(--t-fast);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.ep:hover .ep__eptitle { color: var(--azure-bright); }
+.ep--watched .ep__eptitle { color: var(--ink-faint); }
+.ep__meta { margin-top: 3px; font-size: var(--fs-2xs); font-family: var(--font-mono); color: var(--cyan); }
 .ep__meta--muted { color: var(--ink-faint); }
 .ep__meta--resume { color: var(--azure-bright); }
 .ep__meta--done { color: var(--ink-faint); }
