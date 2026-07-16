@@ -623,15 +623,72 @@ export const useMangaStore = defineStore('manga', {
       try { localStorage.setItem('manga-chain', JSON.stringify(this.chain)) } catch (_) {}
     },
 
-    armChain(chapters) {
-      const { upscale, translate } = this.chain
+    // Traducir un capítulo exige que exista en LAS DOS fuentes elegidas (arte y español). Tener
+    // fuentes no basta: medido en "Kono Koi wo Hoshi ni wa Negawanai", el arte (MangaFire/fr)
+    // tenía 4 capítulos y el ES 8 distintos → sólo el 1 en común. Armar la traducción del 19
+    // hacía que el backend la ejecutase, no encontrase el capítulo en el arte y devolviese
+    // `status: done` con `note: "falta capítulo en arte"` — o sea, un éxito de mentira que se
+    // parecía a "la cadena se saltó la traducción".
+    async translatableAmong(chapters) {
+      try {
+        const d = await api.get(`/api/transplant/chapters/${encodeURIComponent(this.current.id)}`)
+        const ok = new Set((d.chapters || []).map(c => String(c.chapter)))
+        return chapters.filter(c => ok.has(String(c)))
+      } catch (_) {
+        return null            // no se pudo saber ≠ no hay ninguno: que decida quien llama
+      }
+    },
+
+    async armChain(chapters) {
+      const ui = useUiStore()
+      const { upscale } = this.chain
+      let translate = this.chain.translate
+      const list = chapters.map(String)
+      if (!list.length) { this.chainJob = null; return }
+
+      let translatable = list
+      if (translate) {
+        const ok = await this.translatableAmong(list)
+        if (ok === null) {
+          translate = false
+          ui.toast('No se pudo comprobar qué capítulos son traducibles: se descargará y escalará sin traducir', 'error', 7000)
+        } else if (!ok.length) {
+          translate = false
+          ui.toast('Ninguno de esos capítulos está en las DOS fuentes de traducción (arte y español), '
+                   + 'así que no se puede traducir. Se descargará y escalará.', 'error', 9000)
+        } else {
+          translatable = ok
+          if (ok.length < list.length) {
+            ui.toast(`Sólo ${ok.length} de ${list.length} se pueden traducir; el resto sólo se escalará.`, 'info', 7000)
+          }
+        }
+      }
       if (!upscale && !translate) { this.chainJob = null; return }
       this.chainJob = {
         title: this.current.id,
-        chapters: chapters.map(String),
-        waiting: new Set(chapters.map(String)),
+        chapters: list,
+        translatable,
+        waiting: new Set(list),
         upscale, translate, stage: 'downloading',
       }
+    },
+
+    // Fases de un capítulo dentro de la cadena, para pintarlas. Devuelve null si no está en
+    // ninguna cadena. `at` = la fase en curso; los pasos que ya pasaron van 'done'.
+    // Existe porque el usuario no podía ver QUÉ le faltaba a un capítulo: lanzabas
+    // descargar+traducir+escalar y sólo veías la descarga, sin saber si lo demás vendría o no.
+    chainStepsFor(chapter) {
+      const j = this.chainJob
+      const ch = String(chapter)
+      if (!j || !j.chapters.includes(ch)) return null
+      const willTranslate = j.translate && (j.translatable || []).includes(ch)
+      const steps = [{ k: 'dl', label: 'Descargar' }]
+      if (willTranslate) steps.push({ k: 'es', label: 'Traducir' })
+      if (j.upscale) steps.push({ k: '4k', label: 'Escalar 4K' })
+      let at = 'dl'
+      if (j.stage === 'translating') at = willTranslate ? 'es' : '4k'
+      else if (!j.waiting.has(ch)) at = willTranslate ? 'es' : '4k'
+      return { steps, at }
     },
 
     _reconcileChain() {
@@ -657,7 +714,10 @@ export const useMangaStore = defineStore('manga', {
       }
       if (j.waiting.size) return
       if (!j.chapters.length) { this.chainJob = null; return }
-      if (j.translate) { j.stage = 'translating'; this.tpRun(j.chapters) }
+      // Sólo se manda a traducir lo que EXISTE en ambas fuentes y además se descargó.
+      const tr = (j.translatable || []).filter(c => j.chapters.includes(c))
+      if (j.translate && tr.length) { j.stage = 'translating'; this.tpRun(tr) }
+      else if (j.translate && j.upscale) { this.upscaleChapters(j.chapters); this.chainJob = null }
       else this.chainJob = null        // los escalados ya se lanzaron uno a uno
     },
 
@@ -707,8 +767,12 @@ export const useMangaStore = defineStore('manga', {
       }
       const n = (st.chapters || []).length
       if (st.status === 'cancelled') ui.toast('Traducción detenida', 'info')
-      else if (st.status === 'error') ui.toast('Falló la traducción', 'error')
-      else ui.toast(n ? `Listo: ${n} capítulo(s) en español` : 'Sin capítulos compuestos', n ? 'ok' : 'error')
+      else if (st.status === 'error') ui.toast(`Falló la traducción${st.note ? `: ${st.note}` : ''}`, 'error')
+      // El backend puede terminar en 'done' habiendo compuesto CERO capítulos y con el motivo en
+      // `note` (p.ej. "falta capítulo en arte"). Sin enseñarlo, un fallo real se ve igual que un
+      // éxito silencioso — que es justo lo que hizo pensar que la cadena se saltaba la traducción.
+      else ui.toast(n ? `Listo: ${n} capítulo(s) en español`
+                      : `No se tradujo nada${st.note ? `: ${st.note}` : ''}`, n ? 'ok' : 'error', n ? 4000 : 8000)
       this.libraryDirty++
       if (this.current?.id && this.current.id === st.title) {
         this.tp.running = false

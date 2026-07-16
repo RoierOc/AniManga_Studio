@@ -1155,6 +1155,19 @@ async function doExport(toDrive = false) {
             <ul class="chaps">
               <template v-for="c in store.collectionChapters" :key="c.chapter">
               <li class="chap" :class="{ 'chap--4k': upState(c.chapter) === true, 'chap--part': upState(c.chapter) === 'partial', 'chap--src': c._sourceId || c._mdChapterId || c._covMulti, 'chap--md': !!c._mdChapterId, 'chap--read': store.isChapterRead(c.chapter), 'chap--sel': batchSel.has(String(c.chapter)) }" @mouseenter="batchOver(c.chapter)">
+                <!-- Fases pendientes de la cadena. Sin esto lanzabas "descargar, traducir y
+                     escalar" y sólo veías la descarga: no había forma de saber si lo demás
+                     seguía en pie o se había quedado por el camino. -->
+                <div v-if="store.chainStepsFor(c.chapter)" class="steps" :title="`Pendiente: ${store.chainStepsFor(c.chapter).steps.map(s => s.label).join(' → ')}`">
+                  <template v-for="(s, i) in store.chainStepsFor(c.chapter).steps" :key="s.k">
+                    <span v-if="i" class="steps__sep">›</span>
+                    <span class="steps__s"
+                          :class="{ 'is-at': s.k === store.chainStepsFor(c.chapter).at,
+                                    'is-done': store.chainStepsFor(c.chapter).steps.findIndex(x => x.k === store.chainStepsFor(c.chapter).at) > i }">
+                      {{ s.k === 'dl' ? '↓' : s.k === 'es' ? 'ES' : '4K' }}
+                    </span>
+                  </template>
+                </div>
                 <!-- Casilla de selección por lote -->
                 <button class="chap__check" @mousedown.stop.left="batchDown(c.chapter, $event)" @click.stop
                         :title="batchSel.has(String(c.chapter)) ? 'Quitar de la selección' : 'Añadir · shift+clic marca hasta aquí · arrastra para marcar varios'">
@@ -1814,6 +1827,14 @@ async function doExport(toDrive = false) {
   background: var(--glass-strong); border: 1px solid var(--azure); box-shadow: var(--shadow-lg); backdrop-filter: blur(8px); }
 .batchbar__n { font-size: var(--fs-sm); font-weight: 600; color: var(--azure-bright); }
 .batchbar__acts { display: flex; align-items: center; gap: var(--s-2); }
+/* Fases de la cadena en la fila: minúsculo, mono, no compite con el nº de capítulo. */
+.steps { display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: var(--r-pill);
+         background: var(--surface-2); border: 1px solid var(--line); flex-shrink: 0; }
+.steps__s { font-family: var(--font-mono); font-size: 9px; font-weight: 700; color: var(--ink-ghost); line-height: 1; }
+.steps__s.is-done { color: var(--jade); }
+.steps__s.is-at { color: var(--azure-bright); }
+.steps__sep { font-size: 9px; color: var(--line-strong); line-height: 1; }
+
 /* Cadena: se lee como una frase ("luego · 4K · ES") pegada al botón que la ejecuta. */
 .chain { display: flex; align-items: center; gap: 4px; padding-right: var(--s-2); margin-right: 2px; border-right: 1px solid var(--line); }
 .chain__lbl { font-size: var(--fs-2xs); color: var(--ink-ghost); text-transform: lowercase; margin-right: 2px; }
