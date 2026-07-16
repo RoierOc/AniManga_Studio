@@ -879,15 +879,39 @@ _STYLE_OUTLINE = os.environ.get('SUB_STYLE_OUTLINE', '1')
 _STYLE_SHADOW  = os.environ.get('SUB_STYLE_SHADOW', '0')
 
 
+# Estilos de TIPOGRAFIADO (carteles, canciones, créditos): NO son diálogo y no se re-estilan.
+# El grupo los eligió para casar con el arte del vídeo (un rótulo en pantalla, un letrero), así
+# que imponerles nuestra fuente los descuadra. CONSTANTE editable; el MECANISMO es `_is_sign_style`.
+# Cubre las convenciones vistas en fuentes reales: Erai-raws (`sign_1234_…`, `Sign_Arial`, `song`),
+# scans ES/PT (`Cart_A_Tre`, `Créditos`), y las típicas de karaoke/OP/ED.
+# Dos patrones a propósito, no uno:
+#  - PREFIJO: siglas cortas que sólo significan "cartel" al principio del nombre. `op`/`ed` NO
+#    pueden buscarse dentro del nombre — el "op" de `Italics Top` casaría y dejaría un estilo de
+#    DIÁLOGO sin re-estilar (falso positivo caro: se ve como fuente mezclada).
+#  - EN CUALQUIER SITIO: palabras largas e inequívocas (`Opening Song`, `Ending Credits`).
+_SIGN_PREFIX_PAT = re.compile(
+    r'^\s*(sign|cart|letrero|rotulo|rótulo|titul|title|note|nota|op\b|ed\b)', re.I)
+_SIGN_ANY_PAT = re.compile(
+    r'(song|cancion|canción|karaoke|kfx|credit|credito|crédito)', re.I)
+
+
+def _is_sign_style(name: str) -> bool:
+    """True si el Style: parece tipografiado/cartel en vez de diálogo."""
+    n = name or ''
+    return bool(_SIGN_PREFIX_PAT.match(n) or _SIGN_ANY_PAT.search(n))
+
+
 def restyle_ass_header(header: list) -> list:
-    """Reescribe fuente/cuerpo/negrita/borde/sombra de TODOS los Style: del ASS.
+    """Reescribe fuente/cuerpo/negrita/borde/sombra de los Style: de DIÁLOGO del ASS.
 
     Se leen las columnas del `Format:` de [V4+ Styles] en vez de asumir posiciones fijas: el
     orden no es idéntico en todos los scripts (v4 vs v4+), y escribir a ciegas en el índice
     equivocado te cambia un color por un tamaño.
 
-    Sólo toca los Style:. Los carteles con `\\fn…` inline mandan sobre el estilo, así que
-    conservan su tipografía original — no se pisan los signs."""
+    OJO (medido, no supuesto): los carteles NO se protegen solos. Se creyó que llevaban `\\fn…`
+    inline y que el inline mandaba sobre el estilo — FALSO: en [Erai-raws] los `sign_…` definen
+    `Times New Roman,24` **en el propio Style:** y sus eventos no traen ningún `\\fn`. Sin este
+    filtro, re-estilar les cambiaba la tipografía y los descuadraba del arte."""
     if not _STYLE_FONT:
         return header
     cols, out = None, []
@@ -903,6 +927,8 @@ def restyle_ass_header(header: list) -> list:
         vals = [v.strip() for v in s.split(':', 1)[1].split(',')]
         if len(vals) != len(cols):
             out.append(line); continue          # fila rara -> no tocar
+        if 'name' in cols and _is_sign_style(vals[cols.index('name')]):
+            out.append(line); continue          # cartel/canción -> intacto
         for name, val in (('fontname', _STYLE_FONT), ('fontsize', _STYLE_SIZE),
                           ('bold', _STYLE_BOLD), ('outline', _STYLE_OUTLINE),
                           ('shadow', _STYLE_SHADOW)):
