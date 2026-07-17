@@ -204,8 +204,12 @@ def _variants_for_source(source: dict, by_script: dict) -> list:
     return out or list(by_script.get("latin", [])) or [source.get("_fallback_q", "")]
 
 
-def _search_source(source: dict, query: str) -> list:
-    """Búsqueda metadata-only en UNA fuente (post directo, timeout corto)."""
+def _search_source(source: dict, query: str):
+    """Búsqueda metadata-only en UNA fuente (post directo, timeout corto).
+
+    Devuelve **None** si la fuente no se pudo consultar (timeout, HTTP != 200, Cloudflare), frente
+    a **[]** = "respondió y no tiene nada que casé". Quien barre necesita esa diferencia: si un
+    puñado de fuentes falla, el barrido NO vio todo lo que hay y no puede cachearse como si sí."""
     try:
         resp = http_requests.post(
             SUWAYOMI_URL,
@@ -214,11 +218,11 @@ def _search_source(source: dict, query: str) -> list:
             retries=1,  # ranking path: a slow/failing source must fail fast, not retry
         )
         if resp.status_code != 200:
-            return []
+            return None
         data = resp.json()
         mangas = (((data.get("data") or {}).get("fetchSourceManga") or {}).get("mangas")) or []
     except Exception:
-        return []
+        return None
     out = []
     for m in mangas:
         out.append({
@@ -232,11 +236,28 @@ def _search_source(source: dict, query: str) -> list:
     return out
 
 
-def _discover_candidates(variants: list, source_ids=None, on_progress=None) -> list:
+def _discover_candidates(variants: list, source_ids=None, on_progress=None, stats=None) -> list:
     """Fan-out metadata-only; fusiona y filtra por título fuzzy. No descarga imágenes.
     `source_ids` (opcional) restringe a un subconjunto de fuentes (palanca de velocidad).
-    Las variantes se asignan POR FUENTE según su idioma para recortar el fan-out."""
-    sources = _all_sources()
+    Las variantes se asignan POR FUENTE según su idioma para recortar el fan-out.
+
+    `stats` (dict opcional, out-param) recibe {sources, tasks, failed, listing_error}. Sin él este
+    barrido no puede decir si vio TODO o sólo un trozo, y un trozo cacheado es indistinguible de la
+    verdad. MEDIDO: recién reiniciada Suwayomi, `_all_sources()` agota su timeout mientras carga las
+    extensiones — el barrido salió con 6 fuentes en vez de 72 y NADIE falló: sólo se miró una lista
+    corta. Por eso el problema no se detecta contando excepciones, hay que contar el DENOMINADOR."""
+    st = stats if stats is not None else {}
+    st.update({"sources": 0, "tasks": 0, "failed": 0, "listing_error": None})
+    try:
+        sources = _all_sources()
+    except Exception as e:
+        # Sin lista de fuentes no hay barrido posible. Antes esto subía como excepción y el
+        # llamante lo convertía en `candidates = []` → "este manga no está en ninguna fuente".
+        st["listing_error"] = f"{type(e).__name__}: {str(e)[:70]}"
+        print(f"[transplant] no se pudo LISTAR las fuentes ({st['listing_error']}) — "
+              f"barrido imposible; esto NO significa 'no hay fuentes'", file=sys.stderr, flush=True)
+        raise
+    st["sources"] = len(sources)
     if source_ids:
         wanted = {str(s) for s in source_ids}
         sources = [s for s in sources if str(s["id"]) in wanted]
@@ -255,13 +276,18 @@ def _discover_candidates(variants: list, source_ids=None, on_progress=None) -> l
     seen: dict = {}
     done = 0
     total = len(tasks)
+    st["tasks"] = total
     with ThreadPoolExecutor(max_workers=_SEARCH_WORKERS) as pool:
         futs = {pool.submit(_search_source, s, v): (s, v) for (s, v) in tasks}
         for fut in as_completed(futs):
             done += 1
             if on_progress and done % 20 == 0:
                 on_progress(done, total)
-            for m in fut.result():
+            found = fut.result()
+            if found is None:            # la fuente no respondió: no es "no tiene nada"
+                st["failed"] += 1
+                continue
+            for m in found:
                 # fuzzy-match contra cualquier variante para descartar falsos positivos
                 tkey = _norm_key(m["title"])
                 ratio = max((SequenceMatcher(None, tkey, vk).ratio() for vk in var_keys), default=0.0)
@@ -290,9 +316,14 @@ def _gql_fast(query: str, variables: dict, timeout: float):
     return d["data"]
 
 
-def _chapters_map(manga_id: int, timeout: float = None) -> dict:
+def _chapters_map(manga_id: int, timeout: float = None, strict: bool = False) -> dict:
     """{chapter_norm: {id, pageCount, number}} para una manga de Suwayomi.
-    `timeout` (camino de ranking) usa GraphQL con timeout corto."""
+    `timeout` (camino de ranking) usa GraphQL con timeout corto.
+
+    `strict=True` PROPAGA el error de lectura en vez de devolver {}. Lo necesita quien tenga que
+    distinguir "la fuente no tiene capítulos" de "no pude preguntárselo" — sobre todo si va a
+    CACHEAR la respuesta. Por defecto False para no cambiar el comportamiento de los 13 llamantes
+    que ya tratan {} como 'nada usable'."""
     q1 = "mutation($id: Int!){ fetchChapters(input:{mangaId:$id}){ chapters { id } } }"
     q2 = """
             query($mangaId: Int!) {
@@ -301,14 +332,28 @@ def _chapters_map(manga_id: int, timeout: float = None) -> dict:
               }
             }
             """
+    # q1 REFRESCA desde la web de la fuente; q2 lee la BD LOCAL de Suwayomi. El refresco es
+    # best-effort a propósito: si la fuente está tras Cloudflare ("Cloudflare bypass currently
+    # disabled"), caída o lenta, q1 revienta — pero los capítulos ya sincronizados siguen en local
+    # y q2 los devuelve igual. Antes un fallo de q1 se llevaba por delante a q2 y la función
+    # devolvía {}, que el llamante lee como "esa fuente NO tiene el capítulo". MEDIDO: Mangas.in
+    # daba "no tiene el cap 1" con sus 29 capítulos intactos en la BD local. Es "falló ≠ no había"
+    # otra vez: un fallo de RED no puede disfrazarse de ausencia de contenido.
     try:
-        if timeout:
-            _gql_fast(q1, {"id": int(manga_id)}, timeout)
-            data = _gql_fast(q2, {"mangaId": int(manga_id)}, timeout)
-        else:
-            _gql(q1, {"id": int(manga_id)})
-            data = _gql(q2, {"mangaId": int(manga_id)})
-    except Exception:
+        try:
+            _gql_fast(q1, {"id": int(manga_id)}, timeout) if timeout else _gql(q1, {"id": int(manga_id)})
+        except Exception as e:
+            print(f"[transplant] refresco de capítulos falló para manga {manga_id} "
+                  f"({type(e).__name__}: {str(e)[:80]}) — sigo con lo sincronizado en local",
+                  file=sys.stderr, flush=True)
+        data = _gql_fast(q2, {"mangaId": int(manga_id)}, timeout) if timeout else _gql(q2, {"mangaId": int(manga_id)})
+    except Exception as e:
+        print(f"[transplant] no se pudo LEER la lista de capítulos de manga {manga_id} "
+              f"({type(e).__name__}: {str(e)[:80]})"
+              f"{'' if strict else ' — devuelvo vacío, que NO significa no tiene'}",
+              file=sys.stderr, flush=True)
+        if strict:
+            raise
         return {}
     out = {}
     for c in data["chapters"]["nodes"]:
@@ -1261,10 +1306,16 @@ def _search_key(title, al_id, source_ids):
     return f"{title}|{al_id or ''}|{','.join(map(str, source_ids or []))}"
 
 
-def _candidates_cached(title, al_id, variants, source_ids, on_progress=None, refresh=False):
+def _candidates_cached(title, al_id, variants, source_ids, on_progress=None, refresh=False,
+                       stats=None):
     """`_discover_candidates` (barrido de fuentes) memoizado en disco por (title, al_id,
     source_ids). Resultado idéntico; evita re-barrer ~185 fuentes en cada apertura de
-    Versiones/Traducir o en re-barridos del mismo título. `refresh` lo salta y re-cachea."""
+    Versiones/Traducir o en re-barridos del mismo título. `refresh` lo salta y re-cachea.
+
+    SÓLO se cachea un barrido que vio TODAS las fuentes. `if cands:` ya evitaba guardar el vacío,
+    pero no el PARCIAL — y un parcial es peor: parece un resultado. MEDIDO: 6 candidatos en vez de
+    72 (Suwayomi cargando extensiones) se habrían servido `_CANDIDATES_TTL` entero como la lista
+    real de fuentes del manga."""
     key = _search_key(title, al_id, source_ids)
     if not refresh:
         cached = cache_get("candidates", key, _CANDIDATES_TTL)
@@ -1273,9 +1324,13 @@ def _candidates_cached(title, al_id, variants, source_ids, on_progress=None, ref
                 try: on_progress(len(cached), len(cached))
                 except Exception: pass
             return cached
-    cands = _discover_candidates(variants, source_ids=source_ids, on_progress=on_progress)
-    if cands:
+    st = stats if stats is not None else {}
+    cands = _discover_candidates(variants, source_ids=source_ids, on_progress=on_progress, stats=st)
+    if cands and not st.get("failed"):
         cache_set("candidates", key, cands, ttl=_CANDIDATES_TTL, max_entries=120)
+    elif cands:
+        print(f"[transplant] barrido de {title!r} INCOMPLETO ({st.get('failed')} de "
+              f"{st.get('tasks')} búsquedas fallaron) — no se cachea", file=sys.stderr, flush=True)
     return cands
 
 
@@ -1308,9 +1363,14 @@ def _source_kind(cand) -> str:
     return "suwayomi"
 
 
-def _source_catalog(cand, title=None, refresh=False) -> dict:
+def _source_catalog(cand, title=None, refresh=False):
     """{chapter_norm: {number, publishedAt?}} de un candidato — SIN bajar páginas.
-    Enruta local/MangaDex/Suwayomi igual que `_candidate_chapter_urls`."""
+    Enruta local/MangaDex/Suwayomi igual que `_candidate_chapter_urls`.
+
+    Devuelve **None** si no se pudo PREGUNTAR a la fuente (red caída, Suwayomi muerta, Cloudflare),
+    frente a **{}** = "la fuente existe y no tiene capítulos". La diferencia es crítica porque esta
+    función CACHEA: antes un fallo de red devolvía {} y se guardaba `_COVERAGE_TTL` entero, así que
+    la fuente quedaba marcada como vacía aunque tuviera 29 capítulos. Un None NUNCA se cachea."""
     key = _coverage_key(cand)
     if not refresh:
         cached = cache_get("coverage", key, _COVERAGE_TTL)
@@ -1336,9 +1396,12 @@ def _source_catalog(cand, title=None, refresh=False) -> dict:
     else:
         mid = cand.get("mangaId", cand.get("id"))
         try:
-            cmap = _chapters_map(int(mid), timeout=_SAMPLE_TIMEOUT)
-        except Exception:
-            cmap = {}
+            cmap = _chapters_map(int(mid), timeout=_SAMPLE_TIMEOUT, strict=True)
+        except Exception as e:
+            print(f"[transplant] catálogo NO consultable para {cand.get('sourceId')}/{mid} "
+                  f"({type(e).__name__}: {str(e)[:70]}) — no se cachea, no es 'está vacía'",
+                  file=sys.stderr, flush=True)
+            return None
         for chn, v in (cmap or {}).items():
             out[chn] = {"number": v.get("number")}
     cache_set("coverage", key, out, ttl=_COVERAGE_TTL, max_entries=300)
@@ -1394,14 +1457,28 @@ def _run_coverage(task_id: str, title: str, al_id, source_ids, cur_lang: str = "
     ahí el usuario ya tiene "Leer muestra"/comparar A|B para juzgar candidatos dudosos."""
     try:
         variants = title_variants(title, int(al_id) if al_id else None)
+        # `degraded` marca que este barrido NO vio todo lo que hay. Un barrido a medias es
+        # indistinguible de "sólo existen estas fuentes", y antes se persistía 30 días como si
+        # fuera la verdad: MEDIDO, Amayo pasó de 54 fuentes (10 ES) a 34 (2 ES) porque Suwayomi se
+        # murió a mitad, y la caché sirvió el resultado mutilado a la UI como definitivo.
+        degraded: list = []
+        disc: dict = {}
         try:
-            candidates = _candidates_cached(title, al_id, variants, source_ids, refresh=refresh)
-        except Exception:
+            candidates = _candidates_cached(title, al_id, variants, source_ids, refresh=refresh,
+                                            stats=disc)
+        except Exception as e:
+            print(f"[transplant] descubrimiento de fuentes FALLÓ para {title!r} "
+                  f"({type(e).__name__}: {str(e)[:70]})", file=sys.stderr, flush=True)
             candidates = []
+            degraded.append(f"descubrimiento de fuentes: {type(e).__name__}")
+        if disc.get("failed"):
+            degraded.append(f"{disc['failed']} de {disc.get('tasks')} búsquedas no respondieron")
         try:
             candidates += _md_candidates(variants, cur_lang)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[transplant] candidatos de MangaDex FALLARON para {title!r} "
+                  f"({type(e).__name__}: {str(e)[:70]})", file=sys.stderr, flush=True)
+            degraded.append(f"candidatos MangaDex: {type(e).__name__}")
         candidates = [c for c in candidates if (c.get("match") or 0) >= _COVERAGE_MATCH_MIN]
         _set_status(task_id, phase="coverage", covered=0, coverTotal=len(candidates))
         sources_out = []
@@ -1410,6 +1487,10 @@ def _run_coverage(task_id: str, title: str, al_id, source_ids, cur_lang: str = "
             cand = {"sourceId": c["sourceId"], "mangaId": c["id"], "sourceLang": c["sourceLang"]}
             catalog = _source_catalog(cand, title, refresh=refresh)
             _set_status(task_id, phase="coverage", covered=i + 1, coverTotal=len(candidates))
+            if catalog is None:
+                # No consultable: la fuente se cae de la lista, pero eso NO es un dato sobre ella.
+                degraded.append(f"{c.get('sourceName')}: no consultable")
+                continue
             if not catalog:
                 continue
             chapters = sorted(catalog.keys(), key=_chnum)
@@ -1441,11 +1522,21 @@ def _run_coverage(task_id: str, title: str, al_id, source_ids, cur_lang: str = "
         # instante sin recalcular (el usuario solo re-mide con "Recalcular"). Clave por
         # título+idioma; TTL largo (30 días) — es un mapa de "qué fuente tiene qué capítulo",
         # cambia poco; "Recalcular" (refresh=True) lo sobrescribe.
-        cache_set("coverage_result", f"{title}||{cur_lang}",
-                  {"sources": sources_out, "totalKnownChapters": total_known},
-                  ttl=_COVERAGE_RESULT_TTL, max_entries=200)
+        # SÓLO se persiste un barrido COMPLETO. Si algo no se pudo consultar, este resultado no es
+        # "la lista de fuentes de este manga", es "lo que alcancé a ver hoy" — y guardarlo pisaría
+        # un barrido bueno anterior y lo serviría 30 días. Ante la duda, se conserva lo que había:
+        # una caché vieja y completa es MUCHO mejor que una nueva y mutilada.
+        if degraded:
+            print(f"[transplant] cobertura DEGRADADA de {title!r} ({len(sources_out)} fuentes "
+                  f"vistas; {len(degraded)} problemas: {'; '.join(degraded[:5])}) — NO se cachea",
+                  file=sys.stderr, flush=True)
+        else:
+            cache_set("coverage_result", f"{title}||{cur_lang}",
+                      {"sources": sources_out, "totalKnownChapters": total_known},
+                      ttl=_COVERAGE_RESULT_TTL, max_entries=200)
         _set_status(task_id, status="done", phase="ready", variants=variants,
                     totalKnownChapters=total_known, sources=sources_out,
+                    partial=bool(degraded), degraded=degraded[:10],
                     assigned=versions_db.get_assigned_map(title))
     except Exception as e:
         _set_status(task_id, status="error", phase="error", error=str(e))
@@ -1812,7 +1903,14 @@ def _resolve_assign_targets(title, rng, chapters, source) -> list:
         return [x for x in (normalize_chapter(c) for c in chapters) if x]
     catalog_keys = None
     if source:
-        catalog_keys = set(_source_catalog(source, title).keys())
+        catalog = _source_catalog(source, title)
+        # None = no se pudo preguntar a la fuente. Acotar el rango con un catálogo vacío daría
+        # "cero capítulos que asignar" y el usuario vería una asignación que no pasó nada, o peor,
+        # un rango recortado en silencio. Un fallo de red no puede parecerse a "no los tiene".
+        if catalog is None:
+            raise RuntimeError("no se pudo consultar el catálogo de esa fuente "
+                               "(¿Suwayomi caída o fuente bloqueada?) — inténtalo de nuevo")
+        catalog_keys = set(catalog.keys())
     else:
         catalog_keys = set(versions_db.get_assigned_map(title).keys())
     if rng == "all" or (isinstance(rng, dict) and rng.get("all")):
@@ -1957,7 +2055,9 @@ def _run_check_freshness(task_id: str, title: str, al_id, cur_lang: str = ""):
         _set_status(task_id, phase="coverage", covered=0, coverTotal=len(candidates))
         catalogs = {}
         for i, c in enumerate(candidates):
-            catalogs[_cand_key(c)] = _source_catalog(c, title, refresh=True)
+            # None (no consultable) se guarda como {} SOLO en este dict en memoria, que muere con
+            # la petición: aquí son sugerencias, no una caché en disco que envenene 30 días.
+            catalogs[_cand_key(c)] = _source_catalog(c, title, refresh=True) or {}
             _set_status(task_id, phase="coverage", covered=i + 1, coverTotal=len(candidates))
 
         assigned_map = versions_db.get_assigned_map(title)
