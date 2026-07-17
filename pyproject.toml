@@ -1,0 +1,34 @@
+# Config de tooling — Fase 0 (red de seguridad). NO cambia comportamiento de runtime.
+# Estrategia baseline de dos niveles (ver .github/workflows/ci.yml):
+#   · GATE BLOQUEANTE = F (pyflakes, bugs reales) sobre los archivos CAMBIADOS. "Tocaste el
+#     archivo → limpia sus bugs reales", no la deuda de estilo ajena. F ya cazó 2 NameError.
+#   · INFORMATIVO (no bloquea) = BLE001 (blind-except). Lista los nuevos blind-excepts como
+#     anotaciones sin tumbar el build, porque la deuda heredada es de 360 y no se ataca de golpe.
+# Este `select` define el gate bloqueante; BLE001 se pasa aparte con --select en el CI.
+
+[tool.ruff]
+# El intérprete del venv es 3.14; ruff aún topa en 3.13 para inferencia de sintaxis.
+target-version = "py313"
+line-length = 100
+# No escanear artefactos ni el árbol de datos/modelos.
+extend-exclude = ["archive", "data", "models", "suwayomi", "frontend", ".venv", "static"]
+
+[tool.ruff.lint]
+# Gate BLOQUEANTE deliberadamente acotado a bugs reales:
+#   F = pyflakes (imports rotos, NameError, redefiniciones, variables muertas).
+# BLE001 NO va aquí (bloquearía por los 360 blind-excepts heredados al tocar un archivo legacy);
+# el CI lo pasa como paso informativo aparte. E7xx/UP tampoco: estilo omnipresente, cero bugs.
+select = ["F"]
+# F402 (uuid sombreado por variable de bucle en transplant.py:1017) es un olor conocido en el
+# checkpoint de trasplante intocable; se ignora hasta abordarlo con su propio plan.
+ignore = ["F402"]
+
+[tool.ruff.lint.per-file-ignores]
+# Los tests usan fixtures/patrones que disparan falsos F811/F401 al importar por costura.
+"tests/*" = ["F811"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# Silencia el warning de asyncio/marks si aparece; no cambia recolección.
+filterwarnings = ["ignore::DeprecationWarning"]

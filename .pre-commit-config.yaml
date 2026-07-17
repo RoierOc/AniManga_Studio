@@ -1,0 +1,19 @@
+# Pre-commit — Fase 0. Corre local antes de cada commit.
+# Instalar una vez:  .venv/bin/pip install pre-commit && .venv/bin/pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.22
+    hooks:
+      # Solo lint (gate F de pyproject.toml). NO auto-format para no tocar la deuda
+      # heredada de estilo. Sobre archivos staged, así solo mira lo que cambias.
+      # (--force-exclude ya lo añade el propio hook; no duplicar.)
+      - id: ruff
+
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      # Cinturón de seguridad: aunque google_credentials.json esté gitignored, esto evita
+      # que cualquier secreto llegue a un commit por descuido.
+      - id: detect-secrets
+        args: ["--baseline", ".secrets.baseline"]
+        exclude: package-lock.json|pnpm-lock.yaml

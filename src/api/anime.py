@@ -1258,7 +1258,7 @@ def _launch_mpv(file_path: str, sub_file: str = '', start_pos: float = 0.0) -> t
                     [cmd_exe, '/c', 'start', '', win_path],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                 )
-                print(f'[mpv] fallback via cmd.exe', flush=True)
+                print('[mpv] fallback via cmd.exe', flush=True)
                 return (True, None, wl_dir)
             except Exception:
                 continue
@@ -1344,7 +1344,7 @@ def _wait_for_mpv_close(wl_dir: str, timeout: float = 14400) -> float:
                     if final_pos > 0:
                         print(f'[mpv] mpv.exe gone but position file appeared: {final_pos:.0f}s', flush=True)
                         return final_pos
-                    print(f'[mpv] mpv.exe gone from tasklist → EOS', flush=True)
+                    print('[mpv] mpv.exe gone from tasklist → EOS', flush=True)
                     return 0.0  # MPV gone, no position file → EOS or clean finish
             except Exception:
                 pass
@@ -1369,7 +1369,7 @@ def _track_mpv_session(proc, wl_dir: str, anime_id: str, ep_str: str, duration: 
             print(f'[mpv] proc.wait() error: {e}', flush=True)
     else:
         # cmd.exe / no-proc fallback: give MPV a moment to start before polling
-        print(f'[mpv] proc=None, waiting 6s for MPV to start…', flush=True)
+        print('[mpv] proc=None, waiting 6s for MPV to start…', flush=True)
         time.sleep(6)
 
     if _is_wsl():
@@ -1909,7 +1909,7 @@ def qbt_list():
         } for t in torrents]
         result.sort(key=lambda x: x['added_on'], reverse=True)
         return jsonify(result)
-    except Exception as e:
+    except Exception:
         return jsonify([])
 
 
@@ -2987,7 +2987,6 @@ def anime_play():
         data = request.get_json(silent=True) or {}
         anime_id   = data.get('anime_id', '')
         episode    = data.get('episode', -1)
-        local_path = (data.get('local_path') or '').strip()
         sub_file   = (data.get('sub_file') or '').strip()
         ep_str     = str(episode)
 
@@ -3205,6 +3204,7 @@ def anime_native_progress():
     """Persiste posición/visto desde el reproductor nativo (el motor manda el tiempo
     por IPC). Misma lógica de umbral y misma estructura que _track_mpv_session, para
     que resume/visto/historial se comporten igual que con MPV externo."""
+    from api.runtime import push_sse_event
     try:
         data = request.get_json(silent=True) or {}
         anime_id = data.get('anime_id', '')

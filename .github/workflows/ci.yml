@@ -1,0 +1,80 @@
+name: CI
+
+# Fase 0 — red de seguridad. Corre lo que hoy se corre a mano.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # necesario para el diff de "solo archivos cambiados"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Instalar ruff + pytest
+        run: pip install ruff pytest
+
+      # --- Lint SOLO sobre archivos Python cambiados (gate baseline) ---
+      # La deuda heredada (360 blind-excepts) NO bloquea: solo el código nuevo/modificado
+      # debe pasar el conjunto de reglas de pyproject.toml (F + BLE001).
+      - name: Ruff (archivos cambiados)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          BASE="${BASE_SHA:-$BEFORE_SHA}"
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE" 2>/dev/null; then
+            BASE="$(git rev-parse HEAD~1 2>/dev/null || echo HEAD)"
+          fi
+          CHANGED=$(git diff --name-only "$BASE" HEAD -- 'src/**/*.py' 'tests/**/*.py' | tr '\n' ' ')
+          if [ -n "$CHANGED" ]; then
+            echo "Chequeando: $CHANGED"
+            # GATE BLOQUEANTE: F (bugs reales) según pyproject.toml.
+            ruff check $CHANGED
+            # INFORMATIVO: blind-excepts nuevos, nunca bloquea (--exit-zero).
+            echo "::group::blind-except (informativo)"
+            ruff check --select BLE001 --exit-zero $CHANGED
+            echo "::endgroup::"
+          else
+            echo "Sin archivos Python cambiados; nada que lintar."
+          fi
+
+      # --- Tests de backend (costuras con historial de fallo silencioso) ---
+      # Nota: los tests actuales no requieren torch/cv2 (aíslan por costura). Si un test
+      # nuevo los necesitara, se instalarían aquí explícitamente.
+      - name: Pytest
+        run: pytest tests/ -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Instalar dependencias
+        run: pnpm install --frozen-lockfile
+
+      - name: Tests (vitest)
+        run: pnpm test
+
+      - name: Build de producción
+        run: pnpm build
