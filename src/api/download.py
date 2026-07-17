@@ -9,13 +9,13 @@ import json
 import time
 import threading
 from api.resilient_http import http as http_requests  # retry + backoff + per-host rate limiting
+from api.observability import thread_guard
 import subprocess
 import re
 from decimal import Decimal, InvalidOperation
 
 from api.runtime import (
     MANGA_DIR,
-    UPSCALED_DIR,
     manga_dir,
     upscaled_dir,
     PROJECT_ROOT,
@@ -226,7 +226,7 @@ def download_manga():
     
     set_download_status(download_id, {'status': 'started', 'title': title, 'chapters': 0, 'max': max_chapters})
     
-    threading.Thread(target=run_download, args=(download_id, manga_id, title, max_chapters), daemon=True).start()
+    threading.Thread(target=thread_guard('download')(run_download), args=(download_id, manga_id, title, max_chapters), daemon=True).start()
     
     return jsonify({'status': 'started', 'title': title, 'folder': str(folder), 'task_id': download_id})
 
@@ -354,7 +354,7 @@ def download_chapter():
     })
 
     threading.Thread(
-        target=_run_download_chapter,
+        target=thread_guard('download')(_run_download_chapter),
         args=(download_id, title, chapter_norm, chapter_id, manga_id),
         daemon=True,
     ).start()
@@ -394,7 +394,7 @@ def download_cli():
         except Exception as e:
             set_download_status(download_id, {'status': 'error', 'message': str(e)})
 
-    threading.Thread(target=run, daemon=True).start()
+    threading.Thread(target=thread_guard('download')(run), daemon=True).start()
 
     return jsonify({'status': 'started', 'title': title, 'download_id': download_id})
 
@@ -514,7 +514,7 @@ def download_source_chapter():
     })
 
     threading.Thread(
-        target=_run_source_download,
+        target=thread_guard('download')(_run_source_download),
         args=(download_id, title, chapter_norm, page_urls, source_id, manga_id, source_name, source_lang),
         daemon=True,
     ).start()

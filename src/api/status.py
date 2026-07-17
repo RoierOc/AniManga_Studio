@@ -88,3 +88,12 @@ def get_upscale_status_route(upscale_id):
 @status_bp.route('')
 def get_all_status_route():
     return jsonify(_all_status())
+
+
+@status_bp.route('/errors')
+def get_error_counts_route():
+    """Diagnóstico: cuántos errores ha registrado cada costura desde el arranque
+    (ver api.observability). Hace consultable el "fallo silencioso" que antes no dejaba
+    rastro. Los eventos SSE de tipo 'error' llevan el detalle en vivo."""
+    from api.observability import error_counts
+    return jsonify(error_counts())

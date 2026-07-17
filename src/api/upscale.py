@@ -17,7 +17,6 @@ from decimal import Decimal, InvalidOperation
 from concurrent.futures import ThreadPoolExecutor
 
 from api.runtime import (
-    MANGA_DIR,
     UPSCALED_DIR,
     manga_dir,
     upscaled_dir,
@@ -25,6 +24,7 @@ from api.runtime import (
     build_task_id,
     normalize_chapter,
 )
+from api.observability import thread_guard
 
 _UPSCALE_STATUS_FILE = Path(UPSCALED_DIR) / '.upscale_status.json'
 _UPSCALE_IN_FLIGHT = {'upscaling', 'started', 'starting'}
@@ -417,7 +417,7 @@ def _ensure_gpu_worker():
             _gpu_worker_error[0] = None
             _gpu_worker_ready.clear()
             _gpu_worker_thread = threading.Thread(
-                target=_gpu_worker_loop, daemon=True, name="gpu-worker"
+                target=thread_guard('upscale-gpu')(_gpu_worker_loop), daemon=True, name="gpu-worker"
             )
             _gpu_worker_thread.start()
     _gpu_worker_ready.wait(timeout=120)
@@ -697,7 +697,7 @@ def repair_chapter():
             _gpu_tile_throttle_ms[0] = 0
 
         threading.Thread(
-            target=run_upscale_chapter,
+            target=thread_guard('upscale')(run_upscale_chapter),
             args=(input_folder, output_folder, missing_images, upscale_id),
             kwargs={'eco': mode == 'eco'},
             daemon=True,
@@ -888,7 +888,7 @@ def upscale_chapter():
             _gpu_tile_throttle_ms[0] = 0
 
         threading.Thread(
-            target=run_upscale_chapter,
+            target=thread_guard('upscale')(run_upscale_chapter),
             args=(input_folder, output_folder, images, upscale_id),
             kwargs={'eco': mode == 'eco', 'fast': fast_mode},
             daemon=True,
