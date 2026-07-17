@@ -705,7 +705,7 @@ def _erase_onlyen(res, en_g, esw_g, es_w, x0, y0, x1, y1, area, page_area, feath
     return es_full.astype(np.float32) * a + res * (1 - a), None, best_mae
 
 
-def text_free(res, en, es_w, en_tf, es_tf_mapped, feather=4):
+def text_free(res, en, es_w, en_tf, es_tf_mapped, feather=4, es_rs=None):
     """Aplica el texto libre (captions) sobre `res` por CLUSTERING ESPACIAL. Devuelve matched.
 
     El emparejado 1:1 por distancia de CENTROIDE fallaba con los captions: el español se
@@ -752,20 +752,53 @@ def text_free(res, en, es_w, en_tf, es_tf_mapped, feather=4):
         # "Guarda `bg` de TEXTO LIBRE — RETIRADA" arriba antes de pensar en reponerla.
         if not art_not_erased(en, es_w, x0, y0, x1, y1, max_extra=TEXTFREE_ART_MAXEXTRA):
             skips.append((bbox, n_en, n_es, "art", None)); continue
-        src = es_w
-        if area > TEXTFREE_LARGE_FRAC * page_area:
-            # paste grande: refinar por ECC y EXIGIR confirmación ajustada; sin ella el borde
-            # dejaría costura (homografía corrida en página de baja textura / ES de baja resolución).
-            # OJO: ECC sólo se usa en los GRANDES a propósito. Medido sobre 194 pastes de 45-49,
-            # aplicarlo a TODOS empeora el encaje (MAE de anillo 14.1 -> 16.4; 99 peores vs 53
-            # mejores): ECC alinea la caja CON el texto dentro, y el texto EN y ES son distintos,
-            # así que persigue trazos de letras y tuerce el arte. La homografía (SIFT sobre
-            # features del dibujo) es mejor referencia. En los grandes compensa porque ahí el
-            # arte domina sobre el texto y la costura del borde sí sería visible.
+        # FUENTE DEL PEGADO: se elige la MEJOR ALINEADA por ANILLO de arte entre la homografía
+        # (`es_w`) y la ES en IDENTIDAD (`es_rs`, sólo reescalada, sin perspectiva). Motivo: cuando
+        # el scan ES y el EN NO comparten el encuadre de un panel, la homografía GLOBAL tuerce el
+        # arte local; si el caption español (más largo) DESBORDA sobre una cara, el warp estampa esa
+        # cara desalineada sobre el dibujo. La identidad casa el arte y evita el daño manteniendo el
+        # español (MEDIDO ch0001_030: MAE de arte en el desborde warp 41 vs id 5; anillo warp 20 vs
+        # id 4). El ANILLO (arte por FUERA de la caja, sin texto) discrimina las dos fuentes aunque
+        # ambas pasen el umbral absoluto. En cluster GRANDE se añade el refinado ECC como candidato
+        # y se EXIGE que el ganador tenga anillo <= umbral (sin ella un warp corrido dejaría una
+        # costura grande); en cluster pequeño nunca se salta (se cae a `es_w` como antes).
+        # OJO ECC: sólo en los GRANDES a propósito. Medido sobre 194 pastes de 45-49, aplicarlo a
+        # TODOS empeora el encaje (anillo 14.1->16.4): ECC alinea la caja CON el texto dentro, y el
+        # texto EN y ES difieren, así que persigue trazos de letras y tuerce el arte.
+        large = area > TEXTFREE_LARGE_FRAC * page_area
+        # DEFAULT = comportamiento previo, siempre pegable: en grande el refinado ECC si CONFIRMA,
+        # si no la homografía; en pequeño la homografía. NO se le aplica gate de anillo (el original
+        # confiaba en la confirmación ECC sola; ponerle gate tiraba pastes buenos -> regresión).
+        es_full = dxdy = None
+        if large:
             es_full, dxdy = _aligned_es_region(en_g, esw_g, es_w, (x0, y0, x1, y1))
-            if dxdy is None:
-                skips.append((bbox, n_en, n_es, "ecc", None)); continue
-            src = es_full
+        default = es_full if (dxdy is not None) else (None if large else es_w)
+        # Se PREFIERE el candidato con menor ANILLO de arte (identidad gana cuando la homografía
+        # tuerce el arte local y el caption español desborda sobre una cara; MEDIDO ch0001_030:
+        # MAE desborde warp 41 vs id 5, anillo warp 20 vs id 4). El anillo (arte por FUERA de la
+        # caja) discrimina las fuentes aunque ambas pasen el umbral absoluto.
+        cands = [(es_w, esw_g)]
+        if es_rs is not None:
+            cands.append((es_rs, None))
+        if es_full is not None:
+            cands.append((es_full, None))
+        best, best_rm = None, None
+        for c, cg in cands:
+            g = cg if cg is not None else cv2.cvtColor(np.clip(c, 0, 255).astype(np.uint8), cv2.COLOR_RGB2GRAY)
+            rm = _ring_mae(en_g, g, x0, y0, x1, y1)
+            if rm is None:
+                continue
+            if best_rm is None or rm < best_rm:
+                best, best_rm = c, rm
+        if default is None:
+            # GRANDE sin ECC confirmado: no hay default seguro. Sólo se pega si el mejor candidato
+            # casa el anillo (fallo seguro: sin ella un warp corrido dejaría costura grande).
+            if best is None or best_rm > ONLYEN_RING_MAE:
+                skips.append((bbox, n_en, n_es, "ecc", best_rm)); continue
+            src = best
+        else:
+            # Hay default pegable (previo). Se usa el mejor por anillo si lo hay; si no, el default.
+            src = best if best is not None else default
         m = cv2.GaussianBlur(np.full((y1-y0, x1-x0), 255, np.uint8), (0, 0), feather)
         a = np.zeros((h, w), np.float32); a[y0:y1, x0:x1] = m / 255.0; a = a[:, :, None]
         res = src.astype(np.float32) * a + res * (1 - a)
@@ -823,7 +856,8 @@ def _transplant_page(es, en):
     if tf_skipped:
         matched, tf_skips = 0, []
     else:
-        res, matched, tf_skips = text_free(res, en, es_w, en_tf, es_tf_mapped)
+        res, matched, tf_skips = text_free(res, en, es_w, en_tf, es_tf_mapped,
+                                           es_rs=es_fullpage(es, en))
     res = np.clip(res, 0, 255).astype(np.uint8)
     # ¿se tradujo suficiente? texto = globos EN (dedup) + texto libre EN (dedup)
     en_bubbles = dedup(de[0])
@@ -1035,9 +1069,24 @@ def transplant_chapter(es_dir, en_dir, out_dir, file_prefix="ch0000",
                     picked = None
                     for cidx, cimg in cand_imgs:
                         r, nt, fb, db = _transplant_page(cimg, en)
-                        if (db or {}).get("reason") != "no-homography":
-                            picked = (r, nt, fb, db, cidx)   # SIFT alineó → misma página
-                            break
+                        if (db or {}).get("reason") == "no-homography":
+                            continue
+                        # SIFT alineó -> ¿misma página? OJO: aquí el dHash YA es >80 (por eso
+                        # estamos en esta rama), y una homografía se puede construir entre páginas
+                        # DISTINTAS por features coincidentes (líneas/bordes de viñeta), así que "hay
+                        # homografía" da FALSO POSITIVO. La señal de página equivocada es que el
+                        # trasplante traduce CASI NADA: la misma página case la mayoría de globos, una
+                        # alineación espuria da cobertura ínfima y estampa un globo de OTRA escena
+                        # (MEDIDO Pink ch3 p30: es_027 (cena) "alineó" con en030 (baño), cov 0.14, y
+                        # pegó "PERO... AMAS A EMA-CHAN" de otra página). Se exige cobertura >= umbral;
+                        # si no, se sigue buscando y, si ninguna casa, la página queda en inglés
+                        # (candidata a rescate desde otra fuente ES). No afecta a las parciales
+                        # legítimas: esas tienen dHash <=80 y NO entran en esta rama.
+                        cov = (db or {}).get("coverage")
+                        if cov is not None and cov < COVERAGE_MIN:
+                            continue
+                        picked = (r, nt, fb, db, cidx)
+                        break
                     if picked is not None:
                         res, note, is_fb, dbg, es_used_idx = picked
                     else:
