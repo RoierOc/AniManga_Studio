@@ -21,8 +21,9 @@ export const VIEWS = [
   {
     group: 'Manga',
     items: [
-      { id: 'library', label: 'Biblioteca', icon: 'library' },
-      { id: 'explore', label: 'Explorar',   icon: 'globe' },
+      { id: 'library',  label: 'Biblioteca', icon: 'library' },
+      { id: 'discover', label: 'Descubrir',  icon: 'search' },
+      { id: 'explore',  label: 'Explorar',   icon: 'globe' },
     ],
   },
   {

@@ -26,6 +26,7 @@ import PlaceholderView from '@/views/PlaceholderView.vue'
 // van lazy.
 import LibraryHub from '@/views/LibraryHub.vue'
 const ExploreView  = defineAsyncComponent(() => import('@/views/ExploreView.vue'))
+const DiscoverView = defineAsyncComponent(() => import('@/views/manga/Discover.vue'))
 const WorkshopView = defineAsyncComponent(() => import('@/views/WorkshopView.vue'))
 const ActivityView = defineAsyncComponent(() => import('@/views/ActivityView.vue'))
 const AnimeStudio  = defineAsyncComponent(() => import('@/views/anime/AnimeStudio.vue'))
@@ -103,7 +104,7 @@ onUnmounted(() => {
 // defensive fallback and should never render in normal use.
 const meta = computed(() => VIEWS.flatMap(g => g.items).find(i => i.id === ui.currentView))
 
-const VIEW_COMPONENTS = { library: LibraryHub, explore: ExploreView, workshop: WorkshopView, activity: ActivityView, anime: AnimeStudio, settings: SettingsView }
+const VIEW_COMPONENTS = { library: LibraryHub, discover: DiscoverView, explore: ExploreView, workshop: WorkshopView, activity: ActivityView, anime: AnimeStudio, settings: SettingsView }
 const activeComponent = computed(() => VIEW_COMPONENTS[ui.currentView] || null)
 
 // Error boundary: a render error in any view/modal shows a recoverable panel instead of

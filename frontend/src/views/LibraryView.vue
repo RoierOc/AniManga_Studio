@@ -175,6 +175,7 @@ async function load() {
         id: t.title, name: t.title, chapter_count: 0, upscaled: 0, cover: t.cover || null,
         mdId: kind === 'mangadex' ? t.id : null,
         trackedId: t.id, trackedOnly: true, status: t.status || '',
+        al_id: t.al_id || null,          // obras de Descubrir: alimenta la cobertura al abrir
         source_meta: sourceMeta,
       })
     }

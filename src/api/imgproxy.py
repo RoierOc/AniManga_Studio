@@ -31,6 +31,8 @@ _ALLOWED_HOSTS = {
     'image.tmdb.org',
     's4.anilist.co',
     'uploads.mangadex.org',
+    'images.mangabaka.dev',   # Manga Hub: portadas raw del agregador
+    'cdn.mangabaka.dev',      # Manga Hub: variantes dimensionadas (x350@2 ≈ 700px) — las que se usan
 }
 
 

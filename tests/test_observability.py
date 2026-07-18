@@ -61,6 +61,25 @@ def test_thread_guard_passes_happy_path():
     assert obs.error_counts().get("download") is None  # sin errores registrados
 
 
+def test_swallow_happy_path_logs_nothing():
+    with obs.swallow("anime", "history_write"):
+        x = 1 + 1
+    assert x == 2
+    assert obs.error_counts().get("anime") is None   # sin error → sin ruido
+
+
+def test_swallow_surfaces_error_but_does_not_propagate():
+    base = runtime.get_current_seq()
+    # No debe propagar (mismo comportamiento que `except: pass`), pero SÍ registrar:
+    with obs.swallow("anime", "history_write", path="/x/watch_history.json"):
+        raise OSError("disco lleno")
+    assert obs.error_counts().get("anime") == 1
+    new = [e for e in runtime.get_sse_events_since(base) if e.get("type") == "error"]
+    assert len(new) == 1
+    assert "disco lleno" in new[0]["message"]
+    assert new[0]["op"] == "history_write"
+
+
 def test_thread_guard_surfaces_crash_instead_of_silence():
     base = runtime.get_current_seq()
 

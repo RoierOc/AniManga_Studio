@@ -66,6 +66,10 @@ _HOSTS = {
     "graphql.anilist.co": _HostConfig(retries=4, min_interval=0.50, timeout=10),
     # Jikan (MAL mirror) — ~3 req/s / 60 per minute.
     "api.jikan.moe":      _HostConfig(retries=3, min_interval=0.60),
+    # MangaBaka (Manga Hub · agregador de metadatos) — 30/min búsqueda: espaciar ~2.1s.
+    "api.mangabaka.org":  _HostConfig(retries=3, min_interval=2.1, timeout=15),
+    # MangaUpdates API (Manga Hub · refuerzo de taxonomía) — devuelve 429 al pasarse.
+    "api.mangaupdates.com": _HostConfig(retries=3, min_interval=0.40, timeout=15),
     # TMDB images/metadata.
     "api.themoviedb.org": _HostConfig(retries=3, min_interval=0.10),
     # Suwayomi (local) — cheap to retry, no spacing needed.

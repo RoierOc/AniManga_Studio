@@ -445,7 +445,10 @@ function submitManualSplit() {
 }
 
 watch(m, (v) => {
-  tab.value = 'chapters'; sel.value = new Set(); volName.value = v?.name || ''
+  // Pestaña inicial: normalmente Capítulos, pero una apertura desde Descubrir pide Versiones
+  // (proponer la «mejor versión» al instante). `pendingTab` es de un solo uso.
+  tab.value = store.pendingTab || 'chapters'; store.pendingTab = null
+  sel.value = new Set(); volName.value = v?.name || ''
   showManage.value = false; renameVal.value = v?.name || ''
   tomoCover.value = ''; clearBatch(); tpSel.value = new Set()
   // NO tocar `vg` aquí: su ciclo de vida (resetForManga + loadAssignedMap) lo gestiona
@@ -467,6 +470,22 @@ watch([sel, quality, codec, tab, () => store.excludedPages.length], () => {
 function applyVol(vol) {
   const { selected, label } = store.applyMdexVolume(vol)
   if (selected.length) { sel.value = new Set(selected); volName.value = label }
+}
+
+// Auto-organizar todos los tomos según MangaDex (un CBZ por volumen)
+const autoVolCover = ref(true)
+const exportingAll = ref(false)
+const volPlan = computed(() => store.mdex.volumes.length ? store.volumePlan() : [])
+const volPlanChapters = computed(() => volPlan.value.reduce((n, t) => n + t.chapters.length, 0))
+async function exportAllTomos() {
+  if (exportingAll.value) return
+  exportingAll.value = true
+  try {
+    await store.exportAllVolumes({
+      format: fmt.value, quality: quality.value, codec: codec.value,
+      downscaleHalf: downscale.value, coverPerVolume: autoVolCover.value,
+    })
+  } finally { exportingAll.value = false }
 }
 
 function onTomoCover(e) {
@@ -749,6 +768,16 @@ async function doExport(toDrive = false) {
                 </div>
                 <div v-if="store.mdex.volumes.length" class="mdex__vols">
                   <button v-for="v in store.mdex.volumes" :key="v.volume" class="volchip" @click="applyVol(v)">{{ v.label || ('Tomo ' + v.volume) }}</button>
+                </div>
+                <!-- Auto-organizar: un CBZ por cada tomo, con los caps descargados que le tocan -->
+                <div v-if="volPlan.length" class="mdex__auto">
+                  <div class="mdex__auto-info">
+                    <strong>{{ volPlan.length }}</strong> tomo(s) · <strong>{{ volPlanChapters }}</strong> caps descargados se organizarán automáticamente
+                  </div>
+                  <label class="mdex__auto-cov"><input type="checkbox" v-model="autoVolCover" /> Portada por tomo</label>
+                  <button class="exportbtn exportbtn--auto" :disabled="exportingAll" @click="exportAllTomos">
+                    <span v-if="exportingAll" class="xspin" /><Icon v-else name="library" :size="13" /> Exportar todos los tomos
+                  </button>
                 </div>
                 <div v-if="store.mdex.covers.length" class="mdex__covers">
                   <button v-for="c in store.mdex.covers" :key="c.id || c.url" class="covsel" :class="{ 'is-sel': store.mdex.selectedCover?.url === c.url }" @click="store.selectMdexCover(c)">
@@ -1755,6 +1784,12 @@ async function doExport(toDrive = false) {
 .exportbtn:disabled { opacity: .5; cursor: not-allowed; }
 .exportbtn--drive { background: transparent; color: var(--azure-bright); border: 1px solid var(--azure); margin-top: var(--s-1); }
 .exportbtn--drive:hover:not(:disabled) { background: var(--azure-haze); color: var(--azure-bright); }
+.mdex__auto { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin-top: var(--s-2); padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--azure); border-radius: var(--r-sm); background: var(--azure-haze); }
+.mdex__auto-info { flex: 1 1 auto; font-size: var(--fs-xs); color: var(--ink-soft); }
+.mdex__auto-info strong { color: var(--azure-bright); }
+.mdex__auto-cov { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-2xs); color: var(--ink-faint); cursor: pointer; }
+.exportbtn--auto { margin-top: 0; padding: var(--s-2) var(--s-4); }
 .rangebox { display: inline-flex; align-items: center; gap: 3px; }
 .rangebox input { width: 42px; padding: 4px 6px; border-radius: var(--r-xs); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-2xs); text-align: center; }
 .rangebox button { padding: 4px 8px; border-radius: var(--r-xs); font-size: var(--fs-2xs); font-weight: 600; color: var(--cyan); border: 1px solid color-mix(in srgb, var(--cyan) 30%, transparent); }

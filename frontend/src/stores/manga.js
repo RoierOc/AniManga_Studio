@@ -143,6 +143,7 @@ export const useMangaStore = defineStore('manga', {
   state: () => ({
     // detail modal
     current: null,            // { id, name, source_meta } of the open manga
+    pendingTab: null,         // pestaña inicial de un solo uso para el próximo open() (p.ej. Descubrir → 'versions')
     chapters: [],             // [{ chapter, page_count }] — local downloaded chapters
     upscaled: {},             // { chapterNorm: true | 'partial' }
     modalLoading: false,
@@ -438,8 +439,12 @@ export const useMangaStore = defineStore('manga', {
 
     updatesByTitle: (s) => { const m = {}; for (const u of s.updates) m[u.title] = u; return m },
 
-    // chapter navigation within the reader (ascending order)
-    chapterListAsc: (s) => [...s.chapters].sort((a, b) => (parseFloat(a.chapter) || 0) - (parseFloat(b.chapter) || 0)),
+    // chapter navigation within the reader (ascending order).
+    // Base = collectionChapters (local ∪ fuente ∪ MangaDex ∪ asignados), no solo lo
+    // descargado: así la navegación entre capítulos y la tarjeta de fin ("Siguiente")
+    // funcionan IGUAL leyendo online que leyendo descargado. Para un manga puramente
+    // local (sin fuentes cargadas) collectionChapters == local → comportamiento intacto.
+    chapterListAsc() { return [...this.collectionChapters].sort((a, b) => (parseFloat(a.chapter) || 0) - (parseFloat(b.chapter) || 0)) },
     chapterIndex() { return this.chapterListAsc.findIndex(c => String(c.chapter) === String(this.reader?.chapter)) },
     canPrevChapter() { return this.chapterIndex > 0 },
     canNextChapter() { return this.chapterIndex >= 0 && this.chapterIndex < this.chapterListAsc.length - 1 },
@@ -840,6 +845,10 @@ export const useMangaStore = defineStore('manga', {
       this.current = {
         id: manga.id || manga.name, name: manga.name, cover: manga.cover, source_meta: manga.source_meta,
         mdOnly: !!manga.mdOnly, trackedOnly: !!manga.trackedOnly,
+        // al_id (AniList) alimenta el descubrimiento de fuentes de Cobertura/Versiones. Antes se
+        // perdía al abrir → coverage iba solo por título; para Obras de Descubrir traemos el id
+        // real (vía MangaBaka), así el ranking de «mejor versión» arranca con mejor información.
+        al_id: manga.al_id || null,
         trackedId: manga.trackedId || manga.mdId || null, status: manga.status || '',
       }
       if (this.current.cover) this.coverCache[this.current.id] = this.current.cover
@@ -1464,15 +1473,35 @@ export const useMangaStore = defineStore('manga', {
       finally { this.forYouLoading = false; this.forYouLoaded = true }
     },
     // Clic en una recomendación → buscarla en Explorar (MangaDex) para descubrir/añadir.
+    // Abre una obra (de Descubrir, o una recomendación/"similar") en el MangaModal como punto
+    // de convergencia: sembrada por título + al_id + portada, aterriza en Versiones y calcula la
+    // «mejor versión». Reutiliza TODA la maquinaria del modal (cobertura, capítulos, leer,
+    // descargar) sin duplicarla. Fase 2 de [[project_manga_hub_discovery]].
+    async openFromWork(work, opts = {}) {
+      if (!work) return
+      const title = work.title || work.name || ''
+      if (!title) return
+      const anilist = (work.ids && work.ids.anilist) || work.al_id || null
+      this.pendingTab = 'versions'
+      await this.open({
+        id: title, name: title, cover: work.cover || null,
+        al_id: anilist, trackedOnly: true,          // no está descargado → salta la carga local
+      }, opts)
+      // Propone la mejor fuente por defecto: calcula cobertura si no hay ya un ranking cargado.
+      try {
+        const vs = useVersionsStore()
+        if (!vs.sources.length) vs.fetchCoverage(title, anilist, false, '')
+      } catch (_) { /* si Suwayomi está offline, la ficha sigue mostrando metadatos */ }
+    },
+
+    // Clic en una recomendación / "similar" → a la ficha centralizada (no al buscador de fuentes).
     async discoverRec(rec) {
-      const q = rec?.title || rec?.title_romaji || ''
-      if (!q) return
-      const { useMangadexStore } = await import('./mangadex')
-      const md = useMangadexStore()
-      md.query = q
-      try { localStorage.setItem('manga-explore-tab', 'mangadex') } catch (_) {}
-      useUiStore().goto('explore')
-      md.setTab('search')
+      const title = rec?.title || rec?.title_romaji || rec?.name || ''
+      if (!title) return
+      await this.openFromWork({
+        title, cover: rec.cover || rec.coverImage || null,
+        ids: { anilist: rec.al_id || rec.anilist_id || rec.id || null },
+      })
     },
     async loadModels() {
       try { const d = await api.get('/api/upscale/models'); this.models = d.models || {}; this.modelsColor = d.color || {}; this.activeModel = d.active || 'eula' } catch (_) {}
@@ -1845,8 +1874,10 @@ export const useMangaStore = defineStore('manga', {
       } catch (_) {}
       finally { this.mdex.volumesLoading = false }
     },
-    // Returns { selected: [chapterNorms], label } — faithful to the original applyMdexVolume.
-    applyMdexVolume(vol) {
+    // Mapeo PURO volumen→capítulos locales (sin toasts ni efectos) — la lógica fiel de
+    // applyMdexVolume, reutilizable tanto por el clic de un tomo como por el lote "todos".
+    // Devuelve { selected: [chapterNorms], total } (total = nº de caps que el tomo declara).
+    _mapVolumeToLocal(vol) {
       const localChaps = this.chapters
         .map(g => ({ norm: String(g.chapter), num: parseFloat(g.chapter) }))
         .filter(g => !isNaN(g.num))
@@ -1889,13 +1920,62 @@ export const useMangaStore = defineStore('manga', {
         if (inRange.length > 0) selected = inRange.map(g => g.norm)
         else if (!vol.fromScrape) selected = vol.chapters.map(c => String(c)).filter(c => c !== '')
       }
+      const total = vol.chapters ? vol.chapters.length : 0
+      return { selected: selected || [], total }
+    },
+    // Returns { selected: [chapterNorms], label } — clic de un tomo, con feedback.
+    applyMdexVolume(vol) {
+      const { selected, total } = this._mapVolumeToLocal(vol)
       const label = vol.label || `Tomo ${vol.volume}`
       const ui = useUiStore()
-      if (!selected || !selected.length) { ui.toast(`${label}: ningún capítulo en este rango`, 'warn'); return { selected: [], label } }
-      const total = vol.chapters ? vol.chapters.length : 0
+      if (!selected.length) { ui.toast(`${label}: ningún capítulo en este rango`, 'warn'); return { selected: [], label } }
       const missing = total > 0 && total > selected.length ? total - selected.length : 0
       ui.toast(missing > 0 ? `${selected.length}/${total} caps — ${label} (faltan ${missing})` : `${selected.length} caps — ${label}`, missing > 0 ? 'warn' : 'ok')
       return { selected, label }
+    },
+    // Plan de "todos los tomos": para cada volumen con capítulos locales, su lista de caps y
+    // etiqueta. Sin efectos — la UI lo usa para previsualizar y exportAllVolumes para ejecutar.
+    volumePlan() {
+      // Solo capítulos realmente DESCARGADOS: el mapeo de un tomo tiene un fallback que
+      // devuelve los caps declarados aunque no sean locales (útil al clicar un tomo suelto),
+      // pero un lote automático nunca debe exportar un cap que no existe en disco.
+      const local = new Set(this.chapters.map(g => String(g.chapter)))
+      const plan = []
+      const seen = new Set()   // evita que dos tomos reclamen el mismo capítulo local
+      for (const vol of this.mdex.volumes) {
+        const label = vol.label || `Tomo ${vol.volume}`
+        const { selected } = this._mapVolumeToLocal(vol)
+        const chapters = selected.filter(c => local.has(String(c)) && !seen.has(c))
+        if (!chapters.length) continue
+        chapters.forEach(c => seen.add(c))
+        plan.push({ volume: vol.volume, label, chapters })
+      }
+      return plan
+    },
+    // Exporta AUTOMÁTICAMENTE un tomo por cada volumen de MangaDex (auto-organiza los caps
+    // descargados según el mapa oficial). Reutiliza exportTomo (backend/Actividad ya cablean
+    // el progreso). Portada por tomo si hay una en mdex.covers para ese volumen.
+    async exportAllVolumes({ format = 'cbz', quality = 92, codec = 'jpeg', downscaleHalf = false, toDrive = false, coverPerVolume = true } = {}) {
+      const ui = useUiStore()
+      const plan = this.volumePlan()
+      if (!plan.length) { ui.toast('No hay tomos con capítulos descargados para organizar', 'warn'); return { queued: 0 } }
+      const coverByVol = {}
+      for (const c of (this.mdex.covers || [])) if (c.volume && !(c.volume in coverByVol)) coverByVol[c.volume] = c
+      ui.toast(`Organizando y exportando ${plan.length} tomo(s)…`, 'info')
+      let queued = 0
+      for (const t of plan) {
+        let coverB64 = ''
+        if (coverPerVolume && coverByVol[t.volume]) {
+          try { const d = await api.post('/api/mangadex/cover_b64', { url: coverByVol[t.volume].url }); if (d?.b64) coverB64 = d.b64 } catch (_) {}
+        }
+        const taskId = await this.exportTomo({
+          chapters: t.chapters, volumeName: t.label, format, quality, codec, downscaleHalf,
+          coverB64, toDrive,
+        })
+        if (taskId || toDrive) queued++
+      }
+      ui.toast(`${queued} tomo(s) en cola de exportación`, queued ? 'ok' : 'error')
+      return { queued, planned: plan.length }
     },
     async loadMdexCovers() {
       const id = await this.resolveMdexId({ fuzzy: true }); if (!id) return
@@ -2130,10 +2210,14 @@ export const useMangaStore = defineStore('manga', {
       this._resetView()
     },
 
-    // Auto-detección webtoon vs manga por relación de aspecto de las páginas.
-    // Se salta si la serie tiene override manual. No persiste (la detección es barata).
+    // Auto-detección webtoon/manhwa (tira vertical) vs manga (paginado) por relación de
+    // aspecto de las páginas. Se salta si la serie tiene override manual. No persiste.
     _applyAutoMode(m) { this.mode = m },
-    _pageImgUrl(p) { return pageUrl(p) },   // codifica la ruta (carpetas con `?`/espacios)
+    // URL para MEDIR el aspecto: online (`http(s)://`) es la misma URL que muestra el lector
+    // → reutiliza la caché del navegador (0 fetches extra). Local pide una miniatura de 64px:
+    // el ratio alto/ancho es invariante a la escala, así la decodificación es barata (no
+    // descarga el 4K entero solo para medir). pageUrl codifica la ruta (carpetas con `?`/espacios).
+    _pageAspectUrl(p) { return pageUrl(p, 64) },
     _imgAspect(url) {
       return new Promise((resolve) => {
         const im = new Image()
@@ -2148,21 +2232,25 @@ export const useMangaStore = defineStore('manga', {
       if (ov === 'paged' || ov === 'webtoon') { this.mode = ov; return }
       const pages = this.pages
       if (!pages || !pages.length) return
-      // Muestrea SOLO la primera página (la que el lector ya está cargando para
-      // mostrarla) → medir su aspecto no añade NINGUNA petición. Muestrear medio/final
-      // forzaba fetches on-demand carísimos en fuentes online (Suwayomi) que competían
-      // con la página visible y la dejaban "en blanco". La portada basta para distinguir
-      // webtoon (tira muy alta) de manga (~1.4); el modo manual por serie sigue mandando.
-      const idxs = [0]
       const token = title + '|' + pages.length
       this._autoModeToken = token
-      const ratios = await Promise.all(idxs.map((i) => this._imgAspect(this._pageImgUrl(pages[i]))))
-      if (this._autoModeToken !== token) return   // cambió de capítulo mientras medía
-      const valid = ratios.filter((r) => r > 0).sort((a, b) => a - b)
-      if (!valid.length) return
-      const median = valid[Math.floor(valid.length / 2)]
-      // Webtoons son tiras muy altas (h/w ≫ 2); el manga ronda 1.4-1.5.
-      this._applyAutoMode(median >= 2.0 ? 'webtoon' : 'paged')
+      // Muestrea las PRIMERAS páginas (máx 3) — que el lector precarga de todos modos para
+      // mostrarlas, así NO añade peticiones de red. Muestrear medio/final SÍ las añadiría
+      // (fetches on-demand caros en fuentes online que dejaban la página visible en blanco).
+      // Señal: manhwa/manhua son TIRAS verticales → alguna página con h/w ≥ 2 (el manga
+      // ronda 1.4-1.5 y casi nunca llega a 2). Basta UNA tira alta para clasificar webtoon;
+      // esto acierta aunque la portada del webtoon sea un banner casi cuadrado. Se decide
+      // PROVISIONALMENTE tras la portada (modo correcto desde el primer instante) y se
+      // refina a webtoon si una página siguiente resulta ser una tira.
+      const n = Math.min(3, pages.length)
+      let decided = false
+      for (let i = 0; i < n; i++) {
+        const r = await this._imgAspect(this._pageAspectUrl(pages[i]))
+        if (this._autoModeToken !== token) return   // cambió de capítulo mientras medía
+        if (r >= 2.0) { this._applyAutoMode('webtoon'); return }   // tira alta → webtoon
+        if (!decided && r > 0) { this._applyAutoMode('paged'); decided = true }   // provisional: manga
+      }
+      if (!decided) this._applyAutoMode('paged')   // ninguna cargó → asume manga (paginado)
     },
     cycleFit() { const M = ['width', 'height', 'original']; this.fit = M[(M.indexOf(this.fit) + 1) % 3]; localStorage.setItem('reader-fit', this.fit) },
     toggleDir() { this.dir = this.dir === 'rtl' ? 'ltr' : 'rtl'; localStorage.setItem('reader-dir', this.dir) },
@@ -2184,13 +2272,20 @@ export const useMangaStore = defineStore('manga', {
 
     async goNextChapter() {
       if (!this.canNextChapter) return
-      const next = this.chapterListAsc[this.chapterIndex + 1]
-      await this.read(next.chapter, this.upscaled[next.chapter] ? 'upscaled' : 'auto')
+      await this._readRow(this.chapterListAsc[this.chapterIndex + 1])
     },
     async goPrevChapter() {
       if (!this.canPrevChapter) return
-      const prev = this.chapterListAsc[this.chapterIndex - 1]
-      await this.read(prev.chapter, this.upscaled[prev.chapter] ? 'upscaled' : 'auto')
+      await this._readRow(this.chapterListAsc[this.chapterIndex - 1])
+    },
+    // Abre una fila de `collectionChapters` por el camino correcto según su origen: una fila
+    // ONLINE (fuente Suwayomi, MangaDex, o capítulo asignado sin descargar) resuelve sus
+    // páginas en el momento vía readOnline(); una fila descargada usa el lector local. Así
+    // la navegación entre capítulos es idéntica sin que el usuario piense en el origen.
+    async _readRow(row) {
+      if (!row) return
+      if (row._sourceId || row._mdChapterId || row._covMulti) await this.readOnline(row)
+      else await this.read(row.chapter, this.upscaled[row.chapter] ? 'upscaled' : 'auto')
     },
 
     /* reading progress (localStorage, per manga id) */

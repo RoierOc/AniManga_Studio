@@ -5,7 +5,7 @@
  * through untouched — the backend only ever fetches/caches these same
  * hosts, so keeping the check here too avoids ever sending an unrelated
  * URL to our own /api/img endpoint. */
-const ALLOWED_HOSTS = new Set(['image.tmdb.org', 's4.anilist.co', 'uploads.mangadex.org'])
+const ALLOWED_HOSTS = new Set(['image.tmdb.org', 's4.anilist.co', 'uploads.mangadex.org', 'images.mangabaka.dev', 'cdn.mangabaka.dev'])
 
 export function imgProxy(url) {
   if (!url || !/^https?:\/\//.test(url)) return url

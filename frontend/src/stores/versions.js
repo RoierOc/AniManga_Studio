@@ -119,6 +119,13 @@ export const useVersionsStore = defineStore('versions', {
           const st = await api.get(`/api/transplant/status?task_id=${encodeURIComponent(taskId)}`)
           this.phase = st.phase || this.phase
           this.progress = { covered: st.covered, coverTotal: st.coverTotal, searched: st.searched, searchTotal: st.searchTotal }
+          // Ranking PROGRESIVO: el backend emite snapshots parciales ya ordenados durante la
+          // fase de cobertura; los pintamos en vivo para que el grid se vaya poblando y ordenando
+          // sin esperar al barrido completo (percepción de rendimiento). El 'done' final manda.
+          if (st.status !== 'done' && Array.isArray(st.sources)) {
+            this.sources = st.sources
+            if (st.totalKnownChapters != null) this.totalKnownChapters = st.totalKnownChapters
+          }
           if (st.status === 'done') {
             clearInterval(this._poll); this._poll = null; this.loading = false
             this.totalKnownChapters = st.totalKnownChapters || 0

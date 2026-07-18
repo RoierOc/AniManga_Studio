@@ -19,7 +19,9 @@ jobs:
           python-version: "3.13"
 
       - name: Instalar ruff + pytest
-        run: pip install ruff pytest
+        # pydantic: los contratos de la frontera (api/contracts.py) se importan al cargar
+        # los blueprints anime/transplant, que algún test importa. Es ligero (wheel puro).
+        run: pip install ruff pytest pydantic
 
       # --- Lint SOLO sobre archivos Python cambiados (gate baseline) ---
       # La deuda heredada (360 blind-excepts) NO bloquea: solo el código nuevo/modificado

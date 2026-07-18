@@ -35,10 +35,12 @@ import cv2
 from api.resilient_http import http as http_requests  # retry + backoff + per-host rate limiting
 
 from api.runtime import (manga_dir, upscaled_dir, QA_DIR, DATA_ROOT, normalize_chapter, build_task_id,
-                         push_sse_event, cache_get, cache_set, cache_invalidate)
+                         push_sse_event, cache_get, cache_set)
 from api.sources import _gql, SUWAYOMI_URL, SUWAYOMI_BASE, ensure_suwayomi
 from api.download import _fetch_with_retry, _dl_semaphore, _chapter_file_prefix
 from api.anilist import title_variants
+from api.contracts import CoverageBody, VersionsBody, DownloadVersionBody, validate_and_log
+from api.observability import record_error  # "fuente caída ≠ sin capítulos" contable + SSE
 from api import versions_db
 
 transplant_bp = Blueprint("transplant", __name__)
@@ -88,6 +90,10 @@ _RANK_HARD_CAP = 40    # tope duro de seguridad al rankear por match de título 
 _COVERAGE_MATCH_MIN = 0.85
 _SEARCH_TIMEOUT = 7    # s por fuente: una fuente más lenta no vale la espera (era 20s de _gql)
 _SEARCH_WORKERS = 64   # concurrencia del fan-out (peticiones I/O-bound vía Suwayomi)
+# Concurrencia del barrido de CATÁLOGOS de cobertura. Más moderado que el fan-out de búsqueda:
+# cada tarea baja el mapa COMPLETO de capítulos de una fuente (más pesado que un search), y no
+# queremos martillar Suwayomi/MangaDex ni disparar rate-limits/Cloudflare.
+_COVERAGE_WORKERS = 12
 _LATIN_CAP = 2         # sólo romaji+inglés van a TODAS las fuentes; los sinónimos latinos
                        # localizados (ES/DE/VI…) inflaban el barrido x185 sin ganar hits
 _SAMPLE_TIMEOUT = 8    # s por página de muestra en el ranking (sin reintentos)
@@ -254,8 +260,10 @@ def _discover_candidates(variants: list, source_ids=None, on_progress=None, stat
         # Sin lista de fuentes no hay barrido posible. Antes esto subía como excepción y el
         # llamante lo convertía en `candidates = []` → "este manga no está en ninguna fuente".
         st["listing_error"] = f"{type(e).__name__}: {str(e)[:70]}"
-        print(f"[transplant] no se pudo LISTAR las fuentes ({st['listing_error']}) — "
-              f"barrido imposible; esto NO significa 'no hay fuentes'", file=sys.stderr, flush=True)
+        # Contable (/api/status/errors) + SSE, no solo texto en el log: es EL caso E-12
+        # ("falló ≠ no había"). Sigue relanzando para que el llamante no lo lea como "0 fuentes".
+        record_error('transplant', e, op='discover_list_sources',
+                     note="barrido imposible; NO significa 'no hay fuentes'")
         raise
     st["sources"] = len(sources)
     if source_ids:
@@ -1329,8 +1337,13 @@ def _candidates_cached(title, al_id, variants, source_ids, on_progress=None, ref
     if cands and not st.get("failed"):
         cache_set("candidates", key, cands, ttl=_CANDIDATES_TTL, max_entries=120)
     elif cands:
-        print(f"[transplant] barrido de {title!r} INCOMPLETO ({st.get('failed')} de "
-              f"{st.get('tasks')} búsquedas fallaron) — no se cachea", file=sys.stderr, flush=True)
+        # Barrido INCOMPLETO: hay candidatos pero parte del barrido falló → no se cachea (para no
+        # congelar una vista parcial como si fuera completa). Agregado (una vez, con el conteo),
+        # NO por-fuente, para no inundar el bus. record_error = contable + SSE.
+        record_error('transplant', f"barrido de {title!r} incompleto: "
+                     f"{st.get('failed')} de {st.get('tasks')} búsquedas fallaron — no se cachea",
+                     op='discover_incomplete', title=title,
+                     failed=st.get('failed'), tasks=st.get('tasks'))
     return cands
 
 
@@ -1443,6 +1456,23 @@ def _score_candidate_cached_only(c):
     return cache_get("quality", qkey, _QUALITY_TTL)
 
 
+def _rank_coverage_sources(sources_out: list, all_chapters: set):
+    """Calcula completitud (por el máximo capítulo conocido) y ORDENA las fuentes:
+    lo puntuado por calidad primero (desc), luego lo no puntuado por parecido de título (desc)
+    — lo confiable sube, pero nada desaparece. Muta `completeness` in-place y devuelve
+    (lista_ordenada, total_known). Se usa tanto para los snapshots progresivos como para el
+    resultado final, así el ranking parcial y el definitivo salen del MISMO criterio."""
+    total_known = max((_chnum(x) for x in all_chapters), default=0)
+    for s in sources_out:
+        s["completeness"] = round(len(s["chapters"]) / total_known, 3) if total_known else None
+    ranked = sorted(
+        sources_out,
+        key=lambda s: (1, s["quality"]["score"]) if s.get("quality") else (0, s.get("match") or 0),
+        reverse=True,
+    )
+    return ranked, total_known
+
+
 def _run_coverage(task_id: str, title: str, al_id, source_ids, cur_lang: str = "", refresh: bool = False):
     """Cobertura de capítulos por fuente (qué capítulos tiene cada una) + completitud +
     frecuencia de actualización + mapa de asignación actual — alimenta el grid de cobertura
@@ -1483,25 +1513,9 @@ def _run_coverage(task_id: str, title: str, al_id, source_ids, cur_lang: str = "
         _set_status(task_id, phase="coverage", covered=0, coverTotal=len(candidates))
         sources_out = []
         all_chapters = set()
-        for i, c in enumerate(candidates):
-            cand = {"sourceId": c["sourceId"], "mangaId": c["id"], "sourceLang": c["sourceLang"]}
-            catalog = _source_catalog(cand, title, refresh=refresh)
-            _set_status(task_id, phase="coverage", covered=i + 1, coverTotal=len(candidates))
-            if catalog is None:
-                # No consultable: la fuente se cae de la lista, pero eso NO es un dato sobre ella.
-                degraded.append(f"{c.get('sourceName')}: no consultable")
-                continue
-            if not catalog:
-                continue
-            chapters = sorted(catalog.keys(), key=_chnum)
-            all_chapters.update(chapters)
-            sources_out.append({
-                "sourceKind": _source_kind(cand), "sourceId": c["sourceId"], "mangaId": c["id"],
-                "sourceName": c["sourceName"], "sourceLang": c["sourceLang"], "match": c.get("match"),
-                "chapters": chapters, "count": len(chapters),
-                "quality": _score_candidate_cached_only(c),
-                "updateFrequency": _update_frequency(catalog),
-            })
+
+        # La biblioteca LOCAL entra primero (sin red): aparece de inmediato en el grid
+        # progresivo y sirve de referencia de completitud desde el primer snapshot.
         local_files = _local_chapter_files(title)
         if local_files:
             local_chapters = sorted(local_files.keys(), key=_chnum)
@@ -1512,12 +1526,51 @@ def _run_coverage(task_id: str, title: str, al_id, source_ids, cur_lang: str = "
                 "chapters": local_chapters, "count": len(local_chapters),
                 "quality": _score_local(title), "updateFrequency": {"confidence": "unknown"},
             })
-        total_known = max((_chnum(x) for x in all_chapters), default=0)
-        for s in sources_out:
-            s["completeness"] = round(len(s["chapters"]) / total_known, 3) if total_known else None
-        # Orden: lo ya puntuado por calidad primero (desc), luego lo no puntuado por parecido
-        # de título (desc) — lo confiable sube, pero nada desaparece de la lista.
-        sources_out.sort(key=lambda s: (1, s["quality"]["score"]) if s.get("quality") else (0, s.get("match") or 0), reverse=True)
+
+        # Barrido de catálogos EN PARALELO. Antes era secuencial (una fuente tras otra), y con
+        # 30-50 candidatos sumaba latencias de red en serie — el cuello de botella real de "buscar
+        # la mejor versión". Cada `_source_catalog` es I/O puro (Suwayomi/MangaDex) y devuelve su
+        # propio dato, así que el fan-out es seguro; el procesado de resultados corre en ESTE hilo
+        # (as_completed), por lo que sources_out/all_chapters/degraded no necesitan lock. El ranking
+        # se reconstruye y se emite en CADA resultado → la UI ve el grid ordenarse progresivamente.
+        def _fetch(c):
+            cand = {"sourceId": c["sourceId"], "mangaId": c["id"], "sourceLang": c["sourceLang"]}
+            return c, cand, _source_catalog(cand, title, refresh=refresh)
+
+        done = 0
+        with ThreadPoolExecutor(max_workers=min(_COVERAGE_WORKERS, len(candidates) or 1)) as pool:
+            futs = [pool.submit(_fetch, c) for c in candidates]
+            for fut in as_completed(futs):
+                done += 1
+                c, cand, catalog = fut.result()
+                if catalog is None:
+                    # No consultable: la fuente se cae de la lista, pero eso NO es un dato sobre ella.
+                    degraded.append(f"{c.get('sourceName')}: no consultable")
+                elif catalog:
+                    chapters = sorted(catalog.keys(), key=_chnum)
+                    all_chapters.update(chapters)
+                    sources_out.append({
+                        "sourceKind": _source_kind(cand), "sourceId": c["sourceId"], "mangaId": c["id"],
+                        "sourceName": c["sourceName"], "sourceLang": c["sourceLang"], "match": c.get("match"),
+                        "chapters": chapters, "count": len(chapters),
+                        "quality": _score_candidate_cached_only(c),
+                        "updateFrequency": _update_frequency(catalog),
+                    })
+                # Snapshot progresivo: ranking parcial ya ordenado (mismo criterio que el final).
+                # El grid parcial (`sources`, potencialmente decenas de fuentes × capítulos) se
+                # guarda en el dict de estado que la UI SONDEA — NO se empuja por SSE, que solo
+                # lleva los contadores ligeros (empujar el array ~40 veces inundaría el bus).
+                ranked_partial, total_partial = _rank_coverage_sources(sources_out, all_chapters)
+                with _status_lock:
+                    cur = transplant_status.get(task_id, {})
+                    cur.update({"phase": "coverage", "covered": done, "coverTotal": len(candidates),
+                                "sources": ranked_partial, "totalKnownChapters": total_partial,
+                                "partial": True, "_ts": time.time()})
+                    transplant_status[task_id] = cur
+                push_sse_event("transplant", task_id=task_id, phase="coverage",
+                               covered=done, coverTotal=len(candidates))
+
+        sources_out, total_known = _rank_coverage_sources(sources_out, all_chapters)
         # Persiste el RESULTADO de cobertura en disco para que reabrir el manga lo muestre al
         # instante sin recalcular (el usuario solo re-mide con "Recalcular"). Clave por
         # título+idioma; TTL largo (30 días) — es un mapa de "qué fuente tiene qué capítulo",
@@ -1551,6 +1604,7 @@ def coverage():
     Versiones para el mismo título — así comparten la misma entrada de caché "versions" y
     Cobertura ve EXACTAMENTE el mismo conjunto de fuentes ya vetadas."""
     body = request.get_json(silent=True) or {}
+    validate_and_log(CoverageBody, body, "transplant/coverage")
     title = (body.get("title") or "").strip()
     if not title:
         return jsonify({"error": "title required"}), 400
@@ -1831,6 +1885,7 @@ def versions():
     if not ensure_suwayomi():
         return jsonify({"error": "Suwayomi offline"}), 503
     body = request.get_json(silent=True) or {}
+    validate_and_log(VersionsBody, body, "transplant/versions")
     title = (body.get("title") or "").strip()
     if not title:
         return jsonify({"error": "title required"}), 400
@@ -1883,6 +1938,7 @@ def download_version():
     if not ensure_suwayomi():
         return jsonify({"error": "Suwayomi offline"}), 503
     body = request.get_json(silent=True) or {}
+    validate_and_log(DownloadVersionBody, body, "transplant/download_version")
     title = (body.get("title") or "").strip()
     manga_id = (body.get("source") or {}).get("mangaId")
     if not title or not manga_id:

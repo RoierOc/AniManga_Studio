@@ -19,7 +19,8 @@ import logging
 import threading
 import traceback
 from collections import Counter
-from typing import Any, Callable
+from contextlib import contextmanager
+from typing import Any, Callable, Iterator
 
 _log = logging.getLogger("animanga.errors")
 
@@ -60,6 +61,25 @@ def record_error(component: str, exc: BaseException | str, **context: Any) -> No
     except Exception:
         # Blindaje total: registrar un error jamás debe propagar una excepción nueva.
         pass
+
+
+@contextmanager
+def swallow(component: str, op: str, **context: Any) -> Iterator[None]:
+    """Reemplaza un `try: ... except: pass` MUDO por uno que deja rastro. Registra el error
+    (contador + log + SSE) y NO propaga — mismo comportamiento de "tragar" la excepción, pero
+    ahora VISIBLE. Pensado para operaciones best-effort (limpieza, escritura opcional) donde el
+    código debe continuar pase lo que pase.
+
+        with swallow('anime', 'history_write', path=str(p)):
+            p.write_text(data)
+
+    Coste CERO en el camino feliz: solo actúa si algo revienta. **NO usar en un bucle caliente
+    que falle en CADA iteración** (p. ej. por-página/por-tile): ahí, contar los fallos y loguear
+    UNA vez al terminar, o el log (aunque esté rotado) se llena de ruido idéntico."""
+    try:
+        yield
+    except Exception as e:
+        record_error(component, e, op=op, **context)
 
 
 def error_counts() -> dict[str, int]:
