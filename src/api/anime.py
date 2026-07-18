@@ -26,6 +26,7 @@ from flask import Blueprint, jsonify, request, send_file
 from api.imgproxy import warm as _warm_img
 from api.platform import is_wsl as _is_wsl, is_macos as _is_macos
 from api.config_store import get_secret, set_secrets  # runtime-editable API keys (Ajustes)
+from api.observability import record_error, swallow  # hace VISIBLE el fallo silencioso
 
 anime_bp = Blueprint('anime', __name__)
 
@@ -64,9 +65,17 @@ def _lib_path() -> _Path:
     return _Path(manga_dir()) / 'anime_library.json'
 
 def _lib_read() -> dict:
+    p = _lib_path()
+    # "No hay biblioteca todavía" (fichero ausente) es un vacío LEGÍTIMO: no se loguea.
+    # Un fichero presente pero ilegible/corrupto SÍ es un fallo — y hasta ahora devolvía {}
+    # igual que el vacío, así que toda la app (storage, backup, progreso nativo) veía "0 animes"
+    # sin rastro. Se sigue devolviendo {} (comportamiento intacto) pero ahora deja huella.
+    if not p.exists():
+        return {}
     try:
-        return json.loads(_lib_path().read_text(encoding='utf-8'))
-    except Exception:
+        return json.loads(p.read_text(encoding='utf-8'))
+    except Exception as e:
+        record_error('anime', e, op='lib_read', path=str(p))
         return {}
 
 def _lib_write(data: dict):
@@ -81,12 +90,14 @@ def _history_path() -> _Path:
     return _Path(manga_dir()) / 'watch_history.json'
 
 def _history_read() -> list:
+    p = _history_path()
+    if not p.exists():
+        return []                     # sin historial aún ≠ fallo
     try:
-        if _history_path().exists():
-            return json.loads(_history_path().read_text(encoding='utf-8'))
-    except Exception:
-        pass
-    return []
+        return json.loads(p.read_text(encoding='utf-8'))
+    except Exception as e:
+        record_error('anime', e, op='history_read', path=str(p))
+        return []
 
 def _history_append(anime_id: str, title: str, episode: int, cover: str = ''):
     history = _history_read()
@@ -107,12 +118,10 @@ def _history_append(anime_id: str, title: str, episode: int, cover: str = ''):
         'cover': cover,
         'watched_at': now,
     })
-    try:
+    with swallow('anime', 'history_write', path=str(_history_path())):
         _history_path().write_text(
             json.dumps(history[:500], ensure_ascii=False, indent=2), encoding='utf-8'
         )
-    except Exception:
-        pass
 
 # ── Subtitle helpers ───────────────────────────────────────────────────────────
 
@@ -762,9 +771,15 @@ def _scanpaths_path() -> _Path:
     return _Path(os.environ.get('MANGA_DIR', str(_Path.home() / 'MangaLibrary'))) / 'anime_scan_paths.json'
 
 def _scanpaths_read() -> dict:
+    p = _scanpaths_path()
+    if not p.exists():
+        return {'paths': [], 'mappings': {}}     # sin rutas configuradas aún ≠ fallo
     try:
-        return json.loads(_scanpaths_path().read_text(encoding='utf-8'))
-    except Exception:
+        return json.loads(p.read_text(encoding='utf-8'))
+    except Exception as e:
+        # Config corrupta: se degrada a "sin rutas" (comportamiento intacto), pero YA deja rastro
+        # — antes esto perdía en silencio TODAS las carpetas de escaneo del usuario.
+        record_error('anime', e, op='scanpaths_read', path=str(p))
         return {'paths': [], 'mappings': {}}
 
 def _scanpaths_write(data: dict):
@@ -777,9 +792,13 @@ def _anime_settings_path() -> _Path:
     return _Path(os.environ.get('MANGA_DIR', str(_Path.home() / 'MangaLibrary'))) / 'anime_settings.json'
 
 def _anime_settings_read() -> dict:
+    p = _anime_settings_path()
+    if not p.exists():
+        return {}                                # sin ajustes aún ≠ fallo
     try:
-        return json.loads(_anime_settings_path().read_text(encoding='utf-8'))
-    except Exception:
+        return json.loads(p.read_text(encoding='utf-8'))
+    except Exception as e:
+        record_error('anime', e, op='anime_settings_read', path=str(p))
         return {}
 
 def _anime_settings_write(data: dict):
@@ -809,10 +828,16 @@ _dur_cache_dirty = False
 
 def _load_dur_cache():
     global _dur_cache
+    if not _DUR_CACHE_PATH.exists():
+        _dur_cache = {}                          # primer arranque: aún no hay caché ≠ fallo
+        return
     try:
         with open(_DUR_CACHE_PATH) as f:
             _dur_cache = {k: tuple(v) for k, v in json.load(f).items()}
-    except Exception:
+    except Exception as e:
+        # Es un caché (se re-mide al vuelo), así que degradar a {} es seguro; pero un caché
+        # corrupto que se descarta en silencio esconde por qué se re-prueban todos los ficheros.
+        record_error('anime', e, op='dur_cache_load', path=str(_DUR_CACHE_PATH))
         _dur_cache = {}
 
 
@@ -820,12 +845,10 @@ def _save_dur_cache():
     global _dur_cache_dirty
     if not _dur_cache_dirty:
         return
-    try:
+    with swallow('anime', 'dur_cache_save', path=str(_DUR_CACHE_PATH)):
         with open(_DUR_CACHE_PATH, 'w') as f:
             json.dump({k: list(v) for k, v in _dur_cache.items()}, f)
         _dur_cache_dirty = False
-    except Exception:
-        pass
 
 
 _load_dur_cache()
@@ -3205,8 +3228,10 @@ def anime_native_progress():
     por IPC). Misma lógica de umbral y misma estructura que _track_mpv_session, para
     que resume/visto/historial se comporten igual que con MPV externo."""
     from api.runtime import push_sse_event
+    from api.contracts import NativeProgressBody, validate_and_log
     try:
         data = request.get_json(silent=True) or {}
+        validate_and_log(NativeProgressBody, data, "anime/native/progress")
         anime_id = data.get('anime_id', '')
         ep_str   = str(data.get('episode', -1))
         position = float(data.get('position', 0))
@@ -4189,19 +4214,19 @@ _STACKS_CACHE_PATH = _Path.home() / '.animanga_stacks_cache.json'
 
 def _load_stacks_cache():
     global _stacks_cache
+    if not _STACKS_CACHE_PATH.exists():
+        return                                   # aún sin caché ≠ fallo
     try:
         with open(_STACKS_CACHE_PATH) as f:
             _stacks_cache = {int(k): v for k, v in json.load(f).items()}
-    except Exception:
-        pass
+    except Exception as e:
+        record_error('anime', e, op='stacks_cache_load', path=str(_STACKS_CACHE_PATH))
 
 
 def _save_stacks_cache():
-    try:
+    with swallow('anime', 'stacks_cache_save', path=str(_STACKS_CACHE_PATH)):
         with open(_STACKS_CACHE_PATH, 'w') as f:
             json.dump({str(k): v for k, v in _stacks_cache.items()}, f)
-    except Exception:
-        pass
 
 
 _load_stacks_cache()
@@ -4227,17 +4252,15 @@ def _al_cache_get(section: str, key) -> object:
 
 def _al_cache_set(section: str, key, value):
     """Persist a value in the AniList disk cache under (section, key)."""
-    try:
+    with swallow('anime', 'al_cache_set', path=str(_AL_CACHE_PATH), section=section):
         try:
             with open(_AL_CACHE_PATH) as f:
                 data = json.load(f)
         except Exception:
-            data = {}
+            data = {}         # caché corrupta al escribir: se arranca de cero (auto-sana), esperado
         data.setdefault(section, {})[str(key)] = {'data': value, 'ts': int(time.time())}
         with open(_AL_CACHE_PATH, 'w') as f:
             json.dump(data, f)
-    except Exception:
-        pass
 
 
 _MAL_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'

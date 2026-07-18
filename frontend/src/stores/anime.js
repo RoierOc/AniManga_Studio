@@ -1123,8 +1123,13 @@ export const useAnimeStore = defineStore('anime', {
         if (ev.duration) ep.duration = ev.duration
       }
       if (ev.last_watched_at) anime.last_watched_at = ev.last_watched_at
-      // MPV finished → autoplay next
-      if (ev.from_mpv && ev.watched) {
+      // MPV finished → autoplay next.
+      // OJO: sólo para el mpv EXTERNO (sin overlay in-app). Con el reproductor NATIVO
+      // abierto no debemos lanzar aquí el modal: el backend marca `watched` ya en los
+      // últimos ~2 min (no sólo al terminar), así que saltaría en MEDIO de la pantalla,
+      // encima del player nativo y sin poder clickearlo. El fin REAL del nativo lo
+      // encadena su propio handler de 'time' (closeNative → showAutoplay), ya clickeable.
+      if (ev.from_mpv && ev.watched && !this.nativePlayer && !this.autoplay) {
         const next = nextUnwatchedEp(anime)
         if (next) this.showAutoplay(anime, next)
       }

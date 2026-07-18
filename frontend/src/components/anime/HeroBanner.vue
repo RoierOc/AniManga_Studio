@@ -6,6 +6,9 @@ import { relativeTime } from '@/lib/format'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 
+// `bleed`: hero a sangre (borde a borde, sin esquinas redondeadas, funde con el fondo abajo).
+defineProps({ bleed: { type: Boolean, default: false } })
+
 const store = useAnimeStore()
 const active = ref(0)
 const items = computed(() => store.heroItems)
@@ -140,7 +143,7 @@ function secondary() {
 </script>
 
 <template>
-  <section v-if="items.length" class="hero" :class="{ 'is-cover': !hasBanner }">
+  <section v-if="items.length" class="hero" :class="{ 'is-cover': !hasBanner, 'is-bleed': bleed }">
     <!-- Background art -->
     <div class="hero__bg">
       <Transition name="hero-bg" mode="out-in">
@@ -210,6 +213,33 @@ function secondary() {
   border-radius: var(--r-xl); overflow: hidden;
   background: var(--surface);
 }
+
+/* Variante a sangre (home de anime): borde a borde, más alto, sin esquinas ni margen (lo pone
+   el contenedor), y difuminado inferior FUERTE que llega al fondo de página → se funde sin costura. */
+.hero.is-bleed {
+  border-radius: 0; margin: 0; background: transparent;
+  height: clamp(560px, 68vw, 820px);
+}
+/* La IMAGEN misma se desvanece (alfa) en sus bordes arriba y abajo → se disuelve en el fondo de
+   página en vez de oscurecerse con una capa encima. Así "deja de ser imagen y pasa a ser el color
+   de abajo". `overflow:hidden` fija el recorte para que el Ken Burns no arrastre el borde del
+   degradado de la máscara. El fondo transparente deja ver el `--void` real de la página. */
+.hero.is-bleed .hero__img {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 8%, #000 70%, transparent 100%);
+          mask-image: linear-gradient(to bottom, transparent 0%, #000 8%, #000 70%, transparent 100%);
+}
+/* Solo un velo IZQUIERDO suave para la legibilidad del texto; el fundido arriba/abajo lo hace la
+   máscara de la imagen, NO una capa oscura (que teñía toda la imagen). */
+.hero.is-bleed .hero__shade {
+  background: linear-gradient(90deg, rgba(7,10,18,.82) 0%, rgba(7,10,18,.34) 34%, transparent 64%);
+}
+/* Texto del hero alineado con el borde izquierdo de las tarjetas (mismo padding que el grid),
+   en vez de centrado en un max-width — así todo cuadra a la izquierda en pantallas anchas.
+   Más padding inferior para que el logo/título caigan más abajo, sobre la zona oscura. */
+.hero.is-bleed .hero__inner { max-width: none; margin: 0; padding: var(--s-6) var(--alib-pad, var(--s-6)) var(--s-8); }
+/* Logo del anime más grande y bajo (se extiende más hacia abajo). */
+.hero.is-bleed .hero__logo { max-width: min(680px, 88%); max-height: clamp(140px, 19vw, 280px); }
 
 /* Background art */
 .hero__bg { position: absolute; inset: 0; }

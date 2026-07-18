@@ -521,10 +521,14 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
   border: 1px solid var(--line); background: var(--glass); backdrop-filter: blur(8px); font-size: var(--fs-sm); transition: all var(--t-fast); }
 .detail__back:hover { color: var(--ink); border-color: var(--line-strong); }
 
-/* Hero header — Crunchyroll-style wide HD art + logo, same recipe as HeroBanner.vue */
-.dhero { position: relative; margin: 0 0 var(--s-7); height: clamp(500px, 58vw, 680px);
-  border-radius: var(--r-xl); overflow: hidden; background: var(--surface); }
-.dhero__bg { position: absolute; inset: 0; }
+/* Hero header — Crunchyroll-style wide HD art + logo, same recipe as HeroBanner.vue.
+   A sangre (rompe el padding del contenedor), sin caja redondeada, más baja, y la IMAGEN se
+   disuelve en el fondo por arriba y abajo (máscara de alfa), como el hero de Mi Anime. */
+.dhero { position: relative; margin: 0 calc(-1 * var(--s-6)) var(--s-4); height: clamp(460px, 50vw, 600px);
+  border-radius: 0; overflow: hidden; background: transparent; }
+.dhero__bg { position: absolute; inset: 0;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 8%, #000 66%, transparent 100%);
+          mask-image: linear-gradient(to bottom, transparent 0%, #000 8%, #000 66%, transparent 100%); }
 .dhero__img { position: absolute; inset: 0; background-size: cover; background-position: center 18%; }
 /* No wide banner cached yet → fall back to the (vertical) cover, blurred to fill the frame. */
 .dhero.is-cover .dhero__img { filter: blur(28px) saturate(1.15) brightness(.85); transform: scale(1.18); }
@@ -533,9 +537,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
   object-position: center 18%; opacity: 0; transition: opacity 1.2s var(--ease-silk); }
 .dhero__video.is-on { opacity: 1; }
 .dhero__shade { position: absolute; inset: 0;
-  background:
-    linear-gradient(90deg, rgba(7,10,18,.92) 0%, rgba(7,10,18,.62) 38%, rgba(7,10,18,.15) 70%, transparent 100%),
-    linear-gradient(0deg, rgba(7,10,18,.95) 0%, rgba(7,10,18,.30) 32%, transparent 60%); }
+  background: linear-gradient(90deg, rgba(7,10,18,.9) 0%, rgba(7,10,18,.45) 36%, transparent 66%); }
 
 .dhero__inner { position: relative; z-index: 1; height: 100%; display: flex; align-items: flex-end;
   gap: var(--s-5); max-width: 900px; padding: var(--s-6) var(--s-7); }
@@ -769,7 +771,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 
 @media (max-width: 640px) {
   .detail { padding: var(--s-3) var(--s-4) var(--s-8); }
-  .dhero { height: clamp(380px, 72vw, 480px); border-radius: var(--r-lg); }
+  .dhero { height: clamp(380px, 72vw, 480px); border-radius: 0; margin: 0 calc(-1 * var(--s-4)) var(--s-4); }
   .dhero__inner { padding: var(--s-5) var(--s-4); }
   .dhero__poster { display: none; }
   .dhero__logo { max-width: 70%; max-height: 90px; }

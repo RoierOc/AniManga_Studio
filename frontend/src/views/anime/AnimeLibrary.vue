@@ -113,17 +113,13 @@ function openMenu(e, a) {
   <div class="alib">
     <div class="alib__aura" :style="{ '--tint-c': heroTint }" />
 
-    <header class="hero stagger">
-      <div style="--i:0">
-        <p class="hero__eyebrow"><span class="hero__tick" /> TU ANIME</p>
-        <h1>Estudio</h1>
-      </div>
-      <div class="hero__actions" style="--i:1">
-        <button class="scanbtn" @click="store.openScan()" title="Carpetas de anime local"><Icon name="folder" :size="15" /> Carpetas</button>
-      </div>
+    <header class="alib__head">
+      <p class="eyebrow"><span class="tick" /> TU ANIME</p>
     </header>
 
-    <HeroBanner @tint="c => heroTint = c" />
+    <div class="alib__hero">
+      <HeroBanner bleed @tint="c => heroTint = c" />
+    </div>
 
     <!-- Continue watching -->
     <section v-if="store.continueWatching.length" class="cw">
@@ -169,6 +165,8 @@ function openMenu(e, a) {
           <button v-for="s in SORTS" :key="s.id" class="sort" :class="{ 'is-active': store.libSort === s.id }"
                   @click="store.setLibSort(s.id)">{{ s.label }}</button>
         </div>
+        <button class="iconbtn" @click="store.openScan()" title="Carpetas de anime local"
+                aria-label="Carpetas de anime local"><Icon name="folder" :size="16" /></button>
         <label class="searchbox">
           <Icon name="search" :size="15" />
           <input v-model="store.libSearch" type="search" placeholder="Buscar en tu anime…" />
@@ -191,9 +189,23 @@ function openMenu(e, a) {
 </template>
 
 <style scoped>
-.alib { position: relative; max-width: var(--content-max); margin: 0 auto; padding: 0 var(--s-6); }
+/* Ancho completo (de borde a borde del área de contenido): antes un max-width centrado
+   dejaba los extremos vacíos. `--alib-pad` es el único margen lateral del grid/toolbar y lo
+   reutiliza el hero (en negativo) para sangrar a los bordes sin descuadrarse. */
+.alib { position: relative; --alib-pad: var(--s-6); padding: 0 var(--alib-pad); }
 /* El contenido va por encima del aura */
 .alib > * { position: relative; z-index: 1; }
+
+/* Encabezado eyebrow (mismo estilo que las demás vistas de anime: Buscar, Explorar…). */
+.alib__head { padding: var(--s-2) 0 var(--s-4); }
+.eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono);
+  font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); }
+.tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
+
+/* Hero a sangre: rompe el padding lateral del contenedor y ocupa todo el ancho, borde a borde.
+   Margen inferior corto: el borde de la imagen ya se disuelve en el fondo, así que "Seguir viendo"
+   sube y queda cerca sin dejar un hueco muerto. */
+.alib__hero { margin: 0 calc(-1 * var(--alib-pad)) var(--s-1); }
 
 /* Aura del hero — halo del color dominante del banner activo, detrás de todo el home.
    @property permite que el color tween suavemente al rotar el carrusel (si no hay soporte,
@@ -205,17 +217,17 @@ function openMenu(e, a) {
   background: radial-gradient(75% 60% at 50% 0%, color-mix(in srgb, var(--tint-c) 15%, transparent), transparent 72%);
   transition: --tint-c var(--t-cine) var(--ease-silk);
 }
-.hero { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: var(--s-4); padding: var(--s-5) 0 var(--s-5); }
-.hero__eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
-.hero__tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
-
 .searchbox { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); width: min(17.5rem, 50vw);
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); color: var(--ink-faint); transition: border-color var(--t-fast), box-shadow var(--t-fast); }
 .searchbox:focus-within { border-color: var(--azure); box-shadow: 0 0 0 3px var(--azure-haze); }
 .searchbox input { flex: 1; border: none; outline: none; background: none; color: var(--ink); font-size: var(--fs-sm); }
-.hero__actions { display: flex; align-items: center; gap: var(--s-2); }
-.scanbtn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-md); font-size: var(--fs-sm); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
-.scanbtn:hover { color: var(--azure-bright); border-color: var(--azure); }
+
+/* Botón-icono Carpetas: pequeño, junto a los ordenadores (Recientes/Vistos/A–Z), mismo lenguaje
+   visual que la caja de búsqueda para que se localice sin romper la estética. */
+.iconbtn { display: grid; place-items: center; width: 2.25rem; height: 2.25rem; flex-shrink: 0;
+  border-radius: var(--r-md); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line);
+  transition: all var(--t-fast); }
+.iconbtn:hover { color: var(--azure-bright); border-color: var(--azure); }
 
 /* continue watching */
 .cw { margin-bottom: var(--s-8); }
@@ -259,7 +271,7 @@ function openMenu(e, a) {
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-9) 0; color: var(--ink-faint); }
 
 @media (max-width: 540px) {
-  .alib { padding: 0 var(--s-4); }
+  .alib { --alib-pad: var(--s-4); }
   .grid { grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: var(--s-5) var(--s-3); }
 }
 </style>

@@ -157,7 +157,7 @@ function playFromPanel(e) {
 // aplica. Reutilizable para futuros avisos (créditos, fin de temporada, «te puede
 // gustar», etc.): basta añadir una entrada a PLAYER_CUES y un bloque de render en la
 // plantilla con v-if="activeCue === '<id>'". Se muestra como máximo uno a la vez, una
-// sola vez por episodio, y se auto-oculta salvo que el ratón esté encima.
+// sola vez por episodio, y se auto-oculta (5 s) salvo que el ratón esté encima.
 const PLAYER_CUES = [
   { id: 'next-ep', remaining: 88, hold: 5000, applies: () => !!nextEp.value },
 ]
@@ -165,6 +165,10 @@ const activeCue = ref(null)          // id del aviso visible, o null
 const shownCues = ref(new Set())     // ids ya mostrados en este episodio (no repetir)
 const cueHover = ref(false)          // ratón sobre la tarjeta → no auto-ocultar
 let cueTimer = null
+
+// Miniatura del siguiente episodio para la tarjeta (misma fuente que el panel).
+const nextThumb = computed(() =>
+  (np.value && nextEp.value) ? `/api/anime/thumb/${np.value.anime.id}/${nextEp.value.num}` : '')
 
 function armCueTimer(ms) {
   clearTimeout(cueTimer)
@@ -379,12 +383,19 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       <Transition name="wp-cue">
         <div v-if="activeCue === 'next-ep' && nextEp" class="wp__cue"
              @mouseenter="cueEnter" @mouseleave="cueLeave()" @click.stop>
-          <div class="wp__cue-info">
-            <span class="wp__cue-eyebrow">A continuación</span>
-            <span class="wp__cue-title">Episodio {{ nextEp.num }}<template v-if="nextEp.title"> · {{ nextEp.title }}</template></span>
-          </div>
-          <button class="wp__cue-btn" @click="cuePlayNext"><Icon name="skip-next" :size="15" /> Reproducir</button>
-          <button class="wp__cue-close" title="Descartar" @click="dismissCue"><Icon name="close" :size="14" /></button>
+          <button class="wp__cue-main" @click="cuePlayNext">
+            <span class="wp__cue-thumb">
+              <img v-if="nextThumb" :src="nextThumb" alt="" loading="lazy"
+                   @error="($event.target.style.visibility = 'hidden')" />
+              <span class="wp__cue-play"><Icon name="play" :size="18" /></span>
+            </span>
+            <span class="wp__cue-info">
+              <span class="wp__cue-eyebrow">A continuación</span>
+              <span class="wp__cue-title">Episodio {{ nextEp.num }}<template v-if="nextEp.title"> · {{ nextEp.title }}</template></span>
+              <span class="wp__cue-cta">Reproducir</span>
+            </span>
+          </button>
+          <button class="wp__cue-close" title="Descartar" @click.stop="dismissCue"><Icon name="close" :size="14" /></button>
         </div>
       </Transition>
 
@@ -591,31 +602,38 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 /* Aviso "Siguiente episodio" (Netflix-style). Flota abajo-derecha, sobre los controles,
-   visible aunque la UI esté oculta. Discreto y coherente con la estética del reproductor. */
+   visible aunque la UI esté oculta. Miniatura del próximo episodio + CTA. */
 .wp__cue {
   position: absolute; right: var(--s-5); bottom: 5.5rem; z-index: 6;
-  display: flex; align-items: center; gap: var(--s-3);
-  padding: var(--s-3) var(--s-3) var(--s-3) var(--s-4); border-radius: var(--r-md);
+  display: flex; align-items: stretch; gap: var(--s-1);
+  padding: var(--s-2); border-radius: var(--r-md);
   background: var(--glass-strong); backdrop-filter: blur(14px);
   border: 1px solid var(--line-2); box-shadow: var(--shadow-lg);
-  max-width: min(24rem, 70vw);
+  max-width: min(24rem, 72vw);
 }
-.wp__cue-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.wp__cue-main { display: flex; align-items: center; gap: var(--s-3); min-width: 0;
+  padding: var(--s-1); border-radius: var(--r-sm); transition: background var(--t-fast); }
+.wp__cue-main:hover { background: rgba(255,255,255,.06); }
+.wp__cue-thumb { position: relative; flex-shrink: 0; width: 5.25rem; aspect-ratio: 16/9;
+  border-radius: var(--r-sm); overflow: hidden; background: #0a0e18; display: grid; place-items: center; }
+.wp__cue-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.wp__cue-play { position: absolute; inset: 0; display: grid; place-items: center;
+  color: #fff; background: rgba(7,10,18,.35); transition: background var(--t-fast); }
+.wp__cue-main:hover .wp__cue-play { background: rgba(7,10,18,.15); }
+.wp__cue-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; text-align: left; }
 .wp__cue-eyebrow { font-size: var(--fs-2xs); font-weight: 700; text-transform: uppercase;
   letter-spacing: .06em; color: var(--azure-bright); }
 .wp__cue-title { font-size: var(--fs-sm); font-weight: 600; color: #fff;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.wp__cue-btn { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px;
-  padding: var(--s-2) var(--s-4); border-radius: var(--r-sm); font-size: var(--fs-xs);
-  font-weight: 700; color: #0a0e18; background: #fff; transition: filter var(--t-fast); }
-.wp__cue-btn:hover { filter: brightness(.92); }
+.wp__cue-cta { margin-top: 2px; font-size: var(--fs-2xs); font-weight: 700; color: var(--ink-soft); }
 .wp__cue-close { flex-shrink: 0; width: 26px; height: 26px; display: grid; place-items: center;
-  border-radius: var(--r-sm); color: var(--ink-soft); transition: color var(--t-fast); }
+  border-radius: var(--r-sm); color: var(--ink-soft); transition: color var(--t-fast); align-self: flex-start; }
 .wp__cue-close:hover { color: #fff; }
 /* Aparición/desaparición suave y discreta */
 .wp-cue-enter-active { transition: transform var(--t-base) var(--ease-silk), opacity var(--t-base); }
 .wp-cue-leave-active { transition: transform var(--t-base) var(--ease-silk), opacity var(--t-base); }
 .wp-cue-enter-from, .wp-cue-leave-to { transform: translateY(1rem); opacity: 0; }
+
 </style>
 
 <style>
