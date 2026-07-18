@@ -14,6 +14,7 @@ from pathlib import Path
 from flask import Blueprint, request, jsonify
 
 from api.config_store import get_secret  # runtime-editable API keys (Ajustes)
+from api import sub_lang  # detección robusta ES/LAT (código + título), fuente única de verdad
 from api.platform import first_windows_user_dir
 
 subtitle_bp = Blueprint('subtitle', __name__)
@@ -124,11 +125,15 @@ _TEXT_SUB_CODECS = {'ass', 'ssa', 'subrip', 'srt', 'webvtt', 'mov_text', 'text',
 
 # Qué cuenta como "ya está en español". Estaba copiado en 5 sitios; con un solo criterio no
 # pueden desincronizarse el que OFRECE traducir, el que lo BLOQUEA y el que elige la pista fuente.
-_ES_LANGS = ('spa', 'es')
-
-
+# La detección real vive en `sub_lang` (código + título; reconoce LAT/castellano/variantes de
+# grupo), así que "ya está en español" y la auto-selección del player comparten el MISMO criterio.
 def is_es_track(t: dict) -> bool:
-    return (t.get('language') or '') in _ES_LANGS
+    """True si la pista ya está en español (cualquier variante). Acepta ambas formas de dict:
+    ffprobe ({language,title}) y mkvmerge ({properties:{language,track_name}})."""
+    props = t.get('properties') or {}
+    lang = t.get('language') or props.get('language') or ''
+    title = t.get('title') or props.get('track_name') or ''
+    return sub_lang.is_es(lang, title)
 
 
 def _ffprobe_tracks(path: str) -> list:
@@ -719,10 +724,10 @@ def _inject_sub(mkv_path: str, sub_path: str, n_existing_subs: int) -> str:
 
     keep_audio_ids = [str(t['id']) for t in tracks if t.get('type') == 'audio']
     keep_video_ids = [str(t['id']) for t in tracks if t.get('type') == 'video']
-    # Keep existing subtitle tracks except any prior Spanish track (we replace it)
+    # Keep existing subtitle tracks except any prior Spanish track (we replace it). Usa el
+    # criterio robusto (código + título) para no dejar una pista LAT/castellano previa duplicada.
     keep_sub_ids   = [str(t['id']) for t in tracks
-                      if t.get('type') == 'subtitles'
-                      and t.get('properties', {}).get('language', '') not in _ES_LANGS]
+                      if t.get('type') == 'subtitles' and not is_es_track(t)]
 
     cmd = ['mkvmerge', '-o', tmp_out]
     if keep_video_ids:

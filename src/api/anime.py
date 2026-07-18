@@ -26,6 +26,7 @@ from flask import Blueprint, jsonify, request, send_file
 from api.imgproxy import warm as _warm_img
 from api.platform import is_wsl as _is_wsl, is_macos as _is_macos
 from api.config_store import get_secret, set_secrets  # runtime-editable API keys (Ajustes)
+from api import sub_lang  # clasificación robusta de subtítulos ES/LAT (código + título)
 from api.observability import record_error, swallow  # hace VISIBLE el fallo silencioso
 
 anime_bp = Blueprint('anime', __name__)
@@ -1161,7 +1162,12 @@ _OSC_HIDE_MS = int(os.environ.get('ANIME_OSC_HIDE_MS', '1000'))
 # Lista de PRIORIDAD para --slang de mpv: se queda con la PRIMERA que case, no con la mejor.
 # Mismo orden que el player nativo (player.rs), que es el que usa el usuario: latino → genérico
 # (nuestra pista inyectada es `spa` y es latino neutro) → España → inglés. Mantener ambos a la par.
-_SUB_LANGS = ('es-419,es-la,es-mx,es-ar,es-co,lat,latino,spa-419,spa-mx,'
+# NOTA: mpv --slang sólo casa contra el CÓDIGO de idioma de la pista, no el título. La
+# detección real (que también mira el título: 'LAT', 'Spanish (LAT)'…) vive en `sub_lang` y la
+# usa el reproductor NATIVO vía `preferred_sub`. Esta lista es sólo para el mpv EXTERNO (modo
+# 'mpv'), como red de seguridad por código; latino → genérico → castellano → inglés.
+_SUB_LANGS = ('es-419,es-la,es-lat,es-mx,es-ar,es-co,es-cl,es-pe,es-ve,lat,lat-am,latam,'
+              'latino,spa-419,spa-mx,spa-la,'
               'spa,es,esp,spanish,español,'
               'es-es,spa-es,cas,castellano,castilian,'
               'eng,en,english')
@@ -3130,9 +3136,14 @@ def _probe_tracks(path: str) -> dict:
     for i, ext in enumerate(_sidecar_subs(path)):
         ext['index'] = len(subs)
         subs.append(ext)
+    # Pista española preferida (sid 1-based) calculada aquí, no en mpv: --slang sólo mira el
+    # código de idioma, pero el español latino vive muchas veces sólo en el TÍTULO ('LAT',
+    # 'SPA-LAT', 'Spanish (LAT)'…). sub_lang mira código Y título y prioriza latino. 0 = ninguna.
+    best = sub_lang.best_es_index(subs)
     return {
-        'audio_tracks': [_t(s, i) for i, s in enumerate(astreams)],
-        'sub_tracks':   subs,
+        'audio_tracks':  [_t(s, i) for i, s in enumerate(astreams)],
+        'sub_tracks':    subs,
+        'preferred_sub': (best + 1) if best >= 0 else 0,
     }
 
 

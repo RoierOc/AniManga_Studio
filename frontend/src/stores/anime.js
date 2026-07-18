@@ -729,10 +729,16 @@ export const useAnimeStore = defineStore('anime', {
       }
       const resume = startPos > 0 ? startPos : (res.resume_pos || 0)
       const subTracks = res.sub_tracks || []
-      // Pista por defecto: preferir español (sidecar traducido o pista spa incrustada),
-      // si no la primera. 0 = subtítulos desactivados.
-      const spaIdx = subTracks.findIndex((t) => /^(spa|es)/i.test(t.lang || ''))
-      const defSid = subTracks.length ? (spaIdx >= 0 ? spaIdx + 1 : 1) : 0
+      // Pista por defecto: el backend ya calcula la MEJOR pista española (sub_lang, mira
+      // código Y título y prioriza latino) en `preferred_sub` (sid 1-based, 0 = ninguna).
+      // Si por lo que sea no viene, caemos a un criterio de cliente amplio (código o título
+      // con señal de español) y, en último término, a la primera pista.
+      let defSid = res.preferred_sub || 0
+      if (!defSid && subTracks.length) {
+        const esRe = /(^|[^a-z])(spa|es|esp|lat|latino|castellano|cas|spanish|españ?ol)([^a-z]|$)/i
+        const idx = subTracks.findIndex((t) => esRe.test(`${t.lang || ''} ${t.title || ''}`))
+        defSid = idx >= 0 ? idx + 1 : 1
+      }
       Object.assign(this.nativePlayer, {
         pos: resume,
         duration: res.duration || this.nativePlayer.duration || 0,

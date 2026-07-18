@@ -530,8 +530,12 @@ impl Player {
             // `spa` (subtitle.py --language 0:spa) y es latino neutro, así que si no hay ninguna
             // latina explícita, el genérico es la mejor apuesta antes de caer al castellano.
             let _ = init.set_property("alang", "jpn,ja,japanese,jp");
+            // Debe quedar EN PARALELO con _SUB_LANGS de anime.py (hay un test que lo exige). Es
+            // sólo una red de seguridad por código: la selección real la calcula el backend
+            // mirando también el TÍTULO (sub_lang → preferred_sub) y la fija por sid explícito.
             let _ = init.set_property("slang", concat!(
-                "es-419,es-la,es-mx,es-ar,es-co,lat,latino,spa-419,spa-mx,",  // 1º latino
+                "es-419,es-la,es-lat,es-mx,es-ar,es-co,es-cl,es-pe,es-ve,lat,lat-am,latam,",  // 1º latino
+                "latino,spa-419,spa-mx,spa-la,",
                 "spa,es,esp,spanish,español,",                                 // 2º genérico (el nuestro)
                 "es-es,spa-es,cas,castellano,castilian,",                      // 3º España
                 "eng,en,english",                                              // 4º inglés
