@@ -38,10 +38,11 @@ from api.runtime import (manga_dir, upscaled_dir, QA_DIR, DATA_ROOT, normalize_c
                          push_sse_event, cache_get, cache_set)
 from api.sources import _gql, SUWAYOMI_URL, SUWAYOMI_BASE, ensure_suwayomi
 from api.download import _fetch_with_retry, _dl_semaphore, _chapter_file_prefix
-from api.anilist import title_variants
+from api.anilist import title_variants, chapters_by_al_id
 from api.contracts import CoverageBody, VersionsBody, DownloadVersionBody, validate_and_log
 from api.observability import record_error  # "fuente caída ≠ sin capítulos" contable + SSE
 from api import versions_db
+from api import source_health  # histórico de aciertos → acota el fan-out del descubrimiento
 
 transplant_bp = Blueprint("transplant", __name__)
 
@@ -172,7 +173,7 @@ def _all_sources() -> list:
 
 _SEARCH_Q = """mutation S($source: LongString!, $query: String, $page: Int!) {
   fetchSourceManga(input: { source: $source, type: SEARCH, query: $query, page: $page }) {
-    mangas { id title thumbnailUrl }
+    mangas { id title thumbnailUrl url }
   }
 }"""
 
@@ -234,6 +235,7 @@ def _search_source(source: dict, query: str):
         out.append({
             "id": m["id"],
             "title": m["title"],
+            "url": m.get("url"),   # slug estable de la fuente (ancla para re-resolver el mangaId)
             "thumbnailUrl": SUWAYOMI_BASE + m["thumbnailUrl"] if m.get("thumbnailUrl") else None,
             "sourceId": source["id"],
             "sourceName": source["name"],
@@ -269,6 +271,17 @@ def _discover_candidates(variants: list, source_ids=None, on_progress=None, stat
     if source_ids:
         wanted = {str(s) for s in source_ids}
         sources = [s for s in sources if str(s["id"]) in wanted]
+    # Acota el fan-out con el histórico de aciertos: las fuentes que NUNCA aciertan tras muchos
+    # intentos pasan a un tier frío que solo se re-sondea por round-robin (nunca se descarta; ver
+    # source_health). Fail-safe: sin historial o desactivado devuelve TODAS. `_health_seq` marca
+    # esta ronda para registrar los aciertos al final.
+    _health_seq = 0
+    if not source_ids:   # solo cuando barremos el universo completo (no un subconjunto pedido)
+        keep, _health_seq = source_health.select_sources([s["id"] for s in sources])
+        keepset = set(keep)
+        pre = len(sources)
+        sources = [s for s in sources if str(s["id"]) in keepset]
+        st["skipped_cold"] = pre - len(sources)
     var_keys = [_norm_key(v) for v in variants if v]
     # agrupar variantes por sistema de escritura
     by_script: dict = {}
@@ -285,26 +298,33 @@ def _discover_candidates(variants: list, source_ids=None, on_progress=None, stat
     done = 0
     total = len(tasks)
     st["tasks"] = total
+    responded_ids: set = set()   # fuentes que respondieron (para el histórico: resp++)
+    hit_ids: set = set()         # fuentes que produjeron ≥1 candidato válido (hits++)
     with ThreadPoolExecutor(max_workers=_SEARCH_WORKERS) as pool:
         futs = {pool.submit(_search_source, s, v): (s, v) for (s, v) in tasks}
         for fut in as_completed(futs):
             done += 1
             if on_progress and done % 20 == 0:
                 on_progress(done, total)
+            (s, _v) = futs[fut]
             found = fut.result()
             if found is None:            # la fuente no respondió: no es "no tiene nada"
                 st["failed"] += 1
                 continue
+            responded_ids.add(str(s["id"]))
             for m in found:
                 # fuzzy-match contra cualquier variante para descartar falsos positivos
                 tkey = _norm_key(m["title"])
                 ratio = max((SequenceMatcher(None, tkey, vk).ratio() for vk in var_keys), default=0.0)
                 if ratio < _FUZZY_MIN and not any(vk in tkey or tkey in vk for vk in var_keys):
                     continue
+                hit_ids.add(str(m["sourceId"]))
                 key = (m["sourceId"], m["id"])
                 if key not in seen or ratio > seen[key]["match"]:
                     m = dict(m, match=round(ratio, 3))
                     seen[key] = m
+    if _health_seq:
+        source_health.record(_health_seq, responded_ids, hit_ids)
     if on_progress:
         on_progress(total, total)
     return list(seen.values())
@@ -806,7 +826,14 @@ def _score_source(manga_id: int) -> dict | None:
         sl = _deep_slice(urls, _SCORE_PAGES + _COLOR_MARGIN, extra_offset=(i % 4) * 3)
         if sl:
             chapter_urls.append(sl)
-    return _score_url_chapters(chapter_urls)
+    q = _score_url_chapters(chapter_urls)
+    if q is not None:
+        # `chapters` de la calidad = capítulos MUESTREADOS (3-5); el total REAL de la versión ya
+        # lo tenemos gratis en `chmap` (se bajó para el muestreo). La UI lo muestra ("23 cap.").
+        q["totalChapters"] = len(chmap)
+        _nums = [_chnum(k) for k in chmap]
+        q["latestChapter"] = max(_nums) if _nums else None
+    return q
 
 
 def _score_local(title: str) -> dict | None:
@@ -833,7 +860,12 @@ def _score_local(title: str) -> dict | None:
         m = _measure_chapter(contents)
         if m:
             chapters.append(m)
-    return _combine_quality(chapters)
+    q = _combine_quality(chapters)
+    if q is not None:
+        q["totalChapters"] = len(chfiles)
+        _nums = [_chnum(k) for k in chfiles]
+        q["latestChapter"] = max(_nums) if _nums else None
+    return q
 
 
 # ── MangaDex NATIVO como fuente de versiones (su propia API, no vía Suwayomi) ──
@@ -957,6 +989,14 @@ def _md_pick_chapter(manga_uuid, lang=None, want_num=None, group=None):
         for u in units:
             if _chnum(u["number"]) == wn:
                 return u["ids"], u["number"]
+        # El nº pedido puede ser una PARTE que _split_part_units fusionó bajo su entero (p.ej. una
+        # serie numerada como 49.1/49.2/50.1 SIN entero suelto: "50.1" quedó dentro de la unidad
+        # "50" y no casa por número de unidad). Casa contra el número REAL de cada capítulo del
+        # feed y devuelve exactamente ese → si no, "50.1" era inleíble aunque MangaDex lo tuviera.
+        exact = [c["id"] for c in _md_feed_subset(manga_uuid, lang, group)
+                 if _chnum(c.get("number")) == wn]
+        if exact:
+            return exact, str(want_num)
         return [], None
     pick = units[0] if units else None
     return (pick["ids"], pick["number"]) if pick else ([], None)
@@ -1088,7 +1128,14 @@ def _score_md(manga_uuid, lang=None, chapter_id=None) -> dict | None:
             sl = _deep_slice(_md_page_urls(cid), _SCORE_PAGES + _COLOR_MARGIN) if cid else []
             if sl:
                 chapter_urls.append(sl)
-        return _score_url_chapters(chapter_urls)
+        q = _score_url_chapters(chapter_urls)
+        if q is not None:
+            # Total real de ESTA versión = capítulos numerados del feed ya filtrado por
+            # idioma (+ grupo) — no las muestras. Colapsa partes (45, 45.1) como el resto.
+            q["totalChapters"] = len({normalize_chapter(c["number"]) for c in numbered if c.get("number")})
+            _nums = [_chnum(c["number"]) for c in numbered if c.get("number")]
+            q["latestChapter"] = max(_nums) if _nums else None
+        return q
     except Exception:
         return None
 
@@ -1102,7 +1149,7 @@ def _score_candidate(c, use_cache: bool = True) -> dict | None:
     idéntico (el score es determinista); solo los fallos (None) no se cachean → se reintentan."""
     # `v2`: versión del algoritmo de scoring (muestreo exhaustivo distribuido + penalización
     # de irregularidad). Bumpea la clave para NO reusar scores cacheados del algoritmo viejo.
-    qkey = f"v3|{c.get('sourceId')}|{c.get('id')}|{(c.get('sourceLang') or '').lower()}"
+    qkey = f"v5|{c.get('sourceId')}|{c.get('id')}|{(c.get('sourceLang') or '').lower()}"
     if use_cache:
         cached = cache_get("quality", qkey, _QUALITY_TTL)
         if cached is not None:
@@ -1205,17 +1252,26 @@ def _candidate_chapter_urls(cand, title, want_num=None):
         # partes contiguas y concatena sus páginas. Si no existe → vacío (NUNCA sustituir por
         # otro capítulo; antes caía al 1º → trasplantaba el capítulo equivocado).
         wn = _chnum(str(want_num))
-        unit = next((u for u in _split_part_units(cmap.values(), lambda c: c.get("number"))
-                     if _chnum(u["number"]) == wn), None)
-        if not unit:
+        units = list(_split_part_units(cmap.values(), lambda c: c.get("number")))
+        unit = next((u for u in units if _chnum(u["number"]) == wn), None)
+        members = unit["members"] if unit else None
+        if members is None:
+            # nº pedido = parte fusionada bajo su entero (serie numerada X.Y sin entero suelto):
+            # casa contra el número REAL de cada miembro y devuelve ese capítulo exacto.
+            for u in units:
+                m = [c for c in u["members"] if _chnum(c.get("number")) == wn]
+                if m:
+                    members = m
+                    break
+        if not members:
             return (None, [])
         urls = []
-        for c in unit["members"]:
+        for c in members:
             try:
                 urls += _chapter_page_urls(c["id"], timeout=_SAMPLE_TIMEOUT)
             except Exception:
                 pass
-        return (unit["number"], urls)
+        return ((unit["number"] if unit else str(want_num)), urls)
     # Sin capítulo pedido (muestreo de calidad): uno representativo.
     ordered = sorted(cmap.values(),
                      key=lambda c: float(c["number"]) if c["number"] is not None else 0)
@@ -1452,7 +1508,7 @@ def _score_candidate_cached_only(c):
     para que /coverage sea rápido con TODOS los candidatos: la calidad la calcula la
     pestaña Versiones (que ya se abre normalmente antes/junto a la de cobertura) y aquí
     solo se reutiliza si ya existe."""
-    qkey = f"v3|{c.get('sourceId')}|{c.get('id')}|{(c.get('sourceLang') or '').lower()}"
+    qkey = f"v5|{c.get('sourceId')}|{c.get('id')}|{(c.get('sourceLang') or '').lower()}"
     return cache_get("quality", qkey, _QUALITY_TTL)
 
 
@@ -1845,13 +1901,34 @@ def _compute_versions_payload(title: str, al_id, source_ids, cur_lang: str, refr
     def _slim(c):
         return {"sourceId": c["sourceId"], "mangaId": c["id"],
                 "sourceName": c["sourceName"], "sourceLang": c["sourceLang"],
+                "url": c.get("url"),   # ancla ESTABLE: el mangaId numérico de Suwayomi deriva, el slug no
                 "match": c.get("match"), "quality": c["quality"]}
     # `ranked` ya viene desc por score global → cada grupo de idioma hereda el orden
     by_lang: dict = {}
     for c in ranked:
         by_lang.setdefault((c.get("sourceLang") or "?").lower(), []).append(_slim(c))
+    # ── Referencia de completitud: "¿cuántos capítulos hay ACTUALMENTE del manga?" ──
+    # Para juzgar qué versión está completa hace falta un número absoluto, no solo el conteo de
+    # cada fuente. Fuentes, por prioridad:
+    #  1) máximo capítulo VISTO entre todas las versiones (= último publicado; siempre disponible,
+    #     agrega todas las fuentes → buena señal incluso para obras en emisión).
+    #  2) total OFICIAL de AniList si la obra está TERMINADA (Media.chapters; None en emisión).
+    # Se toma el mayor de ambos, así una fuente adelantada no infravalora la referencia.
+    observed = [c["quality"].get("latestChapter") for c in ranked if c.get("quality")]
+    observed = [x for x in observed if x]
+    if local and local.get("latestChapter"):
+        observed.append(local["latestChapter"])
+    ref = max(observed) if observed else None
+    ref_source = "fuentes" if ref else None
+    try:
+        al_chapters, _al_status = chapters_by_al_id(int(al_id)) if al_id else (None, None)
+        if al_chapters and (ref is None or al_chapters >= ref):
+            ref, ref_source = al_chapters, "anilist"
+    except Exception:
+        pass
     payload = {"variants": variants, "versions": [_slim(c) for c in ranked],
-               "byLang": by_lang, "local": local, "currentLang": cur_lang}
+               "byLang": by_lang, "local": local, "currentLang": cur_lang,
+               "referenceChapters": ref, "referenceSource": ref_source}
     return payload, False
 
 
@@ -2006,6 +2083,7 @@ def _do_assign(title: str, rng, chapters, source) -> dict:
             meta["recommended_source"] = {
                 "sourceId": source.get("sourceId"), "mangaId": source.get("mangaId", source.get("id")),
                 "sourceName": source.get("sourceName"), "sourceLang": source.get("sourceLang"),
+                "url": source.get("url"),   # ancla estable: re-resolver el mangaId si Suwayomi lo reasigna
                 "quality": source.get("quality"),
                 "set_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             }
@@ -2046,6 +2124,25 @@ def set_primary():
     if not title:
         return jsonify({"error": "title required"}), 400
     _do_assign(title, "all", None, body.get("source"))
+    # Fijar crea la carpeta del manga (vía .source_meta.json) aunque NO esté descargado — así
+    # aparece en la biblioteca. Pero sin portada local ni thumbnailUrl la tarjeta salía SIN
+    # portada. Sembramos thumbnailUrl (la listing de /library la usa para servir por /thumb, que
+    # la baja y persiste cover.jpg) con la portada que ya trae el frontend, o resolviéndola por
+    # al_id/título. NO cambia el comportamiento de fijar; solo garantiza portada.
+    try:
+        meta = _read_source_meta(title)
+        if meta and not meta.get("thumbnailUrl"):
+            cover = (body.get("cover") or "").strip() or None
+            if not cover:
+                from api import anilist
+                cover = (anilist.cover_by_al_id(body.get("al_id"))
+                         or anilist.cover_by_al_id(anilist._resolve_manga_al_id(title)))
+            if cover:
+                meta["thumbnailUrl"] = cover
+                _write_source_meta(title, meta)
+    except Exception as e:
+        record_error("transplant", e, op="set_primary_cover",
+                     note="no se pudo sembrar portada al fijar; la tarjeta puede salir sin portada")
     return jsonify({"ok": True, "recommended_source": _read_source_meta(title).get("recommended_source")})
 
 

@@ -9,6 +9,8 @@ import { formatBytes } from '@/lib/format'
 import Icon from '@/components/ui/Icon.vue'
 import SubStyleCard from '@/components/anime/SubStyleCard.vue'
 import IntegrityCard from '@/components/anime/IntegrityCard.vue'
+import HealthCard from '@/components/settings/HealthCard.vue'
+import NovelSourcesCard from '@/components/settings/NovelSourcesCard.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import FolderPicker from '@/components/anime/FolderPicker.vue'
 
@@ -22,6 +24,8 @@ const TABS = [
   { id: 'general', label: 'General', icon: 'spark' },
   { id: 'anime', label: 'Anime', icon: 'film' },
   { id: 'conexiones', label: 'Conexiones', icon: 'globe' },
+  { id: 'salud', label: 'Salud', icon: 'check' },
+  { id: 'novelas', label: 'Novelas', icon: 'book' },
   { id: 'almacenamiento', label: 'Almacenamiento', icon: 'folder' },
   { id: 'copia', label: 'Copia y sync', icon: 'refresh' },
 ]
@@ -446,6 +450,24 @@ async function onImportFile(e) {
     </section>
 
     
+        </div>
+
+        <!-- Salud de la biblioteca -->
+        <div v-show="tab === 'salud'" class="set__cat">
+          <div class="set__cathead">
+            <span class="set__catic"><Icon name="check" :size="18" /></span>
+            <div><h2>Salud de la biblioteca</h2><p>Detecta y repara fuentes cruzadas, identidades sin verificar y fallos recientes.</p></div>
+          </div>
+          <HealthCard />
+        </div>
+
+        <!-- Novelas -->
+        <div v-show="tab === 'novelas'" class="set__cat">
+          <div class="set__cathead">
+            <span class="set__catic"><Icon name="book" :size="18" /></span>
+            <div><h2>Novelas</h2><p>Elige de qué fuentes se buscan las novelas y en qué idiomas.</p></div>
+          </div>
+          <NovelSourcesCard />
         </div>
 
         <!-- Almacenamiento -->

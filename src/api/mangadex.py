@@ -21,6 +21,7 @@ auth_bp = Blueprint('mangadex', __name__)
 # never injects a browser User-Agent — MangaDex's WAF 400s any Chrome/Firefox UA; the default
 # `python-requests/x.x` UA is allowed through.
 from api.resilient_http import http as _SESSION
+from api.observability import record_error
 
 MANGA_DIR = str(MANGA_DIR)
 
@@ -675,6 +676,19 @@ def add_to_local_library():
     manga["id"] = str(manga_id)
     if not manga.get("title") and manga.get("name"):
         manga["title"] = manga.get("name")
+
+    # Red de seguridad de PORTADA: si la Obra llega sin portada (algunas del meta-source no la
+    # traen) pero sí con al_id, la resolvemos por AniList antes de guardar — así una entrada
+    # nunca queda coverless para siempre. Cascada barata: al_id (AniList) → título (AniList).
+    if not manga.get("cover"):
+        try:
+            from api import anilist
+            manga["cover"] = (anilist.cover_by_al_id(manga.get("al_id"))
+                              or (anilist.cover_by_al_id(anilist._resolve_manga_al_id(manga.get("title")))
+                                  if manga.get("title") else None))
+        except Exception as e:
+            record_error("mangadex", e, op="resolve_cover_on_add",
+                         note="no se pudo resolver portada al añadir; entrada sin portada")
 
     lib = load_local_library()
 

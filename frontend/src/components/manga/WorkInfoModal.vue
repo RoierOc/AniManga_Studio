@@ -9,6 +9,7 @@ import { useMangaStore } from '@/stores/manga'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import NovelVersions from '@/components/manga/NovelVersions.vue'
 
 const disco = useDiscoveryStore()
 const w = computed(() => disco.work)
@@ -79,13 +80,17 @@ function openCentralized() {
               <button v-if="w.readable" class="wm__cta" @click="openCentralized">
                 <Icon name="spark" :size="16" /> Ver versiones y leer
               </button>
-              <span v-else class="wm__note"><Icon name="library" :size="14" /> Ficha informativa (sin lectura en la app)</span>
+              <span v-else-if="w.type !== 'novel'" class="wm__note"><Icon name="library" :size="14" /> Ficha informativa (sin lectura en la app)</span>
               <button class="wm__add" :class="{ 'is-added': inLibrary }" :disabled="inLibrary || adding" @click="disco.addToLibrary(w)">
                 <Icon :name="inLibrary ? 'check' : 'plus'" :size="15" />
                 {{ inLibrary ? 'En biblioteca' : 'Añadir a biblioteca' }}
               </button>
               <a v-for="l in externalLinks" :key="l.url" class="wm__link" :href="l.url" target="_blank" rel="noopener">{{ l.label }} ↗</a>
             </div>
+
+            <!-- Novelas: la lectura NO viene del meta-source (es un catálogo), sino de los
+                 plugins de novelas. Se busca el título ahí y se elige versión. -->
+            <NovelVersions v-if="w.type === 'novel'" :title="w.title" />
           </div>
         </div>
       </div>

@@ -347,6 +347,47 @@ def _resolve_manga_al_id(title: str):
     return al or None
 
 
+def cover_by_al_id(al_id):
+    """Portada AniList (large) de un manga por su id. Cache 24h ('' = sin portada, se cachea
+    igual para no re-preguntar). Sirve de red de seguridad al añadir una Obra a la biblioteca
+    sin portada: las Obras de Descubrir traen `al_id`, así que casi siempre hay portada fiable."""
+    if not al_id:
+        return None
+    key = str(al_id)
+    hit = _cache_get('al_cover', key, _REC_TTL)
+    if hit is not None:
+        return hit or None
+    try:
+        d = _ql('query($id:Int){Media(id:$id,type:MANGA){coverImage{large medium}}}', {'id': int(al_id)})
+        ci = ((d or {}).get('Media') or {}).get('coverImage') or {}
+        url = ci.get('large') or ci.get('medium') or ''
+    except Exception:
+        url = ''
+    _cache_set('al_cover', key, url, ttl=_REC_TTL, max_entries=800)
+    return url or None
+
+
+def chapters_by_al_id(al_id):
+    """(totalChapters|None, status) de un manga por su id AniList. `chapters` es el total
+    OFICIAL cuando la obra está terminada; es None mientras sigue en emisión (ahí la referencia
+    de 'cuántos capítulos hay' la da el máximo visto entre fuentes). Cache 24h."""
+    if not al_id:
+        return None, None
+    key = str(al_id)
+    hit = _cache_get('al_chapters', key, _REC_TTL)
+    if hit is not None:
+        return (hit.get('chapters'), hit.get('status'))
+    ch = st = None
+    try:
+        d = _ql('query($id:Int){Media(id:$id,type:MANGA){chapters status}}', {'id': int(al_id)})
+        m = (d or {}).get('Media') or {}
+        ch, st = m.get('chapters'), m.get('status')
+    except Exception:
+        pass
+    _cache_set('al_chapters', key, {'chapters': ch, 'status': st}, ttl=_REC_TTL, max_entries=800)
+    return ch, st
+
+
 def _rec_row(node: dict) -> dict | None:
     m = node.get('mediaRecommendation')
     if not m:

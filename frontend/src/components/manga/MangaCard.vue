@@ -3,7 +3,6 @@ import { computed, ref } from 'vue'
 import { MANGA_STATUS } from '@/lib/manga'
 import { imgProxy, imgThumb } from '@/lib/img'
 import { coverRGB, vivid } from '@/lib/coverColor'
-import Icon from '@/components/ui/Icon.vue'
 
 const props = defineProps({ manga: { type: Object, required: true }, updates: { type: Number, default: 0 } })
 
@@ -17,9 +16,6 @@ async function ensureGlow() {
 }
 const hasCover = computed(() => !!props.manga.cover)
 const thumb = computed(() => imgThumb(props.manga.cover))
-const upscaled = computed(() => (props.manga.upscaled || 0) > 0)
-const translated = computed(() => (props.manga.translated_count || 0) > 0)
-const hasPrimary = computed(() => !!props.manga.source_meta?.recommended_source)
 const status = computed(() => MANGA_STATUS[props.manga.status] || null)
 const initials = computed(() =>
   (props.manga.name || '?').replace(/[\[\]_]/g, ' ').trim().slice(0, 2).toUpperCase()
@@ -38,16 +34,7 @@ const initials = computed(() =>
       <div class="card__scrim" />
       <div class="card__shine" />
 
-      <!-- HUD badges -->
-      <div class="card__badges">
-        <span v-if="upscaled" class="badge badge--up">
-          <Icon name="spark" :size="11" /> 4K · {{ manga.upscaled }}
-        </span>
-        <span v-if="translated" class="badge badge--es" :title="`${manga.translated_count} capítulo(s) traducidos`">
-          ES · {{ manga.translated_count }}
-        </span>
-        <span v-if="hasPrimary" class="badge badge--primary" :title="`Versión principal: ${manga.source_meta.recommended_source.sourceName}`">★</span>
-      </div>
+      <!-- Solo estado (como en la tarjeta de anime): completado, leyendo, etc. + aviso de novedades. -->
       <div class="card__topright">
         <span v-if="updates" class="card__new" :title="`${updates} capítulos nuevos`">+{{ updates }}</span>
         <span v-if="status" class="card__status" :style="{ '--c': status.color }">{{ status.label }}</span>
@@ -121,17 +108,6 @@ const initials = computed(() =>
 .card:hover .card__shine { animation: shine 0.8s var(--ease-silk) forwards; }
 @keyframes shine { to { transform: translateX(120%); } }
 
-.card__badges { position: absolute; top: var(--s-2); left: var(--s-2); display: flex; gap: var(--s-1); }
-.badge {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 3px 8px; border-radius: var(--r-pill);
-  font-size: var(--fs-2xs); font-weight: 600;
-  font-family: var(--font-mono); letter-spacing: 0.02em;
-  backdrop-filter: blur(8px);
-}
-.badge--up { background: var(--cyan-glow); color: #d6fffb; border: 1px solid rgba(70, 224, 216, 0.4); box-shadow: var(--glow-cyan); }
-.badge--es { background: color-mix(in srgb, var(--jade) 24%, transparent); color: #c8ffe4; border: 1px solid color-mix(in srgb, var(--jade) 45%, transparent); }
-.badge--primary { background: color-mix(in srgb, var(--cyan) 28%, transparent); color: #d6fffb; border: 1px solid color-mix(in srgb, var(--cyan) 50%, transparent); }
 .card__topright { position: absolute; top: var(--s-2); right: var(--s-2); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
 .card__new { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 7px; border-radius: var(--r-pill); color: #fff; background: var(--azure); box-shadow: var(--glow-azure); }
 .card__status {

@@ -2,6 +2,7 @@
 import { computed } from 'vue'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 
 // Riel horizontal de mangas recomendados (AniList). Reutilizable: la vista de
 // biblioteca lo usa para "Para ti" y el modal para "Similares a este". Un clic
@@ -30,7 +31,7 @@ const fmtLabel = (f) => ({ MANGA: 'Manga', MANHWA: 'Manhwa', MANHUA: 'Manhua', N
     </header>
 
     <div v-if="loading" class="rec__rail" :class="{ 'rec__rail--grid': layout === 'grid' }">
-      <div v-for="n in (layout === 'grid' ? 12 : 6)" :key="n" class="rc rc--skel" />
+      <Skeleton v-for="n in (layout === 'grid' ? 12 : 6)" :key="n" variant="poster" class="rc" />
     </div>
 
     <div v-else class="rec__rail" :class="{ 'rec__rail--grid': layout === 'grid' }">
@@ -96,6 +97,4 @@ const fmtLabel = (f) => ({ MANGA: 'Manga', MANHWA: 'Manhwa', MANHUA: 'Manhua', N
 }
 .rc__meta { display: flex; gap: 6px; font-size: 10px; color: var(--ink-soft); }
 .rc__gen { color: var(--ink-faint); }
-.rc--skel { aspect-ratio: 2/3; border-radius: var(--r-md); background: var(--surface-2); animation: recpulse 1.3s ease-in-out infinite; }
-@keyframes recpulse { 0%,100% { opacity: .5 } 50% { opacity: .85 } }
 </style>

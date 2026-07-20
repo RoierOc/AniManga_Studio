@@ -62,6 +62,7 @@
   --fs-xl:  1.45rem;
   --fs-lg:  1.18rem;
   --fs-md:  1rem;
+  --fs-base: 1rem;   /* alias de --fs-md: cuerpo por defecto (usado por EmptyState/Discover) */
   --fs-sm:  0.875rem;
   --fs-xs:  0.78rem;
   --fs-2xs: 0.69rem;

@@ -3,6 +3,7 @@
 const PATHS = {
   library: '<path d="M4 19V5a1 1 0 0 1 1-1h4v16H5a1 1 0 0 1-1-1Z"/><path d="M9 4h5v16H9z"/><path d="m15 4.5 3.6.9a1 1 0 0 1 .7 1.2L16 20"/>',
   search:  '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/>',
+  alert:   '<path d="M12 4 2.5 20h19L12 4Z"/><path d="M12 10v4"/><path d="M12 17.5v.01"/>',
   heart:   '<path d="M12 20s-7-4.3-9.3-8.6C1.2 8.4 2.6 5 6 5c2 0 3.2 1.2 4 2.4C10.8 6.2 12 5 14 5c3.4 0 4.8 3.4 3.3 6.4C19 15.7 12 20 12 20Z"/>',
   globe:   '<circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3c2.5 2.5 3.8 5.7 3.8 9S14.5 18.5 12 21c-2.5-2.5-3.8-5.7-3.8-9S9.5 5.5 12 3Z"/>',
   folder:  '<path d="M3 7a2 2 0 0 1 2-2h4l2 2.5h6a2 2 0 0 1 2 2V17a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>',
@@ -35,6 +36,16 @@ const PATHS = {
   trash:   '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/><path d="M6 7v13a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V7"/><path d="M10 11v6M14 11v6"/>',
   // Grid 2x2 → cobertura por capítulo (heatmap capítulo×fuente).
   grid:    '<rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="8" rx="1.5"/><rect x="3" y="13" width="8" height="8" rx="1.5"/><rect x="13" y="13" width="8" height="8" rx="1.5"/>',
+  // Sol → brillo del lector.
+  sun:     '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
+  // Libro cerrado → modo PAGINADO (una página tras otra).
+  book:    '<path d="M5 4a1 1 0 0 1 1-1h13v18H6a1 1 0 0 1-1-1V4Z"/><path d="M9 3v18"/>',
+  // Tira vertical continua → modo WEBTOON (scroll).
+  scroll:  '<rect x="7" y="2.5" width="10" height="19" rx="1.5"/><path d="M9.5 7h5M9.5 11h5M9.5 15h5"/>',
+  // Libro abierto → doble página.
+  'book-open': '<path d="M12 6C9.5 4.5 6.5 4.5 4 5.5v13C6.5 17.5 9.5 17.5 12 19M12 6c2.5-1.5 5.5-1.5 8-.5v13c-2.5-1C17.5 17.5 14.5 17.5 12 19M12 6v13"/>',
+  // Flechas horizontales → dirección de lectura (Izq↔Der).
+  'arrows-h': '<path d="M8 8 4 12l4 4M16 8l4 4-4 4M4 12h16"/>',
 }
 defineProps({ name: { type: String, required: true }, size: { type: [Number, String], default: 20 } })
 </script>

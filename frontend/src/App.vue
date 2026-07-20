@@ -14,6 +14,7 @@ import ActivityDrawer from '@/components/ui/ActivityDrawer.vue'
 import ShortcutsModal from '@/components/ui/ShortcutsModal.vue'
 import MangaModal from '@/components/manga/MangaModal.vue'
 import Reader from '@/components/manga/Reader.vue'
+import NovelReader from '@/components/manga/NovelReader.vue'
 import PlayerOverlay from '@/components/anime/PlayerOverlay.vue'
 import NativePlayerOverlay from '@/components/anime/NativePlayerOverlay.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
@@ -165,6 +166,7 @@ watch(() => ui.currentView, () => { crash.value = null })
 
     <MangaModal />
     <Reader />
+    <NovelReader />
     <PlayerOverlay />
     <NativePlayerOverlay />
     <ActivityDrawer />

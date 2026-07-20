@@ -153,6 +153,8 @@ export const useMangaStore = defineStore('manga', {
     mdChapters: [],           // MangaDex chapters for library manga
     mdChaptersLoading: false,
     mdLang: '',               // language filter for MD chapters ('' = all)
+    mdUpdates: { list: [], newCount: 0, loading: false, uuid: null, behindFrom: null, behindTo: null },  // "vas N por detrás" vs MangaDex
+    _mdUpdTimer: null,        // debounce de scheduleMdUpdates (no reactivo)
     dlTasks: {},              // { chapterKey: taskId } — maps chapter to SSE download task ID
     upTasks: {},              // { chapterKey: taskId } — maps chapter to SSE upscale task ID
     cancelledIds: [],         // task ids cancelled locally — hidden everywhere until the backend catches up
@@ -184,6 +186,8 @@ export const useMangaStore = defineStore('manga', {
       versions: [],            // [{ sourceId, mangaId, sourceName, sourceLang, match, quality }]
       byLang: {},              // { lang: [version,...] } cada grupo desc por score
       local: null,             // { height, sharpness, score, ... } score de la versión local (baseline)
+      referenceChapters: null, // cuántos capítulos hay ACTUALMENTE del manga (referencia de completitud)
+      referenceSource: '',     // 'fuentes' (máx visto) | 'anilist' (total oficial si terminada)
       currentLang: '',         // idioma de la versión local del usuario
       langFilter: '',          // '' = todos los idiomas
       sample: { open: false, key: null, loading: false, pages: [], name: '' },
@@ -209,6 +213,10 @@ export const useMangaStore = defineStore('manga', {
     pages: [],
     page: 0,
     readerLoading: false,
+    // Prefetch del capítulo VECINO (solo local): lista de páginas ya resuelta para que el salto
+    // "siguiente capítulo" sea instantáneo (sin round-trip). Lo llena `prefetchNextChapter()` al
+    // acercarse al final; `read()` lo consume si casa título+capítulo+fuente. Ver Reader.vue.
+    _nextPrefetch: { title: null, chapter: null, source: null, pages: null },
     onlineLoadingId: null,    // chapter id currently resolving pages for "Leer" (online), for button spinners
     mode: localStorage.getItem('reader-mode') || 'paged',   // paged | webtoon
     // Override manual de modo por serie (título → 'paged'|'webtoon'). Si existe, gana
@@ -218,6 +226,10 @@ export const useMangaStore = defineStore('manga', {
     dir: localStorage.getItem('reader-dir') || 'rtl',       // rtl | ltr
     spread: localStorage.getItem('reader-spread') === '1',  // two-page spread (paged manga only)
     zoom: 1.0,
+    // Brillo de lectura (modo noche): atenúa el papel blanco del B/N sin tocar el sistema.
+    // 1 = original; <1 = más tenue. Invertir = negativo (blanco↔negro) para leer en oscuridad.
+    readerBrightness: parseFloat(localStorage.getItem('reader-brightness') || '1') || 1,
+    readerInvert: localStorage.getItem('reader-invert') === '1',
     panX: 0,
     panY: 0,
     barsHidden: false,
@@ -448,6 +460,16 @@ export const useMangaStore = defineStore('manga', {
     chapterIndex() { return this.chapterListAsc.findIndex(c => String(c.chapter) === String(this.reader?.chapter)) },
     canPrevChapter() { return this.chapterIndex > 0 },
     canNextChapter() { return this.chapterIndex >= 0 && this.chapterIndex < this.chapterListAsc.length - 1 },
+
+    // Filtro CSS de las páginas (modo noche): brillo + inversión opcional. 'none' cuando no hay
+    // ajuste, para no pagar un repintado con filtro en el caso normal. No se aplica al comparador
+    // (ahí se inspecciona calidad, el filtro falsearía la comparación).
+    pageFilter: (s) => {
+      const parts = []
+      if (s.readerBrightness !== 1) parts.push(`brightness(${s.readerBrightness})`)
+      if (s.readerInvert) parts.push('invert(1) hue-rotate(180deg)')
+      return parts.length ? parts.join(' ') : 'none'
+    },
 
     // two-page spread is only meaningful for paged reading without compare/zoom overlap
     spreadActive: (s) => s.spread && s.mode === 'paged' && !s.compareMode,
@@ -857,6 +879,7 @@ export const useMangaStore = defineStore('manga', {
       this.mdChapters = []
       this.mdId = manga.mdId || null
       this.mdLang = ''
+      this.mdUpdates = { list: [], newCount: 0, loading: false, uuid: null, behindFrom: null, behindTo: null }
       this.upscaled = {}
       this.modalLoading = true
       // Ciclo de vida del store `versions` (plan de colección): lo gestiona SOLO aquí, en la
@@ -882,6 +905,10 @@ export const useMangaStore = defineStore('manga', {
           this.current.transplant_meta = d.transplant_meta || null
         }
         this._resetTp()
+        // Novedades MangaDex en 2º plano: no bloquea la apertura del modal. Se programa (debounce)
+        // para calcular el ALCANCE `have` una vez que la sección de capítulos (fuente/MangaDex,
+        // async) esté cargada — si no, `have` saldría incompleto y marcaría de más.
+        if (!manga.trackedOnly) this.scheduleMdUpdates()
         // If source_meta exists (downloaded, or tracked from Fuentes pre-download), load source
         // chapters from the EFFECTIVE source (the pinned version if any, else the origin source).
         this._loadSourceChapters()
@@ -898,7 +925,7 @@ export const useMangaStore = defineStore('manga', {
               this.mdLang = preferredLang(langs)
             })
             .catch(() => {})
-            .finally(() => { this.mdChaptersLoading = false })
+            .finally(() => { this.mdChaptersLoading = false; if (!manga.trackedOnly) this.scheduleMdUpdates() })
         }
       } catch (_) { useUiStore().toast('No se pudieron cargar los capítulos', 'error') }
       finally {
@@ -931,7 +958,7 @@ export const useMangaStore = defineStore('manga', {
             this.mdLang = (lang && langs.includes(lang)) ? lang : preferredLang(langs)
           })
           .catch(() => {})
-          .finally(() => { this.mdChaptersLoading = false })
+          .finally(() => { this.mdChaptersLoading = false; this.scheduleMdUpdates() })
         return
       }
       this.sourceLoading = true
@@ -943,6 +970,8 @@ export const useMangaStore = defineStore('manga', {
           chapterNorm: String(ch.chapterNumber ?? '').replace(/\.0$/, ''),
           name: ch.name || `Cap. ${ch.chapterNumber ?? '?'}`,
         }))
+        // La sección ya conoce el alcance real de la fuente → recalcula "por detrás" con ese `have`.
+        this.scheduleMdUpdates()
       }
       // SWR: el backend sirve la DB local de Suwayomi al instante (como MangaDex) y refresca
       // la web de la fuente en 2º plano. `?meta=1` → {chapters, stale}. Si vino "stale" (había
@@ -954,6 +983,10 @@ export const useMangaStore = defineStore('manga', {
       if (src.sourceId) q.set('sourceId', String(src.sourceId))
       const srcTitle = this.current?.source_meta?.title || this.current?.name || ''
       if (srcTitle) q.set('title', srcTitle)
+      // url estable (slug de la fuente): ancla el match exacto si el mangaId numérico derivó.
+      const sm2 = this.current?.source_meta
+      const srcUrl = (src.pinned ? sm2?.recommended_source?.url : sm2?.mangaUrl) || ''
+      if (srcUrl) q.set('url', srcUrl)
       api.get(`/api/sources/manga/${srcMangaId}/chapters?${q.toString()}`)
         .then(res => {
           applyChapters(res?.chapters)
@@ -1243,6 +1276,8 @@ export const useMangaStore = defineStore('manga', {
             v.versions = st.versions || []
             v.byLang = st.byLang || {}
             v.local = st.local || null
+            v.referenceChapters = st.referenceChapters ?? null
+            v.referenceSource = st.referenceSource || ''
             v.currentLang = st.currentLang || ''
             // Por defecto mostramos TODAS las fuentes/idiomas (panorama completo); el usuario
             // filtra por idioma con el desplegable (que lleva el conteo por idioma).
@@ -1263,6 +1298,7 @@ export const useMangaStore = defineStore('manga', {
       if (v._dlpoll) { clearInterval(v._dlpoll); v._dlpoll = null }
       v.loading = false; v.phase = ''; v.discoverProgress = {}
       v.versions = []; v.byLang = {}; v.local = null; v.currentLang = ''; v.langFilter = ''
+      v.referenceChapters = null; v.referenceSource = ''
       v.sample = { open: false, key: null, loading: false, pages: [], name: '' }
       v.cmpSel = []; v.dl = null
     },
@@ -1331,10 +1367,15 @@ export const useMangaStore = defineStore('manga', {
         && String(sm.recommended_source.mangaId) === String(cand.mangaId)
       const source = isSet ? null : (cand ? {
         sourceId: cand.sourceId, mangaId: cand.mangaId, sourceName: cand.sourceName,
-        sourceLang: cand.sourceLang, quality: cand.quality,
+        sourceLang: cand.sourceLang, url: cand.url, quality: cand.quality,
       } : null)
       try {
-        const d = await api.post('/api/transplant/set_primary', { title: this.current.id, source })
+        // Pasa la portada (y al_id) que ya conoce la ficha: fijar crea la carpeta del manga aunque
+        // no esté descargado; sin esto la tarjeta salía SIN portada en la biblioteca.
+        const d = await api.post('/api/transplant/set_primary', {
+          title: this.current.id, source,
+          cover: this.current?.cover || null, al_id: this.current?.al_id || null,
+        })
         if (this.current) this.current.source_meta = { ...(this.current.source_meta || {}), recommended_source: d.recommended_source || null }
         this.libraryDirty++
         // La fuente activa de capítulos cambió: recargar la lista para que la pestaña Capítulos
@@ -2006,8 +2047,14 @@ export const useMangaStore = defineStore('manga', {
       this.reader = { title, chapter, source, kind: 'manga', cover: coverOverride || this.current?.cover || '' }
       this.pages = []
       this.page = 0
+      // ¿Tenemos este capítulo ya prefetcheado (salto al vecino)? Entonces sin round-trip.
+      const pf = this._nextPrefetch
+      const usePf = pf && pf.pages && String(pf.title) === String(title)
+        && String(pf.chapter) === String(chapter) && pf.source === source
+      this._nextPrefetch = { title: null, chapter: null, source: null, pages: null }  // consumido/invalidado
       try {
-        const d = await api.post('/api/reader/read_chapter', { title, chapter, source })
+        const d = usePf ? { pages: pf.pages, source: pf.resolvedSource || source }
+                        : await api.post('/api/reader/read_chapter', { title, chapter, source })
         this.pages = d.pages || []
         if (this.reader) this.reader.source = d.source
         this._autoMode(title)   // webtoon vs manga (respeta override manual por serie)
@@ -2017,6 +2064,30 @@ export const useMangaStore = defineStore('manga', {
           this.page = pr.lastPage
       } catch (_) { useUiStore().toast('No se pudo abrir el capítulo', 'error'); this.reader = null }
       finally { this.readerLoading = false }
+    },
+
+    // Precarga la LISTA de páginas del capítulo siguiente (solo local: barato, un listdir) para que
+    // `goNextChapter` no espere al servidor. Idempotente y tolerante a carreras: si el usuario cambia
+    // de capítulo mientras carga, el resultado se descarta. Devuelve las páginas (para que el lector
+    // caliente las primeras imágenes) o null. Los capítulos online/multi-fuente NO se prefetchean:
+    // su resolución es cara y depende de la fuente; el prefetch se limita al camino local común.
+    async prefetchNextChapter() {
+      if (!this.canNextChapter || this.reader?.kind !== 'manga') return null
+      const row = this.chapterListAsc[this.chapterIndex + 1]
+      if (!row || row._sourceId || row._mdChapterId || row._covMulti) return null   // solo local
+      const title = this.reader?.title
+      const chapter = row.chapter
+      const source = this.upscaled[chapter] ? 'upscaled' : 'auto'
+      const pf = this._nextPrefetch
+      if (pf && pf.pages && String(pf.title) === String(title) && String(pf.chapter) === String(chapter) && pf.source === source)
+        return pf.pages   // ya prefetcheado
+      try {
+        const d = await api.post('/api/reader/read_chapter', { title, chapter, source })
+        // ¿Sigue siendo el vecino esperado? (el usuario pudo saltar mientras cargaba.)
+        if (this.reader?.title !== title || this.chapterListAsc[this.chapterIndex + 1]?.chapter !== chapter) return null
+        this._nextPrefetch = { title, chapter, source, pages: d.pages || [], resolvedSource: d.source }
+        return this._nextPrefetch.pages
+      } catch (_) { return null }
     },
     /* ── Escalado a color (APISR) — gestionado desde el MangaModal, fuera del lector ──
        Auto (todo el manga) o por capítulo con SELECTOR de páginas. El detector de
@@ -2147,6 +2218,62 @@ export const useMangaStore = defineStore('manga', {
       this._saveProgress()
     },
     // Read a not-yet-downloaded chapter (MangaModal) directly from its source, online.
+    // ── Novedades MangaDex ("nuevo capítulo listo") ─────────────────────────────
+    // Usa MangaDex como fuente de verdad: compara su catálogo (con fecha de publicación) contra
+    // lo descargado y contra la última visita, y marca los capítulos NUEVOS listos para bajar.
+    // Coalesce varios disparos (apertura + cargas async de fuente/MangaDex) en UN solo fetch, para
+    // que `have` (el alcance de la sección de capítulos) esté ya completo y no marque de más.
+    scheduleMdUpdates() {
+      clearTimeout(this._mdUpdTimer)
+      this._mdUpdTimer = setTimeout(() => this.fetchMdUpdates(), 350)
+    },
+    async fetchMdUpdates() {
+      const title = this.current?.id
+      if (!title) return
+      this.mdUpdates.loading = true
+      try {
+        // Alcance = capítulo MÁS ALTO de la SECCIÓN de capítulos (local ∪ fuente activa ∪ MangaDex),
+        // no solo lo descargado: si tienes 1-250 vía tu fuente, MangaDex ≤250 no es "nuevo".
+        const _num = (x) => { const n = parseFloat(x); return Number.isFinite(n) ? n : -1 }
+        const have = Math.max(-1,
+          ...this.chapters.map(c => _num(c.chapter)),
+          ...this.sourceChapters.map(c => _num(c.chapterNorm ?? c.chapterNumber)),
+          ...this.mdChapters.map(c => _num(c.chapter)))
+        const qs = `title=${encodeURIComponent(title)}&uuid=${encodeURIComponent(this.mdId || '')}`
+          + `&al=${encodeURIComponent(this.current?.al_id || '')}&have=${have}`
+        const d = await api.get(`/api/md_updates/chapters?${qs}`)
+        this.mdUpdates = {
+          list: d.chapters || [], newCount: d.newCount || 0,
+          uuid: d.uuid || null, loading: false,
+          behindFrom: d.behindFrom || null, behindTo: d.behindTo || null,
+        }
+      } catch (_) {
+        this.mdUpdates = { list: [], newCount: 0, uuid: null, loading: false, behindFrom: null, behindTo: null }
+      }
+    },
+    // Descarga 1-clic de un capítulo que te falta desde MangaDex (reusa la descarga agnóstica de origen).
+    async downloadMdUpdate(ch) {
+      const ui = useUiStore()
+      const title = this.current?.id
+      const uuid = this.mdUpdates.uuid
+      if (!title || !uuid || !ch) return
+      const source = { sourceId: '__mangadex__', mangaId: `${uuid}@@${ch.lang}`, sourceName: 'MangaDex', sourceLang: ch.lang }
+      try {
+        const d = await api.post('/api/transplant/chapter_urls', { title, chapter: ch.chapter, source })
+        if (!d.urls?.length) { ui.toast('No se encontraron páginas para ese capítulo', 'error'); return }
+        await api.post('/api/download/download_source_chapter', {
+          title, chapter: ch.chapter, pageUrls: d.urls,
+          sourceId: source.sourceId, mangaId: source.mangaId, sourceName: source.sourceName, sourceLang: source.sourceLang,
+        })
+        ui.toast(`Descargando cap. ${ch.number}`, 'info')
+      } catch (_) { ui.toast('No se pudo descargar el capítulo', 'error') }
+    },
+    async downloadAllMdUpdates() {
+      for (const ch of this.mdUpdates.list.filter(c => c.isNew)) await this.downloadMdUpdate(ch)
+      // El aviso "vas N por detrás" se limpia solo cuando los ficheros aterrizan: refresca el conteo.
+      this.fetchMdUpdates()
+    },
+
     async readOnline(ch) {
       const ui = useUiStore()
       // La asignación explícita por capítulo (chapter_sources) manda SIEMPRE sobre los
@@ -2154,29 +2281,64 @@ export const useMangaStore = defineStore('manga', {
       // y quedan obsoletos en cuanto el capítulo se reasigna) — si no, "Leer" seguía
       // abriendo la fuente ORIGINAL aunque el capítulo ya estuviera reasignado a otra.
       const vs = useVersionsStore()
-      const assigned = this.current?.id ? vs.sourceForChapter(ch.chapter) : null
+      const assigned = this.current?.id ? (vs.sourceForChapter(ch.chapter) || ch._assignedSource || null) : (ch._assignedSource || null)
       const busyKey = assigned ? `assigned:${ch.chapter}` : (ch._sourceId || ch._mdChapterId)
       this.onlineLoadingId = busyKey
       try {
-        let pages = []
-        let meta
-        if (assigned) {
-          const d = await api.post('/api/transplant/chapter_urls', {
-            title: this.current.id, chapter: ch.chapter,
-            source: { sourceKind: assigned.sourceKind, sourceId: assigned.sourceId, mangaId: assigned.mangaId, sourceLang: assigned.sourceLang },
-          })
-          pages = d.urls || []
-          meta = { kind: 'source', chapterRef: `${assigned.sourceId}_${assigned.mangaId}` }
-        } else if (ch._sourceId) {
-          const pg = await api.get(`/api/sources/chapter/${ch._sourceId}/pages`)
-          pages = pg.pages || []
-          meta = { kind: 'source', chapterRef: ch._sourceId }
-        } else if (ch._mdChapterId) {
-          const pg = await api.get(`/api/mangadex/chapter/${ch._mdChapterId}/pages`)
-          pages = pg.pages || []
-          meta = { kind: 'mangadex', chapterRef: ch._mdChapterId }
+        // RESILIENCIA: una sola fuente puede fallar (tras Cloudflare, caída o sin sincronizar
+        // en Suwayomi → 0 páginas). En vez de rendirse con "sin páginas", probamos en orden la
+        // fuente asignada/preferida PRIMERO y luego el resto de fuentes que declaran cubrir este
+        // capítulo (incluida MangaDex) hasta que una entregue páginas. Así la lectura online es
+        // responsiva aunque la mejor versión esté temporalmente inaccesible.
+        const seen = new Set()
+        const srcKey = (x) => `${x.sourceId}|${x.mangaId}`
+        const candidates = []
+        const pushSrc = (x) => {
+          if (!x || x.mangaId == null || x.sourceId == null) return
+          const k = srcKey(x)
+          if (!seen.has(k)) { seen.add(k); candidates.push({ type: 'src', src: x }) }
         }
-        if (!pages.length) { ui.toast('Capítulo sin páginas', 'error'); return }
+        if (assigned) pushSrc(assigned)
+        for (const s of vs.sourcesWithChapter(ch.chapter)) pushSrc(s)
+        if (ch._sourceId) candidates.push({ type: 'legacySource', id: ch._sourceId })
+        if (ch._mdChapterId) candidates.push({ type: 'mangadex', id: ch._mdChapterId })
+
+        let pages = []
+        let meta = null
+        let tried = 0
+        for (const c of candidates) {
+          try {
+            if (c.type === 'src') {
+              const s = c.src
+              const d = await api.post('/api/transplant/chapter_urls', {
+                title: this.current.id, chapter: ch.chapter,
+                source: { sourceKind: s.sourceKind, sourceId: s.sourceId, mangaId: s.mangaId, sourceLang: s.sourceLang },
+              })
+              pages = d.urls || []
+              // chapterRef aquí es una clave COMPUESTA (sourceId_mangaId), NO un id de capítulo:
+              // las páginas se re-resuelven vía /transplant/chapter_urls con la fuente + el nº de
+              // capítulo. Guardamos la `source` para poder REANUDAR (continueHistory la reusa).
+              meta = { kind: 'source', chapterRef: `${s.sourceId}_${s.mangaId}`,
+                       source: { sourceKind: s.sourceKind, sourceId: s.sourceId, mangaId: s.mangaId, sourceLang: s.sourceLang } }
+            } else if (c.type === 'legacySource') {
+              const pg = await api.get(`/api/sources/chapter/${c.id}/pages`)
+              pages = pg.pages || []
+              meta = { kind: 'source', chapterRef: c.id }
+            } else if (c.type === 'mangadex') {
+              const pg = await api.get(`/api/mangadex/chapter/${c.id}/pages`)
+              pages = pg.pages || []
+              meta = { kind: 'mangadex', chapterRef: c.id }
+            }
+          } catch (_) { pages = [] }
+          tried++
+          if (pages.length) break
+        }
+        if (!pages.length) {
+          ui.toast(tried > 1
+            ? 'Ninguna fuente pudo entregar este capítulo ahora (prueba de nuevo o descárgalo)'
+            : 'Capítulo sin páginas', 'error')
+          return
+        }
         this.openOnlineReader(this.current.id, ch.chapter, pages, '', meta, this.current?.cover || '')
       } catch (_) { ui.toast('No se pudo abrir el capítulo', 'error') }
       finally { this.onlineLoadingId = null }
@@ -2208,6 +2370,17 @@ export const useMangaStore = defineStore('manga', {
         try { localStorage.setItem('reader-mode-series', JSON.stringify(this.readerModeOverride)) } catch (_) {}
       }
       this._resetView()
+    },
+
+    // Modo noche del lector: brillo (0.4–1) e inversión. Persisten globalmente (preferencia de
+    // lectura, no por serie), como fit/dir/spread.
+    setBrightness(v) {
+      this.readerBrightness = Math.max(0.4, Math.min(1, Math.round(v * 100) / 100))
+      localStorage.setItem('reader-brightness', String(this.readerBrightness))
+    },
+    toggleInvert() {
+      this.readerInvert = !this.readerInvert
+      localStorage.setItem('reader-invert', this.readerInvert ? '1' : '0')
     },
 
     // Auto-detección webtoon/manhwa (tira vertical) vs manga (paginado) por relación de
@@ -2253,6 +2426,7 @@ export const useMangaStore = defineStore('manga', {
       if (!decided) this._applyAutoMode('paged')   // ninguna cargó → asume manga (paginado)
     },
     cycleFit() { const M = ['width', 'height', 'original']; this.fit = M[(M.indexOf(this.fit) + 1) % 3]; localStorage.setItem('reader-fit', this.fit) },
+    setFit(f) { if (['width', 'height', 'original'].includes(f)) { this.fit = f; localStorage.setItem('reader-fit', f) } },
     toggleDir() { this.dir = this.dir === 'rtl' ? 'ltr' : 'rtl'; localStorage.setItem('reader-dir', this.dir) },
     // Spread on: snap to an even page so pairs stay aligned (0-1, 2-3, …).
     toggleSpread() {
@@ -2312,8 +2486,11 @@ export const useMangaStore = defineStore('manga', {
       const meta = this.reader.onlineMeta
       if (meta?.kind && meta.kind !== 'local' && meta.chapterRef != null) {
         e.lastKind = meta.kind; e.lastRef = meta.chapterRef
+        // Fuente completa (vía moderna `src`): reanudar re-resuelve con /transplant/chapter_urls,
+        // porque su chapterRef es una clave compuesta, no un id de capítulo consultable.
+        if (meta.source) e.lastSource = meta.source; else delete e.lastSource
       } else {
-        delete e.lastKind; delete e.lastRef
+        delete e.lastKind; delete e.lastRef; delete e.lastSource
       }
       this._persistProgress()
     },
@@ -2362,6 +2539,7 @@ export const useMangaStore = defineStore('manga', {
       if (!downloaded && pr?.lastKind && pr?.lastRef) {
         this.continueHistory({
           kind: pr.lastKind, chapter: info.chapter, chapter_ref: pr.lastRef,
+          source: pr.lastSource || null,
           title: this.current.id, cover: this.current?.cover || '',
         })
         return
@@ -2419,6 +2597,18 @@ export const useMangaStore = defineStore('manga', {
       try {
         if (entry.kind === 'local') {
           await this.read(entry.chapter, 'auto', entry.title, entry.cover)
+        } else if (entry.source) {
+          // Vía moderna: la fuente se re-resuelve a páginas frescas (el chapterRef es compuesto,
+          // no un id de capítulo). Mismo camino que readOnline → reanudar online funciona.
+          const s = entry.source
+          const d = await api.post('/api/transplant/chapter_urls', {
+            title: entry.title, chapter: entry.chapter,
+            source: { sourceKind: s.sourceKind, sourceId: s.sourceId, mangaId: s.mangaId, sourceLang: s.sourceLang },
+          })
+          const pages = d.urls || []
+          if (!pages.length) { ui.toast('No se pudo continuar (fuente sin páginas ahora)', 'error'); return }
+          this.openOnlineReader(entry.title, entry.chapter, pages, '',
+            { kind: 'source', chapterRef: `${s.sourceId}_${s.mangaId}`, source: s }, entry.cover)
         } else {
           const route = entry.kind === 'source'
             ? `/api/sources/chapter/${entry.chapter_ref}/pages`

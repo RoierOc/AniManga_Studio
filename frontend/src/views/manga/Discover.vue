@@ -7,6 +7,7 @@ import { useDiscoveryStore, TYPE_FILTERS, SORT_OPTIONS } from '@/stores/discover
 import WorkCard from '@/components/manga/WorkCard.vue'
 import WorkInfoModal from '@/components/manga/WorkInfoModal.vue'
 import Icon from '@/components/ui/Icon.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 
 const store = useDiscoveryStore()
 
@@ -97,7 +98,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 
     <!-- Rejilla -->
     <div v-if="store.loading" class="grid">
-      <div v-for="n in 18" :key="n" class="skeleton" />
+      <Skeleton v-for="n in 18" :key="n" ratio="3 / 4.3" />
     </div>
 
     <div v-else-if="store.error" class="state">
@@ -196,8 +197,6 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 /* ── Rejilla ── */
 /* 6 por fila como las vistas principales (Biblioteca); degrada por breakpoints en pantallas menores. */
 .grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--s-4); }
-.skeleton { aspect-ratio: 3 / 4.3; border-radius: var(--r-md); background: var(--surface); animation: pulse 1.4s ease-in-out infinite; }
-@keyframes pulse { 0%,100% { opacity: .5 } 50% { opacity: .85 } }
 
 .more { display: flex; justify-content: center; padding: var(--s-6) 0 var(--s-2); }
 .more__btn { display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-3) var(--s-6); border-radius: var(--r-pill);

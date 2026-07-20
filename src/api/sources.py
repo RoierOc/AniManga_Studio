@@ -10,6 +10,7 @@ import json as _json
 from api.resilient_http import http as http_requests  # retry + backoff + per-host rate limiting
 
 from api.runtime import manga_dir, cache_get, cache_set
+from api.observability import record_error
 
 sources_bp = Blueprint("sources", __name__)
 
@@ -527,53 +528,112 @@ def _query_src_chapters(manga_id):
 _SEARCH_SRC_MUT = """
     mutation SearchManga($source: LongString!, $query: String, $page: Int!) {
       fetchSourceManga(input: { source: $source, type: SEARCH, query: $query, page: $page }) {
-        mangas { id title }
+        mangas { id title url }
       }
     }
 """
+_MANGA_DB_Q = """
+    query($id: Int!) { manga(id: $id) { title url source { id name } } }
+"""
 
 
-def _resolve_source_manga_id(source_id: str, title: str):
-    """Re-resuelve el mangaId de Suwayomi buscando el título en su fuente. El id guardado en
-    `.source_meta.json` puede quedar OBSOLETO si la DB de Suwayomi se reconstruye/purga (los
-    ids son secuenciales y se reasignan) → los capítulos dejan de cargar. La búsqueda mete el
-    manga de vuelta en la DB de Suwayomi y devuelve su id ACTUAL (match exacto de título si lo
-    hay, si no el primer resultado)."""
+def _canon_title(s: str) -> str:
+    """Normaliza un título a solo alfanuméricos en minúscula (para casar sin puntuación/idioma)."""
+    return "".join(ch for ch in (s or "").lower() if ch.isalnum())
+
+
+def _titles_match(a: str, b: str) -> bool:
+    """¿Son el MISMO título? Canon con contención en ambos sentidos (tolera sufijos tipo
+    '(Pre-serialization)' o el nombre de la fuente añadido) pero exige solape sustancial."""
+    ca, cb = _canon_title(a), _canon_title(b)
+    if not ca or not cb:
+        return False
+    return ca == cb or (len(ca) >= 6 and len(cb) >= 6 and (ca in cb or cb in ca))
+
+
+def _source_manga_db(manga_id):
+    """Título/url/fuente ACTUALES de un mangaId, leídos de la DB de Suwayomi (query, SIN scrape
+    remoto → instantáneo). Sirve para detectar que un id guardado DERIVÓ a otra obra (los ids
+    de Suwayomi se reasignan al reconstruir su DB). Devuelve {} si no se puede consultar (≠ 'no
+    existe': un fallo de red NO debe leerse como cruce)."""
+    try:
+        m = _gql(_MANGA_DB_Q, {"id": int(manga_id)}).get("manga") or {}
+        return {"title": m.get("title") or "", "url": m.get("url") or "",
+                "sourceId": (m.get("source") or {}).get("id"),
+                "sourceName": (m.get("source") or {}).get("name")}
+    except Exception as e:
+        record_error("sources", e, op="manga_db", manga_id=manga_id)
+        return {}
+
+
+def _resolve_source_manga_id(source_id: str, title: str, url: str = "", strict: bool = True,
+                             variants: list = None):
+    """Re-resuelve el mangaId ACTUAL buscando el título en su fuente. El id guardado puede quedar
+    OBSOLETO o DERIVAR a otra obra si la DB de Suwayomi se reconstruye (ids reasignados). La
+    búsqueda re-inserta el manga en la DB y devuelve su id actual. Anclaje por prioridad:
+      1) `url` de la fuente (ESTABLE — el slug no cambia entre reconstrucciones), 2) título canónico
+      (contra `title` y, si se dan, sus `variants` romaji/inglés/nativo/sinónimos).
+    `strict=True` (corrigiendo un CRUCE): si no hay match fiable devuelve id None — un primer-resultado
+    a ciegas re-cruzaría (peor que fallar). `strict=False` (id vacío/purgado, re-alta): permite caer
+    al primer resultado. Devuelve (id|None, matched_url, status) con status ∈ {'ok','none','failed'}:
+    'failed' = la BÚSQUEDA reventó (fuente caída ≠ 'no está', regla falló≠no-había)."""
     try:
         data = _gql(_SEARCH_SRC_MUT, {"source": str(source_id), "query": title, "page": 1})
         mangas = data["fetchSourceManga"]["mangas"]
     except Exception as e:
-        print(f"[sources] re-resolución falló ({title!r} en {source_id}): {e}", flush=True)
-        return None
-    tl = (title or "").strip().lower()
-    for m in mangas:
-        if (m.get("title") or "").strip().lower() == tl:
-            return m["id"]
-    return mangas[0]["id"] if mangas else None
+        record_error("sources", e, op="reresolve", title=title, source_id=source_id)
+        return (None, "", "failed")
+    want_url = (url or "").strip()
+    if want_url:
+        for m in mangas:
+            if (m.get("url") or "").strip() == want_url:
+                return (m["id"], want_url, "ok")
+    names = [title] + list(variants or [])
+    for m in mangas:                                   # match de título canónico (título o variantes)
+        if any(_titles_match(m.get("title"), n) for n in names):
+            return (m["id"], m.get("url") or "", "ok")
+    if strict:
+        return (None, "", "none")                      # sin match fiable: no re-cruzar a ciegas
+    return (mangas[0]["id"], mangas[0].get("url") or "", "ok") if mangas else (None, "", "none")
 
 
-def _persist_source_meta_id(old_id: int, new_id: int, title: str = ""):
-    """Reescribe el mangaId (y el thumbnail, que lleva el id embebido) en el `.source_meta.json`
-    del manga, para que lecturas/descargas/reaperturas usen ya el id nuevo. Busca por el id
-    viejo y, si no, por título."""
+def _persist_source_meta_id(old_id: int, new_id: int, title: str = "", new_url: str = ""):
+    """Reescribe el mangaId derivado en el `.source_meta.json`: TANTO el `mangaId` top-level
+    (origen) COMO el `recommended_source.mangaId` (la versión FIJADA) — el cruce de Ao no Hako
+    vivía en el pin, y persistir solo el top-level lo dejaba roto. Guarda además la `url` estable
+    como ancla para futuras re-resoluciones. Busca la obra por cualquier id que case (top-level o
+    pin) y, si no, por título."""
     try:
         for meta_path in Path(manga_dir()).glob("*/.source_meta.json"):
             try:
                 meta = _json.loads(meta_path.read_text())
-            except Exception:
+            except Exception as e:
+                record_error("sources", e, op="persist_id_read", path=str(meta_path))
                 continue
-            match = (meta.get("mangaId") == old_id) or (title and meta.get("title") == title)
-            if not match:
+            rec = meta.get("recommended_source") or {}
+            hit_top = meta.get("mangaId") == old_id
+            hit_pin = rec.get("mangaId") == old_id
+            if not (hit_top or hit_pin or (title and meta.get("title") == title)):
                 continue
-            meta["mangaId"] = int(new_id)
-            thumb = meta.get("thumbnailUrl") or ""
-            if f"/manga/{old_id}/" in thumb:
-                meta["thumbnailUrl"] = thumb.replace(f"/manga/{old_id}/", f"/manga/{new_id}/")
+            if hit_top or (title and meta.get("title") == title and not hit_pin):
+                meta["mangaId"] = int(new_id)
+                thumb = meta.get("thumbnailUrl") or ""
+                if f"/manga/{old_id}/" in thumb:
+                    meta["thumbnailUrl"] = thumb.replace(f"/manga/{old_id}/", f"/manga/{new_id}/")
+                if new_url:
+                    meta["mangaUrl"] = new_url
+            if hit_pin:
+                rec["mangaId"] = int(new_id)
+                if new_url:
+                    rec["url"] = new_url
+                meta["recommended_source"] = rec
             meta_path.write_text(_json.dumps(meta))
-            print(f"[sources] mangaId obsoleto {old_id} → {new_id} en {meta_path.parent.name}", flush=True)
+            print(f"[sources] mangaId derivado {old_id} → {new_id} en {meta_path.parent.name}"
+                  f" ({'pin' if hit_pin else 'origen'})", flush=True)
             return True
     except Exception as e:
-        print(f"[sources] no se pudo persistir el id nuevo: {e}", flush=True)
+        record_error("sources", e, op="persist_id", old_id=old_id, new_id=new_id)
+    return False
     return False
 
 
@@ -627,6 +687,7 @@ def manga_chapters(manga_id):
     with_meta = request.args.get("meta") == "1"
     source_id = (request.args.get("sourceId") or "").strip()
     title     = (request.args.get("title") or "").strip()
+    url       = (request.args.get("url") or "").strip()   # ancla estable (slug de la fuente)
     key = str(manga_id)
     resolved_id = manga_id
 
@@ -639,17 +700,28 @@ def manga_chapters(manga_id):
         return jsonify(body)
 
     def _reresolve():
-        """Si el id está obsoleto (DB de Suwayomi reconstruida) y tenemos fuente+título,
-        busca el id ACTUAL, persístelo y actualiza la clave de caché. Devuelve True si cambió."""
+        """Busca el id ACTUAL en la fuente (ancla url→título), lo persiste (top-level Y pin) y
+        actualiza la clave de caché. `strict`: no re-cruza a ciegas. Devuelve True si cambió."""
         nonlocal resolved_id, key
         if not (source_id and title):
             return False
-        new_id = _resolve_source_manga_id(source_id, title)
+        new_id, new_url, _st = _resolve_source_manga_id(source_id, title, url, strict=True)
         if not new_id or new_id == manga_id:
             return False
-        _persist_source_meta_id(manga_id, new_id, title)
+        _persist_source_meta_id(manga_id, new_id, title, new_url)
         resolved_id, key = new_id, str(new_id)
         return True
+
+    # GUARD DE CRUCE: un id DERIVADO (Suwayomi reasignó su fila a otra obra) devuelve capítulos
+    # —pero de la obra equivocada—, así que el viejo re-resolver "solo si 0 capítulos" no lo veía.
+    # Antes de servir NADA, si tenemos fuente+título comprobamos (lectura de DB, ~ms) que el id
+    # sigue siendo ESTA obra; si el título no casa → re-resolvemos al id correcto. Best-effort: un
+    # fallo de consulta NO se trata como cruce ("falló ≠ no había").
+    if source_id and title:
+        db = _source_manga_db(manga_id)
+        if db.get("title") and not _titles_match(db["title"], title):
+            if _reresolve():
+                cache_set("sources_chapters", str(manga_id), None, 1)  # invalida la caché del id viejo
 
     try:
         # 1) Caché de disco (salvo refresco forzado) → respuesta inmediata.
@@ -693,6 +765,19 @@ def manga_chapters(manga_id):
         return _respond(chapters, stale)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@sources_bp.route("/verify_source_refs", methods=["POST"])
+def verify_source_refs():
+    """Barrido: verifica/repara los mangaId de fuente (origen y pin) de toda la biblioteca cuando
+    han DERIVADO a otra obra (Suwayomi reasigna ids al reconstruir su DB). `?fix=0` solo informa."""
+    from api.source_identity import verify_source_refs as _sweep
+    fix = (request.args.get("fix") or "1") != "0"
+    report = _sweep(fix=fix)
+    crossed = [r for r in report if r.get("status", "").startswith("cruzado")]
+    fixed = [r for r in report if r.get("fixed")]
+    return jsonify({"ok": True, "total": len(report), "crossed": len(crossed),
+                    "fixed": len(fixed), "report": report})
 
 
 # ── Pages ─────────────────────────────────────────────────────────────────────

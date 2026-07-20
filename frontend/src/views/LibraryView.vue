@@ -3,6 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
+import { useNovelsStore } from '@/stores/novels'
 import { MANGA_STATUS, MANGA_STATUS_ORDER } from '@/lib/manga'
 import MangaCard from '@/components/manga/MangaCard.vue'
 import HistoryPanel from '@/components/manga/HistoryPanel.vue'
@@ -33,8 +34,10 @@ const items = ref([])
 const loading = ref(true)
 const error = ref(false)
 const search = ref('')
-const filter = ref('all')
 const statusFilter = ref('all')
+// "Todo" muestra solo lo ACTIVO (igual que la biblioteca de anime): completadas y abandonadas
+// solo aparecen en su propia pestaña de estado, no ensucian la lista principal.
+const INACTIVE = ['completed', 'dropped']
 const showHistory = ref(false)
 const sort = ref(localStorage.getItem('lib-sort') || 'title')
 const SORTS = [
@@ -64,15 +67,9 @@ const readRank = computed(() => {
   return rank
 })
 
-const FILTERS = computed(() => [
-  { id: 'all', label: 'Todo' },
-  { id: 'upscaled', label: 'Escalado 4K' },
-  { id: 'downloaded', label: 'Solo descargado' },
-  { id: 'updates', label: 'Novedades', count: manga.updates.length },
-])
-
 const statusCounts = computed(() => {
-  const c = { all: items.value.length }
+  // El contador de "Todo" refleja lo que muestra: solo activos (como en anime).
+  const c = { all: items.value.filter(m => !INACTIVE.includes(m.status)).length }
   for (const k of MANGA_STATUS_ORDER) c[k] = items.value.filter(m => m.status === k).length
   return c
 })
@@ -101,10 +98,9 @@ function railWheel(e) {
 const filtered = computed(() => {
   let list = items.value
   if (manga.pendingDelete.length) list = list.filter(m => !manga.pendingDelete.includes(m.id))
-  if (filter.value === 'upscaled') list = list.filter(m => (m.upscaled || 0) > 0)
-  if (filter.value === 'downloaded') list = list.filter(m => !(m.upscaled || 0))
-  if (filter.value === 'updates') list = list.filter(m => manga.updatesByTitle[m.name])
+  // Estado como sección primaria (como anime): "Todo" = solo activos; cada estado, su pestaña.
   if (statusFilter.value !== 'all') list = list.filter(m => m.status === statusFilter.value)
+  else list = list.filter(m => !INACTIVE.includes(m.status))
   const q = search.value.trim().toLowerCase()
   if (q) list = list.filter(m => (m.name || '').toLowerCase().includes(q))
 
@@ -124,6 +120,14 @@ const totals = computed(() => ({
   chapters: items.value.reduce((a, m) => a + (m.chapter_count || 0), 0),
   upscaled: items.value.filter(m => (m.upscaled || 0) > 0).length,
 }))
+
+const novels = useNovelsStore()
+
+// Una novela no tiene capítulos-imagen ni modal de versiones: abre directa en el lector de texto.
+function openItem(m) {
+  if (m.kind === 'novel' && m.novel) return novels.openReader({ id: m.trackedId, title: m.name, novel: m.novel })
+  manga.open(m)
+}
 
 const findingCovers = ref(false)
 
@@ -176,6 +180,7 @@ async function load() {
         mdId: kind === 'mangadex' ? t.id : null,
         trackedId: t.id, trackedOnly: true, status: t.status || '',
         al_id: t.al_id || null,          // obras de Descubrir: alimenta la cobertura al abrir
+        kind: t.kind || null, novel: t.novel || null,   // novelas: abren el lector de texto, no el modal
         source_meta: sourceMeta,
       })
     }
@@ -234,13 +239,8 @@ watch(() => manga.libraryDirty, () => load())
     <!-- Controls -->
     <div class="toolbar stagger">
       <div class="filters" style="--i:2">
-        <button v-for="f in FILTERS" :key="f.id" class="pill" :class="{ 'is-active': filter === f.id }"
-                @click="filter = f.id" v-show="f.id !== 'updates' || f.count">
-          {{ f.label }}<span v-if="f.count" class="pill__n">{{ f.count }}</span>
-        </button>
-        <span class="filters__sep" />
         <button class="pill" :class="{ 'is-active': statusFilter === 'all' }" @click="statusFilter = 'all'">
-          Todo estado
+          Todo <span class="pill__n">{{ statusCounts.all }}</span>
         </button>
         <button v-for="k in MANGA_STATUS_ORDER" :key="k" v-show="statusCounts[k]" class="pill"
                 :class="{ 'is-active': statusFilter === k }" @click="statusFilter = k"
@@ -309,7 +309,7 @@ watch(() => manga.libraryDirty, () => load())
 
     <div v-else class="grid">
       <MangaCard v-for="m in filtered" :key="m.id" :manga="m" :updates="manga.updatesByTitle[m.name]?.new_count || 0"
-                 @click="manga.open(m)" @contextmenu.prevent="openMenu($event, m)" />
+                 @click="openItem(m)" @contextmenu.prevent="openMenu($event, m)" />
     </div>
 
     <!-- Para ti: recomendaciones basadas en tu biblioteca (AniList) — al final del todo -->

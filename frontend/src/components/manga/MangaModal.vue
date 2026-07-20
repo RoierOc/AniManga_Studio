@@ -9,13 +9,29 @@ import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 import { useVersionsStore } from '@/stores/versions'
+import { useDiscoveryStore } from '@/stores/discovery'
 import VersionsCoverageGrid from '@/components/manga/VersionsCoverageGrid.vue'
 import MangaRecRail from '@/components/manga/MangaRecRail.vue'
 
 const store = useMangaStore()
 const ui = useUiStore()
 const vg = useVersionsStore()
+const disco = useDiscoveryStore()
+
+// Añadir a biblioteca DESDE esta ficha (abierta desde Descubrir con "Ver versiones y leer"): una
+// Obra abierta así no está descargada (trackedOnly/mdOnly) y puede no estar aún en la biblioteca.
+// Reusa el store de Descubrir (que ya resuelve portada en el backend por al_id al añadir).
+const libWork = computed(() => {
+  const c = store.current
+  return c ? { id: c.id, title: c.name, cover: c.cover, ids: { anilist: c.al_id || null } } : null
+})
+// Solo tiene sentido ofrecerlo cuando NO está descargada localmente (esas ya están en la biblioteca).
+const canAddToLib = computed(() => !!store.current && (store.current.trackedOnly || store.current.mdOnly))
+const inLib = computed(() => !!libWork.value && disco.inLibrary(libWork.value))
+const addingLib = computed(() => !!libWork.value && disco.isAdding(libWork.value))
+function addToLib() { if (libWork.value) disco.addToLibrary(libWork.value) }
 // The X / overlay just closes the modal and stays on the current view — it must NOT
 // navigate browser history (that was jumping to the previous page, sometimes Mi Anime).
 // replaceNav updates the current history entry to "closed"; the browser back/forward
@@ -130,6 +146,9 @@ const seriesSize = ref(null)
 watch(() => store.current?.id, async (id) => {
   seriesSize.value = null
   if (!id) return
+  // Si la ficha se abre para una Obra no descargada (desde Descubrir) y aún no sabemos qué hay en
+  // la biblioteca, cárgalo → el botón "Añadir a biblioteca" refleja el estado real desde el inicio.
+  if (canAddToLib.value && !disco.libraryTitles.length) disco.loadLibrary()
   // Recomendados por esta serie (AniList, resuelto por título en el backend).
   store.loadRecs(store.current?.name || id)
   try { seriesSize.value = await api.get(`/api/storage/series?title=${encodeURIComponent(id)}`) } catch (_) {}
@@ -356,6 +375,23 @@ function isCurrentVersion(c) {
 const localCand = computed(() => store.ver.local
   ? { local: true, sourceId: '__local__', mangaId: '__local__', sourceName: 'Tu versión local', sourceLang: store.current?.source_meta?.sourceLang || '', quality: store.ver.local }
   : null)
+// Referencia de completitud: cuántos capítulos hay ACTUALMENTE del manga (máximo visto entre
+// fuentes, o total oficial de AniList si terminó). Permite señalar qué versión está al día.
+const refChapters = computed(() => store.ver.referenceChapters || null)
+const refSourceLabel = computed(() => store.ver.referenceSource === 'anilist' ? 'AniList' : 'fuentes')
+// Una versión está "al día" si su último capítulo alcanza la referencia (margen de 0.5 por
+// numeraciones con decimales/partes). `faltan` = cuántos capítulos le faltan hasta el último.
+function versionReach(c) { return c?.quality?.latestChapter ?? null }
+function isUpToDate(c) {
+  const last = versionReach(c); const ref = refChapters.value
+  return last != null && ref != null && last >= ref - 0.5
+}
+function chaptersBehind(c) {
+  const last = versionReach(c); const ref = refChapters.value
+  if (last == null || ref == null) return null
+  const n = Math.round(ref - last)
+  return n > 0 ? n : 0
+}
 const recommended = computed(() => store.current?.source_meta?.recommended_source || null)
 function isPrimary(c) {
   const r = recommended.value
@@ -557,8 +593,13 @@ async function doExport(toDrive = false) {
                 </span>
               </div>
               <div class="modal__hacts">
+                <button v-if="canAddToLib" class="hbtn hbtn--accent" :class="{ 'is-added': inLib }"
+                        :disabled="inLib || addingLib" @click="addToLib">
+                  <Icon :name="inLib ? 'check' : 'plus'" :size="14" />
+                  {{ inLib ? 'En biblioteca' : (addingLib ? 'Añadiendo…' : 'Añadir a biblioteca') }}
+                </button>
                 <button class="hbtn" @click="showManage = !showManage" :class="{ 'is-on': showManage }">Gestionar</button>
-                <button class="hbtn" @click="store.scanCorrupt()">Verificar</button>
+                <button v-if="!canAddToLib" class="hbtn" @click="store.scanCorrupt()">Verificar</button>
               </div>
             </div>
           </header>
@@ -678,7 +719,18 @@ async function doExport(toDrive = false) {
           </div>
 
           <div class="modal__body">
-            <div v-if="store.modalLoading" class="center"><Spinner /></div>
+            <!-- Carga: esqueleto con FORMA de lista de capítulos (no un spinner pelado) para que
+                 la apertura se sienta como contenido llegando. La cabecera (portada/título) ya se
+                 pintó al instante desde store.current; esto solo cubre el cuerpo. -->
+            <div v-if="store.modalLoading" class="modal__skel">
+              <Skeleton variant="line" width="40%" height="1rem" />
+              <div class="modal__skel-rows">
+                <div v-for="i in 8" :key="i" class="modal__skel-row">
+                  <Skeleton variant="line" :width="`${58 + (i * 37) % 34}%`" height="0.9rem" />
+                  <Skeleton variant="block" width="1.5rem" height="1.5rem" radius="var(--r-sm)" />
+                </div>
+              </div>
+            </div>
             <div v-else-if="!store.chapters.length && !store.hasSourceMeta && !vg.hasAssignments && tab !== 'recs'" class="empty">Sin capítulos descargados.</div>
 
             <!-- RECOMENDADOS -->
@@ -804,6 +856,13 @@ async function doExport(toDrive = false) {
             <div v-if="tab === 'versions' && !store.modalLoading" class="vr">
               <p class="vr__lead">Busca todas las versiones de este manga en las fuentes y compáralas por calidad de imagen (resolución nativa × nitidez). Tu versión local aparece como referencia.</p>
 
+              <!-- Referencia de completitud: cuántos capítulos hay AHORA del manga -->
+              <div v-if="refChapters" class="vr__ref">
+                <Icon name="library" :size="14" />
+                <span>Este manga tiene <strong>{{ refChapters }} capítulos</strong> actualmente</span>
+                <span class="vr__refsrc">según {{ refSourceLabel }}</span>
+              </div>
+
               <!-- descubrimiento en curso -->
               <div v-if="ver.loading" class="vr__disc">
                 <Spinner :size="18" />
@@ -859,7 +918,9 @@ async function doExport(toDrive = false) {
                 <div v-if="ver.local" class="vr__row vr__row--local" :class="{ 'vr__row--cmp': isInCompare(localCand) }">
                   <div class="vr__main">
                     <span class="vr__src"><Icon name="library" :size="13" /> Tu versión local <span class="vr__badge vr__badge--actual">ACTUAL</span></span>
-                    <span class="vr__q">{{ ver.local.height }}px · score {{ ver.local.score }}</span>
+                    <span class="vr__q">{{ ver.local.height }}px · score {{ ver.local.score }}<template v-if="ver.local.totalChapters"> · <strong class="vr__caps">{{ ver.local.totalChapters }} cap.</strong></template></span>
+                    <span v-if="isUpToDate(localCand)" class="vr__complete">✓ al día</span>
+                    <span v-else-if="chaptersBehind(localCand)" class="vr__behind">faltan {{ chaptersBehind(localCand) }}</span>
                   </div>
                   <div class="vr__acts">
                     <button class="vr__eye" :class="{ 'is-on': isInCompare(localCand) }" @click="store.verToggleCompare(localCand)" title="Añadir a comparación A|B">
@@ -879,7 +940,9 @@ async function doExport(toDrive = false) {
                           <span v-else-if="isCurrentVersion(c)" class="vr__badge vr__badge--actual">ACTUAL</span>
                           <span v-else-if="c === verBest" class="vr__badge vr__badge--best">★ mejor calidad</span>
                         </span>
-                        <span class="vr__q">{{ c.quality?.height }}px · score {{ c.quality?.score }}</span>
+                        <span class="vr__q">{{ c.quality?.height }}px · score {{ c.quality?.score }}<template v-if="c.quality?.totalChapters"> · <strong class="vr__caps">{{ c.quality.totalChapters }} cap.</strong></template></span>
+                        <span v-if="isUpToDate(c)" class="vr__complete" :title="`Llega al capítulo ${versionReach(c)} — al día con el manga (${refChapters})`">✓ al día</span>
+                        <span v-else-if="chaptersBehind(c)" class="vr__behind" :title="`Su último capítulo es el ${versionReach(c)}; el manga va por el ${refChapters}`">faltan {{ chaptersBehind(c) }}</span>
                         <span v-if="c.match != null" class="vg__match" :class="{ 'vg__match--low': c.match < 0.95 }" :title="'Parecido de título con &quot;' + m?.name + '&quot; — mismo match que la Cobertura por capítulo'">{{ Math.round(c.match * 100) }}% título</span>
                         <span v-if="isIrregular(c.quality)" class="vr__irr" :title="`Calidad irregular entre capítulos (${c.quality.heightMin}–${c.quality.heightMax}px). Algún capítulo es notablemente peor — penalizado en el ranking.`">⚠ irregular</span>
                       </div>
@@ -1152,6 +1215,29 @@ async function doExport(toDrive = false) {
               </div>
               <p v-else-if="!store.colorLoading" class="colors__hint">Detecta y excluye páginas a color antes de escalar los capítulos marcados.</p>
             </div>
+            <!-- Novedades MangaDex: anuncio de "nuevo capítulo listo" con descarga 1-clic. Solo
+                 aparece cuando hay capítulos por delante de lo que ya tienes (fuente de verdad). -->
+            <div v-if="store.mdUpdates.newCount" class="mdupd">
+              <div class="mdupd__head">
+                <span class="mdupd__badge">{{ store.mdUpdates.newCount }}</span>
+                <span class="mdupd__txt">
+                  MangaDex va por delante:
+                  {{ store.mdUpdates.newCount === 1 ? '1 capítulo' : store.mdUpdates.newCount + ' capítulos' }}
+                  <template v-if="store.mdUpdates.behindFrom">
+                    · del {{ store.mdUpdates.behindFrom }} al {{ store.mdUpdates.behindTo }}
+                  </template>
+                </span>
+                <button class="mdupd__all" @click="store.downloadAllMdUpdates()"><Icon name="download" :size="13" /> Descargar todo</button>
+              </div>
+              <ul class="mdupd__list">
+                <li v-for="c in store.mdUpdates.list.filter(x => x.isNew)" :key="c.chapterId" class="mdupd__row">
+                  <span class="mdupd__n">Cap. {{ c.number }}</span>
+                  <span class="mdupd__lang">{{ flag(c.lang) }} {{ c.lang }}</span>
+                  <span class="mdupd__date">{{ (c.publishedAt || '').slice(0, 10) }}</span>
+                  <button class="mdupd__dl" @click="store.downloadMdUpdate(c)"><Icon name="download" :size="13" /> Descargar</button>
+                </li>
+              </ul>
+            </div>
             <div class="modal__chhead">
               <span>Capítulos</span>
               <span v-if="store.effectiveSource?.pinned" class="chsrc" :title="`Fuente fijada: ${store.effectiveSource.sourceName}`">
@@ -1228,7 +1314,10 @@ async function doExport(toDrive = false) {
                 <!-- Source/MD/multi-fuente chapter: not clickable, show download info.
                      `_assignedSource` (chapter_sources) SIEMPRE manda sobre la fuente legada
                      del manga completo — nunca se muestran las dos a la vez. -->
-                <div v-else class="chap__read">
+                <div v-else class="chap__read"
+                     @contextmenu.prevent="store.toggleChapterRead(c.chapter)"
+                     :title="store.isChapterRead(c.chapter) ? 'Leído · clic derecho para desmarcar' : 'Clic derecho: marcar leído'">
+                  <span v-if="store.isChapterRead(c.chapter)" class="chap__read-dot" title="Leído" />
                   <span v-if="c._mdLang" class="chap__flag" :title="c._mdLang">{{ flag(c._mdLang) }}</span>
                   <span class="chap__num">{{ formatChapter(c.chapter) }}</span>
                   <span class="chap__pages" v-if="c._assignedSourceName">vía {{ c._assignedSourceName }}</span>
@@ -1470,6 +1559,13 @@ async function doExport(toDrive = false) {
 .hbtn.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 .hbtn--accent { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 30%, transparent); }
 .hbtn--accent:hover { background: var(--cyan-glow); color: #d6fffb; }
+.hbtn--accent.is-added { color: var(--jade, #4ade80); border-color: color-mix(in srgb, var(--jade, #4ade80) 45%, transparent);
+  background: color-mix(in srgb, var(--jade, #4ade80) 12%, transparent); cursor: default; }
+/* Micro-confirmación: el check da un pequeño "pop" al confirmarse la acción. */
+.hbtn--accent.is-added :deep(svg) { animation: confirm-pop var(--t-base) var(--ease-snap); }
+@keyframes confirm-pop { 0% { transform: scale(0); } 60% { transform: scale(1.35); } 100% { transform: scale(1); } }
+@media (prefers-reduced-motion: reduce) { .hbtn--accent.is-added :deep(svg) { animation: none; } }
+.hbtn:disabled { cursor: default; opacity: .85; }
 .hbtn--danger { color: var(--danger, #f0788c); border-color: color-mix(in srgb, var(--danger, #f0788c) 30%, transparent); }
 .hbtn--danger:hover { background: color-mix(in srgb, var(--danger, #f0788c) 14%, transparent); color: #ffb3bf; border-color: var(--danger, #f0788c); }
 .mf--chk { flex-direction: row; align-items: center; justify-content: space-between; }
@@ -1668,6 +1764,16 @@ async function doExport(toDrive = false) {
 .vr__src { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm); font-weight: 600; color: var(--ink); }
 .vr__lang { font-style: normal; font-weight: 400; font-size: var(--fs-2xs); color: var(--ink-faint); }
 .vr__q { font-size: var(--fs-2xs); color: var(--ink-faint); font-family: var(--font-mono); }
+.vr__caps { color: var(--ink); font-weight: 600; }
+.vr__ref { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-3); padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface-2, var(--surface));
+  font-size: var(--fs-xs); color: var(--ink-soft); }
+.vr__ref strong { color: var(--ink); }
+.vr__refsrc { color: var(--ink-faint); font-size: var(--fs-2xs); margin-left: auto; }
+.vr__complete { font-size: var(--fs-2xs); font-weight: 700; color: var(--jade, #4ade80);
+  background: color-mix(in srgb, var(--jade, #4ade80) 14%, transparent); padding: 1px 7px; border-radius: var(--r-pill); }
+.vr__behind { font-size: var(--fs-2xs); font-weight: 600; color: var(--amber, #f5b544);
+  background: color-mix(in srgb, var(--amber, #f5b544) 14%, transparent); padding: 1px 7px; border-radius: var(--r-pill); }
 .vr__irr { margin-left: 0.5rem; font-size: var(--fs-2xs); color: var(--warn); white-space: nowrap; cursor: help; }
 .vr__badge { font-size: 9px; font-weight: 800; letter-spacing: .04em; padding: 2px 7px; border-radius: var(--r-pill); flex-shrink: 0; }
 .vr__badge--actual { background: var(--ink-ghost); color: var(--base); }
@@ -1682,7 +1788,7 @@ async function doExport(toDrive = false) {
 .vr__acts { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
 .vr__fix { padding: 5px 12px; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .vr__fix:hover { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 45%, transparent); }
-.vr__fix.is-on { color: #04130c; background: var(--cyan); border-color: transparent; }
+.vr__fix.is-on { color: #04130c; background: var(--cyan); border-color: transparent; animation: confirm-pop var(--t-base) var(--ease-snap); }
 .vr__row--primary { border-color: color-mix(in srgb, var(--cyan) 55%, transparent); }
 .vr__row--cmp { box-shadow: 0 0 0 1px var(--azure) inset; }
 .vr__badge--primary { background: var(--cyan); color: #04130c; }
@@ -1738,6 +1844,9 @@ async function doExport(toDrive = false) {
    would collapse this scroll region to 0 and hide the chapters. auto lets it size to
    content and only shrink+scroll once the modal hits its max-height. */
 .modal__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: var(--s-3); }
+.modal__skel { padding: var(--s-2) var(--s-2) var(--s-3); }
+.modal__skel-rows { margin-top: var(--s-4); display: flex; flex-direction: column; gap: var(--s-3); }
+.modal__skel-row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); }
 
 /* tomo export */
 .tomo { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-4); padding: var(--s-2); align-items: start; }
@@ -1832,6 +1941,22 @@ async function doExport(toDrive = false) {
 
 .chaps { display: flex; flex-direction: column; gap: 4px; }
 .modal__chhead { display: flex; align-items: center; justify-content: space-between; padding: var(--s-3) var(--s-3); font-weight: 600; font-size: var(--fs-sm); border-bottom: 1px solid var(--line); }
+/* Novedades MangaDex — anuncio de capítulos nuevos listos */
+.mdupd { margin: var(--s-3); border: 1px solid var(--azure); border-radius: var(--r-md); background: var(--azure-haze); overflow: hidden; }
+.mdupd__head { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); }
+.mdupd__badge { display: inline-grid; place-items: center; min-width: 1.4rem; height: 1.4rem; padding: 0 0.35rem; border-radius: var(--r-pill); background: var(--azure); color: #fff; font-size: var(--fs-2xs); font-weight: 800; }
+.mdupd__txt { font-weight: 700; font-size: var(--fs-sm); color: var(--azure-bright); }
+.mdupd__all { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: var(--r-pill); border: 1px solid var(--azure); background: var(--azure); color: #fff; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; transition: filter var(--t-fast); }
+.mdupd__all:hover { filter: brightness(1.12); }
+.mdupd__seen { display: inline-grid; place-items: center; width: 1.6rem; height: 1.6rem; border-radius: var(--r-sm); border: none; background: transparent; color: var(--ink-faint); cursor: pointer; }
+.mdupd__seen:hover { background: color-mix(in srgb, var(--azure) 18%, transparent); color: var(--ink); }
+.mdupd__list { list-style: none; margin: 0; padding: 0 var(--s-3) var(--s-2); display: flex; flex-direction: column; gap: 4px; max-height: 12rem; overflow-y: auto; }
+.mdupd__row { display: flex; align-items: center; gap: var(--s-2); padding: 4px 0; font-size: var(--fs-xs); color: var(--ink-soft); }
+.mdupd__n { font-weight: 700; color: var(--ink); min-width: 5rem; }
+.mdupd__lang { color: var(--ink-soft); }
+.mdupd__date { color: var(--ink-faint); margin-left: auto; }
+.mdupd__dl { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: var(--r-pill); border: 1px solid var(--azure); background: transparent; color: var(--azure-bright); font-size: var(--fs-2xs); font-weight: 600; cursor: pointer; transition: background var(--t-fast); }
+.mdupd__dl:hover { background: color-mix(in srgb, var(--azure) 18%, transparent); }
 .contbar { display: flex; align-items: center; gap: var(--s-2); width: 100%; margin: var(--s-2) 0; padding: var(--s-2) var(--s-3); border-radius: var(--r-md); background: var(--azure-haze); border: 1px solid var(--azure); color: var(--azure-bright); font-size: var(--fs-sm); font-weight: 500; transition: background var(--t-fast); }
 .contbar:hover { background: color-mix(in oklab, var(--azure) 22%, transparent); }
 .contbar__t { flex: 1; text-align: left; }

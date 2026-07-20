@@ -196,9 +196,12 @@ def _fetch_persist_cover(folder: Path) -> bool:
     if raw is None and is_suwayomi and meta.get('sourceId') and meta.get('title'):
         try:
             from api.sources import _resolve_source_manga_id, _persist_source_meta_id, SUWAYOMI_BASE
-            new_id = _resolve_source_manga_id(str(meta['sourceId']), meta['title'])
+            # id 404 (fila purgada) → re-alta: strict=False permite el 1er resultado. La `url`
+            # (si la hay) ancla el match exacto; el id nuevo se persiste (top-level Y pin).
+            new_id, new_url, _st = _resolve_source_manga_id(str(meta['sourceId']), meta['title'],
+                                                            meta.get('mangaUrl', ''), strict=False)
             if new_id and new_id != meta.get('mangaId'):
-                _persist_source_meta_id(meta.get('mangaId'), new_id, meta['title'])
+                _persist_source_meta_id(meta.get('mangaId'), new_id, meta['title'], new_url)
                 raw = _try_fetch_bytes(f"{SUWAYOMI_BASE}/api/v1/manga/{new_id}/thumbnail")
         except Exception:
             pass
