@@ -661,10 +661,28 @@ fn main() -> windows::core::Result<()> {
         // play sea instantáneo. En reposo no renderiza (Player::active=false).
         with_player(|_| {});
 
+        // Los tirones NO están en el render (medido: draw=42ms, present=0ms incluso durante
+        // el tirón), así que el hilo se va en OTRO mensaje. Delatamos al culpable: cuánto se
+        // tarda en sacar cada mensaje de la cola (espera) y en despacharlo (trabajo).
         let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        loop {
+            let t0 = Instant::now();
+            if !GetMessageW(&mut msg, None, 0, 0).as_bool() {
+                break;
+            }
+            let wait = t0.elapsed();
+            let (m, t1) = (msg.message, Instant::now());
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
+            let work = t1.elapsed();
+            if wait.as_millis() > 100 || work.as_millis() > 100 {
+                player::log_line(&format!(
+                    "[bloqueo] msg=0x{:04X} espera={}ms trabajo={}ms",
+                    m,
+                    wait.as_millis(),
+                    work.as_millis()
+                ));
+            }
         }
     }
 
@@ -736,6 +754,16 @@ fn ipc_log(line: &str) {
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
         let _ = writeln!(f, "{line}");
     }
+}
+
+/// Manda un evento de navegación a la SPA. Lo comparten los DOS caminos por los que puede llegar
+/// un botón lateral del ratón (XBUTTON crudo y APPCOMMAND del driver).
+fn nav_to_js(json: &str) {
+    APP.with(|a| {
+        if let Some(app) = a.borrow().as_ref() {
+            post_to_js(&app.webview, json);
+        }
+    });
 }
 
 fn post_to_js(webview: &ICoreWebView2, json: &str) {
@@ -1102,13 +1130,37 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                     _ => None,
                 };
                 if let Some(json) = json {
-                    APP.with(|a| {
-                        if let Some(app) = a.borrow().as_ref() {
-                            post_to_js(&app.webview, json);
-                        }
-                    });
+                    nav_to_js(json);
                 }
                 LRESULT(1) // TRUE = manejado (evita el WM_APPCOMMAND por defecto)
+            }
+            WM_APPCOMMAND => {
+                // Muchos ratones (Logitech, Razel, y los que pasan por su software) NO emiten
+                // XBUTTON: su driver traduce los botones laterales a un APPCOMMAND de navegador.
+                // En ese caso el brazo de arriba no llega a ejecutarse nunca y los botones
+                // parecen "no hacer nada" — que es exactamente el síntoma reportado.
+                // El comando va en el HIWORD del lParam, con banderas en los 4 bits altos.
+                // Valores literales a propósito: los `APPCOMMAND_*` del crate `windows` no están
+                // en ámbito aquí y, escritos en MAYÚSCULAS dentro de un `match`, Rust los toma
+                // como PATRONES DE ENLACE — el primer brazo casaría con todo y cualquier tecla
+                // multimedia navegaría hacia atrás. (El compilador lo avisa como "should have a
+                // snake case name"; ese warning era el bug.)
+                const APPCMD_BACK: u16 = 1; // APPCOMMAND_BROWSER_BACKWARD
+                const APPCMD_FWD: u16 = 2; // APPCOMMAND_BROWSER_FORWARD
+                let cmd = (((lparam.0 >> 16) & 0xffff) as u16) & 0x0fff;
+                let json = match cmd {
+                    APPCMD_BACK => Some(r#"{"event":"navigate","dir":"back"}"#),
+                    APPCMD_FWD => Some(r#"{"event":"navigate","dir":"forward"}"#),
+                    _ => None,
+                };
+                match json {
+                    Some(json) => {
+                        nav_to_js(json);
+                        LRESULT(1) // manejado
+                    }
+                    // Volumen, reproducción multimedia… no son nuestros: que sigan su curso.
+                    None => DefWindowProcW(hwnd, msg, wparam, lparam),
+                }
             }
             WM_SETCURSOR => {
                 // En composición el WebView no controla el cursor de la ventana; lo
@@ -1219,13 +1271,28 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                             let mut n = f.borrow_mut();
                             *n = n.wrapping_add(1);
                             if *n % 30 == 0 {
-                                if let Some(pos) = p.time_pos() {
-                                    let dur = p.duration().unwrap_or(0.0);
-                                    let paused = p.paused();
+                                // Sospechoso de los tirones: estas lecturas son SÍNCRONAS y
+                                // toman el cerrojo del núcleo de mpv; si está ocupado, paran
+                                // el hilo de la ventana (y con él el vídeo). Medimos por
+                                // separado las propiedades y el salto a WebView2.
+                                let t_prop = Instant::now();
+                                let vals = p.time_pos().map(|pos| {
+                                    (pos, p.duration().unwrap_or(0.0), p.paused())
+                                });
+                                let prop_ms = t_prop.elapsed().as_millis();
+                                let mut post_ms = 0;
+                                if let Some((pos, dur, paused)) = vals {
                                     let json = format!(
                                         r#"{{"event":"time","pos":{pos},"duration":{dur},"paused":{paused}}}"#
                                     );
+                                    let t_post = Instant::now();
                                     post_to_js(&app.webview, &json);
+                                    post_ms = t_post.elapsed().as_millis();
+                                }
+                                if prop_ms > 50 || post_ms > 50 {
+                                    player::log_line(&format!(
+                                        "[bloqueo] props={prop_ms}ms post_js={post_ms}ms"
+                                    ));
                                 }
                             }
                         });

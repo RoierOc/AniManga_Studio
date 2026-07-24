@@ -86,10 +86,24 @@ const SHADERS_ULTRA: &[&str] = &[
     "Anime4K_Thin_HQ.glsl",
 ];
 
+// --- Imagen REAL (series y películas) ---------------------------------------------------
+// Anime4K está entrenado en line art: sobre imagen real deja halos y piel de plástico. Estos
+// dos SÍ son genéricos:
+//   FSRCNNX_x2_8-0-4-1 — red convolucional sobre LUMA, duplica y reconstruye detalle.
+//   SSimSuperRes       — corrige el escalado para que el resultado, al reducirlo, vuelva a
+//                        parecerse al original. Sus pases llevan `!WHEN … OUTPUT.h <`, así que
+//                        se APAGAN SOLOS cuando no estás escalando (1080p en panel 1080p).
+// Orden importa: FSRCNNX (LUMA) primero, SSSR (POSTKERNEL) después.
+const SHADERS_LIVE: &[&str] = &["FSRCNNX_x2_8-0-4-1.glsl", "SSimSuperRes.glsl"];
+// Barato: sólo la corrección de escalado. Para cuando FSRCNNX no dé los fotogramas.
+const SHADERS_LIVE_LITE: &[&str] = &["SSimSuperRes.glsl"];
+
 fn tier_shaders(tier: &str) -> &'static [&'static str] {
     match tier {
         "high" => SHADERS_HIGH,
         "ultra" => SHADERS_ULTRA,
+        "live" => SHADERS_LIVE,
+        "live_lite" => SHADERS_LIVE_LITE,
         _ => &[], // off / none / desconocido
     }
 }
@@ -294,16 +308,35 @@ unsafe fn sdr_white_nits(hwnd: HWND) -> f32 {
     0.0
 }
 
-/// Log de diagnóstico a ipc.log.
-fn log_line(msg: &str) {
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(r"C:/Users/Example/AppData/Local/AniMangaStudio/ipc.log")
-    {
-        use std::io::Write as _;
-        let _ = writeln!(f, "{msg}");
-    }
+/// Log de diagnóstico a ipc.log, ASÍNCRONO.
+///
+/// Antes abría-escribía-cerraba el fichero en el hilo que llama, que es el de la ventana (el
+/// que dibuja el vídeo). MEDIDO: hasta **158 ms** en una sola línea (C: con el antivirus
+/// mirando), y ese hueco aparecía tal cual como micro tirón en `max_gap`. La línea `[cadence]`
+/// sale 1×/s y un volcado de `[params]` son ~30 seguidas, así que el propio diagnóstico
+/// congelaba la imagen. Ahora el que llama solo empuja a un canal (microsegundos) y un hilo
+/// aparte escribe, con el fichero abierto de una vez.
+static LOG_TX: std::sync::OnceLock<std::sync::mpsc::Sender<String>> = std::sync::OnceLock::new();
+
+pub fn log_line(msg: &str) {
+    let tx = LOG_TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<String>();
+        std::thread::spawn(move || {
+            let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(r"C:/Users/Example/AppData/Local/AniMangaStudio/ipc.log")
+            else {
+                return;
+            };
+            use std::io::Write as _;
+            while let Ok(line) = rx.recv() {
+                let _ = writeln!(f, "{line}");
+            }
+        });
+        tx
+    });
+    let _ = tx.send(msg.to_string());
 }
 
 /// Formato del swapchain/textura interop según HDR: 10-bit para HDR10, 8-bit para SDR.
@@ -370,6 +403,19 @@ pub struct Player {
     tick_count: Cell<u64>,
     present_count: Cell<u64>,
     last_stat: Cell<Instant>,
+    // Medidor de ESPACIADO entre presents. El conteo por segundo no ve un micro tirón: 24
+    // frames mal repartidos siguen sumando 24. Lo que se percibe es un frame que dura de
+    // más, así que medimos el hueco entre presents consecutivos y nos quedamos con el peor
+    // y con cuántos se pasan de 60 ms (>1,4× los 41,7 ms de un frame a 23,976 fps).
+    last_present: Cell<Option<Instant>>,
+    max_gap_us: Cell<u64>,
+    // Reparto del hueco: ¿el bloqueo está en mpv dibujando o en Present esperando al
+    // compositor? Sin esto solo sabemos que el hilo se paró, no DÓNDE.
+    // Lo que tardó en escribirse la línea ANTERIOR (el disco también puede parar el hilo).
+    last_log_us: Cell<u64>,
+    max_draw_us: Cell<u64>,
+    max_present_us: Cell<u64>,
+    late_count: Cell<u32>,
 }
 
 impl Player {
@@ -616,6 +662,12 @@ impl Player {
             needs_render: Cell::new(false),
             tick_count: Cell::new(0),
             present_count: Cell::new(0),
+            last_present: Cell::new(None),
+            last_log_us: Cell::new(0),
+            max_draw_us: Cell::new(0),
+            max_present_us: Cell::new(0),
+            max_gap_us: Cell::new(0),
+            late_count: Cell::new(0),
             last_stat: Cell::new(Instant::now()),
         })
     }
@@ -636,10 +688,14 @@ impl Player {
         }
         self.tick_count.set(self.tick_count.get() + 1);
         // ¿mpv tiene un frame nuevo listo? (poll del flag; no requiere update-callback)
-        let has_frame = matches!(
-            self.render_ctx.update(),
-            Ok(f) if f & mpv_render_update::Frame != 0
-        );
+        // update() también toma el cerrojo del núcleo de mpv, y esto corre en CADA tick.
+        let t_upd = Instant::now();
+        let upd = self.render_ctx.update();
+        let upd_ms = t_upd.elapsed().as_millis();
+        if upd_ms > 50 {
+            log_line(&format!("[bloqueo] update={upd_ms}ms"));
+        }
+        let has_frame = matches!(upd, Ok(f) if f & mpv_render_update::Frame != 0);
         if !has_frame && !self.needs_render.get() {
             self.log_cadence();
             return; // nada nuevo que dibujar: NO re-renderizar el mismo frame
@@ -660,6 +716,7 @@ impl Player {
         };
         let gl = &self.gl;
         let mut obj = self.gl_obj;
+        let t_draw = Instant::now();
         unsafe {
             (gl.dx_lock_objects)(self.gl_dx_device, 1, &mut obj);
             (gl.bind_framebuffer)(GL_FRAMEBUFFER, self.fbo);
@@ -670,10 +727,23 @@ impl Player {
             (gl.flush)();
             (gl.dx_unlock_objects)(self.gl_dx_device, 1, &mut obj);
             self.context.CopyResource(bb, sr);
+            let d = t_draw.elapsed().as_micros() as u64;
+            if d > self.max_draw_us.get() { self.max_draw_us.set(d); }
+            let t_pres = Instant::now();
             let _ = self.swapchain.Present(1, DXGI_PRESENT(0));
+            let p = t_pres.elapsed().as_micros() as u64;
+            if p > self.max_present_us.get() { self.max_present_us.set(p); }
         }
         self.needs_render.set(false);
         self.present_count.set(self.present_count.get() + 1);
+        // Espaciado real respecto al present anterior (ver campos del medidor).
+        let now = Instant::now();
+        if let Some(prev) = self.last_present.get() {
+            let gap = now.duration_since(prev).as_micros() as u64;
+            if gap > self.max_gap_us.get() { self.max_gap_us.set(gap); }
+            if gap > 60_000 { self.late_count.set(self.late_count.get() + 1); }
+        }
+        self.last_present.set(Some(now));
         self.log_cadence();
     }
 
@@ -683,13 +753,25 @@ impl Player {
     fn log_cadence(&self) {
         let now = Instant::now();
         if now.duration_since(self.last_stat.get()).as_millis() >= 1000 {
+            let t_log = Instant::now();
             log_line(&format!(
-                "[cadence] ticks/s={} presents/s={}",
+                "[cadence] ticks/s={} presents/s={} max_gap={}.{:02}ms tardios={} draw={}ms present={}ms log={}us",
                 self.tick_count.get(),
-                self.present_count.get()
+                self.present_count.get(),
+                self.max_gap_us.get() / 1000,
+                (self.max_gap_us.get() % 1000) / 10,
+                self.late_count.get(),
+                self.max_draw_us.get() / 1000,
+                self.max_present_us.get() / 1000,
+                self.last_log_us.get()
             ));
+            self.last_log_us.set(t_log.elapsed().as_micros() as u64);
+            self.max_draw_us.set(0);
+            self.max_present_us.set(0);
             self.tick_count.set(0);
             self.present_count.set(0);
+            self.max_gap_us.set(0);
+            self.late_count.set(0);
             self.last_stat.set(now);
         }
     }
@@ -780,6 +862,7 @@ impl Player {
         self.logged.set(false); // volver a registrar params para el archivo nuevo
         self.active.set(true); // empezar a renderizar
         self.needs_render.set(true); // garantizar el primer dibujado del archivo nuevo
+        self.mark_discontinuity();
         if mpv_command_args(&self.mpv, &["loadfile", path, "replace"]) < 0 {
             eprintln!("[player] loadfile falló: {path}");
         }
@@ -788,15 +871,25 @@ impl Player {
     pub fn stop(&self) {
         let _ = mpv_command_args(&self.mpv, &["stop"]);
         self.active.set(false); // volver a reposo (sin gasto de GPU)
+        self.mark_discontinuity();
     }
 
     pub fn set_pause(&self, paused: bool) {
         let _ = self.mpv.set_property("pause", paused);
+        self.mark_discontinuity();
     }
 
     pub fn seek_absolute(&self, secs: f64) {
         let _ = mpv_command_args(&self.mpv, &["seek", &secs.to_string(), "absolute"]);
         self.needs_render.set(true); // en pausa, garantizar el redibujo del frame buscado
+        self.mark_discontinuity();
+    }
+
+    /// Corta la cuenta del hueco entre presents. Pausa/seek/carga/stop paran el flujo de
+    /// frames a propósito: sin esto, el primer present al reanudar mide TODA la pausa
+    /// (se vieron gaps de 40 s) y contamina el medidor con tirones que no existieron.
+    fn mark_discontinuity(&self) {
+        self.last_present.set(None);
     }
 
     pub fn set_volume(&self, vol: f64) {
