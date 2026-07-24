@@ -96,6 +96,9 @@ async function demoConfirm(danger) {
 
     <section class="kit__s">
       <h2 class="kit__h">Carga</h2>
+      <!-- Se confundió con la página colgada: son MUESTRAS, giran para siempre a propósito. -->
+      <p class="kit__note"><Icon name="spark" :size="13" /> Estas ruedas y esqueletos giran
+        <strong>siempre</strong>: son las muestras del componente, no es que la página esté cargando.</p>
       <div class="kit__box kit__row">
         <span><Spinner :size="14" /> 14</span>
         <span><Spinner :size="22" /> 22 (por defecto)</span>
@@ -207,6 +210,10 @@ async function demoConfirm(danger) {
 .kit__dark { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: #05070d; }
 .kit__two { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-4); }
 .kit__ghost { color: var(--ink-ghost); }
+.kit__note { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-3);
+  padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs);
+  color: var(--ice); background: var(--azure-haze); border: 1px solid var(--line-2); }
+.kit__note :deep(svg) { flex-shrink: 0; color: var(--azure); }
 .kit__mono { font-family: var(--font-mono); }
 .muted { color: var(--ink-faint); font-size: var(--fs-xs); margin-top: var(--s-2); }
 code { font-family: var(--font-mono); font-size: 0.9em; color: var(--ice); }

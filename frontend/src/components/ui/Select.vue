@@ -44,14 +44,21 @@ function place() {
   pos.value = { left: r.left, width: r.width, top: up ? r.top - 6 : r.bottom + 6, up }
 }
 
+/* Instante en que se abrió el menú. `onReflow` cierra al hacer scroll, y el `scrollIntoView` de
+   más abajo ES un scroll: con `scroll-behavior:smooth` (base.css) la animación emite eventos
+   durante cientos de ms, así que el menú se abría y se cerraba solo — no se podía elegir nada. */
+let openedAt = 0
+
 async function toggle() {
   if (props.disabled) return
   if (open.value) return close()
   place()
+  openedAt = performance.now()
   open.value = true
   active.value = props.options.findIndex(o => String(o.value) === String(props.modelValue))
   await nextTick()
-  menu.value?.querySelector('.usel__opt.is-active')?.scrollIntoView({ block: 'nearest' })
+  // `behavior:'instant'` para no heredar el scroll suave global (ver openedAt).
+  menu.value?.querySelector('.usel__opt.is-active')?.scrollIntoView({ block: 'nearest', behavior: 'instant' })
 }
 function close() { open.value = false; active.value = -1 }
 
@@ -59,7 +66,7 @@ function pick(o) {
   emit('update:modelValue', o.value)
   emit('change', o.value)
   close()
-  btn.value?.focus()
+  btn.value?.focus({ preventScroll: true })
 }
 
 function onKey(e) {
@@ -89,7 +96,10 @@ function onDocDown(e) {
   close()
 }
 function onReflow(e) {
-  if (e?.type === 'scroll' && menu.value?.contains(e.target)) return
+  if (e?.type === 'scroll') {
+    if (menu.value?.contains(e.target)) return          // scroll DENTRO del menú: legítimo
+    if (performance.now() - openedAt < 300) return      // el scrollIntoView de la propia apertura
+  }
   close()
 }
 watch(open, (v) => {

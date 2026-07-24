@@ -8,6 +8,7 @@ import { useMangaStore } from './manga'
 const SESSION_KEY = 'animanga:session:v2'
 let _navInit = false
 let _applying = false   // true while applying a popstate, so we don't push new history
+let _scrollTimer = 0    // debounce del sellado de la posición de scroll en el historial
 
 function loadSession() {
   try { return JSON.parse(localStorage.getItem(SESSION_KEY) || '{}') } catch { return {} }
@@ -184,6 +185,19 @@ export const useUiStore = defineStore('ui', {
       try { history.scrollRestoration = 'manual' } catch {}
       this._histState('replaceState')
       window.addEventListener('popstate', (e) => this._apply(e.state || {}))
+      // Sella la posición MIENTRAS scrolleas, no solo al navegar. Sin esto, "adelante" siempre
+      // aterrizaba arriba: la entrada que dejas atrás al retroceder nunca llegaba a guardar
+      // dónde estabas, porque sólo se sellaba en el push (o sea, sólo hacia delante).
+      window.addEventListener('scroll', () => {
+        if (_applying) return
+        clearTimeout(_scrollTimer)
+        _scrollTimer = setTimeout(() => this._stampScroll(), 150)
+      }, { passive: true })
+    },
+
+    // Guarda la posición actual EN la entrada de historial actual (sin crear una nueva).
+    _stampScroll() {
+      try { history.replaceState({ ...(history.state || {}), scroll: window.scrollY }, '') } catch {}
     },
 
     /* Devuelve la página a `y` tras un atrás/adelante. El contenido de la vista llega por fetch,
@@ -193,10 +207,13 @@ export const useUiStore = defineStore('ui', {
      * arriba — observar el resize del documento no compensa la complejidad. */
     _restoreScroll(y) {
       if (!y) return
-      let tries = 12
+      let tries = 40                                    // ~0,65 s: cubre la carga de una biblioteca
       const tick = () => {
-        window.scrollTo({ top: y })
-        if (--tries > 0 && window.scrollY < y - 1) requestAnimationFrame(tick)
+        // `behavior:'instant'` A PROPÓSITO: base.css pone `scroll-behavior:smooth` en <html>, y
+        // una restauración animada (a) se ve como un salto raro y (b) peleaba con este bucle,
+        // que re-lanzaba el scrollTo a mitad de la animación y nunca llegaba al destino.
+        window.scrollTo({ top: y, behavior: 'instant' })
+        if (--tries > 0 && Math.abs(window.scrollY - y) > 2) requestAnimationFrame(tick)
       }
       requestAnimationFrame(tick)
     },
@@ -250,10 +267,11 @@ export const useUiStore = defineStore('ui', {
       // describe la vista saliente (aún no hemos hecho push) y la página aún no se ha movido,
       // así que este es el único instante en que ambos datos son los correctos. Sin esto,
       // volver de un detalle a una biblioteca con 200 títulos te dejaba siempre arriba del todo.
-      try { history.replaceState({ ...(history.state || {}), scroll: window.scrollY }, '') } catch {}
+      clearTimeout(_scrollTimer)
+      this._stampScroll()
       this._histState('pushState')
       this.persist()
-      window.scrollTo({ top: 0 })
+      window.scrollTo({ top: 0, behavior: 'instant' })
     },
     // Replace the current entry in place (state changed but it's not a new "page").
     replaceNav() {
