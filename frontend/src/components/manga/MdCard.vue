@@ -21,7 +21,7 @@ const tier = computed(() => {
       <!-- imgProxy: el hotlink directo a uploads.mangadex.org devuelve el
            placeholder anti-hotlink en WebKitGTK (la app de escritorio) -->
       <img v-if="thumb" :src="thumb" class="blurup" aria-hidden="true" alt="" />
-      <img v-if="manga.cover" :src="imgProxy(manga.cover, 260)" :alt="manga.title" loading="lazy" @load="$event.target.classList.add('is-loaded')" class="mc__img" />
+      <img v-if="manga.cover" :src="imgProxy(manga.cover, 260)" :alt="manga.title" loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" class="mc__img" />
       <div v-else class="mc__ph"><Icon name="library" :size="28" /></div>
       <div class="mc__scrim" />
       <span class="mc__shine" />

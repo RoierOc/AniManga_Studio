@@ -139,18 +139,20 @@ onMounted(check)
 
 <style scoped>
 .hc__badge { font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.5625rem; border-radius: var(--r-pill); }
-.hc__badge.is-ok { background: rgba(52,199,120,.16); color: #4ad07f; }
-.hc__badge.is-warn { background: rgba(240,170,60,.16); color: #f0aa3c; }
+/* Colores por TOKEN, no a mano: los hex de antes (#f0aa3c) eran NARANJA, que el sistema prohíbe
+   explícitamente, y además no seguían el remapeo de tema del Modo Cine. */
+.hc__badge.is-ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
+.hc__badge.is-warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
 .hc__refresh { margin-left: auto; }
-.hc__err { color: var(--danger, #e5484d); font-size: var(--fs-sm); margin: var(--s-2) 0; }
-.hc__done { color: #4ad07f; font-size: var(--fs-sm); display: flex; align-items: center; gap: 0.375rem; margin: var(--s-2) 0; }
+.hc__err { color: var(--danger); font-size: var(--fs-sm); margin: var(--s-2) 0; }
+.hc__done { color: var(--ok); font-size: var(--fs-sm); display: flex; align-items: center; gap: 0.375rem; margin: var(--s-2) 0; }
 .hc__body { display: flex; flex-direction: column; gap: var(--s-3); margin-top: var(--s-3); }
 .hc__row { display: flex; gap: var(--s-3); align-items: flex-start; padding: var(--s-3); border-radius: var(--r-md); background: var(--surface-2); }
-.hc__row.is-bad { background: rgba(229,72,77,.08); }
-.hc__row.is-warn { background: rgba(240,170,60,.08); }
+.hc__row.is-bad { background: color-mix(in srgb, var(--danger) 8%, transparent); }
+.hc__row.is-warn { background: color-mix(in srgb, var(--warn) 8%, transparent); }
 .hc__ic { flex-shrink: 0; width: 1.6rem; height: 1.6rem; display: grid; place-items: center; border-radius: 50%; background: var(--surface); color: var(--ink-soft); }
-.hc__row.is-bad .hc__ic { color: #e5484d; }
-.hc__row.is-warn .hc__ic { color: #f0aa3c; }
+.hc__row.is-bad .hc__ic { color: var(--danger); }
+.hc__row.is-warn .hc__ic { color: var(--warn); }
 .hc__txt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: var(--fs-sm); }
 .hc__txt strong { font-size: var(--fs-sm); }
 .hc__txt span { color: var(--ink-soft); }

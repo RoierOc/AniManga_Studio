@@ -37,7 +37,7 @@ function onWheel(e) {
       <article v-for="it in items" :key="it.id" class="cwc"
                @click="emit('play', it)" @contextmenu.prevent="emit('menu', { ev: $event, item: it })">
         <div class="cwc__thumb">
-          <img v-if="it.thumb" :src="it.thumb" :alt="it.title" loading="lazy" class="cwc__img"
+          <img v-if="it.thumb" :src="it.thumb" :alt="it.title" loading="lazy" decoding="async" class="cwc__img"
                @load="$event.target.classList.add('is-loaded')"
                @error="$event.target.style.display = 'none'" />
           <div v-else class="cwc__ph">{{ (it.title || '?')[0].toUpperCase() }}</div>

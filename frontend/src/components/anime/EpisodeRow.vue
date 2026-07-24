@@ -54,7 +54,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
       <div class="eprow__thumb" @click="onPlay">
         <div class="eprow__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 120)}')` : ''" />
         <img v-if="playable || ep.has_thumb" class="eprow__img" :src="`/api/anime/thumb/${anime.id}/${ep.num}${ep.ep_type === 'special' ? '?special=1' : ''}`"
-             loading="lazy" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
+             loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
         <div class="eprow__num"><span class="eprow__num-k">{{ ep.ep_type === 'special' ? 'SP' : 'EP' }}</span><span class="eprow__num-v">{{ String(ep.num).padStart(2, '0') }}</span></div>
         <!-- resume / download / finished bar -->
         <div v-if="resumePct" class="eprow__bar eprow__bar--resume"><span :style="{ width: resumePct + '%' }" /></div>

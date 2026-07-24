@@ -67,7 +67,7 @@ const thumb = computed(() => imgThumb(props.cover))
            tabindex="0" @click="openCard" @keydown.enter="openCard" @mouseenter="ensureGlow" @focus="ensureGlow">
     <div class="mcard__poster">
       <img v-if="thumb" :src="thumb" class="blurup" aria-hidden="true" alt="" />
-      <img v-if="cover" :src="imgProxy(cover, 300)" :alt="title" loading="lazy" class="mcard__img"
+      <img v-if="cover" :src="imgProxy(cover, 300)" :alt="title" loading="lazy" decoding="async" class="mcard__img"
            @load="$event.target.classList.add('is-loaded')" />
       <div v-else class="mcard__ph">{{ (title || '?')[0].toUpperCase() }}</div>
       <div class="mcard__scrim" />

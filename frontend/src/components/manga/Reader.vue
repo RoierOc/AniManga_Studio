@@ -85,7 +85,7 @@ function warm(i) {
 function preloadNeighbors() {
   if (!store.pages.length) return
   const remote = store.reader?.source === 'online'
-  // WEBTOON: la tira se lee bajando; `loading="lazy"` carga tarde y deja HUECOS en blanco al
+  // WEBTOON: la tira se lee bajando; `loading="lazy" decoding="async"` carga tarde y deja HUECOS en blanco al
   // bajar rápido. Precargamos una VENTANA por delante de la imagen central (store.page, que
   // onScroll mantiene) + un par atrás para volver sin recargar. Más margen si la fuente es remota.
   if (store.mode === 'webtoon') {
@@ -459,7 +459,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
           <div class="rd__thumbs" ref="thumbsEl">
             <button v-for="(p, i) in store.pages" :key="i" class="rd__thumb" :class="{ 'is-active': i === store.page }"
                     :data-page="i" @click="store.setPage(i)">
-              <img :src="pageUrl(p, 120)" loading="lazy" alt="" />
+              <img :src="pageUrl(p, 120)" loading="lazy" decoding="async" alt="" />
             </button>
           </div>
         </footer>

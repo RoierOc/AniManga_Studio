@@ -8,6 +8,7 @@ import ContinueRail from '@/components/media/ContinueRail.vue'
 import HeroBanner from '@/components/anime/HeroBanner.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
 import ContentToolbar from '@/components/ui/ContentToolbar.vue'
 
@@ -158,7 +159,7 @@ function openMenu(e, a) {
     </ContentToolbar>
 
     <div v-if="store.loading" class="grid">
-      <div v-for="n in 10" :key="n" class="skeleton" />
+      <Skeleton v-for="n in 10" :key="n" variant="poster" />
     </div>
     <EmptyState v-else-if="!filtered.length" icon="film"
                 :title="store.library.length ? 'Sin resultados.' : 'Aún no has añadido anime.'"
@@ -215,7 +216,6 @@ function openMenu(e, a) {
 .iconbtn:hover { color: var(--azure-bright); border-color: var(--azure); }
 
 .grid { position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(14.0625rem, 1fr)); gap: var(--s-6) var(--s-5); }
-.skeleton { aspect-ratio: 2/3; border-radius: var(--r-md); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-9) 0; color: var(--ink-faint); }
 
 @media (max-width: 540px) {

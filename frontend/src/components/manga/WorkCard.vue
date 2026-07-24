@@ -23,7 +23,7 @@ function quickAdd() { disco.addToLibrary(props.work) }
 <template>
   <article class="wc" tabindex="0" @click="emit('select', work)" @keydown.enter="emit('select', work)">
     <div class="wc__poster">
-      <img v-if="work.cover" :src="cover" :alt="work.title" loading="lazy"
+      <img v-if="work.cover" :src="cover" :alt="work.title" loading="lazy" decoding="async"
            @load="$event.target.classList.add('is-loaded')" class="wc__img" />
       <div v-else class="wc__ph"><Icon name="library" :size="24" /></div>
       <div class="wc__scrim" />

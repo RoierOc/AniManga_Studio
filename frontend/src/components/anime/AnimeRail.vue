@@ -56,7 +56,7 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
       <article v-for="it in items" :key="it.anime.id + '-' + (it.ep?.num ?? '')" class="ecard"
                @click="$emit('select', it)">
         <div class="ecard__thumb">
-          <img :src="epThumb(it)" :alt="'Ep ' + it.ep?.num" loading="lazy"
+          <img :src="epThumb(it)" :alt="'Ep ' + it.ep?.num" loading="lazy" decoding="async"
                @load="$event.target.classList.add('is-loaded')"
                @error="$event.target.style.display = 'none'" class="ecard__img" />
           <div class="ecard__scrim" />
@@ -78,7 +78,7 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
                @click="$emit('select', it)">
         <div class="pcard__poster">
           <img v-if="imgThumb(it.anime.cover)" :src="imgThumb(it.anime.cover)" class="blurup" aria-hidden="true" alt="" />
-          <img v-if="it.anime.cover" :src="imgProxy(it.anime.cover, 220)" :alt="it.anime.title" loading="lazy"
+          <img v-if="it.anime.cover" :src="imgProxy(it.anime.cover, 220)" :alt="it.anime.title" loading="lazy" decoding="async"
                @load="$event.target.classList.add('is-loaded')" class="pcard__img" />
           <div v-else class="pcard__ph">{{ (it.anime.title || '?')[0].toUpperCase() }}</div>
           <div class="pcard__scrim" />

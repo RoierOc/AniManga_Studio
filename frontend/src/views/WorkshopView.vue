@@ -6,6 +6,7 @@ import MangaCard from '@/components/manga/MangaCard.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 
 const store = useWorkshopStore()
 const manga = useMangaStore()
@@ -97,7 +98,7 @@ onMounted(() => store.loadList())
 
       <ul class="pv__chaps">
         <li v-for="(c, i) in st.chapters" :key="c.start" class="pv__chap">
-          <img :src="store.thumbUrl(c.start)" class="pv__thumb" loading="lazy" alt="" referrerpolicy="no-referrer" />
+          <img :src="store.thumbUrl(c.start)" class="pv__thumb" loading="lazy" decoding="async" alt="" referrerpolicy="no-referrer" />
           <div class="pv__chinfo">
             <label class="pv__chlabel">Cap.
               <input :value="c.chapter" @input="store.setChapterNum(i, $event.target.value)" class="pv__numin pv__numin--sm" />
@@ -116,7 +117,7 @@ onMounted(() => store.loadList())
                   :class="{ 'is-start': st.chapters.some(c => c.start === idx - 1), 'is-cover': st.cover === idx - 1 }"
                   @click="store.toggleCut(idx - 1)" @contextmenu.prevent="store.setCover(idx - 1)"
                   :title="`Página ${idx} · clic: corte · clic derecho: portada`">
-            <img :src="store.thumbUrl(idx - 1)" class="pv__cellimg" loading="lazy" alt="" referrerpolicy="no-referrer" />
+            <img :src="store.thumbUrl(idx - 1)" class="pv__cellimg" loading="lazy" decoding="async" alt="" referrerpolicy="no-referrer" />
             <span v-if="st.chapters.some(c => c.start === idx - 1)" class="pv__cellbadge">✂</span>
             <span v-else-if="st.cover === idx - 1" class="pv__cellbadge pv__cellbadge--cov">★</span>
             <span class="pv__cellnum">{{ idx }}</span>
@@ -136,7 +137,7 @@ onMounted(() => store.loadList())
     <!-- ── Importados ──────────────────────────────────────────────────── -->
     <h2 class="sect">Importados</h2>
     <div v-if="store.loading" class="grid">
-      <div v-for="n in 4" :key="n" class="skeleton" />
+      <Skeleton v-for="n in 4" :key="n" variant="poster" />
     </div>
     <EmptyState v-else-if="!store.items.length" icon="upload" title="Aún no has importado nada."
                 hint="Sube un archivo arriba para empezar." />
@@ -182,7 +183,7 @@ onMounted(() => store.loadList())
 .pv__file { display: inline-flex; align-items: center; gap: 4px; color: var(--ink-soft); }
 .pv__badge { padding: 2px var(--s-2); border-radius: var(--r-pill); font-size: var(--fs-2xs); font-weight: 600; background: var(--azure-haze); color: var(--azure-bright); }
 .pv__badge--flat { background: color-mix(in oklab, var(--coral) 18%, transparent); color: var(--coral); }
-.pv__badge--filenames, .pv__badge--comicinfo { background: color-mix(in oklab, var(--mint, #34d399) 18%, transparent); color: var(--mint, #34d399); }
+.pv__badge--filenames, .pv__badge--comicinfo { background: color-mix(in oklab, var(--jade) 18%, transparent); color: var(--jade); }
 
 .pv__flat { margin-top: var(--s-4); padding: var(--s-3); border-radius: var(--r-md); background: var(--surface-2); font-size: var(--fs-xs); color: var(--ink-soft); }
 .pv__flat p { display: flex; gap: var(--s-2); align-items: flex-start; }
@@ -222,7 +223,6 @@ onMounted(() => store.loadList())
 /* ── Grid de importados ───────────────────────────────────────────────── */
 .sect { font-size: var(--fs-lg); margin: var(--s-7) 0 var(--s-4); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14.0625rem, 1fr)); gap: var(--s-6) var(--s-5); }
-.skeleton { aspect-ratio: 2 / 3; border-radius: var(--r-md); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 
 @media (max-width: 540px) {
   .view { padding: var(--s-3) var(--s-4) var(--s-8); }

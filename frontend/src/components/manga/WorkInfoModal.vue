@@ -134,7 +134,7 @@ useModal(() => !!w.value, () => disco.closeWork(), modalEl)
 .wm__chips { display: flex; flex-wrap: wrap; gap: var(--s-1); }
 .wm__chip { font-size: var(--fs-2xs); color: var(--ink-soft); border: 1px solid var(--line); border-radius: var(--r-pill);
   padding: 3px 0.625rem; text-transform: capitalize; }
-.wm__synopsis { color: var(--ink-soft); font-size: var(--fs-sm); line-height: var(--lh-base, 1.6); white-space: pre-line; }
+.wm__synopsis { color: var(--ink-soft); font-size: var(--fs-sm); line-height: var(--lh-body); white-space: pre-line; }
 .wm__synopsis--empty { color: var(--ink-faint); font-style: italic; }
 
 .wm__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); }

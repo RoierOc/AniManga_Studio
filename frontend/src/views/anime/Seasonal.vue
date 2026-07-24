@@ -6,6 +6,7 @@ import DiscoverCard from '@/components/anime/DiscoverCard.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Select from '@/components/ui/Select.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 
 const store = useAnimeStore()
 
@@ -65,7 +66,7 @@ onMounted(() => { if (!store.seasonal.length) store.loadSeasonal() })
     </div>
 
     <div v-if="store.seasonalLoading" class="grid">
-      <div v-for="n in 12" :key="n" class="skeleton" />
+      <Skeleton v-for="n in 12" :key="n" variant="poster" />
     </div>
     <EmptyState v-else-if="!filtered.length" icon="spark" title="Sin resultados para esta temporada." />
     <div v-else class="grid">
@@ -95,7 +96,6 @@ onMounted(() => { if (!store.seasonal.length) store.loadSeasonal() })
 .gchip.is-active { background: var(--azure-haze); border-color: var(--azure); color: var(--azure-bright); }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.875rem, 1fr)); gap: var(--s-5); }
-.skeleton { aspect-ratio: 2/3; border-radius: var(--r-md); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-8) 0; color: var(--ink-faint); }
 
 @media (max-width: 640px) { .season { padding: 0 var(--s-4) var(--s-8); } .grid { grid-template-columns: repeat(auto-fill, minmax(8.75rem, 1fr)); } }

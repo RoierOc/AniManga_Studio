@@ -69,7 +69,7 @@ function openManga(g) {
         <article v-for="g in activeGroups" :key="g.mangaId" class="card">
           <header class="card__head" @click="openManga(g)">
             <span class="card__cover">
-              <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" />
+              <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" decoding="async" />
               <span v-else class="card__mono">{{ monogram(g.title) }}</span>
             </span>
             <span class="card__title">{{ g.title }}</span>
@@ -97,7 +97,7 @@ function openManga(g) {
         <article v-for="g in historyGroups" :key="g.mangaId" class="card">
           <header class="card__head" @click="openManga(g)">
             <span class="card__cover">
-              <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" />
+              <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" decoding="async" />
               <span v-else class="card__mono">{{ monogram(g.title) }}</span>
             </span>
             <span class="card__title">{{ g.title }}</span>

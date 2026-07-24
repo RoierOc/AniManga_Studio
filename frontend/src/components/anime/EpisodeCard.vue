@@ -102,7 +102,7 @@ function openMenu(ev) {
     <div class="ep__thumb" @click="onPrimary">
       <div class="ep__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 200)}')` : ''" />
       <img v-if="playable || ep.has_thumb" class="ep__img" :src="`/api/anime/thumb/${anime.id}/${ep.num}${ep.ep_type === 'special' ? '?special=1' : ''}`"
-           loading="lazy" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
+           loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
 
       <!-- Sobre la portada se queda SÓLO el nº (y el "Visto"). El título vive debajo. -->
       <div class="ep__overlay">

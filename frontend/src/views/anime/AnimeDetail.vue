@@ -325,7 +325,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
     <section v-if="resumeEp" class="dresume" @click="store.play(anime, resumeEp)">
       <div class="dresume__thumb">
         <img v-if="!resumeThumbFailed" :src="`/api/anime/thumb/${anime.id}/${resumeEp.num}`" :alt="'Ep ' + resumeEp.num"
-             loading="lazy" @error="resumeThumbFailed = true" />
+             loading="lazy" decoding="async" @error="resumeThumbFailed = true" />
         <img v-else-if="anime.cover" :src="imgProxy(anime.cover, 260)" :alt="anime.title" />
         <div class="dresume__scrim" />
         <div class="dresume__play"><Icon name="play" :size="24" /></div>
@@ -421,7 +421,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
               class="fran__row" :class="{ 'is-cur': f.is_current, 'is-own': f.in_library }"
               @click="store.openFranchiseItem(f)">
             <span class="fran__n">{{ i + 1 }}</span>
-            <img v-if="f.cover" class="fran__cover" :src="imgProxy(f.cover)" :alt="f.title" loading="lazy" />
+            <img v-if="f.cover" class="fran__cover" :src="imgProxy(f.cover)" :alt="f.title" loading="lazy" decoding="async" />
             <div class="fran__meta">
               <span class="fran__t">{{ f.title }}</span>
               <span class="fran__sub">
@@ -448,7 +448,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
         <div class="recgrid">
           <article v-for="r in recs" :key="r.al_id" class="rec" @click="store.openRec(r)">
             <div class="rec__poster">
-              <img v-if="r.cover" :src="imgProxy(r.cover)" :alt="r.title" loading="lazy" />
+              <img v-if="r.cover" :src="imgProxy(r.cover)" :alt="r.title" loading="lazy" decoding="async" />
               <div class="rec__scrim" />
               <span v-if="r.score" class="rec__score">★ {{ (r.score / 10).toFixed(1) }}</span>
               <span v-if="store.isInLibrary(r)" class="rec__in"><Icon name="check" :size="10" /></span>
@@ -473,7 +473,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
           <div v-if="store.stackBrowseState === 'loading'" class="center"><Spinner /></div>
           <div v-else class="bgrid">
             <article v-for="a in store.stackBrowseAnime" :key="a.al_id || a.mal_id" class="rec" @click="store.openRec(a); store.closeStackBrowse()">
-              <div class="rec__poster"><img v-if="a.cover" :src="imgProxy(a.cover)" :alt="a.title" loading="lazy" /><div class="rec__scrim" /><span v-if="a.score" class="rec__score">★ {{ (a.score/10).toFixed(1) }}</span><div class="rec__ov"><span class="rec__t">{{ a.title }}</span></div></div>
+              <div class="rec__poster"><img v-if="a.cover" :src="imgProxy(a.cover)" :alt="a.title" loading="lazy" decoding="async" /><div class="rec__scrim" /><span v-if="a.score" class="rec__score">★ {{ (a.score/10).toFixed(1) }}</span><div class="rec__ov"><span class="rec__t">{{ a.title }}</span></div></div>
             </article>
           </div>
         </div>
@@ -489,7 +489,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
           <div v-if="store.tagBrowseState === 'loading'" class="center"><Spinner /></div>
           <div v-else class="bgrid">
             <article v-for="a in store.tagBrowseAnime" :key="a.al_id" class="rec" @click="store.openRec(a); store.closeTagBrowse()">
-              <div class="rec__poster"><img v-if="a.cover" :src="imgProxy(a.cover)" :alt="a.title" loading="lazy" /><div class="rec__scrim" /><span v-if="a.score" class="rec__score">★ {{ (a.score/10).toFixed(1) }}</span><div class="rec__ov"><span class="rec__t">{{ a.title }}</span></div></div>
+              <div class="rec__poster"><img v-if="a.cover" :src="imgProxy(a.cover)" :alt="a.title" loading="lazy" decoding="async" /><div class="rec__scrim" /><span v-if="a.score" class="rec__score">★ {{ (a.score/10).toFixed(1) }}</span><div class="rec__ov"><span class="rec__t">{{ a.title }}</span></div></div>
             </article>
           </div>
         </div>
@@ -523,7 +523,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
             <button v-for="(o, i) in activeTab.options" :key="i" class="coveropt"
                     :class="{ 'is-current': o.url === activeTab.current }"
                     :disabled="store.coverSaving" @click="store.pickCover(o)">
-              <img :src="o.url" :alt="o.label" loading="lazy" />
+              <img :src="o.url" :alt="o.label" loading="lazy" decoding="async" />
               <span class="coveropt__label">{{ o.label }}</span>
               <span v-if="o.url === activeTab.current" class="coveropt__current"><Icon name="check" :size="12" /></span>
             </button>
@@ -639,7 +639,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 
 /* Pestaña Detalles */
 .dinfo { display: grid; grid-template-columns: 1fr minmax(15rem, 20rem); gap: var(--s-7); align-items: start; }
-.dinfo__syn { font-size: var(--fs-md); line-height: var(--lh-relaxed, 1.7); color: var(--ink-soft);
+.dinfo__syn { font-size: var(--fs-md); line-height: var(--lh-body); color: var(--ink-soft);
   max-width: 62ch; white-space: pre-line; }
 .dinfo__none { color: var(--ink-faint); font-size: var(--fs-sm); }
 .dinfo__side { display: flex; flex-direction: column; gap: var(--s-3); padding: var(--s-4);
@@ -737,7 +737,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .fran__badge { padding: 1px 0.4375rem; border-radius: var(--r-pill); border: 1px solid var(--line); font-size: var(--fs-2xs); color: var(--ink-soft); }
 .fran__tag { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-2xs); font-weight: 700; white-space: nowrap; flex: none; }
 .fran__tag--cur { color: var(--azure-bright); }
-.fran__tag--own { color: var(--mint, #46d4a0); }
+.fran__tag--own { color: var(--jade); }
 .chips { display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .chip { display: inline-flex; align-items: center; gap: 0.3125rem; padding: 0.3125rem 0.75rem; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .chip:hover { color: var(--ink); border-color: var(--azure); }

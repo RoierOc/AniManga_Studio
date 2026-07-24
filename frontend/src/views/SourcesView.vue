@@ -104,7 +104,7 @@ function openMangaFromGroup(m, groupSource) {
           <article v-for="(m, i) in store.popular" :key="m.sourceId + '_' + m.id + '_' + i" class="sc" tabindex="0"
             @click="openManga(m)" @keydown.enter="openManga(m)">
             <div class="sc__poster">
-              <img v-if="m.thumbnailUrl" :src="m.thumbnailUrl" :alt="m.title" loading="lazy" referrerpolicy="no-referrer" @load="$event.target.classList.add('is-loaded')" class="sc__img" />
+              <img v-if="m.thumbnailUrl" :src="m.thumbnailUrl" :alt="m.title" loading="lazy" decoding="async" referrerpolicy="no-referrer" @load="$event.target.classList.add('is-loaded')" class="sc__img" />
               <div v-else class="sc__ph"><Icon name="globe" :size="24" /></div>
               <div class="sc__scrim" />
               <span v-if="m.inLibrary" class="sc__lib"><Icon name="check" :size="11" /></span>
@@ -132,7 +132,7 @@ function openMangaFromGroup(m, groupSource) {
               <article v-for="(m, i) in group.results" :key="m.sourceId + '_' + m.id + '_' + i" class="sc" tabindex="0"
                 @click="openMangaFromGroup(m, group.source)" @keydown.enter="openMangaFromGroup(m, group.source)">
                 <div class="sc__poster">
-                  <img v-if="m.thumbnailUrl" :src="m.thumbnailUrl" :alt="m.title" loading="lazy" referrerpolicy="no-referrer" @load="$event.target.classList.add('is-loaded')" class="sc__img" />
+                  <img v-if="m.thumbnailUrl" :src="m.thumbnailUrl" :alt="m.title" loading="lazy" decoding="async" referrerpolicy="no-referrer" @load="$event.target.classList.add('is-loaded')" class="sc__img" />
                   <div v-else class="sc__ph"><Icon name="globe" :size="24" /></div>
                   <div class="sc__scrim" />
                   <span v-if="m.inLibrary" class="sc__lib"><Icon name="check" :size="11" /></span>

@@ -621,13 +621,13 @@ useModal(() => !!m.value, closeModal, modalEl)
                       </div>
                       <button v-for="c in store.coverPicker.anilist" :key="'al' + c.url" class="cvp__item"
                               :disabled="!!store.coverPicker.applying" @click="store.applyCover(c.url)" title="Usar esta portada">
-                        <img :src="imgProxy(c.thumb)" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                        <img :src="imgProxy(c.thumb)" referrerpolicy="no-referrer" loading="lazy" decoding="async" alt="" />
                         <span class="cvp__tag cvp__tag--al">AniList</span>
                         <span v-if="store.coverPicker.applying === c.url" class="cvp__busy"><Spinner :size="11" /></span>
                       </button>
                       <button v-for="(c, i) in store.coverPicker.mangadex" :key="'md' + i" class="cvp__item"
                               :disabled="!!store.coverPicker.applying" @click="store.applyCover(c.url)" title="Usar esta portada">
-                        <img :src="imgProxy(c.thumb)" referrerpolicy="no-referrer" loading="lazy" alt="" />
+                        <img :src="imgProxy(c.thumb)" referrerpolicy="no-referrer" loading="lazy" decoding="async" alt="" />
                         <span v-if="c.volume && c.volume !== '?'" class="cvp__tag">Vol {{ c.volume }}</span>
                         <span v-if="store.coverPicker.applying === c.url" class="cvp__busy"><Spinner :size="11" /></span>
                       </button>
@@ -752,7 +752,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                   <div v-if="store.colorPages.length" class="colors__grid">
                     <button v-for="cp in store.colorPages" :key="cp.filename" class="colorpg" :class="{ 'is-excl': store.excludedPages.includes(cp.filename) }"
                             :title="cp.label + (store.excludedPages.includes(cp.filename) ? ' (excluida)' : '')" @click="store.toggleExclude(cp.filename)">
-                      <img :src="cp.url" loading="lazy" alt="" />
+                      <img :src="cp.url" loading="lazy" decoding="async" alt="" />
                       <span v-if="store.excludedPages.includes(cp.filename)" class="colorpg__x"><Icon name="close" :size="12" /></span>
                     </button>
                   </div>
@@ -782,7 +782,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                 </div>
                 <div v-if="store.mdex.results.length" class="mdex__results">
                   <button v-for="r in store.mdex.results" :key="r.id" class="mdres" @click="store.selectMdexEntry(r)">
-                    <img v-if="r.cover" :src="imgProxy(r.cover)" loading="lazy" alt="" />
+                    <img v-if="r.cover" :src="imgProxy(r.cover)" loading="lazy" decoding="async" alt="" />
                     <span class="mdres__t">{{ r.title }}<small v-if="r.year"> · {{ r.year }}</small></span>
                   </button>
                 </div>
@@ -801,7 +801,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                 </div>
                 <div v-if="store.mdex.covers.length" class="mdex__covers">
                   <button v-for="c in store.mdex.covers" :key="c.id || c.url" class="covsel" :class="{ 'is-sel': store.mdex.selectedCover?.url === c.url }" @click="store.selectMdexCover(c)">
-                    <img :src="c.url256 || c.url" loading="lazy" alt="" />
+                    <img :src="c.url256 || c.url" loading="lazy" decoding="async" alt="" />
                     <span v-if="c.volume && c.volume !== 'none'" class="covsel__v">{{ c.volume }}</span>
                     <span v-if="store.mdex.coverLoadingId === c.id" class="covsel__load"><Spinner :size="11" /></span>
                   </button>
@@ -934,7 +934,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                       <div v-if="ver.sample.loading" class="vr__prevload"><Spinner :size="16" /></div>
                       <div v-else-if="ver.sample.pages.length" class="tl__strip">
                         <a v-for="(u, i) in ver.sample.pages" :key="i" :href="u" target="_blank" rel="noopener" class="tl__thumb" :title="`Página ${i + 1}`">
-                          <img :src="u" loading="lazy" referrerpolicy="no-referrer" />
+                          <img :src="u" loading="lazy" decoding="async" referrerpolicy="no-referrer" />
                         </a>
                       </div>
                       <div v-else class="muted vr__prevempty">Sin páginas de muestra.</div>
@@ -1152,7 +1152,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                       <div v-if="tp.preview[c.chapter].loading" class="tl__prevload"><Spinner :size="16" /></div>
                       <div v-else-if="tp.preview[c.chapter].pages.length" class="tl__strip">
                         <a v-for="(u, i) in tp.preview[c.chapter].pages" :key="i" :href="u" target="_blank" rel="noopener" class="tl__thumb" :title="`Página ${i + 1}`">
-                          <img :src="u" loading="lazy" referrerpolicy="no-referrer" />
+                          <img :src="u" loading="lazy" decoding="async" referrerpolicy="no-referrer" />
                         </a>
                       </div>
                       <div v-else class="muted tl__prevempty">Sin páginas.</div>
@@ -1175,7 +1175,7 @@ useModal(() => !!m.value, closeModal, modalEl)
               <div v-if="store.colorPages.length" class="colors__grid">
                 <button v-for="cp in store.colorPages" :key="cp.filename" class="colorpg" :class="{ 'is-excl': store.excludedPages.includes(cp.filename) }"
                         :title="cp.label + (store.excludedPages.includes(cp.filename) ? ' (excluida)' : '')" @click="store.toggleExclude(cp.filename)">
-                  <img :src="cp.url" loading="lazy" alt="" />
+                  <img :src="cp.url" loading="lazy" decoding="async" alt="" />
                   <span v-if="store.excludedPages.includes(cp.filename)" class="colorpg__x"><Icon name="close" :size="12" /></span>
                 </button>
               </div>
@@ -1436,7 +1436,7 @@ useModal(() => !!m.value, closeModal, modalEl)
           <!-- Un capítulo: rejilla plana -->
           <div v-else-if="store.colorPicker.mode === 'single'" class="cpk__grid">
             <button v-for="p in store.colorPicker.pages" :key="p.name" class="cpk__pg" :class="{ 'is-sel': p.sel }" @click="store.toggleColorPage(p.name)">
-              <img :src="pageUrl(p.url, 180)" loading="lazy" alt="" />
+              <img :src="pageUrl(p.url, 180)" loading="lazy" decoding="async" alt="" />
               <span class="cpk__check" :class="{ 'is-on': p.sel }"><Icon v-if="p.sel" name="check" :size="12" /></span>
             </button>
           </div>
@@ -1446,7 +1446,7 @@ useModal(() => !!m.value, closeModal, modalEl)
               <h4>Cap. {{ formatChapter(c.chapter) }} <em v-if="c.done">· ya escalado</em></h4>
               <div class="cpk__grid">
                 <button v-for="p in c.pages" :key="p.name" class="cpk__pg" :class="{ 'is-sel': p.sel }" @click="store.toggleColorPage(p.name, c.chapter)">
-                  <img :src="pageUrl(p.url, 180)" loading="lazy" alt="" />
+                  <img :src="pageUrl(p.url, 180)" loading="lazy" decoding="async" alt="" />
                   <span class="cpk__check" :class="{ 'is-on': p.sel }"><Icon v-if="p.sel" name="check" :size="12" /></span>
                 </button>
               </div>
@@ -1522,7 +1522,7 @@ useModal(() => !!m.value, closeModal, modalEl)
 /* Acción primaria: la única cosa grande y llena de la cabecera. */
 .hgo { display: inline-flex; align-items: center; gap: var(--s-2);
   padding: var(--s-2) var(--s-5); border-radius: var(--r-md);
-  font-size: var(--fs-sm); font-weight: 600; color: #0b0f1a; background: #fff;
+  font-size: var(--fs-sm); font-weight: 600; color: var(--ink-on-accent); background: #fff;
   box-shadow: var(--shadow-md); transition: box-shadow var(--t-fast), transform var(--t-fast); }
 .hgo:hover { box-shadow: var(--glow-azure); transform: translateY(-1px); }
 .hgo em { font-style: normal; font-family: var(--font-mono); font-size: var(--fs-2xs); opacity: .6; }
@@ -1533,15 +1533,15 @@ useModal(() => !!m.value, closeModal, modalEl)
 .hbtn.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 .hbtn--accent { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 30%, transparent); }
 .hbtn--accent:hover { background: var(--cyan-glow); color: #d6fffb; }
-.hbtn--accent.is-added { color: var(--jade, #4ade80); border-color: color-mix(in srgb, var(--jade, #4ade80) 45%, transparent);
-  background: color-mix(in srgb, var(--jade, #4ade80) 12%, transparent); cursor: default; }
+.hbtn--accent.is-added { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 45%, transparent);
+  background: color-mix(in srgb, var(--jade) 12%, transparent); cursor: default; }
 /* Micro-confirmación: el check da un pequeño "pop" al confirmarse la acción. */
 .hbtn--accent.is-added :deep(svg) { animation: confirm-pop var(--t-base) var(--ease-snap); }
 @keyframes confirm-pop { 0% { transform: scale(0); } 60% { transform: scale(1.35); } 100% { transform: scale(1); } }
 @media (prefers-reduced-motion: reduce) { .hbtn--accent.is-added :deep(svg) { animation: none; } }
 .hbtn:disabled { cursor: default; opacity: .85; }
-.hbtn--danger { color: var(--danger, #f0788c); border-color: color-mix(in srgb, var(--danger, #f0788c) 30%, transparent); }
-.hbtn--danger:hover { background: color-mix(in srgb, var(--danger, #f0788c) 14%, transparent); color: #ffb3bf; border-color: var(--danger, #f0788c); }
+.hbtn--danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 30%, transparent); }
+.hbtn--danger:hover { background: color-mix(in srgb, var(--danger) 14%, transparent); color: #ffb3bf; border-color: var(--danger); }
 .mf--chk { flex-direction: row; align-items: center; justify-content: space-between; }
 .mf--chk input { width: auto; }
 .manage__free { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-2); }
@@ -1629,17 +1629,17 @@ useModal(() => !!m.value, closeModal, modalEl)
 .mtab:hover { color: var(--ink); background: var(--surface); }
 .mtab.is-active { color: var(--azure-bright); background: var(--azure-haze); }
 .mtab--sep { margin-right: var(--s-2); padding-right: var(--s-3); border-right: 1px solid var(--line); border-radius: var(--r-pill) 0 0 var(--r-pill); }
-.mtab__badge { font-size: 0.5625rem; font-weight: 800; letter-spacing: .04em; padding: 1px 0.3125rem; border-radius: var(--r-pill); background: var(--jade); color: #04130c; }
+.mtab__badge { font-size: 0.5625rem; font-weight: 800; letter-spacing: .04em; padding: 1px 0.3125rem; border-radius: var(--r-pill); background: var(--jade); color: var(--ink-on-accent); }
 
 /* Pestaña Traducir */
 .tl { padding: var(--s-2) 0 var(--s-4); }
 .tl__lead { font-size: var(--fs-xs); color: var(--ink-soft); line-height: var(--lh-body); margin-bottom: var(--s-3); }
 .tl__disc { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-4); }
 .tl__cta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3); padding: var(--s-3) 0; }
-.tl__localart { display: flex; align-items: flex-start; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-soft); cursor: pointer; margin-bottom: var(--s-3); padding: var(--s-2) var(--s-3); background: var(--surface-2, rgba(255,255,255,.03)); border-radius: var(--r-2, 0.5rem); }
+.tl__localart { display: flex; align-items: flex-start; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-soft); cursor: pointer; margin-bottom: var(--s-3); padding: var(--s-2) var(--s-3); background: var(--surface-2, rgba(255,255,255,.03)); border-radius: var(--r-sm); }
 .tl__localart input { accent-color: var(--accent); cursor: pointer; margin-top: 2px; }
 .tl__localhint { display: block; font-style: normal; color: var(--ink-faint, var(--ink-soft)); opacity: .8; margin-top: 2px; }
-.tl__err { font-size: var(--fs-xs); color: var(--rose, #e8748b); }
+.tl__err { font-size: var(--fs-xs); color: var(--rose); }
 .tl__picks { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3); margin-bottom: var(--s-3); }
 .tl__pick { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--s-3); }
 .tl__pickh { display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: var(--fs-xs); margin-bottom: 0.375rem; }
@@ -1652,8 +1652,8 @@ useModal(() => !!m.value, closeModal, modalEl)
 .tl__bar { height: 0.375rem; border-radius: var(--r-pill); background: var(--surface-2); overflow: hidden; }
 .tl__fill { height: 100%; background: var(--azure); transition: width var(--t-base); }
 .tl__runinfo { display: flex; align-items: center; justify-content: space-between; margin-top: 0.375rem; }
-.tl__stop { display: inline-flex; align-items: center; gap: 0.3125rem; padding: 4px 0.625rem; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--rose, #e8748b); border: 1px solid color-mix(in srgb, var(--rose, #e8748b) 40%, transparent); }
-.tl__stop:hover { background: color-mix(in srgb, var(--rose, #e8748b) 12%, transparent); }
+.tl__stop { display: inline-flex; align-items: center; gap: 0.3125rem; padding: 4px 0.625rem; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--rose); border: 1px solid color-mix(in srgb, var(--rose) 40%, transparent); }
+.tl__stop:hover { background: color-mix(in srgb, var(--rose) 12%, transparent); }
 .tl__chhead { display: flex; align-items: center; justify-content: space-between; margin: var(--s-3) 0 var(--s-2); font-weight: 600; }
 .tl__acts { display: flex; gap: var(--s-2); }
 .btn-xs--accent { color: #fff; background: var(--azure); border-color: transparent; }
@@ -1679,7 +1679,7 @@ useModal(() => !!m.value, closeModal, modalEl)
 .tl__chip { font-size: 0.625rem; font-weight: 700; padding: 1px 0.4375rem; border-radius: var(--r-pill); text-transform: uppercase; letter-spacing: .03em; }
 .tl__chip--pending { color: var(--ink-faint); background: var(--surface-2); }
 .tl__chip--done { color: var(--jade); background: color-mix(in srgb, var(--jade) 14%, transparent); }
-.tl__chip--failed { color: var(--rose, #e8748b); background: color-mix(in srgb, var(--rose, #e8748b) 14%, transparent); }
+.tl__chip--failed { color: var(--rose); background: color-mix(in srgb, var(--rose) 14%, transparent); }
 .tl__chip--doing { color: var(--azure-bright); background: var(--azure-haze); }
 .muted { color: var(--ink-faint); font-weight: 400; }
 
@@ -1707,14 +1707,14 @@ useModal(() => !!m.value, closeModal, modalEl)
   font-size: var(--fs-xs); color: var(--ink-soft); }
 .vr__ref strong { color: var(--ink); }
 .vr__refsrc { color: var(--ink-faint); font-size: var(--fs-2xs); margin-left: auto; }
-.vr__complete { font-size: var(--fs-2xs); font-weight: 700; color: var(--jade, #4ade80);
-  background: color-mix(in srgb, var(--jade, #4ade80) 14%, transparent); padding: 1px 0.4375rem; border-radius: var(--r-pill); }
-.vr__behind { font-size: var(--fs-2xs); font-weight: 600; color: var(--amber, #f5b544);
-  background: color-mix(in srgb, var(--amber, #f5b544) 14%, transparent); padding: 1px 0.4375rem; border-radius: var(--r-pill); }
+.vr__complete { font-size: var(--fs-2xs); font-weight: 700; color: var(--jade);
+  background: color-mix(in srgb, var(--jade) 14%, transparent); padding: 1px 0.4375rem; border-radius: var(--r-pill); }
+.vr__behind { font-size: var(--fs-2xs); font-weight: 600; color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 14%, transparent); padding: 1px 0.4375rem; border-radius: var(--r-pill); }
 .vr__irr { margin-left: 0.5rem; font-size: var(--fs-2xs); color: var(--warn); white-space: nowrap; cursor: help; }
 .vr__badge { font-size: 0.5625rem; font-weight: 800; letter-spacing: .04em; padding: 2px 0.4375rem; border-radius: var(--r-pill); flex-shrink: 0; }
 .vr__badge--actual { background: var(--ink-ghost); color: var(--base); }
-.vr__badge--best { background: var(--cyan); color: #04130c; }
+.vr__badge--best { background: var(--cyan); color: var(--ink-on-accent); }
 .vr__eye { display: inline-flex; align-items: center; gap: 0.3125rem; flex-shrink: 0; padding: 0.3125rem 0.625rem; border-radius: var(--r-sm); font-size: var(--fs-2xs); color: var(--ink-faint); border: 1px solid var(--line); }
 .vr__eye:hover:not(:disabled) { color: var(--azure-bright); border-color: var(--azure); }
 .vr__eye.is-on { color: var(--azure-bright); background: var(--azure-haze); border-color: var(--azure); }
@@ -1725,10 +1725,10 @@ useModal(() => !!m.value, closeModal, modalEl)
 .vr__acts { display: flex; align-items: center; gap: 0.375rem; flex-shrink: 0; }
 .vr__fix { padding: 0.3125rem 0.75rem; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .vr__fix:hover { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 45%, transparent); }
-.vr__fix.is-on { color: #04130c; background: var(--cyan); border-color: transparent; animation: confirm-pop var(--t-base) var(--ease-snap); }
+.vr__fix.is-on { color: var(--ink-on-accent); background: var(--cyan); border-color: transparent; animation: confirm-pop var(--t-base) var(--ease-snap); }
 .vr__row--primary { border-color: color-mix(in srgb, var(--cyan) 55%, transparent); }
 .vr__row--cmp { box-shadow: 0 0 0 1px var(--azure) inset; }
-.vr__badge--primary { background: var(--cyan); color: #04130c; }
+.vr__badge--primary { background: var(--cyan); color: var(--ink-on-accent); }
 
 /* Fuentes por capítulo: cobertura + asignación por rango + huecos + actualizaciones */
 .vg { margin-top: var(--s-5); padding-top: var(--s-4); border-top: 1px solid var(--line); }
@@ -1761,9 +1761,9 @@ useModal(() => !!m.value, closeModal, modalEl)
 
 /* tomos sin repartir en capítulos reales */
 .tl__vol { display: flex; flex-direction: column; gap: var(--s-2); padding: var(--s-3); margin-bottom: var(--s-3); border-radius: var(--r-md); background: var(--azure-haze); border: 1px solid color-mix(in srgb, var(--azure) 30%, transparent); }
-.tl__vol--warn { background: color-mix(in srgb, var(--rose, #e8748b) 10%, transparent); border-color: color-mix(in srgb, var(--rose, #e8748b) 30%, transparent); }
+.tl__vol--warn { background: color-mix(in srgb, var(--rose) 10%, transparent); border-color: color-mix(in srgb, var(--rose) 30%, transparent); }
 .tl__volitem { display: flex; flex-direction: column; gap: var(--s-2); padding-bottom: var(--s-2); }
-.tl__volitem + .tl__volitem { padding-top: var(--s-2); border-top: 1px solid color-mix(in srgb, var(--rose, #e8748b) 20%, transparent); }
+.tl__volitem + .tl__volitem { padding-top: var(--s-2); border-top: 1px solid color-mix(in srgb, var(--rose) 20%, transparent); }
 .tl__volmsg { display: flex; align-items: flex-start; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-soft); line-height: var(--lh-body); }
 .tl__re2 { align-self: flex-start; font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); padding: 4px 0.625rem; border-radius: var(--r-sm); border: 1px solid var(--azure); }
 .tl__re2:hover { background: var(--azure-haze); }
@@ -1774,7 +1774,7 @@ useModal(() => !!m.value, closeModal, modalEl)
 .tl__rmrow { color: var(--ink-faint); transition: color var(--t-fast); margin-left: auto; }
 .tl__rmrow:hover { color: var(--coral); }
 .tl__manualtotal { font-size: var(--fs-2xs); color: var(--ink-faint); }
-.tl__manualtotal.is-bad { color: var(--rose, #e8748b); font-weight: 600; }
+.tl__manualtotal.is-bad { color: var(--rose); font-weight: 600; }
 .tl__manualacts { display: flex; gap: var(--s-2); }
 
 /* flex-basis auto (not 0): the modal has max-height, not a fixed height, so basis:0
@@ -1795,7 +1795,7 @@ useModal(() => !!m.value, closeModal, modalEl)
 .btn-xs { display: inline-flex; align-items: center; gap: 0.3125rem; padding: 4px 0.625rem; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); }
 .btn-xs:hover { background: var(--azure-haze); }
 .mdex__match { font-size: var(--fs-2xs); color: var(--jade); margin-bottom: var(--s-2); display: flex; align-items: center; gap: 0.3125rem; }
-.mdex__match.is-approx { color: var(--amber, var(--ink-faint)); }
+.mdex__match.is-approx { color: var(--warn); }
 .mdex__match a { color: var(--azure-bright); text-decoration: none; }
 .mdex__search { display: flex; gap: var(--s-2); margin-bottom: var(--s-2); }
 .mdex__search input { flex: 1; min-width: 0; padding: 0.3125rem 0.5625rem; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-2xs); }
@@ -1926,9 +1926,9 @@ useModal(() => !!m.value, closeModal, modalEl)
 
 /* Selección por lote: casilla + cabecera "seleccionar" + barra flotante de acciones */
 .batchbox { width: 1.0625rem; height: 1.0625rem; flex-shrink: 0; display: grid; place-items: center; border-radius: 0.3125rem;
-  border: 1.5px solid var(--line-strong); color: var(--ink-inverse, #06101f); background: var(--surface); transition: all var(--t-fast); }
-.batchbox.is-on { background: var(--azure); border-color: var(--azure); color: #06101f; }
-.batchbox.is-part { background: color-mix(in srgb, var(--azure) 40%, transparent); border-color: var(--azure); color: #06101f; }
+  border: 1.5px solid var(--line-strong); color: var(--ink-on-accent); background: var(--surface); transition: all var(--t-fast); }
+.batchbox.is-on { background: var(--azure); border-color: var(--azure); color: var(--ink-on-accent); }
+.batchbox.is-part { background: color-mix(in srgb, var(--azure) 40%, transparent); border-color: var(--azure); color: var(--ink-on-accent); }
 .chap__check { flex-shrink: 0; display: grid; place-items: center; padding: 2px; }
 .chap__check:hover .batchbox { border-color: var(--azure); }
 .batchhead { display: flex; align-items: center; gap: var(--s-3); padding: 2px var(--s-3) var(--s-2); }

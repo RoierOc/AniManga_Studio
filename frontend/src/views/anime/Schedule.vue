@@ -133,7 +133,7 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
         <button v-for="e in airedToday" :key="(e.anime.al_id || e.anime.id) + '-a' + e.ep"
                 class="tcard tcard--aired" @click="openEntry(e)">
           <div class="tcard__cov">
-            <img v-if="e.anime.cover" :src="imgProxy(e.anime.cover, 160)" loading="lazy" alt=""
+            <img v-if="e.anime.cover" :src="imgProxy(e.anime.cover, 160)" loading="lazy" decoding="async" alt=""
                  @load="$event.target.classList.add('is-loaded')" />
             <span v-if="e.mine" class="tcard__mine" title="En tu biblioteca">★</span>
           </div>
@@ -159,7 +159,7 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
         <div v-if="!day.items.length" class="col__empty">—</div>
         <button v-for="e in day.items" :key="(e.anime.al_id || e.anime.id) + '-' + e.ep" class="ent" @click="openEntry(e)">
           <div class="ent__cov">
-            <img v-if="e.anime.cover" :src="imgProxy(e.anime.cover, 160)" loading="lazy" alt=""
+            <img v-if="e.anime.cover" :src="imgProxy(e.anime.cover, 160)" loading="lazy" decoding="async" alt=""
                  @load="$event.target.classList.add('is-loaded')" />
             <span v-if="e.mine" class="ent__mine" title="En tu biblioteca">★</span>
           </div>

@@ -266,7 +266,7 @@ function epWatched(ep) { const l = live(ep); return l ? l.watched : !!ep.watched
                  Si no hay imagen se cae al número, no a un hueco gris. -->
             <button class="ep__thumb" :disabled="!ep.has_file"
                     :title="ep.has_file ? 'Reproducir' : 'No descargado'" @click="play(ep)">
-              <img v-if="ep.still" :src="imgProxy(ep.still)" :alt="ep.title" loading="lazy" />
+              <img v-if="ep.still" :src="imgProxy(ep.still)" :alt="ep.title" loading="lazy" decoding="async" />
               <span v-else class="ep__thumbph">{{ epLabel(ep) }}</span>
               <span class="ep__thumbgo"><Icon :name="ep.has_file ? 'play' : 'download'" :size="16" /></span>
               <span v-if="epPos(ep) && ep.duration" class="ep__thumbbar">

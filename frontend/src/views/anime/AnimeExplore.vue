@@ -5,6 +5,7 @@ import DiscoverCard from '@/components/anime/DiscoverCard.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Select from '@/components/ui/Select.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 
 const store = useAnimeStore()
 
@@ -66,7 +67,7 @@ onMounted(() => {
     </div>
 
     <div v-if="store.exploreLoading && !store.explore.length" class="grid">
-      <div v-for="n in 12" :key="n" class="skeleton" />
+      <Skeleton v-for="n in 12" :key="n" variant="poster" />
     </div>
     <EmptyState v-else-if="!store.explore.length" icon="spark" title="Sin resultados con estos filtros." />
     <template v-else>
@@ -101,7 +102,6 @@ onMounted(() => {
 .gchip.is-active { background: var(--azure-haze); border-color: var(--azure); color: var(--azure-bright); }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.875rem, 1fr)); gap: var(--s-5); }
-.skeleton { aspect-ratio: 2/3; border-radius: var(--r-md); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 
 .more { display: flex; justify-content: center; padding: var(--s-6) 0 0; }
 .morebtn { display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-3) var(--s-5); border-radius: var(--r-pill); border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 600; transition: all var(--t-fast); }

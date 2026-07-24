@@ -233,13 +233,15 @@ onBeforeUnmount(() => {
 }
 .stats__bar { width: 100%; border-radius: 2px 2px 0 0; min-height: 0; transition: height var(--t-fast); }
 .stats__bar--watch { background: var(--azure-bright); }
-.stats__bar--up { background: #7c5cff; }
+/* --violet, no un morado a mano: el hex de antes (#7c5cff) no era ningún token, así que la
+   leyenda y la barra quedaban fuera de la paleta y sordas al tema. */
+.stats__bar--up { background: var(--violet); }
 .stats__dow { font-size: .6rem; color: var(--ink-faint); }
 .stats__legend { display: flex; gap: var(--s-4); margin-top: var(--s-1); }
 .stats__legend span { display: flex; align-items: center; gap: 0.3125rem; font-size: var(--fs-2xs, .7rem); color: var(--ink-soft); }
 .stats__legend .dot { width: 0.5rem; height: 0.5rem; border-radius: 2px; display: inline-block; }
 .dot--watch { background: var(--azure-bright); }
-.dot--up { background: #7c5cff; }
+.dot--up { background: var(--violet); }
 
 .stats__grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-2); }
 .stats__cell {

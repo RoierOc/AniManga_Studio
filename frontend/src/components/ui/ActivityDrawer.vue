@@ -51,7 +51,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
               <article v-for="g in groups" :key="g.mangaId" class="grp">
                 <div class="grp__head">
                   <span class="grp__cover">
-                    <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" />
+                    <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" decoding="async" />
                     <span v-else class="grp__mono">{{ monogram(g.title) }}</span>
                   </span>
                   <span class="grp__title">{{ g.title }}</span>

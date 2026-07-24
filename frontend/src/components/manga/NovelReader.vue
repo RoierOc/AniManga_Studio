@@ -102,7 +102,7 @@ const textStyle = computed(() => ({
   fontSize: `${novels.fontSize}rem`,
   lineHeight: novels.lineHeight,
   maxWidth: `${novels.measure}rem`,
-  fontFamily: novels.serif ? 'Georgia, "Iowan Old Style", serif' : 'var(--font-sans, system-ui)',
+  fontFamily: novels.serif ? 'Georgia, "Iowan Old Style", serif' : 'var(--font-body)',
 }))
 </script>
 

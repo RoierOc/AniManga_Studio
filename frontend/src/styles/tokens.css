@@ -24,6 +24,9 @@
   --ink-soft:    #aab6cc;   /* secondary */
   --ink-faint:   #6b7791;   /* tertiary, captions */
   --ink-ghost:   #424d63;   /* disabled / placeholder */
+  /* Texto OSCURO sobre un relleno saturado (azure/cyan/jade): un botón primario, un badge
+     "MEJOR". Existía tres veces a mano y con tres valores distintos (#0b0f1a, #04130c, #06101f). */
+  --ink-on-accent: #06101f;
 
   /* ── Azure — the primary. Evolved from the beloved #6184d3 ───────────── */
   --azure:       #4d8dff;

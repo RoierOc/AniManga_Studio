@@ -78,7 +78,7 @@ async function read(n) { await store.addToLibrary(n, n.name); store.openReader({
               <div class="nb__grid">
                 <article v-for="n in store.browseItems" :key="n.path" class="nc">
                   <div class="nc__cover">
-                    <img v-if="n.cover" :src="imgProxy(n.cover, 200)" :alt="n.name" loading="lazy" />
+                    <img v-if="n.cover" :src="imgProxy(n.cover, 200)" :alt="n.name" loading="lazy" decoding="async" />
                     <div v-else class="nc__nocover"><Icon name="book" :size="24" /></div>
                     <span v-if="n.rating" class="nc__rating">★ {{ n.rating }}</span>
                     <div class="nc__actions">

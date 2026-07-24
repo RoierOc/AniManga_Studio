@@ -225,7 +225,7 @@ useModal(() => !!d.value, () => novels.closeDetail(), modalEl)
 .hbtn:disabled { opacity: .45; cursor: default; }
 
 .modal__body { padding: var(--s-5); display: flex; flex-direction: column; gap: var(--s-4); overflow-y: auto; }
-.synopsis { font-size: var(--fs-sm); line-height: var(--lh-relaxed, 1.7); color: var(--ink-soft); }
+.synopsis { font-size: var(--fs-sm); line-height: var(--lh-body); color: var(--ink-soft); }
 .chips { display: flex; flex-wrap: wrap; gap: var(--s-1); }
 .chip { font-size: var(--fs-2xs); color: var(--ink-faint); border: 1px solid var(--line); border-radius: var(--r-pill);
   padding: 3px 0.5625rem; }

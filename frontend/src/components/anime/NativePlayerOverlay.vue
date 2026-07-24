@@ -416,7 +416,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
              @mouseenter="cueEnter" @mouseleave="cueLeave()" @click.stop>
           <button class="wp__cue-main" @click="cuePlayNext">
             <span class="wp__cue-thumb">
-              <img v-if="nextThumb" :src="nextThumb" alt="" loading="lazy"
+              <img v-if="nextThumb" :src="nextThumb" alt="" loading="lazy" decoding="async"
                    @error="($event.target.style.visibility = 'hidden')" />
               <span class="wp__cue-play"><Icon name="play" :size="18" /></span>
             </span>
@@ -442,7 +442,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
                     :class="{ 'is-cur': e.num === np.ep.num, 'is-off': !isPlayable(e) }"
                     @click="playFromPanel(e)">
               <span class="wp__ep-th">
-                <img v-if="epThumb(e)" :src="epThumb(e)" alt="" loading="lazy" @error="($event.target.style.visibility = 'hidden')" />
+                <img v-if="epThumb(e)" :src="epThumb(e)" alt="" loading="lazy" decoding="async" @error="($event.target.style.visibility = 'hidden')" />
                 <span v-if="e.num === np.ep.num" class="wp__ep-now"><Icon name="play" :size="16" /></span>
               </span>
               <span class="wp__ep-info">

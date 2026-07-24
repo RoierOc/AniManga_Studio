@@ -4,6 +4,7 @@ import { useCbzStore } from '@/stores/cbz'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 
 const store = useCbzStore()
 onMounted(() => { if (!store.loaded) store.load() })
@@ -17,14 +18,14 @@ onMounted(() => { if (!store.loaded) store.load() })
     </header>
 
     <div v-if="store.loading" class="grid">
-      <div v-for="n in 8" :key="n" class="skeleton" />
+      <Skeleton v-for="n in 8" :key="n" variant="poster" />
     </div>
     <EmptyState v-else-if="store.error || !store.items.length" icon="folder"
                 :title="store.error || 'No hay archivos CBZ/CBR en tu carpeta de Mangas.'" />
     <div v-else class="grid">
       <article v-for="m in store.items" :key="m.title" class="lc" tabindex="0" @click="store.open(m)" @keydown.enter="store.open(m)">
         <div class="lc__poster">
-          <img :src="store.cover(m.title)" :alt="m.title" loading="lazy" @error="$event.target.style.display='none'" class="lc__img" />
+          <img :src="store.cover(m.title)" :alt="m.title" loading="lazy" decoding="async" @error="$event.target.style.display='none'" class="lc__img" />
           <div class="lc__scrim" />
           <span class="lc__count">{{ m.volume_count }} vol.</span>
           <div class="lc__overlay"><h3 class="lc__title">{{ m.title }}</h3></div>
@@ -71,7 +72,6 @@ onMounted(() => { if (!store.loaded) store.load() })
 .eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
 .tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.25rem, 1fr)); gap: var(--s-5); }
-.skeleton { aspect-ratio: 2/3; border-radius: var(--r-md); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-8) 0; color: var(--ink-faint); text-align: center; }
 
 .lc { outline: none; cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }

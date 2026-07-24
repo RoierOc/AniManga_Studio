@@ -5,6 +5,7 @@ import MdCard from '@/components/manga/MdCard.vue'
 import MdDetailModal from '@/components/manga/MdDetailModal.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 
 const store = useMangadexStore()
 
@@ -85,7 +86,7 @@ onMounted(() => {
     <!-- Seguidos (tu lista en MangaDex) -->
     <template v-if="store.tab === 'mylist'">
       <div v-if="store.loading && !store.followed.length" class="grid">
-        <div v-for="n in 12" :key="n" class="skeleton" />
+        <Skeleton v-for="n in 12" :key="n" variant="poster" />
       </div>
       <EmptyState v-else-if="!store.followed.length" icon="heart"
                   :title="store.authed ? 'No sigues ningún manga aún.' : 'Inicia sesión en MangaDex para ver tus seguidos.'">
@@ -100,7 +101,7 @@ onMounted(() => {
 
     <!-- AniList Top -->
     <template v-else-if="store.tab === 'anilist'">
-      <div v-if="store.alLoading && !store.alTop.length" class="grid"><div v-for="n in 12" :key="n" class="skeleton" /></div>
+      <div v-if="store.alLoading && !store.alTop.length" class="grid"><Skeleton v-for="n in 12" :key="n" variant="poster" /></div>
       <EmptyState v-else-if="!store.alTop.length" icon="spark" title="Sin resultados." />
       <template v-else>
         <div class="grid">
@@ -115,7 +116,7 @@ onMounted(() => {
     <!-- Popular / Search -->
     <template v-else>
       <div v-if="store.loading && !store.list.length" class="grid">
-        <div v-for="n in 12" :key="n" class="skeleton" />
+        <Skeleton v-for="n in 12" :key="n" variant="poster" />
       </div>
       <EmptyState v-else-if="!store.list.length" icon="search" :title="store.tab === 'search' ? 'Sin resultados.' : 'Nada que mostrar.'" />
       <template v-else>
@@ -161,7 +162,6 @@ onMounted(() => {
 .tagchip.is-active { background: var(--azure); color: #fff; border-color: transparent; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.25rem, 1fr)); gap: var(--s-5); }
-.skeleton { aspect-ratio: 2/3; border-radius: var(--r-md); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-8) 0; color: var(--ink-faint); }
 .more { display: grid; place-items: center; padding: var(--s-6) 0; }
 .morebtn { padding: var(--s-3) var(--s-6); border-radius: var(--r-pill); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink-soft); font-weight: 600; font-size: var(--fs-sm); transition: all var(--t-fast); }

@@ -38,7 +38,7 @@ function continueReading(h) {
           <div v-else class="hist__list">
             <button v-for="(h, i) in store.history" :key="i" class="hrow" @click="continueReading(h)">
               <div class="hrow__cover">
-                <img v-if="h.cover" :src="imgProxy(h.cover, 60)" :alt="h.title" loading="lazy" />
+                <img v-if="h.cover" :src="imgProxy(h.cover, 60)" :alt="h.title" loading="lazy" decoding="async" />
                 <span class="hrow__ch">Cap. {{ h.chapter }}</span>
               </div>
               <div class="hrow__meta">

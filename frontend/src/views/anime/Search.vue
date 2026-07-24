@@ -6,6 +6,7 @@ import TorrentPanel from '@/components/anime/TorrentPanel.vue'
 import AnimeRail from '@/components/anime/AnimeRail.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 
 const store = useAnimeStore()
 onMounted(() => {
@@ -33,7 +34,7 @@ const popularItems = computed(() => store.seasonalPopular.map(a => ({ anime: a }
     </header>
 
     <div v-if="store.searchLoading" class="grid">
-      <div v-for="n in 10" :key="n" class="skeleton" />
+      <Skeleton v-for="n in 10" :key="n" variant="poster" />
     </div>
     <!-- Estado inicial (sin búsqueda): descubre populares de la temporada -->
     <div v-else-if="!store.searchResults.length" class="discover">
@@ -48,7 +49,7 @@ const popularItems = computed(() => store.seasonalPopular.map(a => ({ anime: a }
       <article v-for="a in store.searchResults" :key="a.al_id || a.title" class="rc" tabindex="0"
                @click="store.openTorrents(a)" @keydown.enter="store.openTorrents(a)">
         <div class="rc__poster">
-          <img v-if="a.cover" :src="a.cover" :alt="a.title" loading="lazy" @load="$event.target.classList.add('is-loaded')" class="rc__img" />
+          <img v-if="a.cover" :src="a.cover" :alt="a.title" loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" class="rc__img" />
           <div class="rc__scrim" />
           <span class="rc__fmt">{{ animeFormatLabel(a.format) }}</span>
           <span v-if="a.score" class="rc__score"><Icon name="spark" :size="10" /> {{ a.score }}</span>
@@ -77,7 +78,6 @@ const popularItems = computed(() => store.seasonalPopular.map(a => ({ anime: a }
 .hint { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-9) 0; color: var(--ink-faint); text-align: center; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.875rem, 1fr)); gap: var(--s-5); }
-.skeleton { aspect-ratio: 2/3; border-radius: var(--r-md); background: linear-gradient(100deg, var(--surface) 30%, var(--surface-2) 50%, var(--surface) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
 
 .rc { outline: none; transition: transform var(--t-base) var(--ease-snap); }
 .rc:hover, .rc:focus-visible { transform: translateY(-6px); }

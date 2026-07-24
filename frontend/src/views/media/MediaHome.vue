@@ -11,6 +11,7 @@ import ContinueRail from '@/components/media/ContinueRail.vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import Skeleton from '@/components/ui/Skeleton.vue'
 import ContentToolbar from '@/components/ui/ContentToolbar.vue'
 
 const store = useMediaStore()
@@ -132,7 +133,13 @@ function play(it) {
                     :search="store.search" @update:search="store.search = $event"
                     search-placeholder="Buscar en tu biblioteca…" />
 
-    <EmptyState v-if="!store.items.length && !store.loading" icon="film"
+    <!-- Mismo esqueleto que Manga y Anime: la rejilla ya tiene forma antes de llegar los datos,
+         en vez del parpadeo en blanco con el que el contenido saltaba de golpe. -->
+    <div v-if="store.loading && !store.items.length" class="mlib__grid">
+      <Skeleton v-for="n in 12" :key="n" variant="poster" />
+    </div>
+
+    <EmptyState v-else-if="!store.items.length" icon="film"
                 :title="store.search ? 'Nada coincide' : 'Tu biblioteca está vacía'"
                 :hint="store.search ? 'Prueba con otro título.' : 'Ve a Buscar o Descubrir para añadir series y películas.'">
       <template #action>

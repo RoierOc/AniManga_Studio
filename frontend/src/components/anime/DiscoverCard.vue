@@ -21,7 +21,7 @@ const scoreTier = computed(() => {
   <article class="sc" tabindex="0" @click="store.openTorrents(anime)" @keydown.enter="store.openTorrents(anime)">
     <div class="sc__cover">
       <img v-if="thumb" :src="thumb" class="blurup" aria-hidden="true" alt="" />
-      <img v-if="anime.cover" :src="anime.cover" :alt="anime.title" loading="lazy"
+      <img v-if="anime.cover" :src="anime.cover" :alt="anime.title" loading="lazy" decoding="async"
            @load="$event.target.classList.add('is-loaded')" class="sc__img" />
       <div v-else class="sc__ph"><Icon name="film" :size="30" /></div>
       <span class="sc__shine" />

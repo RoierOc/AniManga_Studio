@@ -1041,7 +1041,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
                     @click="playFromPanel(e)">
               <div class="wp__ep-th">
                 <img v-if="isPlayable(e)" :src="`/api/anime/thumb/${p.anime.id}/${e.num}`"
-                     alt="" loading="lazy" @error="$event.target.style.display = 'none'" />
+                     alt="" loading="lazy" decoding="async" @error="$event.target.style.display = 'none'" />
                 <span v-if="e.num === p.ep.num" class="wp__ep-now"><Icon name="play" :size="12" /></span>
                 <span v-if="e.resume_pos > 0 && e.duration" class="wp__ep-pr">
                   <i :style="{ width: Math.min(100, e.resume_pos / e.duration * 100) + '%' }" />

@@ -38,7 +38,7 @@ const fmtLabel = (f) => ({ MANGA: 'Manga', MANHWA: 'Manhwa', MANHUA: 'Manhua', N
       <button v-for="r in items" :key="r.al_id" class="rc" @click="emit('select', r)"
               :title="`Buscar «${r.title}» en Explorar`">
         <div class="rc__cov">
-          <img v-if="r.cover" :src="imgProxy(r.cover, 160)" alt="" loading="lazy" />
+          <img v-if="r.cover" :src="imgProxy(r.cover, 160)" alt="" loading="lazy" decoding="async" />
           <span v-else class="rc__mono">{{ (r.title || '?').charAt(0) }}</span>
           <span v-if="r.score" class="rc__score"><Icon name="spark" :size="10" /> {{ Math.round(r.score) }}</span>
           <span class="rc__go"><Icon name="search" :size="14" /></span>

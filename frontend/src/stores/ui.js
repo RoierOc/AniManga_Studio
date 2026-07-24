@@ -179,8 +179,26 @@ export const useUiStore = defineStore('ui', {
       if (_navInit) return
       _navInit = true
       this._applyModeTheme()
+      // Restauramos el scroll a mano (ver _restoreScroll): el automático del navegador dispara
+      // ANTES de que la vista restaurada haya pedido sus datos, así que siempre erraba.
+      try { history.scrollRestoration = 'manual' } catch {}
       this._histState('replaceState')
       window.addEventListener('popstate', (e) => this._apply(e.state || {}))
+    },
+
+    /* Devuelve la página a `y` tras un atrás/adelante. El contenido de la vista llega por fetch,
+     * así que en el primer frame la página aún no tiene altura y un scrollTo() se queda corto:
+     * reintenta hasta llegar (o rendirse).
+     * 12 frames (~200 ms) cubre las cargas normales; si una vista tarda más, aterrizas
+     * arriba — observar el resize del documento no compensa la complejidad. */
+    _restoreScroll(y) {
+      if (!y) return
+      let tries = 12
+      const tick = () => {
+        window.scrollTo({ top: y })
+        if (--tries > 0 && window.scrollY < y - 1) requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
     },
 
     // Apply a history snapshot (a back/forward landing) to the app. Reopens or closes
@@ -210,6 +228,7 @@ export const useUiStore = defineStore('ui', {
       } finally {
         _applying = false
         this.persist()
+        this._restoreScroll(st.scroll || 0)
       }
     },
 
@@ -227,6 +246,11 @@ export const useUiStore = defineStore('ui', {
     pushNav() {
       this.initNav()
       if (_applying) return
+      // Sella la posición del scroll en la entrada que ABANDONAMOS. `history.state` todavía
+      // describe la vista saliente (aún no hemos hecho push) y la página aún no se ha movido,
+      // así que este es el único instante en que ambos datos son los correctos. Sin esto,
+      // volver de un detalle a una biblioteca con 200 títulos te dejaba siempre arriba del todo.
+      try { history.replaceState({ ...(history.state || {}), scroll: window.scrollY }, '') } catch {}
       this._histState('pushState')
       this.persist()
       window.scrollTo({ top: 0 })
