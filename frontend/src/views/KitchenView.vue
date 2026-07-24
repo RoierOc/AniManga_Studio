@@ -14,6 +14,7 @@ import Icon, { ICON_NAMES } from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import Select from '@/components/ui/Select.vue'
 import ContentToolbar from '@/components/ui/ContentToolbar.vue'
 import MediaCard from '@/components/media/MediaCard.vue'
@@ -169,6 +170,19 @@ async function demoConfirm(danger) {
         <div class="kit__box"><EmptyState icon="search" title="Sin resultados para ese filtro.">
           <template #action><button class="is-primary"><Icon name="close" :size="15" /> Quitar filtros</button></template>
         </EmptyState></div>
+      </div>
+    </section>
+
+    <section class="kit__s">
+      <h2 class="kit__h">Estado de error</h2>
+      <p class="kit__note"><Icon name="spark" :size="13" /> «Falló» no es «no había nada»: si una
+        carga revienta, esto es lo que se pinta — <strong>nunca</strong> el estado vacío, que
+        afirmaría que el usuario no tiene contenido.</p>
+      <div class="kit__two">
+        <div class="kit__box"><ErrorState @retry="ui.toast('Reintentando…', 'info')" /></div>
+        <div class="kit__box"><ErrorState title="No se pudo buscar."
+          detail="TypeError: Failed to fetch — http://127.0.0.1:5101/api/anime/search?q=frieren"
+          @retry="ui.toast('Reintentando…', 'info')" /></div>
       </div>
     </section>
 

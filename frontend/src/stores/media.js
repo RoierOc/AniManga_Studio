@@ -34,6 +34,7 @@ export const useMediaStore = defineStore('media', {
     errors: {},          // {sonarr|radarr: mensaje} — "falló" viaja aparte del array vacío
     loading: false,
     loaded: false,
+    loadError: '',       // la CARGA entera falló (≠ `errors`, que son fallos por indexer)
 
     detail: null,        // serie/película abierta
     picker: null,        // selector de torrent abierto (ver ReleasePicker)
@@ -155,6 +156,7 @@ export const useMediaStore = defineStore('media', {
 
     async load() {
       this.loading = true
+      this.loadError = ''
       try {
         const [st, lib] = await Promise.all([
           api.get('/api/media/status'),
@@ -165,6 +167,11 @@ export const useMediaStore = defineStore('media', {
         this.movies = lib.movies || []
         this.errors = lib.errors || {}
         this.loaded = true
+      } catch (e) {
+        // Antes NO había catch: el rechazo se perdía y la lista se quedaba en [], así que la
+        // vista anunciaba «Tu biblioteca está vacía» cuando lo que pasaba era que Sonarr/Radarr
+        // (o el propio backend) no respondían. "Falló" y "no había" no pueden ser lo mismo.
+        this.loadError = e?.message || 'No se pudo contactar con el servidor.'
       } finally { this.loading = false }
     },
 

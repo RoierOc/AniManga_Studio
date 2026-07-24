@@ -12,6 +12,7 @@ import ContextMenu from '@/components/ui/ContextMenu.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import ContentToolbar from '@/components/ui/ContentToolbar.vue'
 
 const store = useMediaStore()
@@ -138,6 +139,11 @@ function play(it) {
     <div v-if="store.loading && !store.items.length" class="mlib__grid">
       <Skeleton v-for="n in 12" :key="n" variant="poster" />
     </div>
+
+    <!-- El fallo va ANTES del vacío: si la carga reventó, no podemos afirmar que no hay nada. -->
+    <ErrorState v-else-if="store.loadError && !store.items.length"
+                title="No se pudo cargar tu biblioteca." :detail="store.loadError"
+                @retry="store.load()" />
 
     <EmptyState v-else-if="!store.items.length" icon="film"
                 :title="store.search ? 'Nada coincide' : 'Tu biblioteca está vacía'"

@@ -9,6 +9,7 @@ import HeroBanner from '@/components/anime/HeroBanner.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
 import ContentToolbar from '@/components/ui/ContentToolbar.vue'
 
@@ -161,6 +162,11 @@ function openMenu(e, a) {
     <div v-if="store.loading" class="grid">
       <Skeleton v-for="n in 10" :key="n" variant="poster" />
     </div>
+    <!-- El fallo va ANTES del vacío: si la carga reventó, no podemos afirmar que no hay nada. -->
+    <ErrorState v-else-if="store.loadError && !store.library.length"
+                title="No se pudo cargar tu anime." :detail="store.loadError"
+                @retry="store.loadLibrary()" />
+
     <EmptyState v-else-if="!filtered.length" icon="film"
                 :title="store.library.length ? 'Sin resultados.' : 'Aún no has añadido anime.'"
                 :hint="store.library.length ? '' : 'Busca una serie y añádela para seguir sus episodios aquí.'">

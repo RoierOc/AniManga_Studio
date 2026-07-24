@@ -29,6 +29,7 @@ const subPollers = {}   // subKey -> interval handle
 export const useAnimeStore = defineStore('anime', {
   state: () => ({
     library: [],
+    loadError: '',              // la carga de la biblioteca falló (≠ biblioteca vacía)
     loading: false,
     // Guard against a stale localStorage value landing on the placeholder fallback.
     sub: ['library', 'search', 'explore', 'seasonal', 'schedule', 'downloads', 'history'].includes(localStorage.getItem('anime-sub'))
@@ -116,6 +117,7 @@ export const useAnimeStore = defineStore('anime', {
     // search + torrents
     searchQuery: '',
     searchResults: [],
+    searchError: '',           // la búsqueda falló (≠ sin resultados)
     searchLoading: false,
     torrentAnime: null,          // anime whose torrents are open (null = show results)
     torrents: [],
@@ -399,11 +401,15 @@ export const useAnimeStore = defineStore('anime', {
 
     async loadLibrary(silent = false) {
       if (!silent) this.loading = true
+      this.loadError = ''
       try {
         const data = await api.get('/api/anime/library')
         this.library = Array.isArray(data) ? data : []
         this._ensureDlPolling()   // si hay descargas en curso, refresca el progreso en vivo
-      } catch (_) {
+      } catch (e) {
+        // El toast se desvanece; la rejilla se quedaba anunciando «Aún no has añadido anime»
+        // para siempre. El fallo tiene que SOBREVIVIR en el estado para que la vista lo diga.
+        this.loadError = e?.message || 'No se pudo contactar con el servidor.'
         if (!silent) useUiStore().toast('No se pudo cargar tu anime', 'error')
       } finally {
         this.loading = false
@@ -1403,10 +1409,16 @@ export const useAnimeStore = defineStore('anime', {
       if (q.length < 2) return
       this.searchLoading = true
       this.searchResults = []
+      this.searchError = ''
       try {
         const d = await api.get(`/api/anime/search?q=${encodeURIComponent(q)}`)
         if (Array.isArray(d)) this.searchResults = d
-      } catch (_) { useUiStore().toast('Error buscando anime', 'error') }
+      } catch (e) {
+        // Una búsqueda que revienta NO es una búsqueda sin resultados: decir «nada coincide»
+        // manda al usuario a probar otro título cuando el problema es que no hay conexión.
+        this.searchError = e?.message || 'No se pudo contactar con el servidor.'
+        useUiStore().toast('Error buscando anime', 'error')
+      }
       finally { this.searchLoading = false }
     },
     closeTorrents() { this.torrentAnime = null },

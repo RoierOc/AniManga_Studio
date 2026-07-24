@@ -7,6 +7,7 @@ import AnimeRail from '@/components/anime/AnimeRail.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 
 const store = useAnimeStore()
 onMounted(() => {
@@ -36,6 +37,9 @@ const popularItems = computed(() => store.seasonalPopular.map(a => ({ anime: a }
     <div v-if="store.searchLoading" class="grid">
       <Skeleton v-for="n in 10" :key="n" variant="poster" />
     </div>
+    <!-- Si la búsqueda REVENTÓ no podemos caer al estado inicial como si no hubiera resultados. -->
+    <ErrorState v-else-if="store.searchError" title="No se pudo buscar."
+                :detail="store.searchError" @retry="store.searchAnime()" />
     <!-- Estado inicial (sin búsqueda): descubre populares de la temporada -->
     <div v-else-if="!store.searchResults.length" class="discover">
       <AnimeRail v-if="popularItems.length" title="Populares de la temporada" variant="poster"
