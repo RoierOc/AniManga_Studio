@@ -209,9 +209,9 @@ export const useUiStore = defineStore('ui', {
       if (!y) return
       let tries = 40                                    // ~0,65 s: cubre la carga de una biblioteca
       const tick = () => {
-        // `behavior:'instant'` A PROPÓSITO: base.css pone `scroll-behavior:smooth` en <html>, y
-        // una restauración animada (a) se ve como un salto raro y (b) peleaba con este bucle,
-        // que re-lanzaba el scrollTo a mitad de la animación y nunca llegaba al destino.
+        // `behavior:'instant'` explícito: restaurar una posición NUNCA debe animarse (se ve como
+        // un salto raro) y, si alguien vuelve a poner scroll suave más arriba, una animación
+        // pelearía con este bucle — que relanzaría el scrollTo a media animación sin llegar nunca.
         window.scrollTo({ top: y, behavior: 'instant' })
         if (--tries > 0 && Math.abs(window.scrollY - y) > 2) requestAnimationFrame(tick)
       }

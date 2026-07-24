@@ -7,6 +7,7 @@ import { imgProxy } from '@/lib/img'
 import { coverRGB, vivid, rgbaCss } from '@/lib/coverColor'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import { smoothBehavior } from '@/lib/motion'
 
 const store = useMangaStore()
 const ui = useUiStore()
@@ -129,7 +130,7 @@ const thumbsEl = ref(null)
 function centerThumb() {
   nextTick(() => {
     const el = thumbsEl.value?.querySelector(`[data-page="${store.page}"]`)
-    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
+    el?.scrollIntoView({ behavior: smoothBehavior(), block: 'nearest', inline: 'nearest' })
   })
 }
 watch(() => store.mode, () => { endOpen.value = false })

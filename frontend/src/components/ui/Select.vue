@@ -45,8 +45,10 @@ function place() {
 }
 
 /* Instante en que se abrió el menú. `onReflow` cierra al hacer scroll, y el `scrollIntoView` de
-   más abajo ES un scroll: con `scroll-behavior:smooth` (base.css) la animación emite eventos
-   durante cientos de ms, así que el menú se abría y se cerraba solo — no se podía elegir nada. */
+   más abajo ES un scroll: cuando `<html>` llevaba `scroll-behavior:smooth` global, esa animación
+   emitía eventos durante cientos de ms y el menú se abría y se cerraba solo — no se podía elegir
+   nada. El global ya no está, pero la guarda se queda: cualquiera puede volver a poner scroll
+   suave en un contenedor de arriba y este componente no debe depender de ello. */
 let openedAt = 0
 
 async function toggle() {

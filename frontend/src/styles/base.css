@@ -10,8 +10,17 @@
 /* Adaptive root size: the whole UI is built on rem, so scaling this scales
    everything uniformly (like browser zoom). Small screens stay ~16px; larger
    monitors grow so the app doesn't look tiny. Tune the middle term to taste. */
+/* SIN `scroll-behavior: smooth` aquí, a propósito. Cuando estaba, TODO scroll programático del
+   documento pasaba a ser una animación de cientos de ms que emite una lluvia de eventos `scroll`,
+   y eso ya rompió dos cosas: (a) `ui/Select.vue` se abría y se cerraba solo -su propio listener de
+   scroll leía la animación de su `scrollIntoView` como "el usuario ha scrolleado"-, y (b) la
+   restauración de posición al volver atrás nunca llegaba al destino, porque el bucle de reintentos
+   relanzaba el scrollTo a mitad de la animación. Llegó a haber tres sitios anulándolo con
+   `behavior:'instant'`, que es la señal de que el global sobraba.
+   Quien quiera scroll suave lo pide EXPLÍCITAMENTE, y así se ve en el código de quién es la
+   decisión: `Reader.vue` (miniatura → página) y `.rail__row` de `AnimeRail.vue` lo hacen. */
 html {
-  scroll-behavior: smooth; -webkit-text-size-adjust: 100%; color-scheme: dark;
+  -webkit-text-size-adjust: 100%; color-scheme: dark;
   font-size: clamp(16px, 0.45vw + 9.5px, 21px);
 }
 

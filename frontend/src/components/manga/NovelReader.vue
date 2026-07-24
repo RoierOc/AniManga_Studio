@@ -9,6 +9,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useNovelsStore } from '@/stores/novels'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import { smoothBehavior } from '@/lib/motion'
 
 const novels = useNovelsStore()
 const open = computed(() => !!novels.reader)
@@ -92,7 +93,7 @@ function onKey(e) {
   if (e.key === 'Escape') { setOpen.value ? (setOpen.value = false) : tocOpen.value ? (tocOpen.value = false) : novels.closeReader() }
   else if (e.key === 'ArrowRight' && hasNext.value) go(index.value + 1)
   else if (e.key === 'ArrowLeft' && hasPrev.value) go(index.value - 1)
-  else if (e.key === ' ') { e.preventDefault(); scroller.value?.scrollBy({ top: scroller.value.clientHeight * 0.85, behavior: 'smooth' }) }
+  else if (e.key === ' ') { e.preventDefault(); scroller.value?.scrollBy({ top: scroller.value.clientHeight * 0.85, behavior: smoothBehavior() }) }
 }
 
 onMounted(() => window.addEventListener('keydown', onKey))

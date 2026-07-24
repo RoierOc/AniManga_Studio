@@ -3,6 +3,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { imgProxy, imgThumb } from '@/lib/img'
 import { animeFormatLabel } from '@/lib/anime'
 import Icon from '@/components/ui/Icon.vue'
+import { smoothBehavior } from '@/lib/motion'
 
 // Reusable Crunchyroll-style content rail. Two variants:
 //  - 'episode' → 16:9 episode thumbnails (play action), optional pulsing NEW badge.
@@ -30,7 +31,7 @@ function updateArrows() {
   canR.value = el.scrollLeft + el.clientWidth < el.scrollWidth - 8
 }
 function page(dir) {
-  row.value?.scrollBy({ left: dir * row.value.clientWidth * 0.9, behavior: 'smooth' })
+  row.value?.scrollBy({ left: dir * row.value.clientWidth * 0.9, behavior: smoothBehavior() })
 }
 onMounted(() => { updateArrows(); window.addEventListener('resize', updateArrows) })
 onBeforeUnmount(() => window.removeEventListener('resize', updateArrows))
