@@ -17,17 +17,33 @@ let lastSeq = null
 const evListeners = new Map()   // event type -> Set<fn>
 const statusListeners = new Set()
 
+/* Estado REAL de la conexión, para que el chip del sidebar diga la verdad: antes se pintaba
+   "Conectado" siempre, estuviera el backend vivo o muerto, y era el único indicador de salud
+   de la app. 'connecting' | 'live' | 'down'. */
+import { ref } from 'vue'
+export const sseState = ref('connecting')
+// Con el SSE en silencio (sólo emite cuando algo cambia) un mensaje puede tardar; el latido
+// del backend llega cada 15 s, así que damos margen antes de declarar la conexión caída.
+let _hbTimer = null
+function _alive() {
+  sseState.value = 'live'
+  clearTimeout(_hbTimer)
+  _hbTimer = setTimeout(() => { if (sseState.value === 'live') sseState.value = 'down' }, 45000)
+}
+
 function ensure() {
   if (source) return
   try {
     const url = lastSeq != null ? `/api/status/stream?since=${lastSeq}` : '/api/status/stream'
     source = new EventSource(url)
+    source.onopen = _alive
     source.onmessage = (e) => {
+      _alive()
       let data
       try { data = JSON.parse(e.data) } catch { return }
 
       // Aggregated status snapshot
-      if (data.downloads || data.upscale || data.exports || data.transplant || data.subtitles) {
+      if (data.downloads || data.upscale || data.exports || data.transplant || data.subtitles || data.subtitle_batches) {
         statusListeners.forEach(fn => { try { fn(data) } catch (_) {} })
       }
       // Event bus
@@ -40,12 +56,15 @@ function ensure() {
       }
     }
     source.onerror = () => {
+      clearTimeout(_hbTimer)
+      sseState.value = 'down'
       if (source && source.readyState === EventSource.CLOSED) {
         source = null
+        sseState.value = 'connecting'
         setTimeout(ensure, 3000)
       }
     }
-  } catch (_) { /* SSE unavailable — app still works via manual refresh */ }
+  } catch (_) { sseState.value = 'down' /* SSE unavailable — app still works via manual refresh */ }
 }
 
 export function onSSE(type, fn) {

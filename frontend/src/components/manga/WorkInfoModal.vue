@@ -3,13 +3,14 @@
  * La lectura/versiones "mejor versión" inline llega en la Fase 2 (WorkDetail). Por ahora, si
  * la obra es legible, un CTA lleva a Explorar con el título precargado para leerla desde una
  * fuente; si es novela/other, se ofrecen enlaces externos de referencia. */
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useDiscoveryStore } from '@/stores/discovery'
 import { useMangaStore } from '@/stores/manga'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import NovelVersions from '@/components/manga/NovelVersions.vue'
+import { useModal } from '@/lib/useModal'
 
 const disco = useDiscoveryStore()
 const w = computed(() => disco.work)
@@ -41,13 +42,17 @@ function openCentralized() {
   disco.closeWork()
   manga.openFromWork(work)
 }
+
+// Escape cierra, el foco no se escapa por detrás y el fondo no scrollea.
+const modalEl = ref(null)
+useModal(() => !!w.value, () => disco.closeWork(), modalEl)
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="wm">
       <div v-if="w" class="wm" @click.self="disco.closeWork()">
-        <div class="wm__card">
+        <div class="wm__card" ref="modalEl">
           <button class="wm__x" @click="disco.closeWork()" aria-label="Cerrar"><Icon name="close" :size="18" /></button>
 
           <div class="wm__hero">
@@ -102,9 +107,9 @@ function openCentralized() {
 .wm { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center; padding: var(--s-4);
   background: rgba(5, 7, 13, .72); backdrop-filter: blur(8px); }
 .wm__card { position: relative; width: min(46rem, 100%); max-height: 90vh; overflow-y: auto;
-  background: var(--surface); border: 1px solid var(--line-2, var(--line)); border-radius: var(--r-lg, 18px);
+  background: var(--surface); border: 1px solid var(--line-2, var(--line)); border-radius: var(--r-lg, 1.125rem);
   box-shadow: var(--shadow-lg); }
-.wm__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 2; width: 34px; height: 34px;
+.wm__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 2; width: 2.125rem; height: 2.125rem;
   display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft);
   background: rgba(7,10,18,.5); border: 1px solid var(--line); transition: all var(--t-fast); }
 .wm__x:hover { color: var(--ink); background: var(--surface-2, var(--surface)); }
@@ -116,10 +121,10 @@ function openCentralized() {
 .wm__head { min-width: 0; display: flex; flex-direction: column; justify-content: flex-end; }
 .wm__badges { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin-bottom: var(--s-2); }
 .wm__type { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .05em;
-  text-transform: uppercase; color: var(--azure-bright); background: var(--azure-haze); padding: 3px 9px; border-radius: var(--r-pill); }
+  text-transform: uppercase; color: var(--azure-bright); background: var(--azure-haze); padding: 3px 0.5625rem; border-radius: var(--r-pill); }
 .wm__meta { font-size: var(--fs-xs); color: var(--ink-faint); }
 .wm__rating { display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-mono); font-size: var(--fs-2xs);
-  font-weight: 700; color: var(--cyan); background: var(--cyan-glow, rgba(56,189,248,.12)); padding: 3px 8px; border-radius: var(--r-pill); }
+  font-weight: 700; color: var(--cyan); background: var(--cyan-glow, rgba(56,189,248,.12)); padding: 3px 0.5rem; border-radius: var(--r-pill); }
 .wm__title { font-family: var(--font-display); font-size: var(--fs-xl); font-weight: 700; line-height: var(--lh-tight); color: var(--ink); }
 .wm__native { color: var(--ink-soft); font-size: var(--fs-sm); margin-top: 2px; }
 .wm__authors { color: var(--ink-faint); font-size: var(--fs-xs); margin-top: var(--s-2); }
@@ -128,7 +133,7 @@ function openCentralized() {
 .wm__loading { display: flex; align-items: center; gap: var(--s-2); color: var(--ink-faint); font-size: var(--fs-sm); }
 .wm__chips { display: flex; flex-wrap: wrap; gap: var(--s-1); }
 .wm__chip { font-size: var(--fs-2xs); color: var(--ink-soft); border: 1px solid var(--line); border-radius: var(--r-pill);
-  padding: 3px 10px; text-transform: capitalize; }
+  padding: 3px 0.625rem; text-transform: capitalize; }
 .wm__synopsis { color: var(--ink-soft); font-size: var(--fs-sm); line-height: var(--lh-base, 1.6); white-space: pre-line; }
 .wm__synopsis--empty { color: var(--ink-faint); font-style: italic; }
 
@@ -137,8 +142,8 @@ function openCentralized() {
   font-size: var(--fs-sm); font-weight: 650; color: #0b0f1a; background: var(--azure); box-shadow: var(--shadow-md);
   transition: transform var(--t-fast) var(--ease-silk), box-shadow var(--t-fast); }
 .wm__cta:hover { transform: translateY(-1px); box-shadow: var(--glow-azure, var(--shadow-lg)); }
-.wm__note { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-faint); font-size: var(--fs-sm); }
-.wm__add { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-3) var(--s-4); border-radius: var(--r-md);
+.wm__note { display: inline-flex; align-items: center; gap: 0.375rem; color: var(--ink-faint); font-size: var(--fs-sm); }
+.wm__add { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-3) var(--s-4); border-radius: var(--r-md);
   font-size: var(--fs-sm); font-weight: 600; color: var(--ink); border: 1px solid var(--line-strong);
   transition: all var(--t-fast); }
 .wm__add:hover:not(:disabled) { border-color: var(--azure); color: var(--azure-bright); }
@@ -147,7 +152,7 @@ function openCentralized() {
 .wm__link { font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line);
   padding: var(--s-2) var(--s-3); border-radius: var(--r-md); transition: all var(--t-fast); }
 .wm__link:hover { color: var(--ink); border-color: var(--line-strong); }
-.wm__soon { display: flex; align-items: center; gap: 6px; font-size: var(--fs-2xs); color: var(--ink-faint);
+.wm__soon { display: flex; align-items: center; gap: 0.375rem; font-size: var(--fs-2xs); color: var(--ink-faint);
   font-family: var(--font-mono); letter-spacing: .02em; }
 
 .wm-enter-active, .wm-leave-active { transition: opacity var(--t-base); }

@@ -4,6 +4,7 @@ import { useAnimeStore } from '@/stores/anime'
 import DiscoverCard from '@/components/anime/DiscoverCard.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import Select from '@/components/ui/Select.vue'
 
 const store = useAnimeStore()
 
@@ -47,13 +48,12 @@ onMounted(() => {
       </div>
 
       <div class="expl__controls">
-        <select class="sel" :value="store.exploreYear" @change="store.exploreYear = Number($event.target.value); reload()">
-          <option :value="0">Cualquier año</option>
-          <option v-for="y in years" :key="y" :value="y">{{ y }}</option>
-        </select>
-        <select class="sel" :value="store.exploreFormat" @change="store.exploreFormat = $event.target.value; reload()">
-          <option v-for="f in FORMATS" :key="f.id" :value="f.id">{{ f.label }}</option>
-        </select>
+        <Select :model-value="store.exploreYear" aria-label="Año"
+                :options="[{ value: 0, label: 'Cualquier año' }, ...years.map(y => ({ value: y, label: String(y) }))]"
+                @change="store.exploreYear = Number($event); reload()" />
+        <Select :model-value="store.exploreFormat" aria-label="Formato"
+                :options="FORMATS.map(f => ({ value: f.id, label: f.label }))"
+                @change="store.exploreFormat = $event; reload()" />
         <div class="segm">
           <button v-for="s in SORTS" :key="s.id" :class="{ 'is-active': store.exploreSort === s.id }" @click="setSort(s.id)">{{ s.label }}</button>
         </div>
@@ -87,17 +87,16 @@ onMounted(() => {
 .expl { max-width: var(--content-max); margin: 0 auto; padding: 0 var(--s-6) var(--s-8); }
 .expl__head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: var(--s-4); padding: var(--s-5) 0; }
 .eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
-.tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
+.tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
 
 .expl__controls { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
-.sel { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); cursor: pointer; }
 .segm { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
-.segm button { padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--ink-faint); transition: all var(--t-fast); }
+.segm button { padding: 0.375rem 0.75rem; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--ink-faint); transition: all var(--t-fast); }
 .segm button:hover { color: var(--ink); }
 .segm button.is-active { background: var(--surface-3); color: var(--ink); }
 
 .genres { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-bottom: var(--s-5); }
-.gchip { padding: 5px 12px; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
+.gchip { padding: 0.3125rem 0.75rem; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .gchip:hover { color: var(--ink); border-color: var(--line-strong); }
 .gchip.is-active { background: var(--azure-haze); border-color: var(--azure); color: var(--azure-bright); }
 

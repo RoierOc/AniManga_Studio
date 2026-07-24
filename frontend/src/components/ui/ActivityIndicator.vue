@@ -44,7 +44,7 @@ const offset = computed(() => C - C * (pct.value / 100))
 
 <style scoped>
 .ai {
-  position: relative; width: 38px; height: 38px;
+  position: relative; width: 2.375rem; height: 2.375rem;
   display: grid; place-items: center;
   color: var(--ink-faint); border-radius: var(--r-sm);
   border: 1px solid transparent; transition: all var(--t-fast);
@@ -61,8 +61,8 @@ const offset = computed(() => C - C * (pct.value / 100))
 .ai__center { position: relative; display: grid; place-items: center; }
 .ai__count { font-size: var(--fs-xs); font-weight: 700; font-family: var(--font-mono); }
 .ai.is-live::after {
-  content: ''; position: absolute; top: 5px; right: 5px;
-  width: 6px; height: 6px; border-radius: 50%; background: var(--cyan);
+  content: ''; position: absolute; top: 0.3125rem; right: 0.3125rem;
+  width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--cyan);
   box-shadow: var(--glow-cyan); animation: ai-pulse 1.4s ease-in-out infinite;
 }
 @keyframes ai-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }

@@ -45,7 +45,7 @@ function useBrowsed() { store.saveDlPath(store.dlBrowse.win || ''); store.closeD
 .picker__x { color: var(--ink-faint); }
 .picker__x:hover { color: var(--ink); }
 .picker__bar { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--line); }
-.picker__up { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line-2); }
+.picker__up { display: inline-flex; align-items: center; gap: 4px; padding: 4px 0.625rem; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line-2); }
 .picker__up:hover:not(:disabled) { color: var(--ink); border-color: var(--line-strong); }
 .picker__up:disabled { opacity: .4; cursor: not-allowed; }
 .picker__path { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

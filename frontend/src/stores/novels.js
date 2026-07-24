@@ -13,13 +13,26 @@ export const useNovelsStore = defineStore('novels', {
     findQuery: '',
     versions: [],      // [{ pluginId, name, path, cover }]
     findSources: [],   // [{ id, status, error }] — para explicar por qué faltan resultados
+    tried: [],         // títulos con los que se buscó (original + variantes)
+    counts: {},        // 'pluginId:path' -> nº de capítulos (llega después de la búsqueda)
     library: [],       // entradas kind:'novel' de local_library
-    novel: null,       // novela abierta: { title, pluginId, path, chapters:[…] }
+    detail: null,      // ficha abierta: { novelId, title, pluginId, path, cover } | null
+    novel: null,       // novela cargada: { title, pluginId, path, chapters:[…] }
     novelLoading: false,
     _adding: {},
 
+    // ── Catálogo (navegar una fuente nativa: SkyNovels) ──
+    browseOpen: false,
+    browseItems: [],
+    browseSort: 'views',   // views | rating | chapters | title
+    browseSearch: '',      // filtra el catálogo por título (usa /search)
+    browseTotal: 0,
+    browsePage: 1,
+    browseLoading: false,
+    browseMoreLoading: false,
+
     // ── Lector de texto ──
-    reader: null,          // { novelId, title, pluginId, chapterIndex, chapterName } | null
+    reader: null,          // { novelId, title, pluginId, chapterName } | null
     chapterHtml: '',
     chapterWords: 0,
     chapterMinutes: 0,
@@ -39,6 +52,8 @@ export const useNovelsStore = defineStore('novels', {
     failedSources: (s) => s.findSources.filter(x => x.status !== 'ok').map(x => x.id),
     inLibrary: (s) => (v) => s.library.some(n => n.novel?.pluginId === v.pluginId && n.novel?.path === v.path),
     isAdding: (s) => (v) => !!s._adding[`${v?.pluginId}:${v?.path}`],
+    // Por dónde iba el usuario en una novela concreta (para "Continuar cap. N").
+    progressOf: (s) => (novelId) => s.progress[novelId] || null,
   },
 
   actions: {
@@ -54,12 +69,28 @@ export const useNovelsStore = defineStore('novels', {
         const r = await api.post('/api/novels/find', { title })
         this.versions = r.results || []
         this.findSources = r.sources || []
+        this.tried = r.tried || []
+        this.loadCounts()   // en segundo plano: no retrasa la lista
       } catch (_) {
         useUiStore().toast('No se pudo buscar la novela', 'error')
       } finally { this.finding = false }
     },
 
-    clearFind() { this.versions = []; this.findSources = []; this.findQuery = '' },
+    /** Rellena el nº de capítulos de cada versión (abre la ficha de cada una: lento). */
+    async loadCounts() {
+      const items = this.versions.map(v => ({ pluginId: v.pluginId, path: v.path }))
+      if (!items.length) return
+      try {
+        const rows = await api.post('/api/novels/counts', { items })
+        const next = { ...this.counts }
+        for (const r of rows || []) next[`${r.pluginId}:${r.path}`] = r.count
+        this.counts = next
+      } catch (_) { /* sin conteos se sigue pudiendo elegir */ }
+    },
+
+    chapterCount(v) { return this.counts[`${v.pluginId}:${v.path}`] },
+
+    clearFind() { this.versions = []; this.findSources = []; this.tried = []; this.counts = {}; this.findQuery = '' },
 
     async addToLibrary(v, title) {
       const key = `${v.pluginId}:${v.path}`
@@ -69,6 +100,7 @@ export const useNovelsStore = defineStore('novels', {
       try {
         await api.post('/api/novels/library/add', {
           title: title || v.name, pluginId: v.pluginId, path: v.path, cover: v.cover || null,
+          lang: v.lang || '', site: v.sourceName || '',
         })
         await this.loadLibrary()
         ui.toast('Novela añadida a tu biblioteca', 'ok')
@@ -78,6 +110,47 @@ export const useNovelsStore = defineStore('novels', {
         const a = { ...this._adding }; delete a[key]; this._adding = a
       }
     },
+
+    // ── Catálogo SkyNovels ──────────────────────────────────────────────────
+    // Navegar la fuente ES fiable (API oficial, 476 novelas) con orden por vistas/rating/etc.
+    // Búsqueda y navegación comparten la misma rejilla; buscar usa /search (todo el catálogo),
+    // navegar usa /browse (paginado + ordenado).
+    openBrowse() { this.browseOpen = true; if (!this.browseItems.length) this.loadBrowse() },
+    closeBrowse() { this.browseOpen = false },
+
+    async loadBrowse() {
+      this.browseLoading = true; this.browsePage = 1; this.browseItems = []
+      try {
+        if (this.browseSearch.trim()) {
+          const r = await api.get(`/api/novels/search?pluginId=skynovels&q=${encodeURIComponent(this.browseSearch.trim())}`)
+          this.browseItems = (Array.isArray(r) ? r : []).map(x => ({ ...x, pluginId: 'skynovels' }))
+          this.browseTotal = this.browseItems.length
+        } else {
+          const d = await api.get(`/api/novels/browse?pluginId=skynovels&sort=${this.browseSort}&page=1`)
+          this.browseItems = (d.results || []).map(x => ({ ...x, pluginId: 'skynovels' }))
+          this.browseTotal = d.total || this.browseItems.length
+        }
+      } catch (_) { useUiStore().toast('No se pudo cargar el catálogo', 'error'); this.browseItems = [] }
+      finally { this.browseLoading = false }
+    },
+
+    async loadMoreBrowse() {
+      // La búsqueda ya trae todo lo que casa (sin páginas); solo navegar pagina.
+      if (this.browseMoreLoading || this.browseSearch.trim()) return
+      if (this.browseItems.length >= this.browseTotal) return
+      this.browseMoreLoading = true
+      const next = this.browsePage + 1
+      try {
+        const d = await api.get(`/api/novels/browse?pluginId=skynovels&sort=${this.browseSort}&page=${next}`)
+        const seen = new Set(this.browseItems.map(x => x.path))
+        this.browseItems = [...this.browseItems, ...(d.results || []).filter(x => !seen.has(x.path)).map(x => ({ ...x, pluginId: 'skynovels' }))]
+        this.browsePage = d.page || next
+      } catch (_) { /* un fallo de página no borra lo cargado */ }
+      finally { this.browseMoreLoading = false }
+    },
+
+    setBrowseSort(s) { if (s === this.browseSort) return; this.browseSort = s; this.loadBrowse() },
+    runBrowseSearch() { this.loadBrowse() },
 
     /** Ficha + lista de capítulos de una novela (para el lector, F4). */
     async openNovel(pluginId, path, title = '') {
@@ -95,19 +168,38 @@ export const useNovelsStore = defineStore('novels', {
       return await api.post('/api/novels/chapter', { pluginId, path })
     },
 
-    // ── Lector ────────────────────────────────────────────────────────────────
-    /** Abre la novela en el lector, retomando por donde iba si hay progreso. */
-    async openReader(entry) {
+    // ── Ficha de la novela ────────────────────────────────────────────────────
+    /** Abre la ficha (sinopsis + capítulos + continuar), NO el lector. */
+    async openDetail(entry) {
       const { pluginId, path } = entry.novel || entry
-      const novelId = entry.id || `novel:${pluginId}:${path}`
+      const src = entry.novel || entry
+      this.detail = {
+        novelId: entry.id || `novel:${pluginId}:${path}`,
+        title: entry.title, pluginId, path, cover: entry.cover || src.cover || null,
+        lang: src.lang || '', sourceName: src.sourceName || src.site || '',  // la biblioteca lo guarda como 'site'
+      }
       await this.openNovel(pluginId, path, entry.title)
-      if (!this.novel) return
-      const saved = this.progress[novelId]
-      this.reader = { novelId, title: this.novel.title, pluginId, chapterIndex: -1, chapterName: '' }
-      await this.goChapter(saved?.chapterIndex || 0, saved?.scroll || 0)
     },
 
-    closeReader() { this.reader = null; this.chapterHtml = ''; this.novel = null },
+    closeDetail() { this.detail = null; if (!this.reader) this.novel = null },
+
+    // ── Lector ────────────────────────────────────────────────────────────────
+    /** Abre la novela en el lector, retomando por donde iba si hay progreso. */
+    async openReader(entry, chapterIndex = null) {
+      const { pluginId, path } = entry.novel || entry
+      const novelId = entry.id || `novel:${pluginId}:${path}`
+      // Si la ficha ya cargó esta novela, no se vuelve a pedir: entrar a leer es instantáneo.
+      const already = this.novel && this.novel.pluginId === pluginId && this.novel.path === path
+      if (!already) await this.openNovel(pluginId, path, entry.title)
+      if (!this.novel) return
+      const saved = this.progress[novelId]
+      const index = chapterIndex != null ? chapterIndex : (saved?.chapterIndex || 0)
+      const scroll = chapterIndex != null ? 0 : (saved?.scroll || 0)
+      this.reader = { novelId, title: this.novel.title, pluginId, chapterIndex: -1, chapterName: '' }
+      await this.goChapter(index, scroll)
+    },
+
+    closeReader() { this.reader = null; this.chapterHtml = ''; if (!this.detail) this.novel = null },
 
     async goChapter(index, scroll = 0) {
       const chapters = this.novel?.chapters || []

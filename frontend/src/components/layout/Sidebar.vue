@@ -1,20 +1,47 @@
 <script setup>
-import { useUiStore, VIEWS } from '@/stores/ui'
+import { computed } from 'vue'
+import { useUiStore, VIEWS, MODES } from '@/stores/ui'
 import { useAnimeStore } from '@/stores/anime'
+import { useMediaStore } from '@/stores/media'
+import { sseState } from '@/lib/sse'
 import Icon from '@/components/ui/Icon.vue'
 const ui = useUiStore()
-const anime = useAnimeStore()
 
-function select(item) {
-  if (item.sub) {                       // anime sub-view
-    anime.closeDetail(); anime.closeTorrents()
-    anime.sub = item.sub
-    anime.persist?.()
-  }
+const CONN = {
+  live:       { tone: 'ok',   label: 'Conectado',    hint: 'El servidor responde y envía novedades en vivo.' },
+  connecting: { tone: 'wait', label: 'Conectando…',  hint: 'Restableciendo la conexión con el servidor.' },
+  down:       { tone: 'bad',  label: 'Sin conexión', hint: 'El servidor no responde: lo que veas puede estar desactualizado.' },
+}
+const conn = computed(() => CONN[sseState.value] || CONN.connecting)
+const anime = useAnimeStore()
+const media = useMediaStore()
+
+// Solo los grupos del modo activo (+ los transversales `both`): el sidebar entero se reconfigura
+// al conmutar, dando la sensación de dos apps dentro de una.
+const groups = computed(() => VIEWS.filter((g) => g.mode === 'both' || g.mode === ui.mode))
+
+// Vistas con sub-pestañas propias: el sidebar necesita saber a QUÉ store cambiarle la sub-vista.
+// Antes esto era un `if` que solo contemplaba anime, así que añadir otra sección obligaba a
+// tocar aquí; con el mapa, la siguiente solo se registra.
+const SUBBED = {
+  anime: {
+    set: (sub) => { anime.closeDetail(); anime.closeTorrents(); anime.sub = sub; anime.persist?.() },
+    get: () => anime.sub,
+  },
+  media: {
+    set: (sub) => { media.closeDetail(); media.setSub(sub) },
+    get: () => media.sub,
+  },
+}
+
+function select(item, group) {
+  if (item.sub) SUBBED[item.id]?.set(item.sub)
+  // Un ítem de un modo concreto (no transversal) fija el "home" de ese modo: al conmutar vuelves aquí.
+  if (group?.mode === 'anime' || group?.mode === 'cine') ui.setModeHome(group.mode, item.id)
   ui.goto(item.id)
 }
 const isActive = (item) =>
-  ui.currentView === item.id && (!item.sub || anime.sub === item.sub)
+  ui.currentView === item.id && (!item.sub || SUBBED[item.id]?.get() === item.sub)
 </script>
 
 <template>
@@ -34,14 +61,21 @@ const isActive = (item) =>
       </button>
     </div>
 
+    <!-- Conmutador de modo: reconfigura toda la navegación de abajo (アニメ ⇄ Cine). -->
+    <div class="modesw" :class="{ 'is-cine': ui.mode === 'cine' }" role="tablist" aria-label="Modo">
+      <span class="modesw__thumb" :style="{ transform: ui.mode === 'cine' ? 'translateX(100%)' : 'none' }" />
+      <button v-for="m in MODES" :key="m.id" class="modesw__opt" :class="{ 'is-on': ui.mode === m.id }"
+              role="tab" :aria-selected="ui.mode === m.id" @click="ui.switchMode(m.id)">{{ m.label }}</button>
+    </div>
+
     <!-- Nav -->
     <nav class="nav">
-      <div v-for="g in VIEWS" :key="g.group" class="nav__group">
+      <div v-for="g in groups" :key="g.group" class="nav__group">
         <span class="nav__label">{{ g.group }}</span>
         <button
           v-for="item in g.items" :key="item.id + (item.sub || '')"
           class="nav__item" :class="{ 'is-active': isActive(item) }"
-          @click="select(item)" :title="item.label"
+          @click="select(item, g)" :title="item.label"
         >
           <span class="nav__rail" />
           <Icon :name="item.icon" :size="19" class="nav__icon" />
@@ -56,9 +90,11 @@ const isActive = (item) =>
         <span class="status-chip__dot" />
         <span class="status-chip__text">Biblioteca oculta</span>
       </div>
-      <div v-else class="status-chip">
+      <!-- Dice la VERDAD: antes se pintaba "Conectado" siempre, aunque el backend estuviera
+           muerto, y era el único indicador de salud de la app. Ahora sigue al EventSource. -->
+      <div v-else class="status-chip" :class="`status-chip--${conn.tone}`" :title="conn.hint">
         <span class="status-chip__dot" />
-        <span class="status-chip__text">Conectado</span>
+        <span class="status-chip__text">{{ conn.label }}</span>
       </div>
     </div>
   </aside>
@@ -86,13 +122,13 @@ const isActive = (item) =>
 }
 .brand__mark {
   position: relative;
-  width: 38px; height: 38px; flex-shrink: 0;
+  width: 2.375rem; height: 2.375rem; flex-shrink: 0;
   display: grid; place-items: center;
   border-radius: var(--r-sm);
   background: radial-gradient(circle at 30% 25%, var(--azure) 0%, var(--azure-ink) 90%);
   box-shadow: var(--glow-azure);
 }
-.brand__kanji { font-size: 20px; color: #fff; font-weight: 700; }
+.brand__kanji { font-size: 1.25rem; color: #fff; font-weight: 700; }
 .brand__pulse {
   position: absolute; inset: -3px;
   border-radius: inherit;
@@ -103,7 +139,7 @@ const isActive = (item) =>
 .brand__name { font-family: var(--font-display); font-weight: 600; font-size: 1.05rem; letter-spacing: -0.01em; white-space: nowrap; }
 .brand__sub  { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--azure); letter-spacing: var(--tracking-caps); }
 .brand__collapse {
-  margin-left: auto; width: 28px; height: 28px; flex-shrink: 0;
+  margin-left: auto; width: 1.75rem; height: 1.75rem; flex-shrink: 0;
   display: grid; place-items: center; color: var(--ink-faint);
   border-radius: var(--r-xs); border: 1px solid var(--line);
   transition: all var(--t-fast) var(--ease-silk);
@@ -112,6 +148,33 @@ const isActive = (item) =>
 .is-collapsed .brand__text { display: none; }
 .is-collapsed .brand { flex-direction: column; gap: var(--s-2); padding: var(--s-3) var(--s-3); height: auto; align-items: center; }
 .is-collapsed .brand__collapse { margin-left: 0; }
+
+/* ── Conmutador de modo ───────────────────────────────────────────────── */
+.modesw {
+  position: relative; display: flex; margin: 0 var(--s-4) var(--s-2);
+  padding: 3px; border-radius: var(--r-pill);
+  background: var(--surface-2); border: 1px solid var(--line);
+}
+.modesw__thumb {
+  position: absolute; top: 3px; left: 3px; width: calc(50% - 3px); height: calc(100% - 0.375rem);
+  border-radius: var(--r-pill); background: var(--azure-haze);
+  border: 1px solid color-mix(in srgb, var(--azure) 45%, transparent);
+  box-shadow: 0 0 12px var(--azure-glow);
+  transition: transform var(--t-base) var(--ease-snap), background var(--t-base), border-color var(--t-base);
+}
+.modesw__opt {
+  position: relative; z-index: 1; flex: 1; padding: var(--s-2) 0;
+  font-size: var(--fs-xs); font-weight: 600; color: var(--ink-faint);
+  transition: color var(--t-fast);
+}
+.modesw__opt.is-on { color: var(--ink); }
+.modesw__opt:first-child { font-family: var(--font-display); }
+/* Colapsado: el segmentado horizontal no cabe → dos etiquetas minúsculas apiladas; la activa
+   resaltada, la otra sigue siendo clicable para conmutar. */
+.is-collapsed .modesw { flex-direction: column; gap: 2px; padding: 2px; margin: 0 var(--s-2) var(--s-2); }
+.is-collapsed .modesw__thumb { display: none; }
+.is-collapsed .modesw__opt { padding: var(--s-1) 0; font-size: 0.62rem; border-radius: var(--r-xs); }
+.is-collapsed .modesw__opt.is-on { background: var(--azure-haze); }
 
 /* ── Nav ──────────────────────────────────────────────────────────────── */
 .nav { flex: 1; padding: var(--s-4) var(--s-3); overflow-y: auto; }
@@ -125,7 +188,7 @@ const isActive = (item) =>
   text-transform: uppercase;
   color: var(--ink-ghost);
 }
-.is-collapsed .nav__label { opacity: 0; height: 8px; }
+.is-collapsed .nav__label { opacity: 0; height: 0.5rem; }
 
 .nav__item {
   position: relative;
@@ -139,7 +202,7 @@ const isActive = (item) =>
 }
 .nav__rail {
   position: absolute; left: -3px; top: 50%; transform: translateY(-50%) scaleY(0);
-  width: 3px; height: 20px; border-radius: var(--r-pill);
+  width: 3px; height: 1.25rem; border-radius: var(--r-pill);
   background: var(--azure); box-shadow: 0 0 12px var(--azure-glow);
   transition: transform var(--t-base) var(--ease-snap);
 }
@@ -160,13 +223,19 @@ const isActive = (item) =>
   font-size: var(--fs-xs); color: var(--ink-faint);
 }
 .status-chip__dot {
-  width: 7px; height: 7px; border-radius: 50%;
+  width: 0.4375rem; height: 0.4375rem; border-radius: 50%;
   background: var(--live); box-shadow: var(--glow-cyan);
   animation: pulse-live 2.4s var(--ease-drift) infinite;
 }
 .is-collapsed .status-chip__text { display: none; }
 .status-chip--hid { color: var(--violet); font-weight: 600; }
 .status-chip--hid .status-chip__dot { background: var(--violet); box-shadow: 0 0 8px color-mix(in srgb, var(--violet) 65%, transparent); }
+/* Reconectando: ámbar y latido rápido. Caído: coral y QUIETO — un punto que late sugiere
+   actividad, y ahí justamente no la hay. */
+.status-chip--wait { color: var(--warn); }
+.status-chip--wait .status-chip__dot { background: var(--warn); box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 60%, transparent); animation-duration: 0.9s; }
+.status-chip--bad { color: var(--coral); font-weight: 600; }
+.status-chip--bad .status-chip__dot { background: var(--coral); box-shadow: 0 0 8px color-mix(in srgb, var(--coral) 60%, transparent); animation: none; }
 
 /* ── Mobile ───────────────────────────────────────────────────────────── */
 @media (max-width: 860px) {

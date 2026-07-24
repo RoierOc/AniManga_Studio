@@ -2,12 +2,13 @@
 /* Vista "Descubrir" — explorador estilo AniList del Manga Hub. Rejilla de OBRAS populares
  * gobernada por filtros (texto + tipo + géneros + orden), deduplicadas del meta-source.
  * Clic → ficha (WorkInfoModal). Estética Midnight Atelier. */
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useDiscoveryStore, TYPE_FILTERS, SORT_OPTIONS } from '@/stores/discovery'
 import WorkCard from '@/components/manga/WorkCard.vue'
 import WorkInfoModal from '@/components/manga/WorkInfoModal.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
+import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useDiscoveryStore()
 
@@ -22,8 +23,24 @@ function onDocClick(e) {
   if (genreOpen.value && genreDd.value && !genreDd.value.contains(e.target)) genreOpen.value = false
   if (sortOpen.value && sortDd.value && !sortDd.value.contains(e.target)) sortOpen.value = false
 }
+/* Scroll infinito: explorar no debería costar un clic por página. `rootMargin` dispara la carga
+ * ANTES de llegar al borde, así que la rejilla crece sin que llegues a ver el final. */
+const sentinel = ref(null)
+let io = null
+// El centinela vive dentro del `v-else-if` de resultados, así que NO existe en el montaje: se
+// observa cuando aparece (y se deja de observar si la rejilla se vacía por un filtro).
+watch(sentinel, (el, prev) => {
+  if (!('IntersectionObserver' in window)) return   // sin soporte queda el botón
+  if (prev && io) io.unobserve(prev)
+  if (!el) return
+  io = io || new IntersectionObserver((entries) => {
+    if (entries[0].isIntersecting && store.hasMore && !store.loadingMore && !store.loading) store.loadMore()
+  }, { rootMargin: '600px' })
+  io.observe(el)
+})
+
 onMounted(() => { store.init(); document.addEventListener('click', onDocClick) })
-onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
+onBeforeUnmount(() => { document.removeEventListener('click', onDocClick); io?.disconnect() })
 </script>
 
 <template>
@@ -111,10 +128,11 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
       <div class="grid">
         <WorkCard v-for="w in store.items" :key="w.id" :work="w" @select="store.openWork($event)" />
       </div>
-      <div class="more">
-        <button v-if="store.hasMore" class="more__btn" :disabled="store.loadingMore" @click="store.loadMore()">
-          <span v-if="store.loadingMore" class="more__spin" /> {{ store.loadingMore ? 'Cargando…' : 'Cargar más' }}
-        </button>
+      <!-- Centinela: al asomar por el borde inferior, la página siguiente se pide sola. El botón
+           sobrevive como respaldo si no hay IntersectionObserver (o si la carga falló). -->
+      <div ref="sentinel" class="more">
+        <Spinner v-if="store.loadingMore" :size="18" />
+        <button v-else-if="store.hasMore" class="more__btn" @click="store.loadMore()">Cargar más</button>
       </div>
     </template>
 
@@ -142,7 +160,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   background: linear-gradient(180deg, var(--void) 82%, transparent);
   backdrop-filter: blur(6px); margin-bottom: var(--s-2); }
 .fsearch { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-4);
-  border: 1px solid var(--line-strong); border-radius: var(--r-lg, 16px); background: var(--surface);
+  border: 1px solid var(--line-strong); border-radius: var(--r-lg, 1rem); background: var(--surface);
   color: var(--ink-faint); transition: border-color var(--t-fast); }
 .fsearch:focus-within { border-color: var(--azure); }
 .fsearch input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: var(--ink); font-size: var(--fs-base); }
@@ -166,10 +184,10 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 .dd__btn:hover { color: var(--ink); border-color: var(--line-strong); }
 .dd__btn.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 .dd__count { display: inline-grid; place-items: center; min-width: 1.15rem; height: 1.15rem; padding: 0 4px;
-  font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; color: #0b0f1a; background: var(--azure); border-radius: 999px; }
+  font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; color: #0b0f1a; background: var(--azure); border-radius: 62.4375rem; }
 .dd__caret { transition: transform var(--t-fast); }
 .dd__caret.is-open { transform: rotate(90deg); }
-.dd__pop { position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; width: min(30rem, 82vw);
+.dd__pop { position: absolute; top: calc(100% + 0.375rem); right: 0; z-index: 20; width: min(30rem, 82vw);
   padding: var(--s-3); border: 1px solid var(--line-2, var(--line-strong)); border-radius: var(--r-md);
   background: var(--glass-strong, var(--surface)); backdrop-filter: blur(16px); box-shadow: var(--shadow-lg); }
 .dd__pop--sort { width: 13rem; padding: var(--s-2); }
@@ -178,7 +196,7 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
 .dd__clear { font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); }
 .dd__clear:hover { text-decoration: underline; }
 .dd__genres { display: flex; flex-wrap: wrap; gap: var(--s-1); max-height: 15rem; overflow-y: auto; scrollbar-width: thin; }
-.gchip { font-size: var(--fs-2xs); font-weight: 600; padding: 5px 10px; border-radius: var(--r-pill);
+.gchip { font-size: var(--fs-2xs); font-weight: 600; padding: 0.3125rem 0.625rem; border-radius: var(--r-pill);
   color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .gchip:hover { color: var(--ink); border-color: var(--line-strong); }
 .gchip.is-on { color: var(--azure-bright); background: var(--azure-haze); border-color: var(--azure); }
@@ -186,11 +204,11 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink-soft); transition: all var(--t-fast); }
 .dd__opt:hover { background: var(--surface-2, var(--surface)); color: var(--ink); }
 .dd__opt.is-on { color: var(--azure-bright); }
-.dd__opt-dot { width: 13px; height: 13px; }
+.dd__opt-dot { width: 0.8125rem; height: 0.8125rem; }
 
 .chips { display: flex; flex-wrap: wrap; gap: var(--s-1); margin-top: var(--s-3); }
-.chip { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-2xs); font-weight: 600;
-  padding: 4px 10px; border-radius: var(--r-pill); color: var(--azure-bright); background: var(--azure-haze);
+.chip { display: inline-flex; align-items: center; gap: 0.3125rem; font-size: var(--fs-2xs); font-weight: 600;
+  padding: 4px 0.625rem; border-radius: var(--r-pill); color: var(--azure-bright); background: var(--azure-haze);
   border: 1px solid var(--azure); transition: all var(--t-fast); }
 .chip:hover { background: color-mix(in srgb, var(--azure) 22%, transparent); }
 
@@ -204,7 +222,6 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   transition: all var(--t-fast); }
 .more__btn:hover:not(:disabled) { border-color: var(--azure); color: var(--azure-bright); }
 .more__btn:disabled { opacity: .6; }
-.more__spin { width: 14px; height: 14px; border: 2px solid var(--line-strong); border-top-color: var(--azure); border-radius: 50%; animation: spin .7s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg) } }
 
 .state { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-9) var(--s-4);
@@ -222,5 +239,5 @@ onBeforeUnmount(() => document.removeEventListener('click', onDocClick))
   .filters__spacer { display: none; }
   .dd__pop { right: auto; left: 0; }
 }
-@media (prefers-reduced-motion: reduce) { .dd__caret, .more__spin { transition: none; animation: none; } }
+@media (prefers-reduced-motion: reduce) { .dd__caret { transition: none; } }
 </style>

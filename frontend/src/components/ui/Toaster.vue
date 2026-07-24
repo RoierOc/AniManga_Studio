@@ -24,7 +24,7 @@ const ui = useUiStore()
   position: fixed; right: var(--s-5); bottom: var(--s-5);
   z-index: var(--z-toast);
   display: flex; flex-direction: column; gap: var(--s-2);
-  max-width: 360px;
+  max-width: 22.5rem;
 }
 .toast {
   position: relative;
@@ -43,7 +43,7 @@ const ui = useUiStore()
 .toast--warn  .toast__bar { background: var(--warn); }
 .toast--error .toast__bar { background: var(--danger); }
 .toast__msg { flex: 1; color: var(--ink-soft); }
-.toast__action { flex-shrink: 0; padding: 4px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 700; color: var(--azure-bright); border: 1px solid color-mix(in srgb, var(--azure) 35%, transparent); transition: all var(--t-fast); }
+.toast__action { flex-shrink: 0; padding: 4px 0.75rem; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 700; color: var(--azure-bright); border: 1px solid color-mix(in srgb, var(--azure) 35%, transparent); transition: all var(--t-fast); }
 .toast__action:hover { background: var(--azure-haze); color: #fff; border-color: var(--azure); }
 .toast__x { color: var(--ink-faint); display: grid; place-items: center; transition: color var(--t-fast); }
 .toast__x:hover { color: var(--ink); }

@@ -5,6 +5,7 @@ import { animeEpLabel, isEpisodePlayable } from '@/lib/anime'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
+import Spinner from '@/components/ui/Spinner.vue'
 
 const props = defineProps({
   anime: { type: Object, required: true },
@@ -99,7 +100,7 @@ function openMenu(ev) {
        @mouseenter.once="store.loadSkip(anime, ep)" @contextmenu.prevent="openMenu">
 
     <div class="ep__thumb" @click="onPrimary">
-      <div class="ep__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover)}')` : ''" />
+      <div class="ep__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 200)}')` : ''" />
       <img v-if="playable || ep.has_thumb" class="ep__img" :src="`/api/anime/thumb/${anime.id}/${ep.num}${ep.ep_type === 'special' ? '?special=1' : ''}`"
            loading="lazy" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
 
@@ -119,7 +120,7 @@ function openMenu(ev) {
       <div v-if="downloading" class="ep__dlbar"><span :style="{ width: dlPct + '%' }" /></div>
 
       <div v-if="playable" class="ep__play"><span class="ep__play-c"><Icon name="play" :size="26" /></span></div>
-      <span v-if="subFetching" class="ep__subtag ep__subtag--load"><span class="ep__spin" /> Buscando ES…</span>
+      <span v-if="subFetching" class="ep__subtag ep__subtag--load"><Spinner :size="10" tone="light" /> Buscando ES…</span>
       <span v-else-if="subRunning" class="ep__subtag">✨ {{ subTask?.progress || 0 }}%</span>
     </div>
 
@@ -177,7 +178,7 @@ function openMenu(ev) {
 .ep__overlay { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; display: flex; align-items: flex-end;
   padding: var(--s-3); color: #fff; pointer-events: none; }
 .ep__num { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-start; line-height: 1; }
-.ep__num-k { font-family: var(--font-mono); font-size: 9px; font-weight: 600; color: var(--ice); letter-spacing: .14em;
+.ep__num-k { font-family: var(--font-mono); font-size: 0.5625rem; font-weight: 600; color: var(--ice); letter-spacing: .14em;
   line-height: 1; text-shadow: 0 1px 6px rgba(0,0,0,.9); }
 .ep__num-seen { color: var(--azure-bright); letter-spacing: .1em; }
 .ep__num-v { font-family: var(--font-display); font-weight: 700; font-size: 2.3rem; line-height: .9;
@@ -197,11 +198,10 @@ function openMenu(ev) {
 .ep__thumb:hover .ep__play { opacity: 1; }
 .ep__thumb:hover .ep__play-c { transform: scale(1); }
 .ep__thumb:hover .ep__play-c:hover { background: var(--azure); border-color: transparent; }
-.ep__subtag { position: absolute; top: var(--s-2); right: var(--s-2); z-index: 4; display: inline-flex; align-items: center; gap: 5px;
-  font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; color: #fff; padding: 2px 7px; border-radius: var(--r-pill);
+.ep__subtag { position: absolute; top: var(--s-2); right: var(--s-2); z-index: 4; display: inline-flex; align-items: center; gap: 0.3125rem;
+  font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; color: #fff; padding: 2px 0.4375rem; border-radius: var(--r-pill);
   background: rgba(7,10,18,.65); backdrop-filter: blur(6px); }
 .ep__subtag--load { color: var(--ice); }
-.ep__spin { width: 10px; height: 10px; border-radius: 50%; border: 2px solid rgba(255,255,255,.28); border-top-color: #fff; animation: spin .7s linear infinite; }
 
 /* Pie de la tarjeta: título + estado. Mismo font-display de siempre (al usuario le gusta la
    tipografía), pero ya sobre fondo sólido: sin sombras y con el color de tinta del tema. */
@@ -220,16 +220,16 @@ function openMenu(ev) {
 .ep__info-title { font-weight: 600; color: var(--ink); margin-bottom: 4px; font-size: var(--fs-sm); }
 .ep__info-syn { color: var(--ink-soft); }
 .ep__info-meta { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-2); color: var(--ink-faint); }
-.ep__badge { padding: 1px 6px; border-radius: var(--r-xs); font-weight: 600; font-size: var(--fs-2xs); }
+.ep__badge { padding: 1px 0.375rem; border-radius: var(--r-xs); font-weight: 600; font-size: var(--fs-2xs); }
 .ep__badge--filler { background: color-mix(in srgb, var(--gold) 18%, transparent); color: var(--gold); }
 .ep__badge--recap { background: var(--azure-haze); color: var(--azure-bright); }
 .ep__info-empty { color: var(--ink-faint); font-style: italic; }
-.ep__info-load { display: flex; gap: 5px; justify-content: center; padding: var(--s-2); }
-.ep__info-load .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--azure); animation: pulse-live 1s var(--ease-drift) infinite; }
+.ep__info-load { display: flex; gap: 0.3125rem; justify-content: center; padding: var(--s-2); }
+.ep__info-load .dot { width: 0.3125rem; height: 0.3125rem; border-radius: 50%; background: var(--azure); animation: pulse-live 1s var(--ease-drift) infinite; }
 .ep__info-load .dot:nth-child(2) { animation-delay: .15s; }
 .ep__info-load .dot:nth-child(3) { animation-delay: .3s; }
 
 .info-enter-active, .info-leave-active { transition: all var(--t-base) var(--ease-silk); overflow: hidden; }
 .info-enter-from, .info-leave-to { opacity: 0; max-height: 0; }
-.info-enter-to, .info-leave-from { max-height: 300px; }
+.info-enter-to, .info-leave-from { max-height: 18.75rem; }
 </style>

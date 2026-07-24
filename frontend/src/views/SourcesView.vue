@@ -163,14 +163,14 @@ function openMangaFromGroup(m, groupSource) {
 .src { max-width: var(--content-max); margin: 0 auto; padding: 0 var(--s-6) var(--s-8); }
 .src__head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: var(--s-4); padding: var(--s-5) 0; }
 .eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
-.tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
-.src__status { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-faint); padding: 6px 12px; border-radius: var(--r-pill); border: 1px solid var(--line); }
+.tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
+.src__status { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-faint); padding: 0.375rem 0.75rem; border-radius: var(--r-pill); border: 1px solid var(--line); }
 .src__status.is-on { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 30%, transparent); }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-ghost); }
+.dot { width: 0.4375rem; height: 0.4375rem; border-radius: 50%; background: var(--ink-ghost); }
 .src__status.is-on .dot { background: var(--jade); box-shadow: 0 0 10px color-mix(in srgb, var(--jade) 60%, transparent); }
 
 .src__head-r { display: flex; align-items: center; gap: var(--s-3); }
-.src__webui { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); font-weight: 500; color: var(--ink-soft); padding: 6px 12px; border-radius: var(--r-pill); border: 1px solid var(--line); background: var(--surface); transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast); }
+.src__webui { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); font-weight: 500; color: var(--ink-soft); padding: 0.375rem 0.75rem; border-radius: var(--r-pill); border: 1px solid var(--line); background: var(--surface); transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast); }
 .src__webui:hover:not(:disabled) { color: var(--ink); border-color: var(--azure); background: var(--azure-haze); }
 .src__webui:hover:not(:disabled) :deep(svg) { color: var(--azure-bright); }
 .src__webui:disabled { opacity: .6; cursor: default; }
@@ -188,17 +188,17 @@ function openMangaFromGroup(m, groupSource) {
 .bigbox input { flex: 1; border: none; outline: none; background: none; color: var(--ink); font-size: var(--fs-lg); }
 .bigbox__go { padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); }
 .bigbox__go:disabled { opacity: .4; cursor: not-allowed; }
-.bigbox__sep { width: 1px; height: 24px; background: var(--line); flex-shrink: 0; }
-.bigbox__pop { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-4); border-radius: var(--r-sm); font-size: var(--fs-sm); font-weight: 500; color: var(--ink-soft); border: 1px solid var(--line); white-space: nowrap; transition: all var(--t-fast); flex-shrink: 0; }
+.bigbox__sep { width: 1px; height: 1.5rem; background: var(--line); flex-shrink: 0; }
+.bigbox__pop { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-4); border-radius: var(--r-sm); font-size: var(--fs-sm); font-weight: 500; color: var(--ink-soft); border: 1px solid var(--line); white-space: nowrap; transition: all var(--t-fast); flex-shrink: 0; }
 .bigbox__pop:hover { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, transparent); background: color-mix(in srgb, var(--amber) 8%, transparent); }
 
 .srcsel { display: flex; gap: var(--s-2); flex-wrap: wrap; margin: var(--s-4) 0; }
-.schip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
+.schip { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.3125rem 0.75rem; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .schip:hover { color: var(--ink); border-color: var(--line-strong); }
 .schip.is-active { background: var(--azure-haze); border-color: var(--azure); color: var(--azure-bright); }
-.schip__ic { width: 16px; height: 16px; border-radius: 3px; }
+.schip__ic { width: 1rem; height: 1rem; border-radius: 3px; }
 .schip__lang { font-family: var(--font-mono); font-size: var(--fs-2xs); opacity: .6; text-transform: uppercase; }
-.schip__cnt { display: inline-flex; align-items: center; justify-content: center; min-width: 18px; height: 16px; padding: 0 4px; border-radius: var(--r-pill); font-size: 10px; font-weight: 700; background: var(--azure); color: #fff; }
+.schip__cnt { display: inline-flex; align-items: center; justify-content: center; min-width: 1.125rem; height: 1rem; padding: 0 4px; border-radius: var(--r-pill); font-size: 0.625rem; font-weight: 700; background: var(--azure); color: #fff; }
 
 .prog { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-4); }
 .prog__bar { flex: 1; height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
@@ -217,21 +217,21 @@ function openMangaFromGroup(m, groupSource) {
 .sc__img.is-loaded { opacity: 1; }
 .sc__ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-ghost); }
 .sc__scrim { position: absolute; inset: 0; background: linear-gradient(180deg, transparent 45%, rgba(5,7,13,.95) 100%); }
-.sc__lib { position: absolute; top: var(--s-2); right: var(--s-2); width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--jade); }
+.sc__lib { position: absolute; top: var(--s-2); right: var(--s-2); width: 1.375rem; height: 1.375rem; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--jade); }
 .sc__overlay { position: absolute; left: 0; right: 0; bottom: 0; padding: var(--s-2) var(--s-3); }
 .sc__title { font-size: var(--fs-xs); font-weight: 600; color: #fff; line-height: var(--lh-snug); text-shadow: 0 1px 5px rgba(0,0,0,.7); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .sc__src { font-size: var(--fs-2xs); color: var(--ice); text-shadow: 0 1px 4px rgba(0,0,0,.6); }
 
 .pophead { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-4); padding-bottom: var(--s-3); border-bottom: 1px solid var(--line); }
 .pophead__title { font-weight: 600; font-size: var(--fs-md); }
-.pophead__lang { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); padding: 1px 5px; border-radius: var(--r-xs); border: 1px solid var(--line-2); }
+.pophead__lang { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); padding: 1px 0.3125rem; border-radius: var(--r-xs); border: 1px solid var(--line-2); }
 .pophead__count { font-size: var(--fs-xs); color: var(--ink-faint); }
 
 .src-group { margin-bottom: var(--s-6); }
 .src-group__head { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-3); padding-bottom: var(--s-3); border-bottom: 1px solid var(--line); }
-.src-group__ic { width: 20px; height: 20px; border-radius: 4px; object-fit: contain; }
+.src-group__ic { width: 1.25rem; height: 1.25rem; border-radius: 4px; object-fit: contain; }
 .src-group__name { font-weight: 600; font-size: var(--fs-sm); color: var(--ink); }
-.src-group__lang { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); padding: 1px 5px; border-radius: var(--r-xs); border: 1px solid var(--line-2); }
+.src-group__lang { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); padding: 1px 0.3125rem; border-radius: var(--r-xs); border: 1px solid var(--line-2); }
 .src-group__count { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
 
 @media (max-width: 540px) { .src { padding: 0 var(--s-4) var(--s-8); } .grid { grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); } }

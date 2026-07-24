@@ -1,22 +1,29 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import Icon from '@/components/ui/Icon.vue'
+import { useModal } from '@/lib/useModal'
 
 const store = useAnimeStore()
 const m = computed(() => store.subTrackModal)
 const SRC = { jimaku: 'Jimaku', opensubtitles: 'OpenSubtitles', subdl: 'Subdl', subdivx: 'Subdivx', nyaa: 'Nyaa' }
+
+// Escape cierra, el foco no se escapa por detrás y el fondo no scrollea.
+const modalEl = ref(null)
+useModal(() => !!m.value, () => store.subTrackModal = null, modalEl)
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="m" class="ov" @click.self="store.subTrackModal = null">
-        <div class="modal">
+        <div class="modal" ref="modalEl">
           <button class="modal__x" @click="store.subTrackModal = null"><Icon name="close" :size="18" /></button>
           <header class="modal__head">
             <h2>Subtítulos en español</h2>
-            <p>{{ m.anime.title }} · Episodio {{ m.ep.num }}</p>
+            <!-- Una película no tiene episodio: mostrar "Episodio 0" era el precio de reusar
+                 este modal, y no hace falta pagarlo. -->
+            <p>{{ m.anime.title }}<template v-if="m.ep.num > 0"> · Episodio {{ m.ep.num }}</template></p>
           </header>
 
           <div class="modal__body">
@@ -80,12 +87,12 @@ const SRC = { jimaku: 'Jimaku', opensubtitles: 'OpenSubtitles', subdl: 'Subdl', 
 <style scoped>
 .ov { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--s-5); background: rgba(7,10,18,.72); backdrop-filter: blur(8px); }
 .modal { position: relative; width: min(35rem, 100%); max-height: 86vh; display: flex; flex-direction: column; background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); overflow: hidden; }
-.modal__x { position: absolute; top: var(--s-3); right: var(--s-3); width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); }
+.modal__x { position: absolute; top: var(--s-3); right: var(--s-3); width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); }
 .modal__head { padding: var(--s-5) var(--s-5) var(--s-3); border-bottom: 1px solid var(--line); }
 .modal__head h2 { font-size: var(--fs-lg); }
 .modal__head p { color: var(--ink-faint); font-size: var(--fs-sm); margin-top: 2px; }
 .modal__body { overflow-y: auto; padding: var(--s-4) var(--s-5); display: flex; flex-direction: column; gap: var(--s-4); }
-.sec { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); font-family: var(--font-mono); letter-spacing: .04em; color: var(--ink-faint); margin-bottom: var(--s-2); text-transform: uppercase; }
+.sec { display: flex; align-items: center; gap: 0.375rem; font-size: var(--fs-xs); font-family: var(--font-mono); letter-spacing: .04em; color: var(--ink-faint); margin-bottom: var(--s-2); text-transform: uppercase; }
 .trk { display: flex; align-items: center; gap: var(--s-3); width: 100%; padding: var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line); background: var(--surface); margin-bottom: var(--s-2); transition: all var(--t-fast); text-align: left; }
 .trk:hover { border-color: var(--azure); background: var(--surface-2); }
 .trk--ready:hover { border-color: var(--jade); }
@@ -93,7 +100,7 @@ const SRC = { jimaku: 'Jimaku', opensubtitles: 'OpenSubtitles', subdl: 'Subdl', 
 .trk--have { border-color: color-mix(in srgb, var(--jade) 30%, var(--line)); cursor: default; }
 .trk--have .trk__lang { background: color-mix(in srgb, var(--jade) 20%, transparent); color: var(--jade); }
 .note { font-size: var(--fs-2xs); color: var(--ink-faint); line-height: 1.45; margin-top: 2px; }
-.trk__lang { font-family: var(--font-mono); font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: var(--r-xs); background: var(--azure-haze); color: var(--azure-bright); flex-shrink: 0; }
+.trk__lang { font-family: var(--font-mono); font-size: 0.5625rem; font-weight: 700; padding: 2px 0.375rem; border-radius: var(--r-xs); background: var(--azure-haze); color: var(--azure-bright); flex-shrink: 0; }
 .trk--ready .trk__lang { background: color-mix(in srgb, var(--jade) 20%, transparent); color: var(--jade); }
 .trk__name { flex: 1; font-size: var(--fs-sm); min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trk__name em { color: var(--ink-faint); font-style: normal; font-size: var(--fs-2xs); }

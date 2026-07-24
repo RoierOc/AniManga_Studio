@@ -1,11 +1,13 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useMangadexStore } from '@/stores/mangadex'
 import { useMangaStore } from '@/stores/manga'
 import { taskId } from '@/lib/manga'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import Select from '@/components/ui/Select.vue'
+import { useModal } from '@/lib/useModal'
 
 const store = useMangadexStore()
 const manga = useMangaStore()        // for live download progress via its `downloads` map
@@ -19,13 +21,17 @@ function dlState(ch) {
   const t = manga.downloads[taskId(d.value.title, ch.chapter, 'download')]
   return t && !['done', 'error', 'cancelled'].includes(t.status) ? t : null
 }
+
+// Escape cierra, el foco no se escapa por detrás y el fondo no scrollea.
+const modalEl = ref(null)
+useModal(() => !!d.value, () => store.closeDetail(), modalEl)
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="d" class="ov" @click.self="store.closeDetail()">
-        <div class="modal">
+        <div class="modal" ref="modalEl">
           <button class="modal__x" @click="store.closeDetail()"><Icon name="close" :size="18" /></button>
 
           <header class="modal__head" :style="d.cover ? `--bg:url('${imgProxy(d.cover)}')` : ''">
@@ -57,10 +63,8 @@ function dlState(ch) {
           <div class="modal__chapters">
             <div class="modal__chhead">
               <span>Capítulos</span>
-              <select v-if="store.detailLangs.length > 1" v-model="store.detailLang" class="langsel">
-                <option value="">Todos</option>
-                <option v-for="l in store.detailLangs" :key="l" :value="l">{{ flag(l) }} {{ l }}</option>
-              </select>
+              <Select v-if="store.detailLangs.length > 1" v-model="store.detailLang" aria-label="Idioma"
+                      :options="[{ value: '', label: 'Todos' }, ...store.detailLangs.map(l => ({ value: l, label: `${flag(l)} ${l}` }))]" />
             </div>
 
             <div v-if="store.detailLoading" class="center"><Spinner /></div>
@@ -93,21 +97,21 @@ function dlState(ch) {
 <style scoped>
 .ov { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--s-5); background: rgba(7,10,18,.72); backdrop-filter: blur(8px); }
 .modal { position: relative; width: min(47.5rem, 100%); max-height: 88vh; display: flex; flex-direction: column; background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); overflow: hidden; }
-.modal__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 3; width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r-sm); color: #fff; background: rgba(7,10,18,.5); border: 1px solid var(--line); transition: all var(--t-fast); }
+.modal__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 3; width: 2.125rem; height: 2.125rem; display: grid; place-items: center; border-radius: var(--r-sm); color: #fff; background: rgba(7,10,18,.5); border: 1px solid var(--line); transition: all var(--t-fast); }
 .modal__x:hover { background: rgba(7,10,18,.8); }
 
 .modal__head { position: relative; display: flex; gap: var(--s-4); padding: var(--s-5); }
 .modal__head::before { content: ''; position: absolute; inset: 0; background: var(--bg) center/cover; opacity: .18; filter: blur(20px); }
 .modal__head-scrim { position: absolute; inset: 0; background: linear-gradient(180deg, transparent, var(--glass-strong)); }
-.modal__cover { position: relative; width: 110px; aspect-ratio: 2/3; object-fit: cover; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
+.modal__cover { position: relative; width: 6.875rem; aspect-ratio: 2/3; object-fit: cover; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
 .modal__info { position: relative; min-width: 0; padding-right: var(--s-6); }
 .modal__title { font-size: var(--fs-xl); line-height: var(--lh-snug); }
 .modal__by { color: var(--ink-soft); font-size: var(--fs-sm); margin-top: 2px; }
 .modal__chips { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-3); }
-.chip { font-size: var(--fs-2xs); padding: 2px 8px; border-radius: var(--r-pill); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-soft); text-transform: capitalize; }
+.chip { font-size: var(--fs-2xs); padding: 2px 0.5rem; border-radius: var(--r-pill); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-soft); text-transform: capitalize; }
 .chip--score { color: var(--gold); }
 .modal__acts { display: flex; gap: var(--s-2); margin-top: var(--s-4); }
-.abtn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); }
+.abtn { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); }
 .abtn:hover { color: var(--ink); border-color: var(--line-strong); }
 .abtn--accent { background: var(--azure); color: #fff; border-color: transparent; }
 .abtn--accent:hover { background: var(--azure-bright); color: #fff; }
@@ -116,10 +120,9 @@ function dlState(ch) {
 .abtn--added { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 30%, transparent); background: color-mix(in srgb, var(--jade) 8%, transparent); }
 .abtn--added:hover { color: var(--jade); }
 
-.modal__desc { padding: 0 var(--s-5) var(--s-3); font-size: var(--fs-sm); color: var(--ink-soft); line-height: var(--lh-body); max-height: 110px; overflow-y: auto; }
+.modal__desc { padding: 0 var(--s-5) var(--s-3); font-size: var(--fs-sm); color: var(--ink-soft); line-height: var(--lh-body); max-height: 6.875rem; overflow-y: auto; }
 .modal__chapters { flex: 1; overflow: hidden; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
 .modal__chhead { display: flex; align-items: center; justify-content: space-between; padding: var(--s-3) var(--s-5); font-weight: 600; }
-.langsel { padding: var(--s-1) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); }
 .center { display: grid; place-items: center; padding: var(--s-6); }
 .empty { text-align: center; color: var(--ink-faint); padding: var(--s-6); }
 .chaps { overflow-y: auto; padding: 0 var(--s-3) var(--s-3); }
@@ -129,11 +132,11 @@ function dlState(ch) {
 .chap__num { font-weight: 600; font-size: var(--fs-sm); }
 .chap__title { color: var(--ink-soft); font-size: var(--fs-xs); margin-left: var(--s-2); }
 .chap__grp { display: block; font-size: var(--fs-2xs); color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.chap__dl { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); flex-shrink: 0; }
+.chap__dl { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); flex-shrink: 0; }
 .chap__dl:hover { color: #fff; background: var(--azure); border-color: transparent; }
 .chap__dl--ghost { color: var(--azure-bright); border-color: var(--azure); background: transparent; }
 .chap__dl--ghost:hover { background: var(--azure-haze); color: var(--azure-bright); }
-.chap__prog { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--cyan); flex-shrink: 0; }
+.chap__prog { display: inline-flex; align-items: center; gap: 0.375rem; font-size: var(--fs-xs); color: var(--cyan); flex-shrink: 0; }
 
 .modal-enter-active, .modal-leave-active { transition: opacity var(--t-base); }
 .modal-enter-active .modal { transition: transform var(--t-base) var(--ease-snap); }

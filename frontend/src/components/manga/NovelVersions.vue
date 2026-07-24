@@ -15,6 +15,20 @@ const novels = useNovelsStore()
 const searched = computed(() => novels.findQuery === props.title && !novels.finding)
 const results = computed(() => (novels.findQuery === props.title ? novels.versions : []))
 const failed = computed(() => (searched.value ? novels.failedSources : []))
+// Con qué títulos se buscó (el original + sus variantes): explica un cero sin resultados.
+const tried = computed(() => (searched.value ? novels.tried : []))
+
+// Marca en ámbar las versiones muy por debajo de la más completa: casi siempre es una
+// traducción parada a medias, no otra edición.
+function isShort(v) {
+  const c = novels.chapterCount(v)
+  const max = Math.max(...results.value.map(x => novels.chapterCount(x) || 0))
+  return c != null && max > 0 && c < max * 0.6
+}
+
+// El idioma es lo primero que se mira al elegir versión: se muestra como píldora, no enterrado.
+const LANG = { 'Español': 'ES', English: 'EN', 'Français': 'FR', 'Português': 'PT' }
+function langShort(l) { return LANG[l] || (l || '').slice(0, 2).toUpperCase() }
 
 function search() {
   novels.loadLibrary()
@@ -34,19 +48,30 @@ function search() {
 
     <template v-if="searched">
       <p v-if="!results.length" class="nv__empty">
-        Ninguna fuente tiene esta novela con ese título. Prueba con el título en inglés.
+        Ninguna de las fuentes consultadas tiene esta novela.
+        <span v-if="tried.length > 1" class="nv__tried">Se probó como: {{ tried.join(' · ') }}.</span>
+        Las novelas licenciadas casi nunca están en fuentes abiertas; puedes añadir más fuentes en
+        Ajustes → Novelas.
       </p>
 
       <ul v-else class="nv__list">
         <li v-for="v in results" :key="v.pluginId + v.path" class="nv__item">
-          <img v-if="v.cover" :src="imgProxy(v.cover)" :alt="v.name" class="nv__cover" />
+          <img v-if="v.cover" :src="imgProxy(v.cover, 160)" :alt="v.name" class="nv__cover" />
           <div v-else class="nv__cover nv__cover--empty"><Icon name="library" :size="16" /></div>
           <div class="nv__info">
             <span class="nv__name">{{ v.name }}</span>
-            <span class="nv__src">{{ v.pluginId }}</span>
+            <span class="nv__src">
+              <span class="nv__lang" :class="{ 'is-es': (v.lang || '').startsWith('Espa') }">{{ langShort(v.lang) }}</span>
+              {{ v.sourceName || v.pluginId }}
+              <!-- Nº de capítulos: sin esto se elige a ciegas (una versión puede tener 23 y otra 285) -->
+              <template v-if="novels.chapterCount(v) != null">
+                · <b :class="{ 'is-short': isShort(v) }">{{ novels.chapterCount(v) }} cap.</b>
+              </template>
+              <template v-else>· <span class="nv__dim">contando…</span></template>
+            </span>
           </div>
-          <button class="nv__read" title="Leer ahora" @click="novels.openReader({ title, novel: v })">
-            <Icon name="book" :size="14" /> Leer
+          <button class="nv__read" title="Ver capítulos y leer" @click="novels.openDetail({ title, cover: v.cover, novel: v })">
+            <Icon name="book" :size="14" /> Abrir
           </button>
           <button class="nv__add" :class="{ 'is-added': novels.inLibrary(v) }"
                   :disabled="novels.inLibrary(v) || novels.isAdding(v)"
@@ -86,17 +111,27 @@ function search() {
 .nv__info { min-width: 0; flex: 1; display: flex; flex-direction: column; }
 .nv__name { font-size: var(--fs-sm); color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nv__src { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
-.nv__add { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 5px var(--s-3);
+.nv__add { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 0.3125rem var(--s-3);
   border-radius: var(--r-pill); font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright);
   background: var(--azure-haze); border: 1px solid var(--line); transition: all var(--t-fast); }
 .nv__add:hover:not(:disabled) { color: var(--ink); }
 .nv__add.is-added { color: var(--ok, #4ade80); }
 .nv__add:disabled { cursor: default; opacity: .8; }
 
-.nv__read { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 5px var(--s-3);
+.nv__read { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 0.3125rem var(--s-3);
   border-radius: var(--r-pill); font-size: var(--fs-2xs); font-weight: 600; color: var(--ink-soft);
   border: 1px solid var(--line); transition: all var(--t-fast); }
 .nv__read:hover { color: var(--azure-bright); background: var(--azure-haze); }
 
-.nv__note { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-2xs); color: var(--ink-faint); }
+.nv__lang { display: inline-block; padding: 1px 0.3125rem; margin-right: 4px; border-radius: var(--r-xs, 3px);
+  font-size: var(--fs-2xs); font-weight: 700; color: var(--ink-soft); background: var(--surface-2, var(--void));
+  border: 1px solid var(--line); }
+.nv__lang.is-es { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 35%, transparent); }
+
+.nv__tried { display: block; margin: 3px 0; font-family: var(--font-mono); font-size: var(--fs-2xs); opacity: .8; }
+.nv__src b { color: var(--ink-soft); font-weight: 600; }
+.nv__src b.is-short { color: var(--warn, #fbbf24); }
+.nv__dim { opacity: .5; }
+
+.nv__note { display: inline-flex; align-items: center; gap: 0.3125rem; font-size: var(--fs-2xs); color: var(--ink-faint); }
 </style>

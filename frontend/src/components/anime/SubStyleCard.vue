@@ -10,6 +10,7 @@ import { useAnimeStore } from '@/stores/anime'
 import { SUB_STYLE_DEFAULT } from '@/stores/anime'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
+import Select from '@/components/ui/Select.vue'
 
 const store = useAnimeStore()
 const s = computed(() => store.nativeSubStyle)
@@ -63,12 +64,9 @@ const famStyle = (fam) => ({ fontFamily: fam ? `"${fam}", sans-serif` : 'inherit
       <div class="ss__ctrls">
         <label class="fld">
           <span>Fuente <em>· {{ store.subFonts.length }} instaladas en Windows</em></span>
-          <select class="ss__sel" :value="s.font" :style="famStyle(s.font)" @change="set('font', $event.target.value)">
-            <option value="">Dejar la del archivo</option>
-            <option v-for="f in store.subFonts" :key="f.family" :value="f.family" :style="famStyle(f.family)">
-              {{ f.family }}
-            </option>
-          </select>
+          <Select block :model-value="s.font" aria-label="Fuente de subtítulos"
+                  :options="[{ value: '', label: 'Dejar la del archivo' }, ...store.subFonts.map(f => ({ value: f.family, label: f.family }))]"
+                  @change="set('font', $event)" />
           <p v-if="missing" class="hint hint--warn">
             «{{ s.font }}» no está instalada: libass usará otra parecida sin avisar.
           </p>
@@ -123,21 +121,19 @@ const famStyle = (fam) => ({ fontFamily: fam ? `"${fam}", sans-serif` : 'inherit
 .card { padding: var(--s-5); border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--surface); }
 .card__title { display: flex; align-items: center; gap: var(--s-2); font-weight: 600; color: var(--ink); margin-bottom: var(--s-4); }
 .card__title :deep(svg) { color: var(--azure); }
-.tag { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; letter-spacing: var(--tracking-caps); color: var(--coral); border: 1px solid color-mix(in srgb, var(--coral) 35%, transparent); border-radius: var(--r-pill); padding: 1px 8px; }
-.fld { display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-xs); color: var(--ink-faint); }
+.tag { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; letter-spacing: var(--tracking-caps); color: var(--coral); border: 1px solid color-mix(in srgb, var(--coral) 35%, transparent); border-radius: var(--r-pill); padding: 1px 0.5rem; }
+.fld { display: flex; flex-direction: column; gap: 0.375rem; font-size: var(--fs-xs); color: var(--ink-faint); }
 .fld em { font-style: normal; color: var(--ink-ghost); }
 .hint { font-size: var(--fs-xs); color: var(--ink-faint); margin-top: var(--s-3); line-height: 1.5; }
-.btn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); flex-shrink: 0; }
+.btn { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); flex-shrink: 0; }
 .btn:hover:not(:disabled) { color: var(--ink); border-color: var(--line-strong); }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 .btn--accent { background: var(--azure); color: #fff; border-color: transparent; font-weight: 600; }
 .btn--accent:hover:not(:disabled) { background: var(--azure-bright); color: #fff; }
 
 .ss { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: var(--s-4); align-items: start; }
-@media (max-width: 60rem) { .ss { grid-template-columns: 1fr; } }
+@media (max-width: 960px) { .ss { grid-template-columns: 1fr; } }
 .ss__ctrls { display: flex; flex-direction: column; gap: var(--s-3); min-width: 0; }
-.ss__sel { width: 100%; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line);
-           background: var(--surface); color: var(--ink); font-size: var(--fs-sm); }
 .ss__row { display: flex; gap: var(--s-2); flex-wrap: wrap; }
 .ss__prev { position: relative; aspect-ratio: 16 / 9; border-radius: var(--r-md); overflow: hidden;
             border: 1px solid var(--line-2); display: grid; place-items: end center; padding-bottom: 8%;

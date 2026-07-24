@@ -18,6 +18,32 @@ const hasPrev = computed(() => index.value > 0)
 const hasNext = computed(() => index.value < chapters.value.length - 1)
 
 const scroller = ref(null)
+const tocScroll = ref(null)
+const tocInput = ref(null)
+const tocQuery = ref('')
+
+// Índice filtrable: con 1399 capítulos, arrastrar la barra a ojo para llegar al 500 no es
+// navegar. Se busca por texto o por número.
+const tocList = computed(() => {
+  const all = chapters.value.map((c, i) => ({ ...c, _i: i }))
+  const q = tocQuery.value.trim().toLowerCase()
+  if (!q) return all
+  const n = parseInt(q, 10)
+  return all.filter(c => (c.name || '').toLowerCase().includes(q) ||
+                         (!isNaN(n) && String(c._i + 1).startsWith(String(n))))
+})
+
+// Abrir el índice YA POSICIONADO donde estás leyendo (antes abría siempre por el capítulo 1).
+async function openToc() {
+  tocOpen.value = !tocOpen.value
+  setOpen.value = false
+  if (!tocOpen.value) return
+  tocQuery.value = ''
+  await nextTick()
+  tocInput.value?.focus()
+  const el = tocScroll.value?.querySelector(`[data-i="${index.value}"]`)
+  if (el) el.scrollIntoView({ block: 'center' })
+}
 const setOpen = ref(false)
 const tocOpen = ref(false)
 const barsHidden = ref(false)
@@ -94,8 +120,8 @@ const textStyle = computed(() => ({
             <span class="nr__ch">{{ novels.reader.chapterName }}</span>
           </div>
           <div class="nr__tools">
-            <button class="nr__btn" :class="{ 'is-on': tocOpen }" title="Índice de capítulos"
-                    @click.stop="tocOpen = !tocOpen; setOpen = false"><Icon name="library" :size="16" /></button>
+            <button class="nr__btn nr__btn--wide" :class="{ 'is-on': tocOpen }" title="Índice de capítulos"
+                    @click.stop="openToc()"><Icon name="library" :size="16" /> Capítulos</button>
             <div class="nr__setwrap">
               <button class="nr__btn" :class="{ 'is-on': setOpen }" title="Ajustes de lectura"
                       @click.stop="setOpen = !setOpen; tocOpen = false"><Icon name="settings" :size="16" /></button>
@@ -138,10 +164,18 @@ const textStyle = computed(() => ({
 
         <!-- Índice de capítulos -->
         <aside v-if="tocOpen" class="nr__toc" @click.stop>
-          <button v-for="(c, i) in chapters" :key="c.path" class="nr__toc-item"
-                  :class="{ 'is-on': i === index }" @click="go(i)">
-            <span>{{ c.name || `Capítulo ${i + 1}` }}</span>
-          </button>
+          <div class="nr__toc-head">
+            <input ref="tocInput" v-model="tocQuery" class="nr__toc-search" type="search"
+                   placeholder="Buscar capítulo o nº…" />
+            <span class="nr__toc-count">{{ tocList.length }} / {{ chapters.length }}</span>
+          </div>
+          <div ref="tocScroll" class="nr__toc-list">
+            <button v-for="c in tocList" :key="c.path" class="nr__toc-item"
+                    :class="{ 'is-on': c._i === index }" :data-i="c._i" @click="go(c._i)">
+              <span class="nr__toc-n">{{ c._i + 1 }}</span>
+              <span class="nr__toc-name">{{ c.name || `Capítulo ${c._i + 1}` }}</span>
+            </button>
+          </div>
         </aside>
 
         <!-- Texto -->
@@ -193,7 +227,7 @@ const textStyle = computed(() => ({
 .nr__bar.is-hidden { opacity: 0; transform: translateY(-100%); pointer-events: none; }
 .nr__foot.is-hidden { opacity: 0; transform: translateY(100%); pointer-events: none; }
 
-.nr__btn { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border-radius: var(--r-sm);
+.nr__btn { width: 2.125rem; height: 2.125rem; flex: none; display: grid; place-items: center; border-radius: var(--r-sm);
   color: inherit; opacity: .75; transition: all var(--t-fast); }
 .nr__btn:hover, .nr__btn.is-on { opacity: 1; background: var(--azure-haze); color: var(--azure-bright); }
 .nr__meta { min-width: 0; flex: 1; display: flex; flex-direction: column; }
@@ -209,17 +243,28 @@ const textStyle = computed(() => ({
 .nr__set-lbl { font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: .05em; color: var(--ink-faint); }
 .nr__set-lbl b { color: var(--azure-bright); font-family: var(--font-mono); }
 .nr__seg { display: flex; gap: 2px; padding: 2px; border-radius: var(--r-sm); background: var(--void); border: 1px solid var(--line); }
-.nr__seg button { flex: 1; padding: 5px; border-radius: 5px; font-size: var(--fs-2xs); color: var(--ink-soft); transition: all var(--t-fast); }
+.nr__seg button { flex: 1; padding: 0.3125rem; border-radius: 0.3125rem; font-size: var(--fs-2xs); color: var(--ink-soft); transition: all var(--t-fast); }
 .nr__seg button.is-on { background: var(--azure-haze); color: var(--azure-bright); font-weight: 600; }
 .nr__set input[type=range] { width: 100%; accent-color: var(--azure-bright); }
 
-.nr__toc { position: absolute; top: 3.6rem; right: var(--s-4); z-index: 4; width: 22rem; max-height: 70vh;
-  overflow-y: auto; display: flex; flex-direction: column; padding: var(--s-2); border-radius: var(--r-md);
+.nr__btn--wide { width: auto; gap: var(--s-2); padding: 0 var(--s-3); display: inline-flex; align-items: center;
+  font-size: var(--fs-xs); font-weight: 600; }
+
+.nr__toc { position: absolute; top: 3.6rem; right: var(--s-4); z-index: 4; width: 24rem; max-height: 70vh;
+  display: flex; flex-direction: column; padding: var(--s-2); border-radius: var(--r-md);
   background: rgba(12, 16, 26, .96); border: 1px solid var(--line); box-shadow: var(--shadow-lg); color: var(--ink); }
-.nr__toc-item { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); text-align: left; font-size: var(--fs-xs);
-  color: var(--ink-soft); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nr__toc-head { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-1) var(--s-1) var(--s-2); }
+.nr__toc-search { flex: 1; min-width: 0; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm);
+  background: var(--void); border: 1px solid var(--line); color: var(--ink); font-size: var(--fs-xs); }
+.nr__toc-count { flex: none; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
+.nr__toc-list { overflow-y: auto; display: flex; flex-direction: column; }
+.nr__toc-item { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-sm); text-align: left; font-size: var(--fs-xs); color: var(--ink-soft); }
+.nr__toc-n { flex: none; min-width: 2.4rem; font-family: var(--font-mono); font-size: var(--fs-2xs); opacity: .5; }
+.nr__toc-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nr__toc-item:hover { background: var(--surface); color: var(--ink); }
 .nr__toc-item.is-on { background: var(--azure-haze); color: var(--azure-bright); font-weight: 600; }
+.nr__toc-item.is-on .nr__toc-n { opacity: 1; }
 
 .nr__scroll { flex: 1; overflow-y: auto; padding: 6rem var(--s-5) 8rem; }
 .nr__loading { display: flex; align-items: center; justify-content: center; gap: var(--s-3); height: 60vh; opacity: .7; }

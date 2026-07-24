@@ -14,7 +14,7 @@ const disco = useDiscoveryStore()
 const TYPE_LABEL = { manga: 'Manga', manhwa: 'Manhwa', manhua: 'Manhua', novel: 'Novela', other: 'Otro' }
 // Sin `&w=`: ese parámetro del proxy es SOLO para el micro-thumb del blur-up (clampa a 64px).
 // La portada ya viene dimensionada del CDN de MangaBaka (~700px), nítida.
-const cover = computed(() => imgProxy(props.work.cover || ''))
+const cover = computed(() => imgProxy(props.work.cover || '', 260))
 const added = computed(() => disco.inLibrary(props.work))
 
 function quickAdd() { disco.addToLibrary(props.work) }
@@ -55,12 +55,12 @@ function quickAdd() { disco.addToLibrary(props.work) }
 .wc__scrim { position: absolute; inset: 0; background: linear-gradient(0deg, rgba(7,10,18,.92) 4%, rgba(7,10,18,.1) 40%, transparent 66%); }
 .wc__type { position: absolute; top: var(--s-2); left: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs);
   font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--ink); background: rgba(7,10,18,.72);
-  padding: 2px 7px; border-radius: var(--r-xs); backdrop-filter: blur(4px); }
+  padding: 2px 0.4375rem; border-radius: var(--r-xs); backdrop-filter: blur(4px); }
 .wc__score { position: absolute; top: var(--s-2); right: var(--s-2); display: inline-flex; align-items: center; gap: 3px;
   font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; color: var(--cyan); background: rgba(7,10,18,.72);
-  padding: 2px 7px; border-radius: var(--r-xs); backdrop-filter: blur(4px); }
+  padding: 2px 0.4375rem; border-radius: var(--r-xs); backdrop-filter: blur(4px); }
 /* Quick-add: aparece al pasar el ratón; si ya está en biblioteca se queda visible en jade. */
-.wc__add { position: absolute; right: var(--s-2); bottom: var(--s-2); z-index: 2; width: 30px; height: 30px;
+.wc__add { position: absolute; right: var(--s-2); bottom: var(--s-2); z-index: 2; width: 1.875rem; height: 1.875rem;
   display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--azure);
   border: 1px solid rgba(255,255,255,.25); box-shadow: var(--shadow-md);
   opacity: 0; transform: translateY(4px); transition: opacity var(--t-fast), transform var(--t-fast), background var(--t-fast); }

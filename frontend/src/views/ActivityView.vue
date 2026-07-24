@@ -136,7 +136,7 @@ function openManga(g) {
 .act__grid { display: flex; flex-direction: column; gap: var(--s-3); }
 .card { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); padding: var(--s-4); }
 .card__head { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-3); cursor: pointer; }
-.card__cover { width: 34px; height: 34px; border-radius: var(--r-sm); overflow: hidden; flex-shrink: 0; background: var(--surface-3); display: grid; place-items: center; }
+.card__cover { width: 2.125rem; height: 2.125rem; border-radius: var(--r-sm); overflow: hidden; flex-shrink: 0; background: var(--surface-3); display: grid; place-items: center; }
 .card__cover img { width: 100%; height: 100%; object-fit: cover; }
 .card__mono { font-size: var(--fs-sm); font-weight: 700; color: var(--ink-faint); }
 .card__title { flex: 1; font-size: var(--fs-md); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -154,11 +154,11 @@ function openManga(g) {
 .row__bar.is-err span { background: var(--coral) !important; width: 100% !important; }
 .row__pct { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); width: 2.5rem; text-align: right; flex-shrink: 0; }
 .row__ts { font-size: var(--fs-2xs); color: var(--ink-ghost); flex-shrink: 0; }
-.row__act { width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--r-xs); color: var(--ink-faint); border: 1px solid var(--line); flex-shrink: 0; transition: all var(--t-fast); }
+.row__act { width: 1.625rem; height: 1.625rem; display: grid; place-items: center; border-radius: var(--r-xs); color: var(--ink-faint); border: 1px solid var(--line); flex-shrink: 0; transition: all var(--t-fast); }
 .row__act:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
 .row__act--dl:hover { color: var(--azure-bright); border-color: color-mix(in srgb, var(--azure) 45%, transparent); }
 
-.pill { font-size: var(--fs-2xs); font-weight: 700; padding: 2px 8px; border-radius: var(--r-pill); flex-shrink: 0; }
+.pill { font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.5rem; border-radius: var(--r-pill); flex-shrink: 0; }
 .pill--done { color: var(--jade); background: color-mix(in srgb, var(--jade) 14%, transparent); }
 .pill--error { color: var(--coral); background: color-mix(in srgb, var(--coral) 14%, transparent); }
 .pill--cancelled { color: var(--ink-faint); background: var(--surface-3); }

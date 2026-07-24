@@ -38,7 +38,7 @@ function continueReading(h) {
           <div v-else class="hist__list">
             <button v-for="(h, i) in store.history" :key="i" class="hrow" @click="continueReading(h)">
               <div class="hrow__cover">
-                <img v-if="h.cover" :src="imgProxy(h.cover)" :alt="h.title" loading="lazy" />
+                <img v-if="h.cover" :src="imgProxy(h.cover, 60)" :alt="h.title" loading="lazy" />
                 <span class="hrow__ch">Cap. {{ h.chapter }}</span>
               </div>
               <div class="hrow__meta">
@@ -57,11 +57,11 @@ function continueReading(h) {
 <style scoped>
 .ov { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--s-5); background: rgba(7,10,18,.72); backdrop-filter: blur(8px); }
 .modal { position: relative; width: min(34rem, 100%); max-height: 80vh; display: flex; flex-direction: column; background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); overflow: hidden; padding: var(--s-5); gap: var(--s-4); }
-.modal__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 3; width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); }
+.modal__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 3; width: 2.125rem; height: 2.125rem; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); }
 .modal__x:hover { color: var(--ink); }
 .modal__head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-4); padding-right: var(--s-7); }
 .modal__head h2 { font-size: var(--fs-xl); }
-.clear { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line); color: var(--ink-faint); font-size: var(--fs-xs); transition: all var(--t-fast); flex-shrink: 0; }
+.clear { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line); color: var(--ink-faint); font-size: var(--fs-xs); transition: all var(--t-fast); flex-shrink: 0; }
 .clear:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
 
 .center { display: grid; place-items: center; padding: var(--s-8); }
@@ -70,7 +70,7 @@ function continueReading(h) {
 .hrow { display: flex; align-items: center; gap: var(--s-4); padding: var(--s-2) var(--s-3); border-radius: var(--r-md); border: 1px solid var(--line); background: var(--surface); text-align: left; transition: all var(--t-fast); }
 .hrow:hover { border-color: var(--line-strong); background: var(--surface-2); }
 .hrow:hover .hrow__play { color: var(--azure-bright); transform: scale(1.15); }
-.hrow__cover { position: relative; width: 46px; height: 64px; flex-shrink: 0; border-radius: var(--r-sm); overflow: hidden; background: var(--surface-3); }
+.hrow__cover { position: relative; width: 2.875rem; height: 4rem; flex-shrink: 0; border-radius: var(--r-sm); overflow: hidden; background: var(--surface-3); }
 .hrow__cover img { width: 100%; height: 100%; object-fit: cover; }
 .hrow__ch { position: absolute; left: 3px; bottom: 2px; font-family: var(--font-display); font-weight: 700; font-size: var(--fs-2xs); color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,.9); }
 .hrow__meta { flex: 1; min-width: 0; }

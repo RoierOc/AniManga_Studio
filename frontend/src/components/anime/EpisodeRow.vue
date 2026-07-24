@@ -4,6 +4,7 @@ import { useAnimeStore } from '@/stores/anime'
 import { animeEpLabel, isEpisodePlayable } from '@/lib/anime'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
+import Spinner from '@/components/ui/Spinner.vue'
 
 const props = defineProps({
   anime: { type: Object, required: true },
@@ -51,7 +52,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
        @mouseenter.once="store.loadSkip(anime, ep)">
     <div class="eprow__main">
       <div class="eprow__thumb" @click="onPlay">
-        <div class="eprow__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover)}')` : ''" />
+        <div class="eprow__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 120)}')` : ''" />
         <img v-if="playable || ep.has_thumb" class="eprow__img" :src="`/api/anime/thumb/${anime.id}/${ep.num}${ep.ep_type === 'special' ? '?special=1' : ''}`"
              loading="lazy" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
         <div class="eprow__num"><span class="eprow__num-k">{{ ep.ep_type === 'special' ? 'SP' : 'EP' }}</span><span class="eprow__num-v">{{ String(ep.num).padStart(2, '0') }}</span></div>
@@ -85,7 +86,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
         <template v-if="playable">
           <button v-if="!subRunning && subTask?.status !== 'done'" class="eprow__icon eprow__icon--sub" :disabled="subFetching"
                   :title="subFetching ? 'Buscando…' : 'Subtítulos en español'" @click.stop="store.translateSubs(anime, ep)">
-            <span v-if="subFetching" class="eprow__mini-spin" /><span v-else class="eprow__sub-lbl">ES</span>
+            <Spinner v-if="subFetching" :size="12" tone="ok" /><span v-else class="eprow__sub-lbl">ES</span>
           </button>
           <button v-if="subTask?.status === 'error' || subTask?.status === 'done'" class="eprow__icon eprow__icon--retry"
                   :title="subTask?.status === 'error' ? 'Reintentar' : 'Re-inyectar subtítulo'"
@@ -155,7 +156,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 .eprow--watched .eprow__thumb:hover .eprow__img { filter: brightness(.85) saturate(.9); }
 .eprow--watched .eprow__num-v { opacity: .75; }
 .eprow__num { position: absolute; bottom: 3px; left: var(--s-2); display: flex; flex-direction: column; align-items: flex-start; color: #fff; z-index: 3; pointer-events: none; }
-.eprow__num-k { font-family: var(--font-mono); font-size: 8px; font-weight: 600; color: var(--ice); letter-spacing: .14em; line-height: 1; }
+.eprow__num-k { font-family: var(--font-mono); font-size: 0.5rem; font-weight: 600; color: var(--ice); letter-spacing: .14em; line-height: 1; }
 .eprow__num-v { font-family: var(--font-display); font-weight: 700; font-size: 1.5rem; line-height: 1; text-shadow: 0 2px 12px rgba(0,0,0,.95); }
 .eprow__bar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 3px; background: rgba(0,0,0,.4); }
 .eprow__bar span { position: absolute; left: 0; top: 0; bottom: 0; transition: width .5s var(--ease-silk); }
@@ -165,10 +166,10 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 .eprow__play :deep(svg) { filter: drop-shadow(0 2px 8px rgba(0,0,0,.6)); }
 .eprow__thumb:hover .eprow__play { opacity: 1; }
 
-.eprow__body { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 5px; }
+.eprow__body { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 0.3125rem; }
 .eprow__titrow { display: flex; align-items: center; gap: var(--s-2); min-width: 0; }
-.eprow__badge { flex-shrink: 0; font-family: var(--font-mono); font-size: 9px; font-weight: 700; letter-spacing: .06em;
-  color: var(--azure-bright); padding: 2px 7px; border-radius: var(--r-pill); background: var(--azure-haze); border: 1px solid var(--azure-glow); }
+.eprow__badge { flex-shrink: 0; font-family: var(--font-mono); font-size: 0.5625rem; font-weight: 700; letter-spacing: .06em;
+  color: var(--azure-bright); padding: 2px 0.4375rem; border-radius: var(--r-pill); background: var(--azure-haze); border: 1px solid var(--azure-glow); }
 .eprow__title { font-size: var(--fs-sm); font-weight: 600; color: var(--ink); line-height: var(--lh-snug);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .eprow--watched .eprow__title { color: var(--ink-faint); font-weight: 500; }
@@ -177,46 +178,45 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 .eprow__status--resume { color: var(--azure-bright); }
 
 .eprow__acts { display: flex; align-items: center; gap: var(--s-1); flex-shrink: 0; }
-.eprow__icon { width: 30px; height: 28px; display: inline-flex; align-items: center; justify-content: center; gap: 3px;
+.eprow__icon { width: 1.875rem; height: 1.75rem; display: inline-flex; align-items: center; justify-content: center; gap: 3px;
   border-radius: var(--r-xs); border: 1px solid var(--line); color: var(--ink-faint); transition: all var(--t-fast) var(--ease-silk); }
 .eprow__icon:hover { color: var(--ink); border-color: var(--line-strong); background: var(--surface-2); }
 .eprow__icon.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 .eprow__icon--danger:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
-.eprow__icon--sub { width: auto; padding: 0 8px; color: var(--jade); border-color: color-mix(in srgb, var(--jade) 25%, transparent); }
+.eprow__icon--sub { width: auto; padding: 0 0.5rem; color: var(--jade); border-color: color-mix(in srgb, var(--jade) 25%, transparent); }
 .eprow__icon--sub:hover { background: color-mix(in srgb, var(--jade) 12%, transparent); border-color: color-mix(in srgb, var(--jade) 50%, transparent); }
 .eprow__icon--retry { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 25%, transparent); }
 .eprow__icon--retry:hover { background: color-mix(in srgb, var(--amber) 12%, transparent); border-color: color-mix(in srgb, var(--amber) 50%, transparent); }
 .eprow__sub-lbl { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; }
-.eprow__mini-spin { width: 12px; height: 12px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--jade); animation: spin .7s linear infinite; }
 .eprow__i { font-family: var(--font-display); font-style: italic; font-weight: 600; font-size: .95rem; }
 .eprow__dots3 { font-size: 1rem; line-height: 1; }
-.eprow__searchbtn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 14px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); background: transparent; transition: all var(--t-fast); }
+.eprow__searchbtn { display: inline-flex; align-items: center; gap: 0.3125rem; padding: 0.3125rem 0.875rem; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); background: transparent; transition: all var(--t-fast); }
 .eprow__searchbtn:hover { background: var(--azure-haze); color: #fff; border-color: var(--azure-bright); }
 
-.eprow__sub { display: flex; align-items: center; gap: 6px; font-size: var(--fs-2xs); color: var(--jade); }
+.eprow__sub { display: flex; align-items: center; gap: 0.375rem; font-size: var(--fs-2xs); color: var(--jade); }
 .eprow__sub.is-done { font-weight: 700; }
-.eprow__sub-bar { width: 120px; height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
+.eprow__sub-bar { width: 7.5rem; height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
 .eprow__sub-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--jade), var(--cyan)); transition: width var(--t-base); }
 .eprow__sub-msg { font-family: var(--font-mono); color: var(--ink-soft); flex-shrink: 0; }
-.eprow__sub-x { width: 18px; height: 18px; display: grid; place-items: center; border-radius: var(--r-xs); color: var(--ink-faint); flex-shrink: 0; }
+.eprow__sub-x { width: 1.125rem; height: 1.125rem; display: grid; place-items: center; border-radius: var(--r-xs); color: var(--ink-faint); flex-shrink: 0; }
 .eprow__sub-x:hover { color: var(--coral); }
 
 .eprow__info { padding: var(--s-3); border-top: 1px solid var(--line); background: var(--base); font-size: var(--fs-xs); line-height: 1.55; }
 .eprow__info-title { font-weight: 600; color: var(--ink); margin-bottom: 4px; font-size: var(--fs-sm); }
 .eprow__info-syn { color: var(--ink-soft); }
 .eprow__info-meta { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-2); color: var(--ink-faint); }
-.eprow__ibadge { padding: 1px 6px; border-radius: var(--r-xs); font-weight: 600; font-size: var(--fs-2xs); }
+.eprow__ibadge { padding: 1px 0.375rem; border-radius: var(--r-xs); font-weight: 600; font-size: var(--fs-2xs); }
 .eprow__ibadge--filler { background: color-mix(in srgb, var(--gold) 18%, transparent); color: var(--gold); }
 .eprow__ibadge--recap { background: var(--azure-haze); color: var(--azure-bright); }
 .eprow__info-empty { color: var(--ink-faint); font-style: italic; }
-.eprow__info-load { display: flex; gap: 5px; justify-content: center; padding: var(--s-2); }
-.eprow__info-load .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--azure); animation: pulse-live 1s var(--ease-drift) infinite; }
+.eprow__info-load { display: flex; gap: 0.3125rem; justify-content: center; padding: var(--s-2); }
+.eprow__info-load .dot { width: 0.3125rem; height: 0.3125rem; border-radius: 50%; background: var(--azure); animation: pulse-live 1s var(--ease-drift) infinite; }
 .eprow__info-load .dot:nth-child(2) { animation-delay: .15s; }
 .eprow__info-load .dot:nth-child(3) { animation-delay: .3s; }
 
 .info-enter-active, .info-leave-active { transition: all var(--t-base) var(--ease-silk); overflow: hidden; }
 .info-enter-from, .info-leave-to { opacity: 0; max-height: 0; }
-.info-enter-to, .info-leave-from { max-height: 300px; }
+.info-enter-to, .info-leave-from { max-height: 18.75rem; }
 
 @media (max-width: 640px) {
   .eprow__thumb { width: 7rem; }

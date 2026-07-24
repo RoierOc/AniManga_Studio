@@ -25,6 +25,19 @@ const A4K_MODES = [
   { id: 'high', label: 'A+A UL (Máx. calidad) · CTRL+8' },
   { id: 'ultra', label: 'A+A UL + Thin (Máx. + bordes) · CTRL+9' },
 ]
+// Imagen real (series/películas): Anime4K no aplica —está entrenado en line art—, así que el
+// menú ofrece los shaders genéricos. Los tiers los resuelve `tier_shaders()` en player.rs.
+const LIVE_MODES = [
+  { id: 'off', label: 'Desactivado' },
+  { id: 'live', label: 'FSRCNNX + SSimSuperRes (máx. detalle)' },
+  { id: 'live_lite', label: 'SSimSuperRes (ligero)' },
+]
+const scaleModes = computed(() => (np.value?.isLive ? LIVE_MODES : A4K_MODES))
+// El botón se llama por lo que hay detrás: en anime es Anime4K; en imagen real no lo es, así que
+// decir "Anime4K" ahí era mentira. Nombre genérico: "Shaders".
+const scaleName = computed(() => (np.value?.isLive ? 'Shaders' : 'Anime4K'))
+const scaleLabel = computed(() =>
+  np.value?.tier === 'off' ? scaleName.value : (np.value?.isLive ? 'Shaders·On' : 'A4K·Alto'))
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
 const playing = computed(() => np.value && !np.value.paused)
@@ -37,12 +50,19 @@ const audioIndex = computed(() => (np.value ? np.value.aid - 1 : 0))
 const subIndex = computed(() => (np.value ? np.value.sid - 1 : -1))
 
 // Episodios para el panel lateral (cambiar sin salir), igual que el original.
+// `playlist` la pasa quien abre el reproductor desde otro dominio (series/películas); el anime
+// la deriva de su biblioteca. Misma forma en ambos casos → el panel no sabe de dónde viene.
 const panelEps = computed(() => {
-  const eps = (np.value?.anime?.episodes || []).filter((e) => e.num > 0 && e.ep_type !== 'special')
+  const eps = (np.value?.playlist || np.value?.anime?.episodes || [])
+    .filter((e) => e.num > 0 && e.ep_type !== 'special')
   return [...eps].sort((a, b) => a.num - b.num)
 })
 function isPlayable(e) {
   return !!(e.in_local || e.info_hash)
+}
+// Miniatura: la del episodio si la trae (series, vía Sonarr), si no la ruta de anime.
+function epThumb(e) {
+  return e.thumb || (np.value?.anime?.id ? `/api/anime/thumb/${np.value.anime.id}/${e.num}` : '')
 }
 
 function fmt(s) {
@@ -142,14 +162,25 @@ function require_next() {
   const cur = np.value.ep.num
   return eps.find((e) => e.num > cur && isPlayable(e)) || null
 }
+// Cambiar de episodio SIN salir tiene que conservar el dominio: si esto es una serie occidental,
+// el progreso del episodio nuevo debe seguir yendo a su almacén (cada item de `playlist` trae su
+// propio progressKey), no a la biblioteca de anime.
+function playEp(e) {
+  const cur = np.value
+  store.playNative(cur.anime, e, e.pos || 0, {
+    progressKey: e.progressKey || null,
+    playlist: cur.playlist,
+    onProgress: cur.onProgress,
+  })
+}
 function goNext() {
   const n = nextEp.value
-  if (n) store.playNative(np.value.anime, n)
+  if (n) playEp(n)
 }
 function playFromPanel(e) {
   if (!isPlayable(e) || e.num === np.value.ep.num) return
   epPanel.value = false
-  store.playNative(np.value.anime, e)
+  playEp(e)
 }
 
 // ── Avisos del reproductor (cues) — sistema extensible estilo Netflix ──────────
@@ -329,12 +360,12 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
                       :class="{ 'is-sel': i === subIndex }" @click="setSub(i)">{{ trackLabel(t, i) }}</button>
             </div>
           </div>
-          <!-- Anime4K -->
+          <!-- Shaders (Anime4K en anime, genéricos en imagen real) -->
           <div class="wp__menuwrap">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'a4k', 'is-glow': np.tier !== 'off' }"
-                    title="Anime4K (mejora de imagen por GPU)"
+                    :title="`${scaleName} (mejora de imagen por GPU)`"
                     @click="menuOpen = menuOpen === 'a4k' ? '' : 'a4k'">
-              <Icon name="spark" :size="13" /> {{ np.tier === 'off' ? 'Anime4K' : 'A4K·Alto' }}
+              <Icon name="spark" :size="13" /> {{ scaleLabel }}
             </button>
             <div v-if="menuOpen === 'a4k'" class="wp__menu" @wheel.stop>
               <div class="wp__subsize" @click.stop title="Ajusta los medios tonos (gamma) para igualar tu mpv. Doble clic = neutro.">
@@ -349,7 +380,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
                 <b :class="{ 'is-zero': np.sat === 1 }" @dblclick="setSat(1)">{{ Math.round((np.sat ?? 1) * 100) }}%</b>
                 <button :disabled="np.sat >= 3" aria-label="Más saturación" @click="bumpSat(0.05)">+</button>
               </div>
-              <button v-for="m in A4K_MODES" :key="m.id" :class="{ 'is-sel': m.id === np.tier }"
+              <button v-for="m in scaleModes" :key="m.id" :class="{ 'is-sel': m.id === np.tier }"
                       @click="setA4k(m.id)">{{ m.label }}</button>
             </div>
           </div>
@@ -411,11 +442,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
                     :class="{ 'is-cur': e.num === np.ep.num, 'is-off': !isPlayable(e) }"
                     @click="playFromPanel(e)">
               <span class="wp__ep-th">
-                <img :src="`/api/anime/thumb/${np.anime.id}/${e.num}`" alt="" loading="lazy" @error="($event.target.style.visibility = 'hidden')" />
+                <img v-if="epThumb(e)" :src="epThumb(e)" alt="" loading="lazy" @error="($event.target.style.visibility = 'hidden')" />
                 <span v-if="e.num === np.ep.num" class="wp__ep-now"><Icon name="play" :size="16" /></span>
               </span>
               <span class="wp__ep-info">
-                <span class="wp__ep-num">Episodio {{ e.num }}</span>
+                <span class="wp__ep-num">{{ e.label || `Episodio ${e.num}` }}</span>
                 <span class="wp__ep-meta">{{ e.title || (e.in_local ? 'Local' : 'Torrent') }}</span>
               </span>
             </button>
@@ -456,7 +487,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .wp__titles p { font-size: var(--fs-xs); color: var(--ink-soft); }
 .wp__badge {
   margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-2xs);
-  padding: 2px 8px; border-radius: var(--r-pill); color: var(--azure-bright);
+  padding: 2px 0.5rem; border-radius: var(--r-pill); color: var(--azure-bright);
   border: 1px solid color-mix(in srgb, var(--azure) 40%, transparent);
   background: color-mix(in srgb, var(--azure) 12%, transparent);
 }
@@ -469,13 +500,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .wp.is-idle .wp__bar { opacity: 0; transform: translateY(8px); pointer-events: none; }
 
 .wp__timeline {
-  position: relative; height: 5px; border-radius: 3px; background: rgba(255, 255, 255, 0.18);
+  position: relative; height: 0.3125rem; border-radius: 3px; background: rgba(255, 255, 255, 0.18);
   cursor: pointer; margin-bottom: var(--s-3);
 }
-.wp__timeline:hover { height: 8px; }
+.wp__timeline:hover { height: 0.5rem; }
 .wp__tl-cur { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--azure-bright); }
 .wp__tl-knob {
-  position: absolute; top: 50%; width: 14px; height: 14px; border-radius: 50%;
+  position: absolute; top: 50%; width: 0.875rem; height: 0.875rem; border-radius: 50%;
   background: var(--azure-bright); transform: translate(-50%, -50%);
   opacity: 0; transition: opacity var(--t-fast); box-shadow: 0 0 8px var(--azure-glow);
 }
@@ -494,7 +525,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 }
 .wp__preview-t {
   font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 700; color: #fff;
-  padding: 2px 8px; border-radius: var(--r-pill); background: rgba(7, 10, 18, 0.85);
+  padding: 2px 0.5rem; border-radius: var(--r-pill); background: rgba(7, 10, 18, 0.85);
   border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
@@ -508,7 +539,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .wp__sk { font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 700; }
 
 .wp__skipop {
-  display: inline-flex; align-items: center; gap: 5px; padding: var(--s-2) var(--s-3);
+  display: inline-flex; align-items: center; gap: 0.3125rem; padding: var(--s-2) var(--s-3);
   border-radius: var(--r-pill); border: 1px solid rgba(255, 255, 255, 0.25);
   background: rgba(255, 255, 255, 0.08); color: #fff; font-size: var(--fs-xs); font-weight: 600;
   cursor: pointer; transition: all var(--t-fast);
@@ -518,7 +549,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .wp__vol { display: flex; align-items: center; gap: 4px; }
 .wp__vol input[type='range'] { width: 6rem; accent-color: var(--azure-bright); cursor: pointer; }
 .wp__boost { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700;
-  color: var(--cyan); padding: 1px 5px; border-radius: var(--r-pill); background: var(--cyan-glow); }
+  color: var(--cyan); padding: 1px 0.3125rem; border-radius: var(--r-pill); background: var(--cyan-glow); }
 .wp__subnote span { margin-right: 0; color: var(--ink-dim); font-size: var(--fs-2xs); }
 .wp__time { font-family: var(--font-mono); font-size: var(--fs-xs); color: #fff; white-space: nowrap; }
 .wp__time em { font-style: normal; color: var(--ink-soft); }
@@ -626,7 +657,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 .wp__cue-title { font-size: var(--fs-sm); font-weight: 600; color: #fff;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .wp__cue-cta { margin-top: 2px; font-size: var(--fs-2xs); font-weight: 700; color: var(--ink-soft); }
-.wp__cue-close { flex-shrink: 0; width: 26px; height: 26px; display: grid; place-items: center;
+.wp__cue-close { flex-shrink: 0; width: 1.625rem; height: 1.625rem; display: grid; place-items: center;
   border-radius: var(--r-sm); color: var(--ink-soft); transition: color var(--t-fast); align-self: flex-start; }
 .wp__cue-close:hover { color: #fff; }
 /* Aparición/desaparición suave y discreta */
@@ -655,4 +686,8 @@ html.native-video .shell { visibility: hidden !important; }
    baja su alto para no solaparla. En fullscreen la barra se oculta (regla global .native-fs). */
 html.native-video.native-shell:not(.native-fs) .tb { visibility: visible !important; }
 html.native-video:not(.native-fs) .wp__head { top: var(--titlebar-h); }
+/* El panel de episodios también arranca en top:0 y su cabecera quedaba TAPADA por la barra de
+   título de la ventana (✕/min/max). En modo ventana empieza bajo la barra; en fullscreen (sin
+   barra) sigue de arriba abajo. */
+html.native-video:not(.native-fs) .wp__eps { top: var(--titlebar-h); }
 </style>

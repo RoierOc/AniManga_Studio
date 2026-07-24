@@ -181,5 +181,5 @@ watch(() => [props.sources, props.assigned, props.totalKnownChapters], () => nex
 .cvg__scroll { overflow-x: auto; flex: 1; min-width: 0; }
 .cvg__canvas { display: block; cursor: crosshair; }
 .cvg__tip { position: fixed; z-index: 50; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-sm);
-  padding: 3px 8px; font-size: var(--fs-2xs); color: var(--ink); pointer-events: none; white-space: nowrap; }
+  padding: 3px 0.5rem; font-size: var(--fs-2xs); color: var(--ink); pointer-events: none; white-space: nowrap; }
 </style>

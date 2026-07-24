@@ -12,8 +12,25 @@ import EpisodeRow from '@/components/anime/EpisodeRow.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
+import { useSubBatchStore } from '@/stores/subbatch'
+
 const store = useAnimeStore()
+const subbatch = useSubBatchStore()
 const anime = computed(() => store.detail)
+
+// Abre el modal de traducción por LOTES con los episodios que tienen archivo resoluble.
+function openSubBatch() {
+  const a = anime.value
+  if (!a) return
+  const titles = [a.title, a.title_romaji].filter(Boolean)
+  const eps = [...mainEps.value, ...specials.value].filter(e => e.in_local || e.info_hash)
+  const items = eps.map(e => ({
+    episode: e.num, season: e.season || 1, title: e.title || '',
+    anime_id: a.id, info_hash: e.info_hash || '', local_path: e.local_path || '',
+    ep_type: e.ep_type || 'episode', titles,
+  }))
+  subbatch.openFor({ title: a.title, items })
+}
 
 // Resplandor del póster en su color dominante (solo decorativo, detrás del póster).
 // El hero ya aporta el ambiente de fondo (banner); esto le da identidad al póster.
@@ -203,7 +220,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
       </div>
 
       <div class="dhero__inner stagger">
-        <img v-if="anime.cover && !posterFailed" class="dhero__poster" :src="imgProxy(anime.cover)" :alt="anime.title"
+        <img v-if="anime.cover && !posterFailed" class="dhero__poster" :src="imgProxy(anime.cover, 260)" :alt="anime.title"
              :style="[{ '--i': 0 }, posterGlow]" @error="posterFailed = true" />
 
         <div class="dhero__col" style="--i:1">
@@ -309,7 +326,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
       <div class="dresume__thumb">
         <img v-if="!resumeThumbFailed" :src="`/api/anime/thumb/${anime.id}/${resumeEp.num}`" :alt="'Ep ' + resumeEp.num"
              loading="lazy" @error="resumeThumbFailed = true" />
-        <img v-else-if="anime.cover" :src="imgProxy(anime.cover)" :alt="anime.title" />
+        <img v-else-if="anime.cover" :src="imgProxy(anime.cover, 260)" :alt="anime.title" />
         <div class="dresume__scrim" />
         <div class="dresume__play"><Icon name="play" :size="24" /></div>
         <div v-if="resumePct" class="dresume__bar"><span :style="{ width: resumePct + '%' }" /></div>
@@ -324,6 +341,10 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 
     <div class="eptoolbar">
       <span class="eptoolbar__lbl">{{ mainEps.length }} episodios</span>
+      <button class="eptoolbar__batch" title="Buscar o traducir subtítulos en español de varios episodios"
+              @click="openSubBatch">
+        <Icon name="globe" :size="15" /> Subtítulos ES (lote)
+      </button>
       <div class="epseg">
         <button :class="{ 'is-on': epView === 'grid' }" title="Cuadrícula" @click="setEpView('grid')"><Icon name="library" :size="15" /></button>
         <button :class="{ 'is-on': epView === 'list' }" title="Lista" @click="setEpView('list')"><Icon name="menu" :size="15" /></button>
@@ -524,7 +545,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 /* Hero header — Crunchyroll-style wide HD art + logo, same recipe as HeroBanner.vue.
    A sangre (rompe el padding del contenedor), sin caja redondeada, más baja, y la IMAGEN se
    disuelve en el fondo por arriba y abajo (máscara de alfa), como el hero de Mi Anime. */
-.dhero { position: relative; margin: 0 calc(-1 * var(--s-6)) var(--s-4); height: clamp(460px, 50vw, 600px);
+.dhero { position: relative; margin: 0 calc(-1 * var(--s-6)) var(--s-4); height: clamp(28.75rem, 50vw, 37.5rem);
   border-radius: 0; overflow: hidden; background: transparent; }
 .dhero__bg { position: absolute; inset: 0;
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 8%, #000 66%, transparent 100%);
@@ -540,9 +561,9 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
   background: linear-gradient(90deg, rgba(7,10,18,.9) 0%, rgba(7,10,18,.45) 36%, transparent 66%); }
 
 .dhero__inner { position: relative; z-index: 1; height: 100%; display: flex; align-items: flex-end;
-  gap: var(--s-5); max-width: 900px; padding: var(--s-6) var(--s-7); }
+  gap: var(--s-5); max-width: 56.25rem; padding: var(--s-6) var(--s-7); }
 /* natural aspect (height auto) + flex-shrink:0 → poster shown whole, not cropped or squeezed. */
-.dhero__poster { width: 168px; height: auto; border-radius: var(--r-md); box-shadow: var(--shadow-lg), var(--pglow, 0 0 0 transparent); border: 1px solid rgba(255,255,255,.16); flex-shrink: 0;
+.dhero__poster { width: 10.5rem; height: auto; border-radius: var(--r-md); box-shadow: var(--shadow-lg), var(--pglow, 0 0 0 transparent); border: 1px solid rgba(255,255,255,.16); flex-shrink: 0;
   transition: box-shadow var(--t-slow) var(--ease-silk);
   view-transition-name: detail-poster;   /* destino del morph desde la card (lib/vt.js) */ }
 .dhero__col { display: flex; flex-direction: column; gap: var(--s-3); min-width: 0; }
@@ -550,13 +571,13 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .dhero__title { font-family: var(--font-display); font-weight: 700; color: #fff; font-size: clamp(2rem, 4vw, 3.4rem);
   line-height: 1.06; text-shadow: 0 2px 24px rgba(0,0,0,.6);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.dhero__logo { max-width: min(520px, 80%); max-height: clamp(100px, 14vw, 180px); width: auto; height: auto;
+.dhero__logo { max-width: min(32.5rem, 80%); max-height: clamp(6.25rem, 14vw, 11.25rem); width: auto; height: auto;
   object-fit: contain; object-position: left bottom; filter: drop-shadow(0 4px 20px rgba(0,0,0,.65)); }
 
-.dhero__stats { display: flex; flex-direction: column; gap: var(--s-2); max-width: 360px; }
+.dhero__stats { display: flex; flex-direction: column; gap: var(--s-2); max-width: 22.5rem; }
 .dhero__count { font-size: var(--fs-sm); color: var(--ice); text-shadow: 0 1px 8px rgba(0,0,0,.7); }
 .dhero__count strong { color: #fff; font-family: var(--font-display); }
-.dhero__disk { display: inline-flex; align-items: center; gap: 4px; margin-left: var(--s-2); padding: 1px 8px;
+.dhero__disk { display: inline-flex; align-items: center; gap: 4px; margin-left: var(--s-2); padding: 1px 0.5rem;
   border-radius: var(--r-pill); font-size: var(--fs-2xs); color: var(--ice);
   background: rgba(255,255,255,.12); border: 1px solid rgba(255,255,255,.16); }
 .dhero__disk :deep(svg) { color: var(--cyan); }
@@ -564,9 +585,9 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .dhero__bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--azure-deep), var(--azure)); }
 
 .dhero__airing { display: inline-flex; align-items: center; gap: var(--s-2); width: fit-content;
-  font-size: var(--fs-xs); color: var(--ice); padding: 4px 12px; border-radius: var(--r-pill);
+  font-size: var(--fs-xs); color: var(--ice); padding: 4px 0.75rem; border-radius: var(--r-pill);
   background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.16); backdrop-filter: blur(6px); }
-.dhero__airing-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--cyan); box-shadow: var(--glow-cyan); animation: pulse-live 2s var(--ease-drift) infinite; }
+.dhero__airing-dot { width: 0.4375rem; height: 0.4375rem; border-radius: 50%; background: var(--cyan); box-shadow: var(--glow-cyan); animation: pulse-live 2s var(--ease-drift) infinite; }
 
 .dhero__row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
 /* Selector de estado propio (reemplaza el <select> nativo) */
@@ -576,7 +597,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
   backdrop-filter: blur(8px); font-size: var(--fs-sm); font-weight: 600; cursor: pointer; transition: all var(--t-fast); }
 .dstatus__btn:hover { border-color: var(--azure); background: rgba(255,255,255,.2); }
 .dstatus__btn.is-open { border-color: var(--azure); background: rgba(255,255,255,.2); }
-.dstatus__dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 8px currentColor; }
+.dstatus__dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 8px currentColor; }
 .dstatus__dot--none { background: var(--ink-ghost); box-shadow: none; }
 .dstatus__lbl { white-space: nowrap; }
 .dstatus__chev { color: var(--ink-soft); transition: transform var(--t-fast); }
@@ -612,7 +633,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
   content: ''; position: absolute; left: 0; right: 0; bottom: -1px; height: 3px;
   border-radius: var(--r-pill); background: var(--azure-bright); box-shadow: 0 0 8px var(--azure-glow);
 }
-.dtab__badge { margin-left: 7px; padding: 1px 7px; border-radius: var(--r-pill);
+.dtab__badge { margin-left: 0.4375rem; padding: 1px 0.4375rem; border-radius: var(--r-pill);
   font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700;
   color: var(--ink-soft); background: var(--surface-2); border: 1px solid var(--line); }
 
@@ -636,7 +657,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
   border: 1px solid var(--line-2); transition: border-color var(--t-base), box-shadow var(--t-base), transform var(--t-base) var(--ease-snap);
 }
 .dresume:hover { border-color: var(--azure-glow); box-shadow: var(--shadow-md); transform: translateY(-2px); }
-.dresume__thumb { position: relative; flex-shrink: 0; width: 200px; aspect-ratio: 16/9; border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
+.dresume__thumb { position: relative; flex-shrink: 0; width: 12.5rem; aspect-ratio: 16/9; border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
 .dresume__thumb img { width: 100%; height: 100%; object-fit: cover; }
 .dresume__scrim { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7,10,18,.1), rgba(5,7,13,.55)); }
 .dresume__play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; transition: transform var(--t-base) var(--ease-snap); }
@@ -654,8 +675,12 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 
 .eptoolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin: 0 0 var(--s-4); }
 .eptoolbar__lbl { font-family: var(--font-display); font-size: var(--fs-lg); font-weight: 600; color: var(--ink); }
+.eptoolbar__batch { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-2) var(--s-4); border-radius: var(--r-pill); font-size: var(--fs-sm); font-weight: 600;
+  color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); cursor: pointer; transition: all var(--t-fast); }
+.eptoolbar__batch:hover { color: #fff; border-color: var(--azure); background: var(--azure-haze); }
 .epseg { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
-.epseg button { width: 34px; height: 30px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-faint); transition: all var(--t-fast); }
+.epseg button { width: 2.125rem; height: 1.875rem; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-faint); transition: all var(--t-fast); }
 .epseg button:hover { color: var(--ink); }
 .epseg button.is-on { background: var(--surface-3); color: var(--azure-bright); }
 
@@ -666,15 +691,15 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 
 /* management */
 .dhero__mgmt { display: flex; gap: var(--s-2); flex-wrap: wrap; }
-.mbtn { padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink);
+.mbtn { padding: 0.375rem 0.75rem; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink);
   background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.16); backdrop-filter: blur(8px); transition: all var(--t-fast); }
 .mbtn:hover { color: #fff; border-color: rgba(255,255,255,.32); background: rgba(255,255,255,.18); }
 .mbtn--danger:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
-.mbtn__sz { margin-left: 6px; padding: 1px 6px; border-radius: var(--r-pill); font-family: var(--font-mono);
+.mbtn__sz { margin-left: 0.375rem; padding: 1px 0.375rem; border-radius: var(--r-pill); font-family: var(--font-mono);
   font-size: var(--fs-2xs); color: var(--cyan); background: rgba(255,255,255,.1); }
 .mbtn--accent { background: var(--azure); color: #fff; border-color: transparent; }
 .mbtn--accent:hover { background: var(--azure-bright); color: #fff; }
-.mbtn--accent, .mbtn--in { display: inline-flex; align-items: center; gap: 5px; }
+.mbtn--accent, .mbtn--in { display: inline-flex; align-items: center; gap: 0.3125rem; }
 .mbtn--in { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 40%, transparent); background: color-mix(in srgb, var(--jade) 12%, transparent); opacity: 1; }
 
 .linkpanel { margin: 0 0 var(--s-6); padding: var(--s-4); border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--surface); }
@@ -682,7 +707,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .linkpanel__head button { color: var(--ink-faint); }
 .linkpanel__sub { width: 100%; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--base); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); margin-bottom: var(--s-3); }
 .linkpanel__empty { color: var(--ink-faint); font-size: var(--fs-sm); text-align: center; padding: var(--s-3); }
-.linkpanel__list { display: flex; flex-direction: column; gap: var(--s-1); max-height: 240px; overflow-y: auto; }
+.linkpanel__list { display: flex; flex-direction: column; gap: var(--s-1); max-height: 15rem; overflow-y: auto; }
 .linkitem { display: flex; flex-direction: column; gap: 2px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--base); border: 1px solid var(--line); text-align: left; transition: all var(--t-fast); }
 .linkitem:hover { border-color: var(--azure); }
 .linkitem__name { font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -709,12 +734,12 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .fran__t { font-size: var(--fs-sm); font-weight: 600; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fran__sub { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-soft); }
 .fran__sub em { font-style: normal; font-family: var(--font-mono); color: var(--ink-faint); }
-.fran__badge { padding: 1px 7px; border-radius: var(--r-pill); border: 1px solid var(--line); font-size: var(--fs-2xs); color: var(--ink-soft); }
+.fran__badge { padding: 1px 0.4375rem; border-radius: var(--r-pill); border: 1px solid var(--line); font-size: var(--fs-2xs); color: var(--ink-soft); }
 .fran__tag { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-2xs); font-weight: 700; white-space: nowrap; flex: none; }
 .fran__tag--cur { color: var(--azure-bright); }
 .fran__tag--own { color: var(--mint, #46d4a0); }
 .chips { display: flex; flex-wrap: wrap; gap: var(--s-2); }
-.chip { display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
+.chip { display: inline-flex; align-items: center; gap: 0.3125rem; padding: 0.3125rem 0.75rem; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .chip:hover { color: var(--ink); border-color: var(--azure); }
 .chip__rank { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
 .chip--stack { color: var(--violet); border-color: color-mix(in srgb, var(--violet) 30%, transparent); }
@@ -727,15 +752,15 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .rec:hover .rec__poster { border-color: var(--azure-glow); box-shadow: var(--shadow-md); }
 .rec__poster img { width: 100%; height: 100%; object-fit: cover; }
 .rec__scrim { position: absolute; inset: 0; background: linear-gradient(180deg, transparent 45%, rgba(5,7,13,.92)); }
-.rec__score { position: absolute; top: 6px; left: 6px; font-size: var(--fs-2xs); font-weight: 700; color: var(--gold); padding: 2px 6px; border-radius: var(--r-pill); background: rgba(7,10,18,.6); }
-.rec__in { position: absolute; top: 6px; right: 6px; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: var(--jade); color: #fff; }
+.rec__score { position: absolute; top: 0.375rem; left: 0.375rem; font-size: var(--fs-2xs); font-weight: 700; color: var(--gold); padding: 2px 0.375rem; border-radius: var(--r-pill); background: rgba(7,10,18,.6); }
+.rec__in { position: absolute; top: 0.375rem; right: 0.375rem; width: 1.125rem; height: 1.125rem; display: grid; place-items: center; border-radius: 50%; background: var(--jade); color: #fff; }
 .rec__ov { position: absolute; left: 0; right: 0; bottom: 0; padding: var(--s-2); }
 .rec__t { font-size: var(--fs-2xs); font-weight: 600; color: #fff; line-height: 1.25; text-shadow: 0 1px 4px rgba(0,0,0,.7); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 
 /* browse overlays */
 .ov { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--s-5); background: rgba(7,10,18,.72); backdrop-filter: blur(8px); }
 .bmodal { position: relative; width: min(48.75rem, 100%); max-height: 86vh; display: flex; flex-direction: column; background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); padding: var(--s-5); overflow-y: auto; }
-.bmodal__x { position: absolute; top: var(--s-3); right: var(--s-3); width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); }
+.bmodal__x { position: absolute; top: var(--s-3); right: var(--s-3); width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); }
 .bmodal__head { margin-bottom: var(--s-4); padding-right: var(--s-7); }
 .bmodal__head h2 { font-size: var(--fs-xl); }
 .bmodal__head .muted { color: var(--ink-faint); font-weight: 400; }
@@ -745,7 +770,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 
 /* context menu */
 .ctx-backdrop { position: fixed; inset: 0; z-index: var(--z-modal); }
-.ctx { position: fixed; display: flex; flex-direction: column; min-width: 200px; padding: var(--s-1); border-radius: var(--r-md); background: var(--glass-strong); backdrop-filter: blur(16px); border: 1px solid var(--line-2); box-shadow: var(--shadow-lg); }
+.ctx { position: fixed; display: flex; flex-direction: column; min-width: 12.5rem; padding: var(--s-1); border-radius: var(--r-md); background: var(--glass-strong); backdrop-filter: blur(16px); border: 1px solid var(--line-2); box-shadow: var(--shadow-lg); }
 .ctx button { text-align: left; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink-soft); }
 .ctx button:hover { background: var(--surface-2); color: var(--ink); }
 
@@ -767,16 +792,16 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .coveropt img { width: 100%; aspect-ratio: 2/3; object-fit: cover; background: var(--base); }
 .covergrid--wide .coveropt img { aspect-ratio: 16/9; }
 .coveropt__label { padding: 0 var(--s-2) var(--s-2); font-size: var(--fs-2xs); color: var(--ink-faint); }
-.coveropt__current { position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; background: var(--azure); color: #fff; }
+.coveropt__current { position: absolute; top: 0.375rem; right: 0.375rem; width: 1.25rem; height: 1.25rem; display: grid; place-items: center; border-radius: 50%; background: var(--azure); color: #fff; }
 
 @media (max-width: 640px) {
   .detail { padding: var(--s-3) var(--s-4) var(--s-8); }
-  .dhero { height: clamp(380px, 72vw, 480px); border-radius: 0; margin: 0 calc(-1 * var(--s-4)) var(--s-4); }
+  .dhero { height: clamp(23.75rem, 72vw, 30rem); border-radius: 0; margin: 0 calc(-1 * var(--s-4)) var(--s-4); }
   .dhero__inner { padding: var(--s-5) var(--s-4); }
   .dhero__poster { display: none; }
-  .dhero__logo { max-width: 70%; max-height: 90px; }
+  .dhero__logo { max-width: 70%; max-height: 5.625rem; }
   .epgrid { grid-template-columns: repeat(auto-fill, minmax(13.5rem, 1fr)); gap: var(--s-3); }
-  .dresume__thumb { width: 128px; }
+  .dresume__thumb { width: 8rem; }
   .dresume__btn { padding: var(--s-2) var(--s-3); }
 }
 </style>

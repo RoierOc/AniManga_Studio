@@ -136,3 +136,18 @@
 
 /* La shell nativa (WebView2 sin marco) reserva el alto de la barra propia. */
 .native-shell { --titlebar-h: 2.25rem; }   /* 36px */
+
+/* ── Modo Cine (series y películas occidentales) ──────────────────────────
+   Misma familia, otro grado: el acento azure vira a indigo/acero (~#5b6ee8) para que se sienta la
+   misma app en otro cuarto, no otra app. Como TODO el sistema deriva de las escalas azure y accent,
+   remapearlas aquí cambia el tema entero -rieles, glows, botones, hero- sin tocar un solo
+   componente. La clase la pone/quita `ui._applyModeTheme()` en <html>. */
+html.mode-cine {
+  --azure:       #5b6ee8;
+  --azure-bright:#7d8cf2;
+  --azure-deep:  #4152c4;
+  --azure-ink:   #232a63;
+  --azure-glow:  rgba(91, 110, 232, 0.45);
+  --azure-haze:  rgba(91, 110, 232, 0.13);
+  --ice:         #b3bcff;
+}

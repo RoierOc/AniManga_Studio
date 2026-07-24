@@ -38,7 +38,7 @@ const fmtLabel = (f) => ({ MANGA: 'Manga', MANHWA: 'Manhwa', MANHUA: 'Manhua', N
       <button v-for="r in items" :key="r.al_id" class="rc" @click="emit('select', r)"
               :title="`Buscar «${r.title}» en Explorar`">
         <div class="rc__cov">
-          <img v-if="r.cover" :src="imgProxy(r.cover)" alt="" loading="lazy" />
+          <img v-if="r.cover" :src="imgProxy(r.cover, 160)" alt="" loading="lazy" />
           <span v-else class="rc__mono">{{ (r.title || '?').charAt(0) }}</span>
           <span v-if="r.score" class="rc__score"><Icon name="spark" :size="10" /> {{ Math.round(r.score) }}</span>
           <span class="rc__go"><Icon name="search" :size="14" /></span>
@@ -69,7 +69,7 @@ const fmtLabel = (f) => ({ MANGA: 'Manga', MANHWA: 'Manhwa', MANHUA: 'Manhua', N
   grid-auto-columns: unset; overflow-x: visible; scroll-snap-type: none;
 }
 .rc {
-  scroll-snap-align: start; display: flex; flex-direction: column; gap: 6px;
+  scroll-snap-align: start; display: flex; flex-direction: column; gap: 0.375rem;
   background: none; border: none; padding: 0; text-align: left; cursor: pointer;
 }
 .rc__cov {
@@ -82,8 +82,8 @@ const fmtLabel = (f) => ({ MANGA: 'Manga', MANHWA: 'Manhwa', MANHUA: 'Manhua', N
 .rc__cov img { width: 100%; height: 100%; object-fit: cover; }
 .rc__mono { font-size: 2rem; font-weight: 800; color: var(--ink-faint); }
 .rc__score {
-  position: absolute; top: 5px; left: 5px; display: inline-flex; align-items: center; gap: 2px;
-  padding: 2px 6px; border-radius: var(--r-pill); font-size: 10px; font-weight: 700;
+  position: absolute; top: 0.3125rem; left: 0.3125rem; display: inline-flex; align-items: center; gap: 2px;
+  padding: 2px 0.375rem; border-radius: var(--r-pill); font-size: 0.625rem; font-weight: 700;
   color: #fff; background: rgba(0,0,0,.62); backdrop-filter: blur(4px);
 }
 .rc__go {
@@ -95,6 +95,6 @@ const fmtLabel = (f) => ({ MANGA: 'Manga', MANHWA: 'Manhwa', MANHUA: 'Manhua', N
   font-size: var(--fs-xs); font-weight: 600; color: var(--ink); line-height: var(--lh-snug);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.rc__meta { display: flex; gap: 6px; font-size: 10px; color: var(--ink-soft); }
+.rc__meta { display: flex; gap: 0.375rem; font-size: 0.625rem; color: var(--ink-soft); }
 .rc__gen { color: var(--ink-faint); }
 </style>

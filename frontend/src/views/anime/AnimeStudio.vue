@@ -87,21 +87,6 @@ const current = computed(() => {
    intencional tanto sobre el hero a sangre (Mi Anime) como sobre las vistas centradas (Buscar,
    Explorar…). Alineada a la izquierda con el mismo padding que el contenido → las pestañas cuadran
    con el hero y las tarjetas en cualquier ancho de pantalla. */
-.subnav {
-  display: flex; gap: var(--s-1); flex-wrap: wrap; align-items: center;
-  padding: var(--s-3) var(--s-6);
-  border-bottom: 1px solid var(--line);
-  margin-bottom: var(--s-5);
-}
-.subnav__tab {
-  display: inline-flex; align-items: center; gap: var(--s-2);
-  padding: var(--s-2) var(--s-4); border-radius: var(--r-pill);
-  font-size: var(--fs-sm); font-weight: 500; color: var(--ink-faint);
-  transition: all var(--t-fast) var(--ease-silk);
-}
-.subnav__tab:hover { color: var(--ink); background: var(--surface); }
-.subnav__tab.is-active { color: var(--azure-bright); background: var(--azure-haze); }
-@media (max-width: 640px) { .subnav { padding: var(--s-3) var(--s-4); } }
 .studio__body { padding-bottom: var(--s-8); }
 
 /* the detail/library/placeholder swap */

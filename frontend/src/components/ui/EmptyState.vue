@@ -39,11 +39,23 @@ defineProps({
 }
 .empty-state > :not(.empty-state__brand) { position: relative; z-index: 1; }
 .empty-state__glyph {
-  width: 64px; height: 64px; display: grid; place-items: center;
+  width: 4rem; height: 4rem; display: grid; place-items: center;
   border-radius: var(--r-lg); color: var(--azure);
   background: var(--azure-haze); border: 1px solid color-mix(in srgb, var(--azure) 22%, transparent);
 }
 .empty-state__title { color: var(--ink-soft); font-size: var(--fs-base); }
 .empty-state__hint { color: var(--ink-faint); font-size: var(--fs-sm); max-width: 30rem; }
-.empty-state__action { margin-top: var(--s-2); }
+.empty-state__action { margin-top: var(--s-2); display: flex; flex-wrap: wrap; gap: var(--s-3); justify-content: center; }
+/* El botón lo pinta el propio EmptyState: así una vista sólo escribe `<button>Explorar</button>`
+   en el slot y no acaba con un `.btn` distinto por vista (que es lo que pasaba). */
+.empty-state__action :deep(button) {
+  display: inline-flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-3) var(--s-5); border-radius: var(--r-pill);
+  font-size: var(--fs-sm); font-weight: 600; color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); cursor: pointer;
+  transition: all var(--t-fast);
+}
+.empty-state__action :deep(button:hover) { color: #fff; border-color: var(--azure); background: var(--azure-haze); }
+.empty-state__action :deep(button.is-primary) { background: var(--azure); border-color: transparent; color: #fff; }
+.empty-state__action :deep(button.is-primary:hover) { background: var(--azure-bright); box-shadow: var(--glow-azure); }
 </style>

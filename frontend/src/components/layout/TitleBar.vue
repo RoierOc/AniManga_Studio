@@ -6,6 +6,11 @@
 // nativa (App.vue la envuelve en v-if="isNative()"), así el player web no la ve.
 import { ref, onMounted, onUnmounted } from 'vue'
 import { windowControl, onMessage } from '@/lib/nativeBridge'
+import { useDocTitle } from '@/lib/docTitle'
+
+// Mismo texto que el título de la ventana: la marca dice qué app es, esto dice qué estás
+// haciendo. En pantallas anchas hay sitio de sobra y era espacio desaprovechado.
+const { context } = useDocTitle()
 
 const maximized = ref(false)
 
@@ -47,6 +52,10 @@ function close() { windowControl('close') }
       <div class="tb__brand">
         <span class="tb__mark"><span class="tb__kanji">青</span></span>
         <span class="tb__word">AniManga<b>Studio</b></span>
+        <template v-if="context">
+          <span class="tb__sep" />
+          <span class="tb__ctx">{{ context }}</span>
+        </template>
       </div>
     </div>
 
@@ -95,7 +104,11 @@ function close() { windowControl('close') }
   cursor: default;
 }
 
-.tb__brand { display: flex; align-items: center; gap: var(--s-2); pointer-events: none; }
+.tb__brand { display: flex; align-items: center; gap: var(--s-2); pointer-events: none; min-width: 0; }
+.tb__sep { width: 1px; height: 0.75rem; background: var(--line-2); flex-shrink: 0; }
+.tb__ctx { font-size: var(--fs-xs); color: var(--ink-faint); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 720px) { .tb__sep, .tb__ctx { display: none; } }
 .tb__mark {
   width: 1.15rem; height: 1.15rem; flex-shrink: 0;
   display: grid; place-items: center; border-radius: 0.3rem;

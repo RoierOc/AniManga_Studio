@@ -124,7 +124,7 @@ export const useAnimeStore = defineStore('anime', {
     torrentVariants: [],         // alias/sinónimos (AniList) que se buscan en Nyaa, visibles en el panel (cap 5)
     torrentAllVariants: [],      // full AniList synonym list (no cap) — used by _buildExtraQueries
     torrentCategory: '1_2',
-    flt: { lang: 'all', hideDead: true, quality: '', group: '', ep: 'all' },
+    flt: { lang: 'all', hideDead: true, quality: '', group: '', ep: 'all', sort: 'relevance' },
     targetEp: null,             // target episode when navigating from detail
     epFetch: {},                 // per-episode deep-fetch state: epNum → 'loading' | 'done'
     addingHashes: [],            // keys currently being added to qbt
@@ -138,6 +138,11 @@ export const useAnimeStore = defineStore('anime', {
     // 'off' | 'high' | 'ultra' (los tiers 'fast'/'medium'/'artcnn'/'fsrcnnx' se retiraron → migran a 'high')
     native4kTier: ['off', 'high', 'ultra'].includes(localStorage.getItem('anime-native-4k'))
       ? localStorage.getItem('anime-native-4k') : 'high',
+    // Tier para IMAGEN REAL (series/películas). Aparte del de anime a propósito: Anime4K está
+    // entrenado en line art y sobre imagen real deja halos, así que cada dominio guarda el suyo
+    // y ver anime no arrastra nunca el coste del otro (ni al revés).
+    nativeLiveTier: ['off', 'live', 'live_lite'].includes(localStorage.getItem('anime-native-live'))
+      ? localStorage.getItem('anime-native-live') : 'live',
     nativeVol: Number(localStorage.getItem('anime-native-vol') ?? 100), // 0..100
     nativeSubScale: Number(localStorage.getItem('anime-native-subscale') ?? 1), // 0.5..2
     nativeSubStyle: _loadSubStyle(),   // {font,size,bold,outline,shadow} — ver SUB_STYLE_DEFAULT
@@ -316,13 +321,19 @@ export const useAnimeStore = defineStore('anime', {
       if (maxEp > 0 && maxEp <= 50) {
         for (let n = 1; n <= maxEp; n++) if (!map[n]) map[n] = []
       }
-      for (const k in map) {
-        map[k].sort((a, b) => {
+      const sortKey = this.flt.sort || 'relevance'
+      const cmp = {
+        seeders: (a, b) => b.seeders - a.seeders,
+        size_desc: (a, b) => (b.size_bytes || 0) - (a.size_bytes || 0),
+        size_asc: (a, b) => (a.size_bytes || 0) - (b.size_bytes || 0),
+        // relevance: idioma preferido primero (ES, luego EN), desempate por seeders
+        relevance: (a, b) => {
           if (a.isSpanish !== b.isSpanish) return a.isSpanish ? -1 : 1
           if (a.isEnglish !== b.isEnglish) return a.isEnglish ? -1 : 1
           return b.seeders - a.seeders
-        })
-      }
+        },
+      }[sortKey]
+      for (const k in map) map[k].sort(cmp)
       let groups = Object.entries(map)
         .map(([k, torrents]) => ({ episode: Number(k), torrents }))
         .sort((a, b) => {
@@ -578,7 +589,13 @@ export const useAnimeStore = defineStore('anime', {
       } catch (_) { useUiStore().toast('No se pudo enlazar', 'error') }
     },
     async clearEpisodes(anime) {
-      if (!confirm(`¿Borrar los episodios de "${anime.title}" para liberar espacio?\n\nSe eliminan los archivos (su torrent en qBittorrent, o los vídeos de la carpeta vinculada), pero la serie —portada, estado, progreso visto y miniaturas— se conserva. Podrás volver a descargarla desde Torrents cuando quieras.`)) return
+      if (!await useUiStore().confirm({
+        title: 'Borrar episodios', danger: true, confirmLabel: 'Liberar espacio',
+        body: `¿Borrar los episodios de "${anime.title}" para liberar espacio?\n` +
+              'Se eliminan los archivos (su torrent en qBittorrent, o los vídeos de la carpeta vinculada), ' +
+              'pero la serie —portada, estado, progreso visto y miniaturas— se conserva.\n' +
+              'Podrás volver a descargarla desde Torrents cuando quieras.',
+      })) return
       try {
         // delete the files (free space) AND remove the torrent so qBittorrent no
         // longer flags it as "missing files" and re-downloads it. The library entry
@@ -588,10 +605,18 @@ export const useAnimeStore = defineStore('anime', {
         await this.loadLibrary(true)
       } catch (_) { useUiStore().toast('No se pudo borrar', 'error') }
     },
+    // Quitar de la biblioteca NO borra los archivos: es reversible, así que no interrumpe con un
+    // diálogo — actúa y ofrece deshacer. El diálogo se reserva para lo que borra bytes.
     async removeFromLibrary(animeId) {
-      if (!confirm('¿Eliminar esta serie de la biblioteca?')) return
-      try { await api.del(`/api/anime/library/${animeId}`, { body: { delete_files: false } }); this.detailId = null; await this.loadLibrary(true) }
-      catch (_) { useUiStore().toast('No se pudo eliminar', 'error') }
+      const ui = useUiStore()
+      const snapshot = this.library.find(a => a.id === animeId)
+      try {
+        await api.del(`/api/anime/library/${animeId}`, { body: { delete_files: false } })
+        this.detailId = null
+        await this.loadLibrary(true)
+        ui.toast(`«${snapshot?.title || 'Serie'}» quitada de la biblioteca`, 'info', 7000,
+          snapshot ? { label: 'Deshacer', fn: () => this.addToLibrary(snapshot) } : null)
+      } catch (_) { ui.toast('No se pudo eliminar', 'error') }
     },
     openEpOverrideMenu(ev, anime, ep) { this.epOverrideMenu = { anime, ep, x: ev.clientX, y: ev.clientY } },
     async setEpOverride(type) {
@@ -695,17 +720,29 @@ export const useAnimeStore = defineStore('anime', {
     },
 
     /* ── Reproductor nativo embebido (libmpv en la shell) ──────────────────── */
-    async playNative(anime, ep, startPos = 0) {
+    // `opts.progressKey` abre el MISMO reproductor para contenido que no es anime (series y
+    // películas vía Sonarr/Radarr): el vídeo se resuelve por `ep.local_path` y el progreso se
+    // guarda en el almacén de ese dominio (ver `_reportNativeProgress`).
+    async playNative(anime, ep, startPos = 0, opts = {}) {
       this.dismissAutoplay?.()
       // Mostrar el overlay YA (estado de carga) para no dejar al usuario en la vista
       // previa mientras se resuelve la ruta (ffprobe) — la espera se percibía como
       // "no abre". El spinner se quita al llegar el primer evento de tiempo.
       this.nativePlayer = {
         anime, ep, pos: startPos, duration: 0, paused: false, loading: true,
-        tier: this.native4kTier, _lastReport: 0, fullscreen: false,
+        // `isLive` = imagen real: lo marca quien abre desde series/películas (progressKey).
+        isLive: !!opts.progressKey,
+        tier: opts.progressKey ? this.nativeLiveTier : this.native4kTier,
+        _lastReport: 0, fullscreen: false,
         audioTracks: [], subTracks: [], aid: 1, sid: 0,
         speed: 1, subScale: this.nativeSubScale, subSync: 0,
         bright: this.nativeBright, sat: this.nativeSat,
+        progressKey: opts.progressKey || null,
+        onProgress: opts.onProgress || null,
+        // Lista para el panel de episodios del reproductor. En anime sale de `anime.episodes`;
+        // los dominios externos (series) la pasan aquí ya normalizada, con su propio progressKey
+        // por episodio para que cambiar desde el panel siga guardando en su almacén.
+        playlist: opts.playlist || null,
       }
       this._ensureNativeSub()
 
@@ -760,7 +797,7 @@ export const useAnimeStore = defineStore('anime', {
       }
       // Fijar la pista elegida (mpv no la autoselecciona con sub-auto=no + sub-add auto).
       if (defSid > 0) nativeSend('track', { sid: String(defSid) })
-      nativeSend('shaders', { tier: this.native4kTier })
+      nativeSend('shaders', { tier: this.nativePlayer.tier })
       // Permitir amplificar hasta 150% (mpv corta en volume-max, 100 por defecto).
       nativeSend('setprop', { name: 'volume-max', value: '150' })
       nativeSend('volume', { value: this.nativeVol })
@@ -800,11 +837,19 @@ export const useAnimeStore = defineStore('anime', {
         // creíble (>60 s) para no disparar con una duración espuria momentánea al cargar
         // o cambiar de archivo (que marcaría visto tras un instante de reproducción).
         if (d.duration > 60 && d.pos >= d.duration - 1) {
-          const { anime, ep } = this.nativePlayer
+          // Se lee TODO antes de cerrar: `closeNative()` pone `nativePlayer` a null.
+          const { anime, ep, playlist, onProgress } = this.nativePlayer
           this._reportNativeProgress(true)
           this.closeNative()
-          const nxt = nextUnwatchedEp(anime, ep)
-          if (nxt) this.showAutoplay(anime, nxt)
+          // Con `playlist` (series/películas) el siguiente sale de ahí: `nextUnwatchedEp` mira
+          // `anime.episodes`, que en esos dominios no existe — sin esto no encadenaría nunca.
+          const nxt = playlist
+            ? playlist.find(e => e.num > ep.num && e.in_local) || null
+            : nextUnwatchedEp(anime, ep)
+          if (nxt) {
+            this.showAutoplay(anime, nxt, playlist
+              ? { progressKey: nxt.progressKey || null, playlist, onProgress } : null)
+          }
         }
       })
     },
@@ -812,6 +857,20 @@ export const useAnimeStore = defineStore('anime', {
     _reportNativeProgress(ended) {
       const np = this.nativePlayer
       if (!np) return
+      // `progressKey` lo pone quien abre el reproductor desde OTRO dominio (series/películas
+      // vía Sonarr): mismo overlay y mismo motor, pero el progreso va a su propio almacén.
+      // Sin esto, una serie occidental escribiría dentro de la biblioteca de anime.
+      if (np.progressKey) {
+        api.post('/api/media/progress', {
+          key: np.progressKey, position: np.pos, duration: np.duration, ended,
+        }).catch(() => {})
+        // Y se avisa al dueño del dominio EN EL ACTO, sin esperar al ida y vuelta: es lo que
+        // hace que al salir del episodio el minuto aparezca ya en la ficha y en "Seguir viendo"
+        // (antes se refrescaba con un setTimeout a ciegas). Callback y no import del store de
+        // media para no crear un ciclo: `stores/media.js` ya importa este módulo.
+        np.onProgress?.({ key: np.progressKey, pos: np.pos, duration: np.duration, ended })
+        return
+      }
       api.post('/api/anime/native/progress', {
         anime_id: np.anime.id,
         episode: np.ep.num,
@@ -827,6 +886,18 @@ export const useAnimeStore = defineStore('anime', {
       nativeSend('pause', { value: v })
     },
     nativeSeek(pos) {
+      // Calibración del "Saltar OP": un seek en los 10 s siguientes al salto (y a menos de
+      // 60 s del punto de aterrizaje) se lee como corrección → se aprende para esta serie.
+      // El propio seek del salto (pos === target) no cuenta.
+      const cal = this._skipOpCal
+      if (cal && Date.now() - cal.at < 10000) {
+        const d = pos - cal.target
+        if (Math.abs(d) > 1 && Math.abs(d) < 60) {
+          const learned = Math.min(200, Math.max(20, Math.round(cal.amt + d)))
+          try { localStorage.setItem(cal.key, String(learned)) } catch {}
+          this._skipOpCal = null
+        }
+      }
       if (!this.nativePlayer) return
       this.nativePlayer.pos = pos
       nativeSend('seek', { pos })
@@ -927,13 +998,28 @@ export const useAnimeStore = defineStore('anime', {
       this.nativePlayer.sid = idx + 1   // 0 = off
       nativeSend('track', { sid: idx < 0 ? 'no' : String(idx + 1) })
     },
-    nativeSkipOp() {                // salto de opening: 82 s (ajustado para no comerse el
-      if (!this.nativePlayer) return  // primer par de segundos tras el OP)
-      this.nativeSeek((this.nativePlayer.pos || 0) + 82)
+    // Salto de opening que APRENDE por serie: el primer episodio saltas 82 s (el genérico) y,
+    // si corriges el aterrizaje con un seek en los siguientes 10 s, esa corrección se suma al
+    // salto guardado de ESA serie. Del episodio 2 en adelante "Saltar OP" cae exacto.
+    nativeSkipOp() {
+      const np = this.nativePlayer
+      if (!np) return
+      const key = `anime-skipop:${np.anime?.id || ''}`
+      const amt = Math.min(200, Math.max(20, Number(localStorage.getItem(key)) || 82))
+      const target = (np.pos || 0) + amt
+      this._skipOpCal = { at: Date.now(), target, key, amt }
+      this.nativeSeek(target)
     },
+    // Escribe en la preferencia del dominio ABIERTO: el menú del reproductor ofrece los tiers
+    // de anime o los de imagen real, y cada uno persiste por su lado.
     setNative4kTier(tier) {
-      this.native4kTier = tier
-      localStorage.setItem('anime-native-4k', tier)
+      if (this.nativePlayer?.isLive) {
+        this.nativeLiveTier = tier
+        localStorage.setItem('anime-native-live', tier)
+      } else {
+        this.native4kTier = tier
+        localStorage.setItem('anime-native-4k', tier)
+      }
       if (this.nativePlayer) {
         this.nativePlayer.tier = tier
         nativeSend('shaders', { tier })
@@ -1100,18 +1186,26 @@ export const useAnimeStore = defineStore('anime', {
     },
 
     /* ── Auto-play ──────────────────────────────────────────────────────── */
-    showAutoplay(anime, ep) {
+    // `opts` (progressKey/playlist/onProgress) viaja con el autoplay: sin él, encadenar el
+    // siguiente episodio de una serie occidental caería en `play()`, que es del dominio anime.
+    showAutoplay(anime, ep, opts = null) {
       this.dismissAutoplay()
-      this.autoplay = { anime, ep }
+      this.autoplay = { anime, ep, opts }
       this.autoplaySeconds = 10
       autoplayTimer = setInterval(() => {
         this.autoplaySeconds--
         if (this.autoplaySeconds <= 0) {
           const a = this.autoplay
           this.dismissAutoplay()
-          if (a) this.play(a.anime, a.ep)
+          if (a) this.playAutoplay(a)
         }
       }, 1000)
+    },
+    // Punto único de arranque del autoplay (lo usan el temporizador y el botón "Ver ahora").
+    playAutoplay(a) {
+      if (!a) return
+      if (a.opts) return this.playNative(a.anime, a.ep, a.ep.pos || 0, a.opts)
+      return this.play(a.anime, a.ep)
     },
     dismissAutoplay() {
       if (autoplayTimer) { clearInterval(autoplayTimer); autoplayTimer = null }
@@ -1443,7 +1537,7 @@ export const useAnimeStore = defineStore('anime', {
       useUiStore().pushNav()
       this.torrents = []
       // ep:'all' even with a target — the targetEp group filter keeps the episode + batches.
-      this.flt = { lang: 'all', hideDead: true, quality: '', group: '', ep: 'all' }
+      this.flt = { lang: 'all', hideDead: true, quality: '', group: '', ep: 'all', sort: 'relevance' }
       const fmt = anime.format || ''
       this.targetEp = (fmt === 'MOVIE' || fmt === 'MUSIC') ? null : (targetEpisode && targetEpisode > 0 ? targetEpisode : null)
       const allVariants = await this._resolveTorrentVariants(anime)
@@ -1552,9 +1646,14 @@ export const useAnimeStore = defineStore('anime', {
       this.subFetching = key
       const loadId = ui.toast('Buscando subtítulos en español…', 'loading', 0)
       const p = new URLSearchParams({
-        info_hash: ep.info_hash || '', episode: ep.num, anime_id: anime.id,
+        info_hash: ep.info_hash || '', episode: ep.num, anime_id: anime.id || '',
         ep_type: ep.ep_type || 'episode', ...(ep.local_path ? { local_path: ep.local_path } : {}),
       })
+      // Series/películas occidentales no están en la biblioteca de anime: mandan su propia
+      // identidad. `season` importa de verdad — sin ella OpenSubtitles asume S01 y devuelve
+      // el subtítulo de otro episodio (ver comentario en subtitle.py).
+      if (ep.season) p.set('season', ep.season)
+      for (const t of ep.titles || []) p.append('titles', t)
       try {
         const d = await api.get(`/api/subtitle/tracks?${p}`)
         const tracks = d.tracks || [], ext = d.external_tracks || [], spa = d.spanish_tracks || []
@@ -1613,9 +1712,11 @@ export const useAnimeStore = defineStore('anime', {
       } catch (e) {
         if (e?.status === 409 && !force) {
           delete this.subTasks[key]
-          if (window.confirm('Este episodio ya tiene subtítulos en español.\n\n' +
-                             'Traducir con IA creará otra pista, probablemente peor que la que ya ' +
-                             'tienes (si es oficial del grupo).\n\n¿Traducir de todas formas?')) {
+          if (await ui.confirm({
+            title: 'Ya hay subtítulos en español', confirmLabel: 'Traducir igualmente',
+            body: 'Este episodio ya tiene subtítulos en español.\n' +
+                  'Traducir con IA creará otra pista, probablemente peor que la que ya tienes (si es oficial del grupo).',
+          })) {
             return this.startTranslate(anime, ep, subIndex, externalSub, true)
           }
           return

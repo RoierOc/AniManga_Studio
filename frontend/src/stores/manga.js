@@ -109,10 +109,22 @@ function normalizeTask(kind, id, v) {
     // Traducción de subtítulos de anime. El backend ya reporta progress 0-100. Se
     // agrupa aparte de los mangas (clave `anime:<título>` + isAnime) para que el
     // clic NO abra el modal de manga y el icono/portada sean los del anime.
+    // Si la tarea pertenece a un LOTE, se suprime: el agregado (`subtitle_batch`) ya la cuenta,
+    // y mostrar ambos duplicaría el episodio en curso en el Centro de Actividad.
+    if (v.batch_id) return null
     const title = v.title || 'Anime'
     return { ...base, mangaId: `anime:${title}`, title, isAnime: true,
       episode: v.episode, pct: status === 'done' ? 100 : Math.min(100, Math.round(v.progress || 0)),
       label: v.episode != null ? `Ep. ${v.episode} · subtítulos` : 'Subtítulos' }
+  }
+  if (kind === 'subtitle_batch') {
+    // Lote de subtítulos: UNA tarjeta con el progreso global (5/12), agrupada bajo el mismo
+    // `anime:<título>` para que use el icono/portada del anime y no abra el modal de manga.
+    const title = v.title || 'Subtítulos'
+    const total = v.total || 0
+    return { ...base, mangaId: `anime:${title}`, title, isAnime: true,
+      pct: total ? Math.round((v.done || 0) / total * 100) : 0,
+      label: `Subtítulos en español · ${v.done || 0}/${total}` }
   }
   return null
 }
@@ -202,6 +214,7 @@ export const useMangaStore = defineStore('manga', {
     exports: {},
     transplant: {},           // { taskId: {status, phase, chapterDone, chapterTotal, ...} } — traducción + descarga de versión
     subtitles: {},            // { taskId: {status, progress, title, episode, ...} } — traducción de subs de anime (modelo)
+    subtitleBatches: {},      // { batchId: {status, done, total, title, ...} } — lote de subtítulos (agregado)
 
     // Centro de Actividad: historial DERIVADO del mismo snapshot (rebanada terminal). No se
     // graba en el cliente — activas e historial son la misma fuente de verdad y sobreviven F5.
@@ -526,6 +539,9 @@ export const useMangaStore = defineStore('manga', {
       for (const [id, v] of Object.entries(s.subtitles)) {
         const t = normalizeTask('subtitle', id, v); if (t) out.push(t)
       }
+      for (const [id, v] of Object.entries(s.subtitleBatches)) {
+        const t = normalizeTask('subtitle_batch', id, v); if (t) out.push(t)
+      }
       return out
     },
     // Solo lo que está vivo ahora (cola + corriendo) — alimenta indicador, drawer y "Activas".
@@ -563,6 +579,7 @@ export const useMangaStore = defineStore('manga', {
         this.exports = data.exports || {}
         this.transplant = data.transplant || {}
         this.subtitles = data.subtitles || {}
+        this.subtitleBatches = data.subtitle_batches || {}
         // Escalado a color completado → marca el capítulo como "color hecho" (oculta el botón,
         // como el 4K). El marcador en disco (loadColorStatus) es la verdad persistente.
         for (const v of Object.values(this.upscale)) {
@@ -1164,11 +1181,13 @@ export const useMangaStore = defineStore('manga', {
       if (!cost?.pages) return true
       const chs = Object.keys(cost.byChapter || {}).sort()
       const lista = chs.length > 6 ? `${chs.slice(0, 6).join(', ')}… (+${chs.length - 6})` : chs.join(', ')
-      return window.confirm(
-        `Esto va a invalidar ${cost.pages} página(s) ya escaladas a 4K en ${cost.chapters} capítulo(s).\n\n` +
-        `${lista}\n\n` +
-        'Al traducir cambia el arte, así que el 4K deja de servir y habrá que volver a escalar ' +
-        '(horas de GPU). Lo recomendable es traducir primero y escalar después.\n\n¿Traducir igualmente?')
+      return useUiStore().confirm({
+        title: 'Se pierde trabajo de 4K', danger: true, confirmLabel: 'Traducir igualmente',
+        body: `Esto va a invalidar ${cost.pages} página(s) ya escaladas a 4K en ${cost.chapters} capítulo(s).\n` +
+              `${lista}\n` +
+              'Al traducir cambia el arte, así que el 4K deja de servir y habrá que volver a escalar ' +
+              '(horas de GPU). Lo recomendable es traducir primero y escalar después.',
+      })
     },
 
     async tpRun(chapters) {
@@ -2503,6 +2522,9 @@ export const useMangaStore = defineStore('manga', {
       this._recordHistory(chapter)
     },
     isChapterRead(chapter) { return !!this.progress[this.current?.id]?.read?.[String(chapter)] },
+    /** Capítulos leídos de una serie CUALQUIERA (no sólo la abierta) — lo usa la tarjeta de la
+     *  rejilla para enseñar lo que falta en vez del total, que es un dato muerto. */
+    readCountOf(mangaId) { return Object.keys(this.progress[mangaId]?.read || {}).length },
     toggleChapterRead(chapter) {
       const k = this.current?.id; if (!k) return
       const e = this._progressEntry(k)
@@ -2576,6 +2598,7 @@ export const useMangaStore = defineStore('manga', {
           source: r.source || 'local',
           kind: meta?.kind || 'local',
           chapter_ref: meta?.chapterRef ?? null,
+          source_obj: meta?.source ?? null,   // objeto de fuente: re-resolver al reanudar
         })
         this.historyLoaded = false
       } catch (_) {}
@@ -2595,12 +2618,17 @@ export const useMangaStore = defineStore('manga', {
     async continueHistory(entry) {
       const ui = useUiStore()
       try {
+        // `entry.source` es un OBJETO cuando viene de resumeCurrent (`pr.lastSource`); desde el
+        // panel de historial es la CADENA 'online' de display y el objeto real viaja en
+        // `source_obj`. Tomamos el que sea objeto: tratar la cadena como objeto mandaba
+        // `{sourceId: undefined}` y devolvía 0 páginas ("fuente sin páginas ahora").
+        const srcObj = (entry.source && typeof entry.source === 'object') ? entry.source : entry.source_obj
         if (entry.kind === 'local') {
           await this.read(entry.chapter, 'auto', entry.title, entry.cover)
-        } else if (entry.source) {
+        } else if (srcObj) {
           // Vía moderna: la fuente se re-resuelve a páginas frescas (el chapterRef es compuesto,
           // no un id de capítulo). Mismo camino que readOnline → reanudar online funciona.
-          const s = entry.source
+          const s = srcObj
           const d = await api.post('/api/transplant/chapter_urls', {
             title: entry.title, chapter: entry.chapter,
             source: { sourceKind: s.sourceKind, sourceId: s.sourceId, mangaId: s.mangaId, sourceLang: s.sourceLang },

@@ -21,7 +21,7 @@ const tier = computed(() => {
       <!-- imgProxy: el hotlink directo a uploads.mangadex.org devuelve el
            placeholder anti-hotlink en WebKitGTK (la app de escritorio) -->
       <img v-if="thumb" :src="thumb" class="blurup" aria-hidden="true" alt="" />
-      <img v-if="manga.cover" :src="imgProxy(manga.cover)" :alt="manga.title" loading="lazy" @load="$event.target.classList.add('is-loaded')" class="mc__img" />
+      <img v-if="manga.cover" :src="imgProxy(manga.cover, 260)" :alt="manga.title" loading="lazy" @load="$event.target.classList.add('is-loaded')" class="mc__img" />
       <div v-else class="mc__ph"><Icon name="library" :size="28" /></div>
       <div class="mc__scrim" />
       <span class="mc__shine" />
@@ -49,12 +49,12 @@ const tier = computed(() => {
 .mc__shine { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(112deg, transparent 35%, rgba(168,200,255,.14) 48%, transparent 60%); transform: translateX(-120%); }
 .mc:hover .mc__shine { animation: shine .8s var(--ease-silk) forwards; }
 @keyframes shine { to { transform: translateX(120%); } }
-.mc__score { position: absolute; top: var(--s-2); left: var(--s-2); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 8px; border-radius: var(--r-pill); backdrop-filter: blur(6px); background: rgba(7,10,18,.6); color: var(--ink-soft); }
+.mc__score { position: absolute; top: var(--s-2); left: var(--s-2); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.5rem; border-radius: var(--r-pill); backdrop-filter: blur(6px); background: rgba(7,10,18,.6); color: var(--ink-soft); }
 .mc__score.is-high { color: var(--jade); } .mc__score.is-mid { color: var(--gold); } .mc__score.is-low { color: var(--ink-faint); }
-.mc__rating { position: absolute; top: var(--s-2); right: var(--s-2); font-family: var(--font-mono); font-size: 9px; font-weight: 700; padding: 2px 6px; border-radius: var(--r-xs); color: var(--coral); background: rgba(7,10,18,.6); backdrop-filter: blur(6px); }
+.mc__rating { position: absolute; top: var(--s-2); right: var(--s-2); font-family: var(--font-mono); font-size: 0.5625rem; font-weight: 700; padding: 2px 0.375rem; border-radius: var(--r-xs); color: var(--coral); background: rgba(7,10,18,.6); backdrop-filter: blur(6px); }
 .mc__hover { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; transition: opacity var(--t-base); }
 .mc:hover .mc__hover, .mc:focus-visible .mc__hover { opacity: 1; }
-.mc__btn { width: 46px; height: 46px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--azure); box-shadow: var(--glow-azure); transform: scale(.8); transition: transform var(--t-base) var(--ease-snap); }
+.mc__btn { width: 2.875rem; height: 2.875rem; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--azure); box-shadow: var(--glow-azure); transform: scale(.8); transition: transform var(--t-base) var(--ease-snap); }
 .mc:hover .mc__btn { transform: scale(1); }
 .mc__overlay { position: absolute; left: 0; right: 0; bottom: 0; padding: var(--s-3); }
 .mc__title { font-size: var(--fs-sm); font-weight: 600; color: #fff; line-height: var(--lh-snug); text-shadow: 0 1px 6px rgba(0,0,0,.65); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

@@ -139,7 +139,7 @@ onMounted(load)
 .ns__reset { font-size: var(--fs-2xs); color: var(--azure-bright); text-decoration: underline; }
 
 .ns__seg { display: flex; gap: 2px; padding: 2px; border-radius: var(--r-sm); background: var(--void); border: 1px solid var(--line); }
-.ns__seg button { padding: 4px var(--s-3); border-radius: 5px; font-size: var(--fs-2xs); color: var(--ink-soft); transition: all var(--t-fast); }
+.ns__seg button { padding: 4px var(--s-3); border-radius: 0.3125rem; font-size: var(--fs-2xs); color: var(--ink-soft); transition: all var(--t-fast); }
 .ns__seg button.is-on { background: var(--azure-haze); color: var(--azure-bright); font-weight: 600; }
 
 .ns__filter { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--void);

@@ -12,7 +12,7 @@ const offset = computed(() => C * (1 - store.autoplaySeconds / 10))
 function playNow() {
   const a = store.autoplay
   store.dismissAutoplay()
-  if (a) store.play(a.anime, a.ep)
+  store.playAutoplay(a)
 }
 </script>
 
@@ -49,12 +49,12 @@ function playNow() {
 <style scoped>
 .ap { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center;
   background: rgba(7,10,18,.72); backdrop-filter: blur(8px); }
-.ap__card { display: flex; width: min(31.25rem, calc(100vw - 40px)); border-radius: var(--r-lg); overflow: hidden;
+.ap__card { display: flex; width: min(31.25rem, calc(100vw - 2.5rem)); border-radius: var(--r-lg); overflow: hidden;
   background: var(--glass-strong); border: 1px solid var(--line-2); box-shadow: var(--shadow-xl); }
-.ap__cover { width: 124px; object-fit: cover; flex-shrink: 0; }
+.ap__cover { width: 7.75rem; object-fit: cover; flex-shrink: 0; }
 .ap__body { flex: 1; padding: var(--s-5); display: flex; flex-direction: column; gap: var(--s-2); }
 .ap__eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); }
-.ap__tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
+.ap__tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
 .ap__title { font-size: var(--fs-lg); }
 .ap__series { font-size: var(--fs-sm); color: var(--ink-faint); }
 .ap__row { display: flex; align-items: center; gap: var(--s-4); margin-top: var(--s-3); }

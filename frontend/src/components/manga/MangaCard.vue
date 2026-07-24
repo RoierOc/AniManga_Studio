@@ -1,136 +1,51 @@
 <script setup>
-import { computed, ref } from 'vue'
+/* Tarjeta de manga = `MediaCard` (todo lo visual) + la traducción de dominio, igual que hizo
+ * `AnimeCard.vue`. Antes duplicaba póster/glow/shine a mano y NO tenía acciones al hover ni el
+ * despliegue de info: el dominio fundacional era el peor presentado. Con la primitiva compartida
+ * hereda gratis todo lo que se pula ahí.
+ *
+ * API: props (`manga`, `updates`) + eventos `open`/`play` (Continuar). El click de tarjeta emite
+ * `open` (antes era @click nativo → las vistas se actualizaron). */
+import { computed } from 'vue'
 import { MANGA_STATUS } from '@/lib/manga'
-import { imgProxy, imgThumb } from '@/lib/img'
-import { coverRGB, vivid } from '@/lib/coverColor'
+import { useMangaStore } from '@/stores/manga'
+import MediaCard from '@/components/media/MediaCard.vue'
 
 const props = defineProps({ manga: { type: Object, required: true }, updates: { type: Number, default: 0 } })
+const emit = defineEmits(['open', 'play'])
 
-// Glow del color dominante de la portada al pasar el ratón (perezoso: se muestrea la
-// primera vez que se hace hover y queda cacheado). Solo afecta a la sombra/borde.
-const glow = ref('')
-async function ensureGlow() {
-  if (glow.value || !props.manga.cover) return
-  const rgb = await coverRGB(imgProxy(props.manga.cover))
-  if (rgb) { const v = vivid(rgb); glow.value = `${v.r}, ${v.g}, ${v.b}` }
-}
-const hasCover = computed(() => !!props.manga.cover)
-const thumb = computed(() => imgThumb(props.manga.cover))
+const store = useMangaStore()
+
 const status = computed(() => MANGA_STATUS[props.manga.status] || null)
-const initials = computed(() =>
-  (props.manga.name || '?').replace(/[\[\]_]/g, ' ').trim().slice(0, 2).toUpperCase()
-)
+const kind = computed(() => (props.manga.kind === 'novel' ? 'NOVELA' : 'MANGA'))
+const flag = computed(() =>
+  props.updates ? { tone: 'live', label: `+${props.updates} nuevos` } : null)
+
+/* Leídos / total. La tarjeta enseñaba sólo el total de capítulos, que no dice nada accionable:
+   lo que quieres saber de un vistazo es CUÁNTOS TE FALTAN. `MediaCard` ya pinta `done/total`
+   igual que en anime, así que basta con darle los números correctos. */
+const read = computed(() => store.readCountOf(props.manga.id))
+const total = computed(() => props.manga.chapter_count || 0)
+const pending = computed(() => Math.max(0, total.value - read.value))
+
+const tags = computed(() => [
+  pending.value ? `${pending.value} sin leer` : (total.value ? 'Al día' : ''),
+  props.manga.upscaled ? `${props.manga.upscaled} en 4K` : '',
+].filter(Boolean))
 </script>
 
 <template>
-  <article class="card" :class="{ 'has-glow': glow }" :style="glow ? { '--cardglow': glow } : {}"
-           tabindex="0" @mouseenter="ensureGlow" @focus="ensureGlow">
-    <div class="card__poster">
-      <img v-if="thumb" :src="thumb" class="blurup" aria-hidden="true" alt="" />
-      <img v-if="hasCover" :src="imgProxy(manga.cover)" :alt="manga.name" loading="lazy" class="card__img"
-           @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" />
-      <div v-else class="card__fallback"><span>{{ initials }}</span></div>
-
-      <div class="card__scrim" />
-      <div class="card__shine" />
-
-      <!-- Solo estado (como en la tarjeta de anime): completado, leyendo, etc. + aviso de novedades. -->
-      <div class="card__topright">
-        <span v-if="updates" class="card__new" :title="`${updates} capítulos nuevos`">+{{ updates }}</span>
-        <span v-if="status" class="card__status" :style="{ '--c': status.color }">{{ status.label }}</span>
-      </div>
-
-      <!-- Title + stats overlaid on the poster bottom -->
-      <div class="card__overlay">
-        <h3 class="card__title">{{ manga.name }}</h3>
-        <div class="card__stats">
-          <span>{{ manga.chapter_count || 0 }} cap.</span>
-          <span class="dot" />
-          <span>{{ manga.image_count || 0 }} pág.</span>
-        </div>
-      </div>
-    </div>
-  </article>
+  <MediaCard
+    :cover="manga.cover"
+    :title="manga.name"
+    :kind-label="kind"
+    :status="status"
+    :flag="flag"
+    :count="{ done: read, total }"
+    :tags="tags"
+    play-label="Continuar"
+    alt-label=""
+    @open="emit('open')"
+    @play="emit('play')"
+  />
 </template>
-
-<style scoped>
-.card {
-  position: relative;
-  border-radius: var(--r-md);
-  cursor: pointer;
-  outline: none;
-  transition: transform var(--t-base) var(--ease-snap);
-}
-.card:hover, .card:focus-visible { transform: translateY(-6px); }
-
-.card__poster {
-  position: relative;
-  aspect-ratio: 2 / 3;
-  border-radius: var(--r-md);
-  overflow: hidden;
-  background: var(--surface-2);
-  border: 1px solid var(--line);
-  box-shadow: var(--shadow-sm);
-  transition: box-shadow var(--t-base) var(--ease-silk), border-color var(--t-base);
-}
-.card:hover .card__poster {
-  border-color: var(--azure-glow);
-  box-shadow: var(--shadow-lg), 0 0 0 1px var(--azure-glow);
-}
-/* Glow del color de la portada (si se muestreó): tiñe borde+halo al hover/foco. */
-.card.has-glow:hover .card__poster, .card.has-glow:focus-visible .card__poster {
-  border-color: rgba(var(--cardglow), .55);
-  box-shadow: var(--shadow-lg), 0 0 0 1px rgba(var(--cardglow), .55), 0 8px 34px rgba(var(--cardglow), .45);
-}
-
-.card__img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-slow) var(--ease-silk), transform var(--t-cine) var(--ease-silk); }
-.card__img.is-loaded { opacity: 1; }
-.card:hover .card__img { transform: scale(1.07); }
-
-.card__fallback {
-  position: absolute; inset: 0; display: grid; place-items: center;
-  background: radial-gradient(circle at 50% 30%, var(--surface-3), var(--surface));
-  color: var(--ink-ghost); font-family: var(--font-display); font-size: 2rem; font-weight: 600;
-}
-
-.card__scrim {
-  position: absolute; inset: 0;
-  background: linear-gradient(180deg, transparent 38%, rgba(7, 10, 18, 0.55) 62%, rgba(5, 7, 13, 0.94) 100%);
-}
-
-/* diagonal holo shine on hover */
-.card__shine {
-  position: absolute; inset: 0;
-  background: linear-gradient(112deg, transparent 35%, rgba(168, 200, 255, 0.14) 48%, transparent 60%);
-  transform: translateX(-120%);
-  pointer-events: none;
-}
-.card:hover .card__shine { animation: shine 0.8s var(--ease-silk) forwards; }
-@keyframes shine { to { transform: translateX(120%); } }
-
-.card__topright { position: absolute; top: var(--s-2); right: var(--s-2); display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.card__new { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 7px; border-radius: var(--r-pill); color: #fff; background: var(--azure); box-shadow: var(--glow-azure); }
-.card__status {
-  font-size: var(--fs-2xs); font-weight: 600; padding: 2px 8px; border-radius: var(--r-pill);
-  color: var(--c); background: color-mix(in srgb, var(--c) 16%, transparent);
-  border: 1px solid color-mix(in srgb, var(--c) 40%, transparent); backdrop-filter: blur(6px);
-}
-
-.card__overlay {
-  position: absolute; left: 0; right: 0; bottom: 0;
-  padding: var(--s-3) var(--s-3) var(--s-3);
-  transition: transform var(--t-base) var(--ease-silk);
-}
-.card__title {
-  font-family: var(--font-body); font-weight: 600; font-size: var(--fs-sm);
-  line-height: var(--lh-snug); color: #fff;
-  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.6);
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.card__stats {
-  display: flex; align-items: center; gap: var(--s-2);
-  margin-top: 5px; font-size: var(--fs-xs); color: var(--ink-soft);
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
-}
-.dot { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-faint); }
-</style>

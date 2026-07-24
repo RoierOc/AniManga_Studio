@@ -78,7 +78,7 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
                @click="$emit('select', it)">
         <div class="pcard__poster">
           <img v-if="imgThumb(it.anime.cover)" :src="imgThumb(it.anime.cover)" class="blurup" aria-hidden="true" alt="" />
-          <img v-if="it.anime.cover" :src="imgProxy(it.anime.cover)" :alt="it.anime.title" loading="lazy"
+          <img v-if="it.anime.cover" :src="imgProxy(it.anime.cover, 220)" :alt="it.anime.title" loading="lazy"
                @load="$event.target.classList.add('is-loaded')" class="pcard__img" />
           <div v-else class="pcard__ph">{{ (it.anime.title || '?')[0].toUpperCase() }}</div>
           <div class="pcard__scrim" />
@@ -105,7 +105,7 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
 .rail__arrow:hover:not(:disabled) { color: var(--ink); border-color: var(--azure); background: var(--azure-haze); }
 .rail__arrow:disabled { opacity: .3; cursor: default; }
 .rail__row { display: flex; gap: var(--s-4); overflow-x: auto; padding-bottom: var(--s-3); scroll-snap-type: x mandatory; scroll-behavior: smooth; }
-.rail__row::-webkit-scrollbar { height: 6px; }
+.rail__row::-webkit-scrollbar { height: 0.375rem; }
 .rail__row::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: var(--r-pill); }
 
 /* ── episode (16:9) ── */
@@ -119,8 +119,8 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
 .ecard__play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; opacity: 0; transition: opacity var(--t-base); }
 .ecard:hover .ecard__play { opacity: 1; }
 .ecard__play :deep(svg) { filter: drop-shadow(0 2px 8px rgba(0,0,0,.6)); }
-.ecard__new { position: absolute; top: var(--s-2); right: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .04em; padding: 2px 7px; border-radius: var(--r-xs); color: #fff; background: var(--azure); box-shadow: var(--glow-azure); animation: pulse-live 1.8s var(--ease-drift) infinite; }
-.ecard__ep { position: absolute; top: var(--s-2); left: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 7px; border-radius: var(--r-xs); background: rgba(7,10,18,.7); color: var(--ice); }
+.ecard__new { position: absolute; top: var(--s-2); right: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .04em; padding: 2px 0.4375rem; border-radius: var(--r-xs); color: #fff; background: var(--azure); box-shadow: var(--glow-azure); animation: pulse-live 1.8s var(--ease-drift) infinite; }
+.ecard__ep { position: absolute; top: var(--s-2); left: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.4375rem; border-radius: var(--r-xs); background: rgba(7,10,18,.7); color: var(--ice); }
 .ecard__bar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: rgba(0,0,0,.4); }
 .ecard__bar span { display: block; height: 100%; background: var(--azure-bright); box-shadow: 0 0 6px var(--azure-glow); }
 .ecard__title { margin-top: var(--s-2); font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
@@ -136,11 +136,11 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
 .pcard:hover .pcard__img { transform: scale(1.07); }
 .pcard__ph { position: absolute; inset: 0; display: grid; place-items: center; font-family: var(--font-display); font-size: 2.4rem; color: var(--ink-ghost); }
 .pcard__scrim { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7,10,18,.25) 0%, transparent 30%, transparent 52%, rgba(5,7,13,.94) 100%); }
-.pcard__fmt { position: absolute; top: var(--s-2); left: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600; padding: 2px 6px; border-radius: var(--r-xs); color: var(--ink); background: rgba(7,10,18,.6); backdrop-filter: blur(6px); }
-.pcard__score { position: absolute; top: var(--s-2); right: var(--s-2); display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 6px; border-radius: var(--r-pill); color: var(--gold); background: color-mix(in srgb, var(--gold) 15%, rgba(7,10,18,.7)); }
+.pcard__fmt { position: absolute; top: var(--s-2); left: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600; padding: 2px 0.375rem; border-radius: var(--r-xs); color: var(--ink); background: rgba(7,10,18,.6); backdrop-filter: blur(6px); }
+.pcard__score { position: absolute; top: var(--s-2); right: var(--s-2); display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.375rem; border-radius: var(--r-pill); color: var(--gold); background: color-mix(in srgb, var(--gold) 15%, rgba(7,10,18,.7)); }
 .pcard__hover { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; transition: opacity var(--t-base); }
 .pcard:hover .pcard__hover { opacity: 1; }
-.pcard__btn { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--azure); box-shadow: var(--glow-azure); transform: scale(.8); transition: transform var(--t-base) var(--ease-snap); }
+.pcard__btn { width: 2.75rem; height: 2.75rem; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--azure); box-shadow: var(--glow-azure); transform: scale(.8); transition: transform var(--t-base) var(--ease-snap); }
 .pcard:hover .pcard__btn { transform: scale(1); }
 .pcard__overlay { position: absolute; left: 0; right: 0; bottom: 0; padding: var(--s-3); }
 .pcard__name { font-size: var(--fs-xs); font-weight: 600; line-height: var(--lh-snug); color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.65); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

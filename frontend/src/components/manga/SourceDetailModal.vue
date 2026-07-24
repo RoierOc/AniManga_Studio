@@ -1,8 +1,9 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useSourcesStore } from '@/stores/sources'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import { useModal } from '@/lib/useModal'
 
 const store = useSourcesStore()
 const d = computed(() => store.detail)
@@ -11,13 +12,17 @@ const genres = computed(() => {
   const g = d.value?.genre
   return Array.isArray(g) ? g : (typeof g === 'string' ? g.split(',').map(x => x.trim()).filter(Boolean) : [])
 })
+
+// Escape cierra, el foco no se escapa por detrás y el fondo no scrollea.
+const modalEl = ref(null)
+useModal(() => !!d.value, () => store.closeDetail(), modalEl)
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="d" class="ov" @click.self="store.closeDetail()">
-        <div class="modal">
+        <div class="modal" ref="modalEl">
           <button class="modal__x" @click="store.closeDetail()"><Icon name="close" :size="18" /></button>
           <header class="modal__head">
             <img v-if="d.thumbnailUrl" :src="d.thumbnailUrl" class="modal__cover" :alt="d.title" referrerpolicy="no-referrer" />
@@ -69,23 +74,23 @@ const genres = computed(() => {
 <style scoped>
 .ov { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--s-5); background: rgba(7,10,18,.72); backdrop-filter: blur(8px); }
 .modal { position: relative; width: min(45rem, 100%); max-height: 88vh; display: flex; flex-direction: column; background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); overflow: hidden; }
-.modal__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 3; width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); }
+.modal__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 3; width: 2.125rem; height: 2.125rem; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); }
 .modal__x:hover { color: var(--ink); }
 .modal__head { display: flex; gap: var(--s-4); padding: var(--s-5); border-bottom: 1px solid var(--line); }
-.modal__cover { width: 110px; aspect-ratio: 2/3; object-fit: cover; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
+.modal__cover { width: 6.875rem; aspect-ratio: 2/3; object-fit: cover; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
 .modal__cover--ph { display: grid; place-items: center; background: var(--surface-2); color: var(--ink-ghost); }
 .modal__info { min-width: 0; padding-right: var(--s-6); }
 .modal__src { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--azure); letter-spacing: .04em; }
 .modal__title { font-size: var(--fs-xl); line-height: var(--lh-snug); margin: 2px 0; }
 .modal__by { color: var(--ink-soft); font-size: var(--fs-sm); }
 .modal__acts { display: flex; gap: var(--s-2); margin-top: var(--s-3); }
-.abtn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line-2); background: transparent; transition: all var(--t-fast); }
+.abtn { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.375rem 0.875rem; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line-2); background: transparent; transition: all var(--t-fast); }
 .abtn:hover:not(:disabled) { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 .abtn--added { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 30%, transparent); background: color-mix(in srgb, var(--jade) 8%, transparent); }
 .abtn:disabled { cursor: default; opacity: .85; }
 .modal__genres { display: flex; flex-wrap: wrap; gap: var(--s-1); margin-top: var(--s-3); }
-.g { font-size: var(--fs-2xs); padding: 2px 8px; border-radius: var(--r-pill); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-soft); }
-.modal__desc { padding: var(--s-3) var(--s-5); font-size: var(--fs-sm); color: var(--ink-soft); line-height: var(--lh-body); max-height: 100px; overflow-y: auto; }
+.g { font-size: var(--fs-2xs); padding: 2px 0.5rem; border-radius: var(--r-pill); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-soft); }
+.modal__desc { padding: var(--s-3) var(--s-5); font-size: var(--fs-sm); color: var(--ink-soft); line-height: var(--lh-body); max-height: 6.25rem; overflow-y: auto; }
 .modal__chapters { flex: 1; overflow: hidden; display: flex; flex-direction: column; border-top: 1px solid var(--line); }
 .modal__chhead { padding: var(--s-3) var(--s-5); font-weight: 600; }
 .muted { color: var(--ink-faint); font-weight: 400; }
@@ -98,7 +103,7 @@ const genres = computed(() => {
 .chap__main { flex: 1; min-width: 0; }
 .chap__name { font-size: var(--fs-sm); font-weight: 500; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chap__sub { font-size: var(--fs-2xs); color: var(--ink-faint); }
-.chap__dl { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); flex-shrink: 0; }
+.chap__dl { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); flex-shrink: 0; }
 .chap__dl:hover { color: #fff; background: var(--azure); border-color: transparent; }
 .chap__dl--ghost { color: var(--azure-bright); border-color: var(--azure); background: transparent; }
 .chap__dl--ghost:hover { background: var(--azure-haze); color: var(--azure-bright); }

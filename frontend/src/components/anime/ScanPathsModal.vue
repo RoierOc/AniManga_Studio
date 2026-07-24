@@ -1,16 +1,22 @@
 <script setup>
+import { ref } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import { useModal } from '@/lib/useModal'
 
 const store = useAnimeStore()
+
+// Escape cierra, el foco no se escapa por detrás y el fondo no scrollea.
+const modalEl = ref(null)
+useModal(() => store.scan.show, () => store.scan.show = false, modalEl)
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="store.scan.show" class="ov" @click.self="store.scan.show = false">
-        <div class="modal">
+        <div class="modal" ref="modalEl">
           <button class="modal__x" @click="store.scan.show = false"><Icon name="close" :size="18" /></button>
           <header class="modal__head"><h2>Carpetas de anime local</h2><p>Escanea carpetas y enlázalas con AniList para añadirlas a tu biblioteca.</p></header>
 
@@ -70,7 +76,7 @@ const store = useAnimeStore()
 <style scoped>
 .ov { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--s-5); background: rgba(7,10,18,.72); backdrop-filter: blur(8px); }
 .modal { position: relative; width: min(42.5rem, 100%); max-height: 86vh; display: flex; flex-direction: column; background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); overflow: hidden; }
-.modal__x { position: absolute; top: var(--s-3); right: var(--s-3); width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); }
+.modal__x { position: absolute; top: var(--s-3); right: var(--s-3); width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); }
 .modal__head { padding: var(--s-5) var(--s-5) var(--s-3); border-bottom: 1px solid var(--line); }
 .modal__head h2 { font-size: var(--fs-lg); }
 .modal__head p { color: var(--ink-faint); font-size: var(--fs-sm); margin-top: 2px; }
@@ -90,14 +96,14 @@ const store = useAnimeStore()
 .browser { border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--base); overflow: hidden; }
 .browser__bar { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); border-bottom: 1px solid var(--line); }
 .browser__path { flex: 1; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.browser__list { max-height: 200px; overflow-y: auto; padding: var(--s-2); display: flex; flex-direction: column; gap: 2px; }
+.browser__list { max-height: 12.5rem; overflow-y: auto; padding: var(--s-2); display: flex; flex-direction: column; gap: 2px; }
 .browser__item { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2); border-radius: var(--r-xs); font-size: var(--fs-sm); color: var(--ink-soft); text-align: left; }
 .browser__item:hover { background: var(--surface); color: var(--ink); }
 .center { display: grid; place-items: center; padding: var(--s-5); }
 .folders { display: flex; flex-direction: column; gap: var(--s-2); }
 .frow { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line); }
 .frow.is-matched { border-left: 2px solid var(--jade); }
-.frow__cover { width: 36px; height: 50px; object-fit: cover; border-radius: var(--r-xs); flex-shrink: 0; }
+.frow__cover { width: 2.25rem; height: 3.125rem; object-fit: cover; border-radius: var(--r-xs); flex-shrink: 0; }
 .frow__cover--ph { display: grid; place-items: center; background: var(--surface-2); color: var(--ink-ghost); }
 .frow__info { flex: 1; min-width: 0; }
 .frow__name { font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

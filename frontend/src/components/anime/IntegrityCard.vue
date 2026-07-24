@@ -77,7 +77,7 @@ const signed = (n) => (n > 0 ? `+${formatBytes(n)}` : `−${formatBytes(-n)}`)
 .card { padding: var(--s-5); border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--surface); }
 .card__title { display: flex; align-items: center; gap: var(--s-2); font-weight: 600; color: var(--ink); margin-bottom: var(--s-3); }
 .card__title :deep(svg) { color: var(--azure); }
-.btn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); flex-shrink: 0; }
+.btn { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); flex-shrink: 0; }
 .btn:hover:not(:disabled) { color: var(--ink); border-color: var(--line-strong); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn--xs { padding: 3px var(--s-2); font-size: var(--fs-2xs); }
@@ -86,8 +86,8 @@ const signed = (n) => (n > 0 ? `+${formatBytes(n)}` : `−${formatBytes(-n)}`)
 
 .int__tot { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--jade); }
 .int__tot.is-bad { color: var(--coral); }
-.int__ok { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--jade); }
-.int__row { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3); margin-bottom: 6px;
+.int__ok { display: flex; align-items: center; gap: 0.375rem; font-size: var(--fs-sm); color: var(--jade); }
+.int__row { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3); margin-bottom: 0.375rem;
             border-radius: var(--r-sm); background: var(--base);
             border: 1px solid color-mix(in srgb, var(--coral) 32%, transparent); }
 .int__name { flex: 1; min-width: 0; font-size: var(--fs-xs); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

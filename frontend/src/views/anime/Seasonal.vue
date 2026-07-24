@@ -5,6 +5,7 @@ import { SEASON_ES } from '@/lib/anime'
 import DiscoverCard from '@/components/anime/DiscoverCard.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import Select from '@/components/ui/Select.vue'
 
 const store = useAnimeStore()
 
@@ -45,12 +46,12 @@ onMounted(() => { if (!store.seasonal.length) store.loadSeasonal() })
       </div>
 
       <div class="season__controls">
-        <select class="sel" :value="store.season" @change="store.season = $event.target.value; store.loadSeasonal()">
-          <option v-for="(es, k) in SEASON_ES" :key="k" :value="k">{{ es }}</option>
-        </select>
-        <select class="sel" :value="store.year" @change="store.year = Number($event.target.value); store.loadSeasonal()">
-          <option v-for="y in years" :key="y" :value="y">{{ y }}</option>
-        </select>
+        <Select :model-value="store.season" aria-label="Temporada"
+                :options="Object.entries(SEASON_ES).map(([k, es]) => ({ value: k, label: es }))"
+                @change="store.season = $event; store.loadSeasonal()" />
+        <Select :model-value="store.year" aria-label="Año"
+                :options="years.map(y => ({ value: y, label: String(y) }))"
+                @change="store.year = Number($event); store.loadSeasonal()" />
         <div class="segm">
           <button v-for="s in SORTS" :key="s.id" :class="{ 'is-active': store.seasonSort === s.id }" @click="setSort(s.id)">{{ s.label }}</button>
         </div>
@@ -77,20 +78,19 @@ onMounted(() => { if (!store.seasonal.length) store.loadSeasonal() })
 .season { max-width: var(--content-max); margin: 0 auto; padding: 0 var(--s-6) var(--s-8); }
 .season__head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: var(--s-4); padding: var(--s-5) 0; }
 .eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
-.tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
+.tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
 .season__nav { display: flex; align-items: center; gap: var(--s-3); }
-.navbtn { width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r-sm); border: 1px solid var(--line); color: var(--ink-soft); transition: all var(--t-fast); }
+.navbtn { width: 2.125rem; height: 2.125rem; display: grid; place-items: center; border-radius: var(--r-sm); border: 1px solid var(--line); color: var(--ink-soft); transition: all var(--t-fast); }
 .navbtn:hover { color: var(--ink); border-color: var(--azure); background: var(--azure-haze); }
 
 .season__controls { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
-.sel { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); cursor: pointer; }
 .segm { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
-.segm button { padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--ink-faint); transition: all var(--t-fast); }
+.segm button { padding: 0.375rem 0.75rem; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--ink-faint); transition: all var(--t-fast); }
 .segm button:hover { color: var(--ink); }
 .segm button.is-active { background: var(--surface-3); color: var(--ink); }
 
 .genres { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-bottom: var(--s-5); }
-.gchip { padding: 5px 12px; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
+.gchip { padding: 0.3125rem 0.75rem; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .gchip:hover { color: var(--ink); border-color: var(--line-strong); }
 .gchip.is-active { background: var(--azure-haze); border-color: var(--azure); color: var(--azure-bright); }
 

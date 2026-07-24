@@ -8,14 +8,22 @@ import Sidebar from '@/components/layout/Sidebar.vue'
 import TopBar from '@/components/layout/TopBar.vue'
 import TitleBar from '@/components/layout/TitleBar.vue'
 import { isNative, onMessage } from '@/lib/nativeBridge'
+import { useDocTitle } from '@/lib/docTitle'
 import { supportsVT } from '@/lib/vt'
 import Toaster from '@/components/ui/Toaster.vue'
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
 import ActivityDrawer from '@/components/ui/ActivityDrawer.vue'
 import ShortcutsModal from '@/components/ui/ShortcutsModal.vue'
+import CommandPalette from '@/components/ui/CommandPalette.vue'
 import MangaModal from '@/components/manga/MangaModal.vue'
 import Reader from '@/components/manga/Reader.vue'
 import NovelReader from '@/components/manga/NovelReader.vue'
-import PlayerOverlay from '@/components/anime/PlayerOverlay.vue'
+import NovelModal from '@/components/manga/NovelModal.vue'
+import NovelBrowse from '@/components/manga/NovelBrowse.vue'
+import SubBatchModal from '@/components/subtitle/SubBatchModal.vue'
+// Player WEB (legado): lazy — arrastra hls.js + jassub (+wasm), y en la app nativa no se usa
+// nunca. Eager metía ~medio MB en el chunk de entrada de cada arranque.
+const PlayerOverlay = defineAsyncComponent(() => import('@/components/anime/PlayerOverlay.vue'))
 import NativePlayerOverlay from '@/components/anime/NativePlayerOverlay.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 
@@ -30,11 +38,18 @@ const ExploreView  = defineAsyncComponent(() => import('@/views/ExploreView.vue'
 const DiscoverView = defineAsyncComponent(() => import('@/views/manga/Discover.vue'))
 const WorkshopView = defineAsyncComponent(() => import('@/views/WorkshopView.vue'))
 const ActivityView = defineAsyncComponent(() => import('@/views/ActivityView.vue'))
+const MediaView    = defineAsyncComponent(() => import('@/views/media/MediaStudio.vue'))
 const AnimeStudio  = defineAsyncComponent(() => import('@/views/anime/AnimeStudio.vue'))
 const SettingsView = defineAsyncComponent(() => import('@/views/SettingsView.vue'))
+const KitchenView  = defineAsyncComponent(() => import('@/views/KitchenView.vue'))
 
 const ui = useUiStore()
 const manga = useMangaStore()
+
+// La ventana (y con ella la barra de tareas y Alt-Tab) dice QUÉ estás haciendo, no sólo cómo se
+// llama la app. Ver lib/docTitle.js.
+const { title: docTitle } = useDocTitle()
+watch(docTitle, (t) => { document.title = t }, { immediate: true })
 
 // Dentro de la shell nativa (WebView2 sin marco) pintamos nuestra propia barra de
 // título. La clase en <html> activa el hueco superior (--titlebar-h) global.
@@ -67,6 +82,15 @@ function onGlobalKey(e) {
   }
   const tag = (e.target?.tagName || '').toLowerCase()
   if (tag === 'input' || tag === 'textarea' || tag === 'select') return
+  // Alt+← / Alt+→ = atrás/adelante, como en cualquier navegador. Además es el TERCER camino por
+  // el que puede llegar un botón lateral del ratón: hay drivers (Logitech, Razer…) que en vez de
+  // emitir XBUTTON lo mapean a esta combinación de teclas.
+  if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+    e.preventDefault()
+    if (e.key === 'ArrowLeft') window.history.back()
+    else window.history.forward()
+    return
+  }
   if (e.key === '?') { e.preventDefault(); ui.showShortcuts = !ui.showShortcuts }
   else if (e.key === 'Escape' && ui.showShortcuts) ui.showShortcuts = false
 }
@@ -105,7 +129,7 @@ onUnmounted(() => {
 // defensive fallback and should never render in normal use.
 const meta = computed(() => VIEWS.flatMap(g => g.items).find(i => i.id === ui.currentView))
 
-const VIEW_COMPONENTS = { library: LibraryHub, discover: DiscoverView, explore: ExploreView, workshop: WorkshopView, activity: ActivityView, anime: AnimeStudio, settings: SettingsView }
+const VIEW_COMPONENTS = { library: LibraryHub, discover: DiscoverView, explore: ExploreView, workshop: WorkshopView, activity: ActivityView, anime: AnimeStudio, media: MediaView, settings: SettingsView, kitchen: KitchenView }
 const activeComponent = computed(() => VIEW_COMPONENTS[ui.currentView] || null)
 
 // Error boundary: a render error in any view/modal shows a recoverable panel instead of
@@ -166,11 +190,17 @@ watch(() => ui.currentView, () => { crash.value = null })
 
     <MangaModal />
     <Reader />
+    <NovelModal />
+    <NovelBrowse />
+    <SubBatchModal />
     <NovelReader />
-    <PlayerOverlay />
+    <!-- Solo se monta (y se descarga su chunk) cuando de verdad se abre el player web. -->
+    <PlayerOverlay v-if="_anime.player" />
     <NativePlayerOverlay />
     <ActivityDrawer />
+    <CommandPalette />
     <ShortcutsModal />
+    <ConfirmDialog />
     <Toaster />
   </div>
 </template>
@@ -188,11 +218,11 @@ watch(() => ui.currentView, () => { crash.value = null })
 
 /* error boundary fallback */
 .crash { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 70vh; text-align: center; gap: var(--s-3); padding: var(--s-6); }
-.crash__glyph { width: 84px; height: 84px; display: grid; place-items: center; border-radius: var(--r-lg); color: var(--coral); background: color-mix(in srgb, var(--coral) 12%, transparent); border: 1px solid color-mix(in srgb, var(--coral) 30%, transparent); }
+.crash__glyph { width: 5.25rem; height: 5.25rem; display: grid; place-items: center; border-radius: var(--r-lg); color: var(--coral); background: color-mix(in srgb, var(--coral) 12%, transparent); border: 1px solid color-mix(in srgb, var(--coral) 30%, transparent); }
 .crash h2 { font-size: var(--fs-2xl); }
-.crash__msg { color: var(--ink-faint); font-family: var(--font-mono); font-size: var(--fs-xs); max-width: 560px; word-break: break-word; }
+.crash__msg { color: var(--ink-faint); font-family: var(--font-mono); font-size: var(--fs-xs); max-width: 35rem; word-break: break-word; }
 .crash__actions { display: flex; gap: var(--s-3); margin-top: var(--s-2); }
-.crash__btn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-3) var(--s-5); border-radius: var(--r-md); font-size: var(--fs-sm); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); }
+.crash__btn { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-3) var(--s-5); border-radius: var(--r-md); font-size: var(--fs-sm); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); }
 .crash__btn:hover { color: var(--ink); border-color: var(--line-strong); }
 .crash__btn--accent { background: var(--azure); color: #fff; border-color: transparent; }
 .crash__btn--accent:hover { background: var(--azure-bright); color: #fff; }

@@ -1,8 +1,16 @@
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import Icon from '@/components/ui/Icon.vue'
+import { useUiStore } from '@/stores/ui'
+import { useMediaStore } from '@/stores/media'
 
 const emit = defineEmits(['close'])
+const ui = useUiStore()
+const media = useMediaStore()
+// El panel refleja el MODO activo: en Cine muestra estadísticas de series/películas (calculadas en
+// cliente desde la biblioteca de Sonarr/Radarr), en anime las de siempre (endpoint /storage/stats).
+const cine = computed(() => ui.mode === 'cine')
+const ms = computed(() => media.stats)
 const data = ref(null)
 const loading = ref(true)
 const error = ref(false)
@@ -40,9 +48,14 @@ function fmtGB(bytes) {
 async function load() {
   loading.value = true; error.value = false
   try {
-    const r = await fetch('/api/storage/stats')
-    if (!r.ok) throw new Error()
-    data.value = await r.json()
+    if (cine.value) {
+      // Cine: nos basta con que la biblioteca esté cargada; el getter `stats` hace el resto.
+      await media.init()
+    } else {
+      const r = await fetch('/api/storage/stats')
+      if (!r.ok) throw new Error()
+      data.value = await r.json()
+    }
   } catch { error.value = true }
   finally { loading.value = false }
 }
@@ -65,13 +78,45 @@ onBeforeUnmount(() => {
 <template>
   <div ref="rootEl" class="stats" role="dialog" aria-label="Estadísticas">
     <header class="stats__head">
-      <span class="stats__title"><Icon name="chart" :size="16" /> Estadísticas</span>
+      <span class="stats__title"><Icon name="chart" :size="16" /> Estadísticas · {{ cine ? 'Cine' : 'アニメ' }}</span>
       <button class="stats__x" title="Cerrar" @click="emit('close')"><Icon name="close" :size="15" /></button>
     </header>
 
     <div v-if="loading" class="stats__state">Cargando…</div>
     <div v-else-if="error" class="stats__state">No se pudieron cargar las estadísticas.</div>
 
+    <!-- ── Cuerpo modo CINE (series y películas) ─────────────────────────── -->
+    <div v-else-if="cine" class="stats__body">
+      <section class="stats__block stats__block--hero">
+        <span class="stats__eyebrow">Tu biblioteca</span>
+        <div class="stats__hero-nums">
+          <div class="stats__big"><b>{{ ms.series }}</b><span>series</span></div>
+          <div class="stats__big"><b>{{ ms.movies }}</b><span>películas</span></div>
+        </div>
+        <p v-if="ms.watching" class="stats__last">Siguiendo <em>{{ ms.watching }}</em> {{ ms.watching === 1 ? 'serie' : 'series' }}</p>
+      </section>
+
+      <section class="stats__block">
+        <span class="stats__eyebrow">Contenido</span>
+        <div class="stats__grid">
+          <div class="stats__cell"><b>{{ ms.seasons }}</b><span>temporadas</span></div>
+          <div class="stats__cell"><b>{{ ms.epsHave }}</b><span>episodios</span></div>
+          <div class="stats__cell"><b>{{ ms.moviesHave }}</b><span>pelis en disco</span></div>
+          <div class="stats__cell"><b>{{ ms.epsMissing }}</b><span>eps. por bajar</span></div>
+        </div>
+      </section>
+
+      <section class="stats__block">
+        <span class="stats__eyebrow">Almacenamiento</span>
+        <ul class="stats__bars">
+          <li><span>Series</span><i>{{ fmtGB(ms.sizeSeries) }}</i></li>
+          <li><span>Películas</span><i>{{ fmtGB(ms.sizeMovies) }}</i></li>
+          <li class="stats__bars-total"><span>Total usado</span><i>{{ fmtGB(ms.sizeTotal) }}</i></li>
+        </ul>
+      </section>
+    </div>
+
+    <!-- ── Cuerpo modo アニメ (anime/manga) ──────────────────────────────── -->
     <div v-else class="stats__body">
       <!-- Este mes -->
       <section class="stats__block stats__block--hero">
@@ -140,11 +185,11 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .stats {
-  position: absolute; top: calc(100% + 8px); right: 0;
-  width: 340px; max-width: calc(100vw - 24px);
+  position: absolute; top: calc(100% + 0.5rem); right: 0;
+  width: 21.25rem; max-width: calc(100vw - 1.5rem);
   background: var(--surface, #131a2b);
   border: 1px solid var(--line);
-  border-radius: var(--r-lg, 14px);
+  border-radius: var(--r-lg, 0.875rem);
   box-shadow: 0 18px 50px rgba(0,0,0,.5);
   z-index: var(--z-modal, 900);
   overflow: hidden;
@@ -159,7 +204,7 @@ onBeforeUnmount(() => {
 }
 .stats__title { display: flex; align-items: center; gap: var(--s-2); font-weight: 600; font-size: var(--fs-sm); color: var(--ink); }
 .stats__title :deep(svg) { color: var(--azure-bright); }
-.stats__x { color: var(--ink-faint); width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--r-sm); }
+.stats__x { color: var(--ink-faint); width: 1.625rem; height: 1.625rem; display: grid; place-items: center; border-radius: var(--r-sm); }
 .stats__x:hover { color: var(--ink); background: var(--azure-haze); }
 
 .stats__state { padding: var(--s-6); text-align: center; color: var(--ink-soft); font-size: var(--fs-sm); }
@@ -170,7 +215,7 @@ onBeforeUnmount(() => {
 
 .stats__block--hero {
   background: var(--azure-haze);
-  border: 1px solid var(--azure); border-radius: var(--r-md, 10px);
+  border: 1px solid var(--azure); border-radius: var(--r-md, 0.625rem);
   padding: var(--s-3) var(--s-4);
 }
 .stats__hero-nums { display: flex; gap: var(--s-6); }
@@ -180,7 +225,7 @@ onBeforeUnmount(() => {
 .stats__last { font-size: var(--fs-xs); color: var(--ink-soft); margin: 0; }
 .stats__last em { color: var(--ink); font-style: normal; font-weight: 500; }
 
-.stats__chart { display: flex; align-items: flex-end; gap: 3px; height: 74px; }
+.stats__chart { display: flex; align-items: flex-end; gap: 3px; height: 4.625rem; }
 .stats__col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; height: 100%; }
 .stats__bars-stack {
   flex: 1; width: 100%; display: flex; flex-direction: column; justify-content: flex-end;
@@ -191,8 +236,8 @@ onBeforeUnmount(() => {
 .stats__bar--up { background: #7c5cff; }
 .stats__dow { font-size: .6rem; color: var(--ink-faint); }
 .stats__legend { display: flex; gap: var(--s-4); margin-top: var(--s-1); }
-.stats__legend span { display: flex; align-items: center; gap: 5px; font-size: var(--fs-2xs, .7rem); color: var(--ink-soft); }
-.stats__legend .dot { width: 8px; height: 8px; border-radius: 2px; display: inline-block; }
+.stats__legend span { display: flex; align-items: center; gap: 0.3125rem; font-size: var(--fs-2xs, .7rem); color: var(--ink-soft); }
+.stats__legend .dot { width: 0.5rem; height: 0.5rem; border-radius: 2px; display: inline-block; }
 .dot--watch { background: var(--azure-bright); }
 .dot--up { background: #7c5cff; }
 
@@ -205,9 +250,9 @@ onBeforeUnmount(() => {
 .stats__cell b { font-size: 1.15rem; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
 .stats__cell span { font-size: var(--fs-2xs, .7rem); color: var(--ink-faint); }
 
-.stats__bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.stats__bars { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.3125rem; }
 .stats__bars li { display: flex; justify-content: space-between; font-size: var(--fs-xs); color: var(--ink-soft); }
 .stats__bars li i { font-style: normal; color: var(--ink); font-variant-numeric: tabular-nums; }
-.stats__bars-total { border-top: 1px solid var(--line); padding-top: 5px; margin-top: 2px; font-weight: 600; }
+.stats__bars-total { border-top: 1px solid var(--line); padding-top: 0.3125rem; margin-top: 2px; font-weight: 600; }
 .stats__bars-total span, .stats__bars-total i { color: var(--ink); }
 </style>

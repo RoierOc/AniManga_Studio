@@ -14,6 +14,8 @@ import { useVersionsStore } from '@/stores/versions'
 import { useDiscoveryStore } from '@/stores/discovery'
 import VersionsCoverageGrid from '@/components/manga/VersionsCoverageGrid.vue'
 import MangaRecRail from '@/components/manga/MangaRecRail.vue'
+import Select from '@/components/ui/Select.vue'
+import { useModal } from '@/lib/useModal'
 
 const store = useMangaStore()
 const ui = useUiStore()
@@ -45,71 +47,8 @@ const colorModelLabel = computed(() => {
   const k = (store.colorModel && colorModelKeys.value.includes(store.colorModel)) ? store.colorModel : colorModelKeys.value[0]
   return store.models[k] || 'el modelo a color'
 })
-// ── Selector de modelo de escalado (desplegable propio, con distintivo Color/B&N) ──
-// Sustituye el <select> nativo: cada modelo lleva una etiqueta clara de si es a COLOR
-// (APISR/DAT/RCAN, 3 canales) o B&N (eula/MangaJaNai, 1 canal) para no confundirlos.
-const modelOpen = ref(false)
-const modelRef = ref(null)      // el botón (.mmodel__btn)
-const menuRef = ref(null)       // el menú teletransportado
-const menuPos = ref({ top: 0, left: 0, width: 0, up: false })
 const modelEntries = computed(() =>
   Object.entries(store.models).map(([key, label]) => ({ key, label, color: !!store.modelsColor[key] })))
-const activeModelEntry = computed(() =>
-  modelEntries.value.find(e => e.key === store.activeModel) || modelEntries.value[0] || null)
-function pickModel(key) { store.setModel(key); modelOpen.value = false }
-// El menú se teletransporta al body con posición FIJA (el panel Gestionar tiene overflow:hidden
-// para su animación de colapso y recortaría un menú absolute). Se coloca bajo el botón, o encima
-// si no cabe abajo — nunca se recorta.
-function placeMenu() {
-  const btn = modelRef.value
-  if (!btn) return
-  const r = btn.getBoundingClientRect()
-  const rows = modelEntries.value.length
-  const estH = Math.min(260, rows * 40 + 12)
-  const below = window.innerHeight - r.bottom
-  const up = below < estH + 8 && r.top > below
-  menuPos.value = {
-    left: r.left,
-    width: r.width,
-    top: up ? r.top - 6 : r.bottom + 6,
-    up,
-  }
-}
-function onModelDocClick(e) {
-  if (modelRef.value?.contains(e.target)) return
-  if (menuRef.value?.contains(e.target)) return
-  modelOpen.value = false
-}
-function onModelDocKey(e) { if (e.key === 'Escape') modelOpen.value = false }
-function onModelReflow(e) {
-  if (!modelOpen.value) return
-  // No cerrar cuando el scroll nace DENTRO del propio menú (tiene scroll interno)
-  if (e && e.type === 'scroll' && menuRef.value?.contains(e.target)) return
-  modelOpen.value = false
-}
-function toggleModel() {
-  if (!modelOpen.value) placeMenu()
-  modelOpen.value = !modelOpen.value
-}
-watch(modelOpen, (v) => {
-  if (v) {
-    document.addEventListener('mousedown', onModelDocClick)
-    document.addEventListener('keydown', onModelDocKey)
-    window.addEventListener('resize', onModelReflow)
-    window.addEventListener('scroll', onModelReflow, true)
-  } else {
-    document.removeEventListener('mousedown', onModelDocClick)
-    document.removeEventListener('keydown', onModelDocKey)
-    window.removeEventListener('resize', onModelReflow)
-    window.removeEventListener('scroll', onModelReflow, true)
-  }
-})
-onUnmounted(() => {
-  document.removeEventListener('mousedown', onModelDocClick)
-  document.removeEventListener('keydown', onModelDocKey)
-  window.removeEventListener('resize', onModelReflow)
-  window.removeEventListener('scroll', onModelReflow, true)
-})
 
 const colorPickerSelCount = computed(() => {
   const cp = store.colorPicker
@@ -161,7 +100,8 @@ async function freeSpace(scope) {
   const id = store.current?.id
   if (!id || freeing.value) return
   const label = scope === 'upscaled' ? 'la copia 4K' : scope === 'original' ? 'los archivos originales descargados' : 'TODOS los archivos (4K + originales)'
-  if (!window.confirm(`¿Borrar ${label} de "${store.current?.name || id}" del disco?\n\nEl manga sigue en tu biblioteca; podrás volver a descargar/escalar.`)) return
+  if (!await ui.confirm({ title: 'Liberar espacio', danger: true, confirmLabel: 'Borrar',
+      body: `¿Borrar ${label} de "${store.current?.name || id}" del disco?\nEl manga sigue en tu biblioteca; podrás volver a descargar/escalar.` })) return
   freeing.value = scope
   try {
     const r = await api.post('/api/storage/series/delete', { title: id, scope })
@@ -186,6 +126,22 @@ const coverage = computed(() => {
     else if (st === 'partial') partial++
   }
   return { total: chs.length, full, partial, plain: chs.length - full - partial }
+})
+
+// Capítulo por el que vas ahora mismo (filo azul + "pág. N" en su fila).
+function isCurrent(ch) {
+  const i = store.continueInfo()
+  return !!i && String(i.chapter) === String(ch)
+}
+
+// Progreso de lectura de la serie, para la barra de la cabecera.
+const chapterTotal = computed(() => store.collectionChapters.length)
+const readTotal = computed(() => store.collectionChapters.filter(c => store.isChapterRead(c.chapter)).length)
+const readPct = computed(() => (chapterTotal.value ? (readTotal.value / chapterTotal.value) * 100 : 0))
+// Primer capítulo descargado, para "Empezar a leer" cuando no hay progreso.
+const firstChapter = computed(() => {
+  const c = [...store.chapters].sort((a, b) => (parseFloat(a.chapter) || 0) - (parseFloat(b.chapter) || 0))[0]
+  return c ? c.chapter : null
 })
 
 const LANG_FLAG = { en: '🇬🇧', es: '🇪🇸', 'es-la': '🇲🇽', ja: '🇯🇵', 'pt-br': '🇧🇷', fr: '🇫🇷', ko: '🇰🇷', zh: '🇨🇳', 'zh-hk': '🇭🇰', it: '🇮🇹', de: '🇩🇪', ru: '🇷🇺' }
@@ -323,8 +279,14 @@ const tomoCover = ref('')      // b64 cover for the exported tomo
 const tp = computed(() => store.tp)
 const tpSel = ref(new Set())
 const toggleTp = (ch) => { const s = new Set(tpSel.value); s.has(ch) ? s.delete(ch) : s.add(ch); tpSel.value = s }
-const onArt = (e) => store.tpSelectArt(tp.value.artCands.find(c => store._candKey(c) === e.target.value))
-const onEs = (e) => store.tpSelectEs(tp.value.esCands.find(c => store._candKey(c) === e.target.value))
+const onArt = (v) => store.tpSelectArt(tp.value.artCands.find(c => store._candKey(c) === v))
+const onEs = (v) => store.tpSelectEs(tp.value.esCands.find(c => store._candKey(c) === v))
+// Candidatos de fuente → opciones del desplegable (misma etiqueta que tenía el <option>).
+const candOpts = (list, withScore) => list.map(c => ({
+  value: store._candKey(c),
+  label: `${c.sourceName} (${c.sourceLang})`,
+  hint: c.quality ? (withScore ? `${c.quality.height}px · ${c.quality.score}` : `${c.quality.height}px`) : 'sin medir',
+}))
 // Si el capítulo tiene una fuente asignada (grid de cobertura) que NO es español, el backend
 // usa ese arte para ESE capítulo en vez del arte global del título (ver transplant.py
 // _run_chapters) — mostramos por qué para que no sea una sorpresa.
@@ -548,56 +510,72 @@ async function doExport(toDrive = false) {
   const chapters = [...sel.value].sort((a, b) => parseFloat(a) - parseFloat(b))
   await store.exportTomo({ chapters, volumeName: volName.value, format: fmt.value, quality: quality.value, codec: codec.value, downscaleHalf: downscale.value, coverB64: tomoCover.value || store.mdex.coverB64, toDrive })
 }
+
+// Escape cierra, el foco no se escapa por detrás y el fondo no scrollea.
+const modalEl = ref(null)
+useModal(() => !!m.value, closeModal, modalEl)
 </script>
 
 <template>
   <Teleport to="body">
     <Transition name="modal">
       <div v-if="m" class="ov" @click.self="closeModal">
-        <div class="modal" :class="{ 'modal--art': !!coverArt }" :style="coverStyle">
+        <!-- Ancho POR PESTAÑA: «Capítulos» está cómoda estrecha, pero «Versiones» mete nueve
+             datos en una fila y «Exportar Tomo» es un grid de dos columnas — ahogados en 45rem.
+             La transición hace que el ensanchado se lea como intencionado, no como un salto. -->
+        <div ref="modalEl" class="modal" :class="[{ 'modal--art': !!coverArt }, `modal--${tab}`]" :style="coverStyle">
           <button class="modal__x" @click="closeModal"><Icon name="close" :size="18" /></button>
 
           <header class="modal__head">
             <div class="modal__ambient" aria-hidden="true" />
-            <img v-if="m.cover" :src="imgProxy(m.cover)" class="modal__cover" :alt="m.name" />
+            <img v-if="m.cover" :src="imgProxy(m.cover, 180)" class="modal__cover" :alt="m.name" />
             <div v-else class="modal__cover modal__cover--ph"><Icon name="library" :size="30" /></div>
             <div class="modal__info">
               <h2 class="modal__title">{{ m.name }}</h2>
-              <p class="modal__sub">
-                {{ chapters?.length || store.chapters.length }} capítulos
-                <template v-if="m.source_meta?.sourceName"> · {{ m.source_meta.sourceName }}</template>
+
+              <!-- Una SOLA línea de metadatos: antes esto eran cinco bloques apilados (subtítulo,
+                   enlace, estado, leyenda de colores y barra de cobertura) con el mismo peso
+                   visual, y el ojo no sabía dónde aterrizar. La leyenda desapareció: los badges
+                   de la lista ya dicen "4K"/"PARCIAL" con palabras. -->
+              <p class="modal__meta">
+                <span>{{ chapters?.length || store.chapters.length }} capítulos</span>
+                <span v-if="readTotal" class="modal__dot" />
+                <span v-if="readTotal" class="modal__read">{{ readTotal }} leídos</span>
+                <span v-if="coverage?.full" class="modal__dot" />
+                <span v-if="coverage?.full" class="modal__4k">{{ coverage.full }} en 4K<template v-if="coverage.partial"> · {{ coverage.partial }} parcial</template></span>
+                <span v-if="m.source_meta?.sourceName" class="modal__dot" />
+                <span v-if="m.source_meta?.sourceName">{{ m.source_meta.sourceName }}</span>
+                <a v-if="store.mdId" :href="'https://mangadex.org/title/' + store.mdId" target="_blank" rel="noopener" class="mdlink" title="Ver en MangaDex">
+                  <Icon name="globe" :size="12" /> MangaDex
+                </a>
               </p>
-              <a v-if="store.mdId" :href="'https://mangadex.org/title/' + store.mdId" target="_blank" rel="noopener" class="mdlink" title="Ver en MangaDex">
-                <Icon name="globe" :size="13" /> MangaDex
-              </a>
-              <select class="modal__status" :value="m.status || ''"
-                      :style="{ color: MANGA_STATUS[m.status]?.color || 'var(--ink-faint)' }"
-                      @change="store.setStatus(m, $event.target.value)">
-                <option value="">Sin estado</option>
-                <option v-for="(v, k) in MANGA_STATUS" :key="k" :value="k">{{ v.label }}</option>
-              </select>
-              <div class="modal__legend">
-                <span><span class="lg lg--4k" /> 4K</span>
-                <span><span class="lg lg--part" /> parcial</span>
-                <span><span class="lg lg--orig" /> original</span>
+
+              <!-- Progreso de lectura de la SERIE: con 250 capítulos, un punto por fila no deja
+                   ver el patrón; esta barra sí. -->
+              <div v-if="readTotal && chapterTotal" class="modal__prog" :title="`${readTotal} de ${chapterTotal} capítulos leídos`">
+                <span class="modal__prog-fill" :style="{ width: readPct + '%' }" />
               </div>
-              <!-- Cobertura de escalado: dónde está disponible el comparador original/4K -->
-              <div v-if="coverage && (coverage.full || coverage.partial)" class="modal__cov" title="Capítulos escalados a 4K (disponibles para comparar original/4K)">
-                <div class="modal__covbar">
-                  <span class="modal__covseg modal__covseg--4k" :style="{ flexGrow: coverage.full || 0.0001 }" />
-                  <span class="modal__covseg modal__covseg--part" :style="{ flexGrow: coverage.partial || 0.0001 }" />
-                  <span class="modal__covseg modal__covseg--plain" :style="{ flexGrow: coverage.plain || 0.0001 }" />
-                </div>
-                <span class="modal__covn">
-                  {{ coverage.full }}/{{ coverage.total }} en 4K<template v-if="coverage.partial"> · {{ coverage.partial }} parcial(es)</template>
-                </span>
-              </div>
+
+              <!-- Acción PRIMARIA, sola y grande. Antes «Continuar» vivía dentro del cuerpo
+                   scrolleable, debajo de las pestañas: con la lista desplazada, lo que haces el
+                   90% de las veces no estaba ni en pantalla. -->
               <div class="modal__hacts">
+                <button v-if="store.continueInfo()" class="hgo" @click="store.resumeCurrent()">
+                  <Icon name="play" :size="15" />
+                  <span>Continuar · Cap. {{ formatChapter(store.continueInfo().chapter) }}</span>
+                  <em v-if="store.continueInfo().total">pág. {{ store.continueInfo().page + 1 }}/{{ store.continueInfo().total }}</em>
+                </button>
+                <button v-else-if="firstChapter != null" class="hgo" @click="store.read(firstChapter)">
+                  <Icon name="play" :size="15" /> <span>Empezar a leer</span>
+                </button>
                 <button v-if="canAddToLib" class="hbtn hbtn--accent" :class="{ 'is-added': inLib }"
                         :disabled="inLib || addingLib" @click="addToLib">
                   <Icon :name="inLib ? 'check' : 'plus'" :size="14" />
                   {{ inLib ? 'En biblioteca' : (addingLib ? 'Añadiendo…' : 'Añadir a biblioteca') }}
                 </button>
+                <Select :model-value="m.status || ''" aria-label="Estado de lectura"
+                        :options="[{ value: '', label: 'Sin estado' }, ...Object.entries(MANGA_STATUS).map(([k, v]) => ({ value: k, label: v.label, color: v.color }))]"
+                        @change="store.setStatus(m, $event)" />
                 <button class="hbtn" @click="showManage = !showManage" :class="{ 'is-on': showManage }">Gestionar</button>
                 <button v-if="!canAddToLib" class="hbtn" @click="store.scanCorrupt()">Verificar</button>
               </div>
@@ -634,7 +612,7 @@ async function doExport(toDrive = false) {
                   <Icon name="library" :size="13" /> {{ store.coverPicker.open ? 'Ocultar portadas' : 'Elegir portada (AniList / MangaDex)' }}
                 </button>
                 <div v-if="store.coverPicker.open" class="cvp">
-                  <div v-if="store.coverPicker.loading" class="cvp__load"><span class="xspin" /> Buscando portadas online…</div>
+                  <div v-if="store.coverPicker.loading" class="cvp__load"><Spinner :size="11" /> Buscando portadas online…</div>
                   <template v-else>
                     <div class="cvp__grid">
                       <div v-if="store.coverPicker.current" class="cvp__item is-current" title="Portada actual">
@@ -645,13 +623,13 @@ async function doExport(toDrive = false) {
                               :disabled="!!store.coverPicker.applying" @click="store.applyCover(c.url)" title="Usar esta portada">
                         <img :src="imgProxy(c.thumb)" referrerpolicy="no-referrer" loading="lazy" alt="" />
                         <span class="cvp__tag cvp__tag--al">AniList</span>
-                        <span v-if="store.coverPicker.applying === c.url" class="cvp__busy"><span class="xspin" /></span>
+                        <span v-if="store.coverPicker.applying === c.url" class="cvp__busy"><Spinner :size="11" /></span>
                       </button>
                       <button v-for="(c, i) in store.coverPicker.mangadex" :key="'md' + i" class="cvp__item"
                               :disabled="!!store.coverPicker.applying" @click="store.applyCover(c.url)" title="Usar esta portada">
                         <img :src="imgProxy(c.thumb)" referrerpolicy="no-referrer" loading="lazy" alt="" />
                         <span v-if="c.volume && c.volume !== '?'" class="cvp__tag">Vol {{ c.volume }}</span>
-                        <span v-if="store.coverPicker.applying === c.url" class="cvp__busy"><span class="xspin" /></span>
+                        <span v-if="store.coverPicker.applying === c.url" class="cvp__busy"><Spinner :size="11" /></span>
                       </button>
                     </div>
                     <p v-if="!store.coverPicker.anilist.length && !store.coverPicker.mangadex.length" class="cvp__empty">
@@ -670,29 +648,14 @@ async function doExport(toDrive = false) {
               <section class="manage__sect manage__sect--up">
                 <span class="manage__label">Escalado 4K <em>· se aplica al instante</em></span>
                 <div class="manage__row">
-                  <div class="mf mmodel">
+                  <div class="mf">
                     <span>Modelo</span>
-                    <button type="button" class="mmodel__btn" :class="{ open: modelOpen }" ref="modelRef" @click="toggleModel" :aria-expanded="modelOpen">
-                      <span v-if="activeModelEntry" class="mmodel__tag" :class="activeModelEntry.color ? 'is-color' : 'is-bw'">
-                        <i class="mmodel__dot" />{{ activeModelEntry.color ? 'Color' : 'B&N' }}
-                      </span>
-                      <span class="mmodel__name">{{ activeModelEntry?.label || 'Modelo' }}</span>
-                      <Icon name="chevron" :size="14" class="mmodel__chev" />
-                    </button>
-                    <Teleport to="body">
-                      <Transition name="mmodel-pop">
-                        <ul v-if="modelOpen" ref="menuRef" class="mmodel__menu" :class="{ 'is-up': menuPos.up }"
-                            :style="{ top: menuPos.top + 'px', left: menuPos.left + 'px', width: menuPos.width + 'px' }">
-                          <li v-for="e in modelEntries" :key="e.key">
-                            <button type="button" class="mmodel__opt" :class="{ 'is-sel': e.key === store.activeModel }" @click="pickModel(e.key)">
-                              <span class="mmodel__tag" :class="e.color ? 'is-color' : 'is-bw'"><i class="mmodel__dot" />{{ e.color ? 'Color' : 'B&N' }}</span>
-                              <span class="mmodel__name">{{ e.label }}</span>
-                              <Icon v-if="e.key === store.activeModel" name="check" :size="14" class="mmodel__ck" />
-                            </button>
-                          </li>
-                        </ul>
-                      </Transition>
-                    </Teleport>
+                    <!-- Mismo desplegable que el resto de la app; la etiqueta Color/B&N viaja como
+                         `hint`, igual que en Ajustes. Antes esto era un menú propio de ~100 líneas
+                         que reimplementaba teletransporte, colocación, clic fuera y Escape. -->
+                    <Select block :model-value="store.activeModel" aria-label="Modelo de escalado"
+                            :options="modelEntries.map(e => ({ value: e.key, label: e.label, hint: e.color ? 'Color' : 'B&N' }))"
+                            @change="store.setModel($event)" />
                   </div>
                   <label class="mf mf--chk"><span>Modo eco <em>(deja correr MPV al escalar)</em></span>
                     <input type="checkbox" :checked="store.eco" @change="store.setEco($event.target.checked)" />
@@ -709,7 +672,9 @@ async function doExport(toDrive = false) {
           </Transition>
 
           <div class="modal__tabs">
-            <button class="mtab" :class="{ 'is-active': tab === 'chapters' }" @click="tab = 'chapters'">Capítulos</button>
+            <button class="mtab mtab--sep" :class="{ 'is-active': tab === 'chapters' }" @click="tab = 'chapters'">
+              <Icon name="book" :size="13" /> Capítulos
+            </button>
             <button class="mtab" :class="{ 'is-active': tab === 'versions' }" @click="tab = 'versions'"><Icon name="spark" :size="13" /> Versiones</button>
             <button class="mtab" :class="{ 'is-active': tab === 'translate' }" @click="tab = 'translate'"><Icon name="globe" :size="13" /> Traducir
               <span v-if="store.current?.transplant_meta?.translated?.length" class="mtab__badge">ES</span>
@@ -749,10 +714,13 @@ async function doExport(toDrive = false) {
                 <label class="fld"><span>Nombre del tomo</span><input v-model="volName" type="text" placeholder="Volumen 1" /></label>
                 <div class="fld-row">
                   <label class="fld"><span>Formato</span>
-                    <select v-model="fmt"><option value="cbz">CBZ</option><option value="cbr">CBR</option></select>
+                    <Select block v-model="fmt" aria-label="Formato"
+                            :options="[{ value: 'cbz', label: 'CBZ' }, { value: 'cbr', label: 'CBR' }]" />
                   </label>
                   <label class="fld"><span>Compresión</span>
-                    <select v-model="codec"><option value="jpeg">JPEG</option><option value="webp">WebP (menor tamaño)</option></select>
+                    <Select block v-model="codec" aria-label="Compresión" :options="[
+                      { value: 'jpeg', label: 'JPEG' },
+                      { value: 'webp', label: 'WebP', hint: 'menor tamaño' }]" />
                   </label>
                   <label class="fld"><span>Calidad: {{ quality }}</span><input v-model.number="quality" type="range" :min="qMin" max="100" /></label>
                 </div>
@@ -779,7 +747,7 @@ async function doExport(toDrive = false) {
                 <!-- color pages exclusion -->
                 <div class="colors">
                   <button class="btn-xs" :disabled="store.colorLoading || !sel.size" @click="detectColors">
-                    <span v-if="store.colorLoading" class="xspin" />Detectar páginas a color
+                    <Spinner v-if="store.colorLoading" :size="11" />Detectar páginas a color
                   </button>
                   <div v-if="store.colorPages.length" class="colors__grid">
                     <button v-for="cp in store.colorPages" :key="cp.filename" class="colorpg" :class="{ 'is-excl': store.excludedPages.includes(cp.filename) }"
@@ -796,7 +764,7 @@ async function doExport(toDrive = false) {
                 <div class="mdex__head">
                   <span>Tomos y portadas de MangaDex</span>
                   <button class="btn-xs" :disabled="store.mdex.volumesLoading" @click="store.loadMdexVolumes(); store.loadMdexCovers()">
-                    <span v-if="store.mdex.volumesLoading" class="xspin" />{{ store.mdex.volumes.length ? 'Recargar' : 'Cargar' }}
+                    <Spinner v-if="store.mdex.volumesLoading" :size="11" />{{ store.mdex.volumes.length ? 'Recargar' : 'Cargar' }}
                   </button>
                 </div>
                 <!-- Coincidencia activa + corrección manual (la auto-resolución puede acertar
@@ -809,7 +777,7 @@ async function doExport(toDrive = false) {
                   <input v-model="store.mdex.search" placeholder="¿Manga incorrecto? Búscalo en MangaDex…"
                          @keyup.enter="store.searchMdexForTomo()" />
                   <button class="btn-xs" :disabled="store.mdex.searching" @click="store.searchMdexForTomo()">
-                    <span v-if="store.mdex.searching" class="xspin" />Buscar
+                    <Spinner v-if="store.mdex.searching" :size="11" />Buscar
                   </button>
                 </div>
                 <div v-if="store.mdex.results.length" class="mdex__results">
@@ -828,14 +796,14 @@ async function doExport(toDrive = false) {
                   </div>
                   <label class="mdex__auto-cov"><input type="checkbox" v-model="autoVolCover" /> Portada por tomo</label>
                   <button class="exportbtn exportbtn--auto" :disabled="exportingAll" @click="exportAllTomos">
-                    <span v-if="exportingAll" class="xspin" /><Icon v-else name="library" :size="13" /> Exportar todos los tomos
+                    <Spinner v-if="exportingAll" :size="11" /><Icon v-else name="library" :size="13" /> Exportar todos los tomos
                   </button>
                 </div>
                 <div v-if="store.mdex.covers.length" class="mdex__covers">
                   <button v-for="c in store.mdex.covers" :key="c.id || c.url" class="covsel" :class="{ 'is-sel': store.mdex.selectedCover?.url === c.url }" @click="store.selectMdexCover(c)">
                     <img :src="c.url256 || c.url" loading="lazy" alt="" />
                     <span v-if="c.volume && c.volume !== 'none'" class="covsel__v">{{ c.volume }}</span>
-                    <span v-if="store.mdex.coverLoadingId === c.id" class="covsel__load"><span class="xspin" /></span>
+                    <span v-if="store.mdex.coverLoadingId === c.id" class="covsel__load"><Spinner :size="11" /></span>
                   </button>
                 </div>
               </div>
@@ -881,10 +849,10 @@ async function doExport(toDrive = false) {
                 <div class="vr__head">
                   <div class="vr__filter">
                     <span class="muted">Idioma</span>
-                    <select class="vr__langsel" :value="ver.langFilter" @change="store.verSetLangFilter($event.target.value)">
-                      <option value="">Todos ({{ ver.versions.length }})</option>
-                      <option v-for="l in verLangs" :key="l" :value="l">{{ flag(l) }} {{ l }} ({{ ver.byLang[l].length }})</option>
-                    </select>
+                    <Select :model-value="ver.langFilter" aria-label="Idioma" :options="[
+                      { value: '', label: 'Todos', hint: String(ver.versions.length) },
+                      ...verLangs.map(l => ({ value: l, label: `${flag(l)} ${l}`, hint: String(ver.byLang[l].length) }))]"
+                      @change="store.verSetLangFilter($event)" />
                   </div>
                   <button class="btn-xs" @click="store.verDiscover(true)" title="Volver a buscar (ignora la caché)">↻ Buscar de nuevo</button>
                 </div>
@@ -1125,9 +1093,8 @@ async function doExport(toDrive = false) {
                       <span class="tl__src">{{ tp.artSel.sourceName }} · {{ tp.artSel.sourceLang }}</span>
                       <span v-if="tp.artSel.quality" class="tl__q">{{ tp.artSel.quality.height }}px · score {{ tp.artSel.quality.score }}</span>
                     </div>
-                    <select v-if="tp.artCands.length" class="tl__sel" :value="store._candKey(tp.artSel)" @change="onArt">
-                      <option v-for="c in tp.artCands" :key="store._candKey(c)" :value="store._candKey(c)">{{ c.sourceName }} ({{ c.sourceLang }}) — {{ c.quality?.height }}px / {{ c.quality?.score }}</option>
-                    </select>
+                    <Select v-if="tp.artCands.length" block aria-label="Fuente del arte"
+                            :model-value="store._candKey(tp.artSel)" :options="candOpts(tp.artCands, true)" @change="onArt" />
                   </div>
                   <div class="tl__pick">
                     <div class="tl__pickh">Español</div>
@@ -1135,9 +1102,8 @@ async function doExport(toDrive = false) {
                       <span class="tl__src">{{ tp.esSel.sourceName }} · {{ tp.esSel.sourceLang }}</span>
                       <span v-if="tp.esSel.quality" class="tl__q">{{ tp.esSel.quality.height }}px</span>
                     </div>
-                    <select v-if="tp.esCands.length" class="tl__sel" :value="store._candKey(tp.esSel)" @change="onEs">
-                      <option v-for="c in tp.esCands" :key="store._candKey(c)" :value="store._candKey(c)">{{ c.sourceName }} ({{ c.sourceLang }}){{ c.quality ? ` — ${c.quality.height}px` : ' — sin medir' }}</option>
-                    </select>
+                    <Select v-if="tp.esCands.length" block aria-label="Fuente en español"
+                            :model-value="store._candKey(tp.esSel)" :options="candOpts(tp.esCands, false)" @change="onEs" />
                   </div>
                 </div>
 
@@ -1203,7 +1169,7 @@ async function doExport(toDrive = false) {
               <div class="colors__head">
                 <span class="colors__title">Páginas a color (excluir del escalado)</span>
                 <button class="btn-xs" :disabled="store.colorLoading || !store.chapters.length" @click="store.loadColorPages(store.chapters.map(c => c.chapter))">
-                  <span v-if="store.colorLoading" class="xspin" />Detectar
+                  <Spinner v-if="store.colorLoading" :size="11" />Detectar
                 </button>
               </div>
               <div v-if="store.colorPages.length" class="colors__grid">
@@ -1243,18 +1209,11 @@ async function doExport(toDrive = false) {
               <span v-if="store.effectiveSource?.pinned" class="chsrc" :title="`Fuente fijada: ${store.effectiveSource.sourceName}`">
                 <Icon name="spark" :size="11" /> {{ store.effectiveSource.sourceName || 'versión fijada' }}
               </span>
-              <select v-if="store.mdLangs.length > 1" v-model="store.mdLang" class="langsel">
-                <option value="">Todos</option>
-                <option v-for="l in store.mdLangs" :key="l" :value="l">{{ flag(l) }} {{ l }}</option>
-              </select>
+              <Select v-if="store.mdLangs.length > 1" v-model="store.mdLang" aria-label="Idioma"
+                      :options="[{ value: '', label: 'Todos' }, ...store.mdLangs.map(l => ({ value: l, label: `${flag(l)} ${l}` }))]" />
             </div>
 
-            <!-- Continuar leyendo donde lo dejaste -->
-            <button v-if="store.continueInfo()" class="contbar" @click="store.resumeCurrent()">
-              <Icon name="spark" :size="14" />
-              <span class="contbar__t">Continuar — Cap. {{ formatChapter(store.continueInfo().chapter) }}</span>
-              <span v-if="store.continueInfo().total" class="contbar__p">pág {{ store.continueInfo().page + 1 }}/{{ store.continueInfo().total }}</span>
-            </button>
+            <!-- «Continuar» ya no va aquí: subió a la cabecera, que no scrollea. -->
 
             <!-- Barra de selección por lote: marca capítulos y actúa sobre ellos (descargar/escalar) -->
             <div v-if="store.collectionChapters.length" class="batchhead">
@@ -1269,7 +1228,7 @@ async function doExport(toDrive = false) {
 
             <ul class="chaps">
               <template v-for="c in store.collectionChapters" :key="c.chapter">
-              <li class="chap" :class="{ 'chap--4k': upState(c.chapter) === true, 'chap--part': upState(c.chapter) === 'partial', 'chap--src': c._sourceId || c._mdChapterId || c._covMulti, 'chap--md': !!c._mdChapterId, 'chap--read': store.isChapterRead(c.chapter), 'chap--sel': batchSel.has(String(c.chapter)) }" @mouseenter="batchOver(c.chapter)">
+              <li class="chap" :class="{ 'chap--4k': upState(c.chapter) === true, 'chap--part': upState(c.chapter) === 'partial', 'chap--src': c._sourceId || c._mdChapterId || c._covMulti, 'chap--md': !!c._mdChapterId, 'chap--read': store.isChapterRead(c.chapter), 'chap--sel': batchSel.has(String(c.chapter)), 'chap--now': isCurrent(c.chapter) }" @mouseenter="batchOver(c.chapter)">
                 <!-- Fases pendientes de la cadena. Sin esto lanzabas "descargar, traducir y
                      escalar" y sólo veías la descarga: no había forma de saber si lo demás
                      seguía en pie o se había quedado por el camino. -->
@@ -1297,6 +1256,10 @@ async function doExport(toDrive = false) {
                     <span class="chap__pages">{{ c.page_count }} pág.</span>
                     <span v-if="upState(c.chapter) === true" class="chap__tag chap__tag--4k">4K</span>
                     <span v-else-if="upState(c.chapter) === 'partial'" class="chap__tag chap__tag--part" :title="store.health[c.chapter] ? `Faltan ${store.health[c.chapter].missing_upscaled} págs.` : ''">PARCIAL<template v-if="store.health[c.chapter]?.missing_upscaled"> ·{{ store.health[c.chapter].missing_upscaled }}</template></span>
+                    <!-- Dónde te quedaste DENTRO del capítulo en curso -->
+                    <span v-if="isCurrent(c.chapter)" class="chap__now">
+                      <Icon name="play" :size="10" /> pág. {{ store.continueInfo().page + 1 }}<template v-if="store.continueInfo().total">/{{ store.continueInfo().total }}</template>
+                    </span>
                   </button>
                   <!-- Fuente asignada a este capítulo (chapter_sources) + reasignación puntual -->
                   <div v-if="vg.sources.length" class="chap__srcpin">
@@ -1462,9 +1425,9 @@ async function doExport(toDrive = false) {
               <p>Solo se muestran las páginas a color. Marca las que quieras escalar con {{ colorModelLabel }}.</p>
             </div>
             <label class="cpk__model" v-if="colorModelKeys.length > 1">Modelo
-              <select :value="store.colorModel || colorModelKeys[0]" @change="store.setColorModel($event.target.value)">
-                <option v-for="k in colorModelKeys" :key="k" :value="k">{{ store.models[k] }}</option>
-              </select>
+              <Select :model-value="store.colorModel || colorModelKeys[0]" aria-label="Modelo a color"
+                      :options="colorModelKeys.map(k => ({ value: k, label: store.models[k] }))"
+                      @change="store.setColorModel($event)" />
             </label>
             <button class="cpk__x" @click="store.closeColorPicker()"><Icon name="close" :size="16" /></button>
           </header>
@@ -1503,9 +1466,13 @@ async function doExport(toDrive = false) {
 <style scoped>
 .ov { position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center; padding: var(--s-5);
   background: rgba(7,10,18,.72); backdrop-filter: blur(8px); }
-.modal { position: relative; width: min(45rem, 100%); max-height: 88vh; display: flex; flex-direction: column;
-  background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); overflow: hidden; }
-.modal__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 2; width: 34px; height: 34px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); transition: all var(--t-fast); }
+.modal { position: relative; width: min(var(--modal-w, 52rem), 100%); max-height: 88vh; display: flex; flex-direction: column;
+  background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); overflow: hidden;
+  transition: width var(--t-base) var(--ease-silk); }
+/* Las pestañas densas piden aire; las de lectura no. */
+.modal--versions, .modal--tomo { --modal-w: 72rem; }
+.modal--recs { --modal-w: 60rem; }
+.modal__x { position: absolute; top: var(--s-3); right: var(--s-3); z-index: 2; width: 2.125rem; height: 2.125rem; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); transition: all var(--t-fast); }
 .modal__x:hover { color: var(--ink); border-color: var(--line-strong); }
 
 .modal__head { position: relative; overflow: hidden; display: flex; gap: var(--s-4); padding: var(--s-5); border-bottom: 1px solid var(--line); flex-shrink: 0; }
@@ -1529,32 +1496,39 @@ async function doExport(toDrive = false) {
 /* align-self:flex-start stops the flex row from stretching the cover to the (taller)
    info column's height. Keep the natural aspect ratio (width fixed, height auto) so the
    cover is shown whole — no cropping the sides, no distortion. */
-.modal__cover { width: 132px; height: auto; align-self: flex-start; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
+.modal__cover { width: 8.25rem; height: auto; align-self: flex-start; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
 /* Resplandor del póster en su propio color dominante (#2). */
 .modal--art .modal__cover { box-shadow: var(--shadow-md), 0 6px 30px rgba(var(--cv), .45); }
-.modal__cover--ph { display: grid; place-items: center; background: var(--surface-2); color: var(--ink-ghost); width: 132px; aspect-ratio: 2/3; }
-.modal__info { min-width: 0; padding-right: var(--s-7); }
-.modal__title { font-size: var(--fs-xl); line-height: var(--lh-snug); }
-.modal__sub { color: var(--ink-faint); font-size: var(--fs-sm); margin-top: var(--s-1); }
-.mdlink { display: inline-flex; align-items: center; gap: 5px; margin-top: var(--s-2); font-size: var(--fs-xs); font-weight: 500; color: var(--violet); text-decoration: none; padding: 4px 10px; border-radius: var(--r-sm); border: 1px solid color-mix(in srgb, var(--violet) 25%, transparent); transition: all var(--t-fast); }
+.modal__cover--ph { display: grid; place-items: center; background: var(--surface-2); color: var(--ink-ghost); width: 8.25rem; aspect-ratio: 2/3; }
+.modal__info { min-width: 0; flex: 1; padding-right: var(--s-7); display: flex; flex-direction: column; }
+.modal__title { font-size: var(--fs-2xl); line-height: var(--lh-tight); }
+
+/* Metadatos en UNA línea, todos del mismo peso bajo (son referencia, no acción). */
+.modal__meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2);
+  margin-top: var(--s-2); color: var(--ink-faint); font-size: var(--fs-sm); }
+.modal__dot { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-ghost); flex-shrink: 0; }
+.modal__read { color: var(--ink-soft); }
+.modal__4k { color: var(--cyan); }
+.mdlink { display: inline-flex; align-items: center; gap: 0.3125rem; font-size: var(--fs-xs); font-weight: 500; color: var(--violet); text-decoration: none; padding: 2px 0.5rem; border-radius: var(--r-pill); border: 1px solid color-mix(in srgb, var(--violet) 25%, transparent); transition: all var(--t-fast); }
 .mdlink:hover { background: color-mix(in srgb, var(--violet) 10%, transparent); border-color: var(--violet); }
-.modal__status { margin-top: var(--s-2); margin-left: var(--s-2); padding: 4px 10px; border-radius: var(--r-sm);
-  background: var(--surface); border: 1px solid var(--line-2); font-size: var(--fs-xs); font-weight: 600; cursor: pointer; }
-.modal__status:focus { outline: none; border-color: var(--azure); }
-.modal__legend { display: flex; gap: var(--s-3); margin-top: var(--s-3); font-size: var(--fs-2xs); color: var(--ink-faint); }
-.modal__legend span { display: inline-flex; align-items: center; gap: 5px; }
-.lg { width: 8px; height: 8px; border-radius: 2px; }
-.lg--4k { background: var(--cyan); } .lg--part { background: var(--gold); } .lg--orig { background: var(--ink-ghost); }
-.modal__cov { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-2); max-width: 20rem; }
-.modal__covbar { display: flex; flex: 1; height: 5px; border-radius: var(--r-pill); overflow: hidden; background: var(--surface-2); }
-.modal__covseg { min-width: 0; }
-.modal__covseg--4k { background: var(--cyan); }
-.modal__covseg--part { background: var(--gold); }
-.modal__covseg--plain { background: var(--ink-ghost); opacity: .5; }
-.modal__covn { font-size: var(--fs-2xs); color: var(--ink-faint); font-family: var(--font-mono); white-space: nowrap; }
+
+/* Progreso de lectura de la serie */
+.modal__prog { height: 3px; margin-top: var(--s-3); border-radius: var(--r-pill);
+  background: var(--surface-3); overflow: hidden; max-width: 22rem; }
+.modal__prog-fill { display: block; height: 100%; border-radius: inherit;
+  background: linear-gradient(90deg, var(--azure), var(--cyan));
+  box-shadow: 0 0 8px var(--azure-glow); transition: width var(--t-slow) var(--ease-silk); }
+
+/* Acción primaria: la única cosa grande y llena de la cabecera. */
+.hgo { display: inline-flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-2) var(--s-5); border-radius: var(--r-md);
+  font-size: var(--fs-sm); font-weight: 600; color: #0b0f1a; background: #fff;
+  box-shadow: var(--shadow-md); transition: box-shadow var(--t-fast), transform var(--t-fast); }
+.hgo:hover { box-shadow: var(--glow-azure); transform: translateY(-1px); }
+.hgo em { font-style: normal; font-family: var(--font-mono); font-size: var(--fs-2xs); opacity: .6; }
 
 .modal__hacts { display: flex; gap: var(--s-2); margin-top: var(--s-3); }
-.hbtn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); }
+.hbtn { display: inline-flex; align-items: center; gap: 0.3125rem; padding: 0.3125rem 0.625rem; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); }
 .hbtn:hover { color: var(--ink); border-color: var(--line-strong); }
 .hbtn.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 .hbtn--accent { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 30%, transparent); }
@@ -1572,7 +1546,7 @@ async function doExport(toDrive = false) {
 .mf--chk input { width: auto; }
 .manage__free { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-2); }
 .manage__free-lbl { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-2xs); color: var(--ink-faint); }
-.freebtn { display: inline-flex; align-items: center; gap: 5px; padding: 5px 10px; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600;
+.freebtn { display: inline-flex; align-items: center; gap: 0.3125rem; padding: 0.3125rem 0.625rem; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600;
   color: var(--coral); border: 1px solid color-mix(in srgb, var(--coral) 30%, transparent); transition: all var(--t-fast); }
 .freebtn:hover:not(:disabled) { background: color-mix(in srgb, var(--coral) 12%, transparent); border-color: color-mix(in srgb, var(--coral) 55%, transparent); }
 .freebtn:disabled { opacity: .5; cursor: default; }
@@ -1580,12 +1554,12 @@ async function doExport(toDrive = false) {
 /* expand/collapse animation for the management panel */
 .info-enter-active, .info-leave-active { transition: max-height var(--t-base) var(--ease-silk), opacity var(--t-base) var(--ease-silk); overflow: hidden; }
 .info-enter-from, .info-leave-to { max-height: 0; opacity: 0; }
-.info-enter-to, .info-leave-from { max-height: 340px; opacity: 1; }
+.info-enter-to, .info-leave-from { max-height: 21.25rem; opacity: 1; }
 .manage__sect { display: flex; flex-direction: column; gap: var(--s-2); }
 .manage__sect + .manage__sect { margin-top: var(--s-3); padding-top: var(--s-3); border-top: 1px solid var(--line); }
 .manage__label { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--ink-faint); }
 .manage__label em { font-style: normal; text-transform: none; letter-spacing: 0; color: var(--ink-ghost); }
-.manage__size { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: var(--fs-xs); color: var(--ink-faint); }
+.manage__size { display: flex; align-items: center; flex-wrap: wrap; gap: 0.375rem; font-size: var(--fs-xs); color: var(--ink-faint); }
 .manage__size :deep(svg) { color: var(--ink-ghost); }
 .manage__size b { color: var(--ink); font-weight: 600; }
 .manage__size-4k b { color: var(--cyan); }
@@ -1597,7 +1571,7 @@ async function doExport(toDrive = false) {
 .mf input { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); }
 .mf input:focus { outline: none; border-color: var(--azure); }
 .mf select {
-  padding: var(--s-2) 30px var(--s-2) var(--s-3); border-radius: var(--r-sm);
+  padding: var(--s-2) 1.875rem var(--s-2) var(--s-3); border-radius: var(--r-sm);
   background-color: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm);
   cursor: pointer; appearance: none; -webkit-appearance: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%239aa7bd' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");
@@ -1609,69 +1583,27 @@ async function doExport(toDrive = false) {
 .mf select option { background: var(--surface-2); color: var(--ink); }
 
 /* ── Selector de modelo propio (distintivo Color/B&N) ─────────────────────── */
-.mmodel { position: relative; }
-.mmodel__btn {
-  display: flex; align-items: center; gap: var(--s-2); width: 100%;
-  padding: var(--s-2) var(--s-3); border-radius: var(--r-sm);
-  background: var(--surface); border: 1px solid var(--line-2); color: var(--ink);
-  font-size: var(--fs-sm); cursor: pointer; text-align: left;
-  transition: border-color var(--t-fast), box-shadow var(--t-fast);
-}
-.mmodel__btn:hover { border-color: var(--line-strong); }
-.mmodel__btn.open { border-color: var(--azure); box-shadow: 0 0 0 3px var(--azure-haze); }
-.mmodel__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mmodel__chev { color: var(--ink-ghost); transition: transform var(--t-fast); flex-shrink: 0; }
-.mmodel__btn.open .mmodel__chev { transform: rotate(180deg); }
 /* Etiqueta Color / B&N */
-.mmodel__tag {
-  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
-  padding: 2px 8px 2px 6px; border-radius: var(--r-pill);
-  font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .02em;
-  border: 1px solid var(--line-2);
-}
-.mmodel__dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
-.mmodel__tag.is-color { color: #ffd5a3; border-color: color-mix(in srgb, #ff8a4d 45%, transparent); background: color-mix(in srgb, #ff8a4d 12%, transparent); }
-.mmodel__tag.is-color .mmodel__dot { background: conic-gradient(from 210deg, #ff6b6b, #ffd93d, #6bcb77, #4d8dff, #b06bff, #ff6b6b); }
-.mmodel__tag.is-bw { color: var(--ink-soft); border-color: var(--line-strong); background: color-mix(in srgb, var(--ink) 6%, transparent); }
-.mmodel__tag.is-bw .mmodel__dot { background: linear-gradient(135deg, #f2f2f2 0%, #f2f2f2 49%, #2b2b2b 51%, #2b2b2b 100%); border: 1px solid var(--line-strong); }
 /* Menú — teletransportado al body con posición FIJA (el panel Gestionar tiene overflow:hidden y
    lo recortaría); JS calcula top/left/width y voltea con .is-up si no cabe abajo. */
-.mmodel__menu {
-  position: fixed; z-index: 200;
-  padding: var(--s-1); border-radius: var(--r-md);
-  background: var(--glass-strong); backdrop-filter: blur(18px);
-  border: 1px solid var(--line-2); box-shadow: var(--shadow-lg);
-  max-height: 260px; overflow-y: auto;
-}
-.mmodel__menu.is-up { transform: translateY(-100%); }
-.mmodel__opt {
-  display: flex; align-items: center; gap: var(--s-2); width: 100%;
-  padding: var(--s-2) var(--s-2); border-radius: var(--r-sm);
-  color: var(--ink-soft); font-size: var(--fs-sm); cursor: pointer; text-align: left;
-}
-.mmodel__opt:hover { background: color-mix(in srgb, var(--azure) 14%, transparent); color: var(--ink); }
-.mmodel__opt.is-sel { color: var(--ink); }
-.mmodel__ck { color: var(--azure); flex-shrink: 0; }
 /* Solo opacidad: el posicionamiento (incl. translateY(-100%) del volteo) lo lleva JS/.is-up,
    así la animación no pisa el transform de colocación. */
-.mmodel-pop-enter-active, .mmodel-pop-leave-active { transition: opacity var(--t-fast); }
-.mmodel-pop-enter-from, .mmodel-pop-leave-to { opacity: 0; }
 
 .manage__actions { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-3); }
 .manage__spacer { flex: 1; }
-.delbtn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--coral); border: 1px solid color-mix(in srgb, var(--coral) 35%, transparent); background: transparent; transition: all var(--t-fast); }
+.delbtn { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--coral); border: 1px solid color-mix(in srgb, var(--coral) 35%, transparent); background: transparent; transition: all var(--t-fast); }
 .delbtn:hover { background: color-mix(in srgb, var(--coral) 12%, transparent); border-color: var(--coral); }
-.upbtn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line-2); cursor: pointer; }
+.upbtn { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line-2); cursor: pointer; }
 .upbtn:hover { color: var(--ink); }
 .savebtn { padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); }
 .savebtn:hover { background: var(--azure-bright); }
 .manage__row--color { align-items: center; margin-top: var(--s-2); }
-.colorbtn { flex-shrink: 0; display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-4); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--cyan); border: 1px solid color-mix(in srgb, var(--cyan) 40%, transparent); background: color-mix(in srgb, var(--cyan) 8%, transparent); transition: all var(--t-fast); }
+.colorbtn { flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-4); border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--cyan); border: 1px solid color-mix(in srgb, var(--cyan) 40%, transparent); background: color-mix(in srgb, var(--cyan) 8%, transparent); transition: all var(--t-fast); }
 .colorbtn:hover { background: color-mix(in srgb, var(--cyan) 16%, transparent); border-color: var(--cyan); }
 .manage__hint { font-size: var(--fs-2xs); color: var(--ink-ghost); line-height: var(--lh-snug); }
 
 /* ── Selector visual de portada ───────────────────────────────────────── */
-.cvp__toggle { display: inline-flex; align-items: center; gap: 6px; margin-top: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line); font-size: var(--fs-xs); color: var(--azure-bright); }
+.cvp__toggle { display: inline-flex; align-items: center; gap: 0.375rem; margin-top: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line); font-size: var(--fs-xs); color: var(--azure-bright); }
 .cvp__toggle:hover { border-color: var(--azure); background: var(--azure-haze); }
 .cvp { margin-top: var(--s-2); }
 .cvp__load { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-faint); padding: var(--s-3); }
@@ -1681,64 +1613,70 @@ async function doExport(toDrive = false) {
 .cvp__item.is-current { border-color: var(--azure-bright); cursor: default; }
 .cvp__item img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .cvp__item:disabled { opacity: .7; cursor: progress; }
-.cvp__tag { position: absolute; bottom: 0; left: 0; right: 0; font-size: 9px; line-height: 1.4; text-align: center; background: rgba(0,0,0,.6); color: #fff; padding: 1px 2px; }
+.cvp__tag { position: absolute; bottom: 0; left: 0; right: 0; font-size: 0.5625rem; line-height: 1.4; text-align: center; background: rgba(0,0,0,.6); color: #fff; padding: 1px 2px; }
 .cvp__tag--al { background: color-mix(in oklab, var(--azure) 75%, #000); }
 .cvp__busy { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.45); }
 .cvp__empty { font-size: var(--fs-2xs); color: var(--ink-faint); padding: var(--s-2); }
 
-.modal__tabs { display: flex; gap: var(--s-1); padding: var(--s-2) var(--s-4) 0; border-bottom: 1px solid var(--line); flex-shrink: 0; }
-.mtab { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-4); border-radius: var(--r-sm) var(--r-sm) 0 0; font-size: var(--fs-sm); font-weight: 500; color: var(--ink-faint); border-bottom: 2px solid transparent; transition: all var(--t-fast); }
-.mtab:hover { color: var(--ink); }
-.mtab.is-active { color: var(--azure-bright); border-bottom-color: var(--azure); }
-.mtab__badge { font-size: 9px; font-weight: 800; letter-spacing: .04em; padding: 1px 5px; border-radius: var(--r-pill); background: var(--jade); color: #04130c; }
+/* Pestañas con el MISMO vocabulario que el resto de la app (`.subnav__tab`, pills): antes eran
+   pestañas subrayadas, un segundo dialecto para lo mismo. `Capítulos` va destacada y separada:
+   es la diaria, las otras cuatro son ocasionales. */
+.modal__tabs { display: flex; align-items: center; gap: var(--s-1); padding: var(--s-3) var(--s-4);
+  border-bottom: 1px solid var(--line); flex-shrink: 0; overflow-x: auto; }
+.mtab { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-4);
+  border-radius: var(--r-pill); font-size: var(--fs-sm); font-weight: 500; color: var(--ink-faint);
+  white-space: nowrap; transition: all var(--t-fast) var(--ease-silk); }
+.mtab:hover { color: var(--ink); background: var(--surface); }
+.mtab.is-active { color: var(--azure-bright); background: var(--azure-haze); }
+.mtab--sep { margin-right: var(--s-2); padding-right: var(--s-3); border-right: 1px solid var(--line); border-radius: var(--r-pill) 0 0 var(--r-pill); }
+.mtab__badge { font-size: 0.5625rem; font-weight: 800; letter-spacing: .04em; padding: 1px 0.3125rem; border-radius: var(--r-pill); background: var(--jade); color: #04130c; }
 
 /* Pestaña Traducir */
 .tl { padding: var(--s-2) 0 var(--s-4); }
 .tl__lead { font-size: var(--fs-xs); color: var(--ink-soft); line-height: var(--lh-body); margin-bottom: var(--s-3); }
 .tl__disc { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-4); }
 .tl__cta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3); padding: var(--s-3) 0; }
-.tl__localart { display: flex; align-items: flex-start; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-soft); cursor: pointer; margin-bottom: var(--s-3); padding: var(--s-2) var(--s-3); background: var(--surface-2, rgba(255,255,255,.03)); border-radius: var(--r-2, 8px); }
+.tl__localart { display: flex; align-items: flex-start; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-soft); cursor: pointer; margin-bottom: var(--s-3); padding: var(--s-2) var(--s-3); background: var(--surface-2, rgba(255,255,255,.03)); border-radius: var(--r-2, 0.5rem); }
 .tl__localart input { accent-color: var(--accent); cursor: pointer; margin-top: 2px; }
 .tl__localhint { display: block; font-style: normal; color: var(--ink-faint, var(--ink-soft)); opacity: .8; margin-top: 2px; }
 .tl__err { font-size: var(--fs-xs); color: var(--rose, #e8748b); }
 .tl__picks { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3); margin-bottom: var(--s-3); }
 .tl__pick { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--s-3); }
-.tl__pickh { display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: var(--fs-xs); margin-bottom: 6px; }
+.tl__pickh { display: flex; align-items: center; justify-content: space-between; font-weight: 600; font-size: var(--fs-xs); margin-bottom: 0.375rem; }
 .tl__re { color: var(--ink-faint); font-size: var(--fs-sm); padding: 0 4px; }
 .tl__re:hover { color: var(--azure-bright); }
 .tl__cand { display: flex; flex-direction: column; }
 .tl__src { font-size: var(--fs-xs); color: var(--azure-bright); font-weight: 600; }
 .tl__q { font-size: var(--fs-2xs); color: var(--ink-faint); }
-.tl__sel { width: 100%; margin-top: 6px; font-size: var(--fs-2xs); padding: 4px 6px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); }
 .tl__run { margin: var(--s-3) 0; }
-.tl__bar { height: 6px; border-radius: var(--r-pill); background: var(--surface-2); overflow: hidden; }
+.tl__bar { height: 0.375rem; border-radius: var(--r-pill); background: var(--surface-2); overflow: hidden; }
 .tl__fill { height: 100%; background: var(--azure); transition: width var(--t-base); }
-.tl__runinfo { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
-.tl__stop { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--rose, #e8748b); border: 1px solid color-mix(in srgb, var(--rose, #e8748b) 40%, transparent); }
+.tl__runinfo { display: flex; align-items: center; justify-content: space-between; margin-top: 0.375rem; }
+.tl__stop { display: inline-flex; align-items: center; gap: 0.3125rem; padding: 4px 0.625rem; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--rose, #e8748b); border: 1px solid color-mix(in srgb, var(--rose, #e8748b) 40%, transparent); }
 .tl__stop:hover { background: color-mix(in srgb, var(--rose, #e8748b) 12%, transparent); }
 .tl__chhead { display: flex; align-items: center; justify-content: space-between; margin: var(--s-3) 0 var(--s-2); font-weight: 600; }
 .tl__acts { display: flex; gap: var(--s-2); }
 .btn-xs--accent { color: #fff; background: var(--azure); border-color: transparent; }
 .btn-xs--accent:hover:not(:disabled) { filter: brightness(1.1); }
 .btn-xs:disabled { opacity: .45; cursor: default; }
-.tl__chaps { max-height: 280px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
-.tl__chap { display: flex; align-items: center; gap: var(--s-2); padding: 6px var(--s-2); border-radius: var(--r-sm); cursor: pointer; transition: background var(--t-fast); }
+.tl__chaps { max-height: 17.5rem; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.tl__chap { display: flex; align-items: center; gap: var(--s-2); padding: 0.375rem var(--s-2); border-radius: var(--r-sm); cursor: pointer; transition: background var(--t-fast); }
 .tl__chap:hover { background: var(--surface); }
 .tl__chap.is-sel { background: var(--azure-haze); }
-.tl__box { width: 16px; height: 16px; flex-shrink: 0; display: grid; place-items: center; border-radius: 4px; border: 1px solid var(--line-strong); color: var(--azure-bright); }
+.tl__box { width: 1rem; height: 1rem; flex-shrink: 0; display: grid; place-items: center; border-radius: 4px; border: 1px solid var(--line-strong); color: var(--azure-bright); }
 .tl__chap.is-sel .tl__box { border-color: var(--azure); }
 .tl__cnum { flex: 1; font-size: var(--fs-sm); cursor: pointer; }
 .tl__box { cursor: pointer; }
-.tl__eye { display: grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0; border-radius: var(--r-sm); color: var(--ink-faint); border: 1px solid var(--line); }
+.tl__eye { display: grid; place-items: center; width: 1.625rem; height: 1.625rem; flex-shrink: 0; border-radius: var(--r-sm); color: var(--ink-faint); border: 1px solid var(--line); }
 .tl__eye:hover { color: var(--azure-bright); border-color: var(--azure); }
 .tl__eye.is-on { color: var(--azure-bright); background: var(--azure-haze); border-color: var(--azure); }
-.tl__prev { padding: var(--s-2) var(--s-2) var(--s-3) 26px; }
+.tl__prev { padding: var(--s-2) var(--s-2) var(--s-3) 1.625rem; }
 .tl__prevload, .tl__prevempty { padding: var(--s-2); font-size: var(--fs-2xs); }
-.tl__strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 6px; }
-.tl__thumb { flex-shrink: 0; width: 64px; aspect-ratio: 2/3; border-radius: var(--r-sm); overflow: hidden; border: 1px solid var(--line); background: var(--surface-2); }
+.tl__strip { display: flex; gap: 0.375rem; overflow-x: auto; padding-bottom: 0.375rem; }
+.tl__thumb { flex-shrink: 0; width: 4rem; aspect-ratio: 2/3; border-radius: var(--r-sm); overflow: hidden; border: 1px solid var(--line); background: var(--surface-2); }
 .tl__thumb img { width: 100%; height: 100%; object-fit: cover; }
 .tl__thumb:hover { border-color: var(--azure); }
-.tl__chip { font-size: 10px; font-weight: 700; padding: 1px 7px; border-radius: var(--r-pill); text-transform: uppercase; letter-spacing: .03em; }
+.tl__chip { font-size: 0.625rem; font-weight: 700; padding: 1px 0.4375rem; border-radius: var(--r-pill); text-transform: uppercase; letter-spacing: .03em; }
 .tl__chip--pending { color: var(--ink-faint); background: var(--surface-2); }
 .tl__chip--done { color: var(--jade); background: color-mix(in srgb, var(--jade) 14%, transparent); }
 .tl__chip--failed { color: var(--rose, #e8748b); background: color-mix(in srgb, var(--rose, #e8748b) 14%, transparent); }
@@ -1755,13 +1693,12 @@ async function doExport(toDrive = false) {
 .vr__hint { font-size: var(--fs-2xs); color: var(--ink-ghost); }
 .vr__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s-3); }
 .vr__filter { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); }
-.vr__langsel { font-size: var(--fs-xs); padding: 4px 8px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); cursor: pointer; }
 .vr__list { display: flex; flex-direction: column; gap: var(--s-1); }
 .vr__row { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
 .vr__row--local { margin-bottom: var(--s-2); background: var(--surface-2); border-style: dashed; }
 .vr__row--best { border-color: color-mix(in srgb, var(--cyan) 45%, transparent); background: var(--cyan-glow, color-mix(in srgb, var(--cyan) 8%, transparent)); }
 .vr__main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.vr__src { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-sm); font-weight: 600; color: var(--ink); }
+.vr__src { display: inline-flex; align-items: center; gap: 0.3125rem; font-size: var(--fs-sm); font-weight: 600; color: var(--ink); }
 .vr__lang { font-style: normal; font-weight: 400; font-size: var(--fs-2xs); color: var(--ink-faint); }
 .vr__q { font-size: var(--fs-2xs); color: var(--ink-faint); font-family: var(--font-mono); }
 .vr__caps { color: var(--ink); font-weight: 600; }
@@ -1771,22 +1708,22 @@ async function doExport(toDrive = false) {
 .vr__ref strong { color: var(--ink); }
 .vr__refsrc { color: var(--ink-faint); font-size: var(--fs-2xs); margin-left: auto; }
 .vr__complete { font-size: var(--fs-2xs); font-weight: 700; color: var(--jade, #4ade80);
-  background: color-mix(in srgb, var(--jade, #4ade80) 14%, transparent); padding: 1px 7px; border-radius: var(--r-pill); }
+  background: color-mix(in srgb, var(--jade, #4ade80) 14%, transparent); padding: 1px 0.4375rem; border-radius: var(--r-pill); }
 .vr__behind { font-size: var(--fs-2xs); font-weight: 600; color: var(--amber, #f5b544);
-  background: color-mix(in srgb, var(--amber, #f5b544) 14%, transparent); padding: 1px 7px; border-radius: var(--r-pill); }
+  background: color-mix(in srgb, var(--amber, #f5b544) 14%, transparent); padding: 1px 0.4375rem; border-radius: var(--r-pill); }
 .vr__irr { margin-left: 0.5rem; font-size: var(--fs-2xs); color: var(--warn); white-space: nowrap; cursor: help; }
-.vr__badge { font-size: 9px; font-weight: 800; letter-spacing: .04em; padding: 2px 7px; border-radius: var(--r-pill); flex-shrink: 0; }
+.vr__badge { font-size: 0.5625rem; font-weight: 800; letter-spacing: .04em; padding: 2px 0.4375rem; border-radius: var(--r-pill); flex-shrink: 0; }
 .vr__badge--actual { background: var(--ink-ghost); color: var(--base); }
 .vr__badge--best { background: var(--cyan); color: #04130c; }
-.vr__eye { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0; padding: 5px 10px; border-radius: var(--r-sm); font-size: var(--fs-2xs); color: var(--ink-faint); border: 1px solid var(--line); }
+.vr__eye { display: inline-flex; align-items: center; gap: 0.3125rem; flex-shrink: 0; padding: 0.3125rem 0.625rem; border-radius: var(--r-sm); font-size: var(--fs-2xs); color: var(--ink-faint); border: 1px solid var(--line); }
 .vr__eye:hover:not(:disabled) { color: var(--azure-bright); border-color: var(--azure); }
 .vr__eye.is-on { color: var(--azure-bright); background: var(--azure-haze); border-color: var(--azure); }
 .vr__eye:disabled { opacity: .4; cursor: default; }
 .vr__dl { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); margin-bottom: var(--s-3); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); font-size: var(--fs-xs); color: var(--ink-soft); }
 .vr__prev { padding: var(--s-2) var(--s-1) var(--s-1); }
 .vr__prevload, .vr__prevempty { padding: var(--s-2); font-size: var(--fs-2xs); }
-.vr__acts { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.vr__fix { padding: 5px 12px; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
+.vr__acts { display: flex; align-items: center; gap: 0.375rem; flex-shrink: 0; }
+.vr__fix { padding: 0.3125rem 0.75rem; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .vr__fix:hover { color: var(--cyan); border-color: color-mix(in srgb, var(--cyan) 45%, transparent); }
 .vr__fix.is-on { color: #04130c; background: var(--cyan); border-color: transparent; animation: confirm-pop var(--t-base) var(--ease-snap); }
 .vr__row--primary { border-color: color-mix(in srgb, var(--cyan) 55%, transparent); }
@@ -1802,22 +1739,22 @@ async function doExport(toDrive = false) {
 .vg__swcyan { color: var(--cyan); font-weight: 600; }
 .vg__swblue { color: var(--azure-bright, var(--azure)); font-weight: 600; }
 .vg__srclist { display: flex; flex-direction: column; gap: var(--s-1); margin-top: var(--s-3); }
-.vg__srcrow { display: flex; align-items: center; gap: var(--s-2); padding: 5px var(--s-2); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line); font-size: var(--fs-2xs); }
+.vg__srcrow { display: flex; align-items: center; gap: var(--s-2); padding: 0.3125rem var(--s-2); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line); font-size: var(--fs-2xs); }
 .vg__srcname { flex: 1; min-width: 0; color: var(--ink); font-weight: 600; }
 .vg__srcmeta { color: var(--ink-faint); font-family: var(--font-mono); }
-.vg__match { font-family: var(--font-mono); font-size: var(--fs-2xs); padding: 1px 6px; border-radius: var(--r-xs); color: var(--ink-faint); background: var(--surface-2); cursor: help; }
+.vg__match { font-family: var(--font-mono); font-size: var(--fs-2xs); padding: 1px 0.375rem; border-radius: var(--r-xs); color: var(--ink-faint); background: var(--surface-2); cursor: help; }
 .vg__match--low { color: var(--warn, var(--gold)); background: color-mix(in srgb, var(--warn, var(--gold)) 16%, transparent); }
 .vg__rangepanel { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-md); background: var(--surface-2); border: 1px dashed var(--line); font-size: var(--fs-xs); flex-wrap: wrap; }
-.vg__rangein { width: 6.5rem; font-size: var(--fs-xs); padding: 4px 8px; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line); color: var(--ink); }
+.vg__rangein { width: 6.5rem; font-size: var(--fs-xs); padding: 4px 0.5rem; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line); color: var(--ink); }
 .vg__fresh { margin-bottom: var(--s-3); }
 .vg__suglist { display: flex; flex-direction: column; gap: var(--s-1); }
-.vg__sug { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); padding: 5px var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line); font-size: var(--fs-2xs); }
+.vg__sug { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); padding: 0.3125rem var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line); font-size: var(--fs-2xs); }
 .vg__sugtxt { color: var(--ink-soft); }
-.vr__primary { display: flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--cyan); margin-bottom: var(--s-2); }
+.vr__primary { display: flex; align-items: center; gap: 0.375rem; font-size: var(--fs-xs); color: var(--cyan); margin-bottom: var(--s-2); }
 .vr__primary strong { color: var(--ink); font-weight: 600; }
 .vr__tray { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2); padding: var(--s-2) var(--s-3); margin-bottom: var(--s-3); border-radius: var(--r-md); background: var(--azure-haze); border: 1px solid color-mix(in srgb, var(--azure) 30%, transparent); }
-.vr__chip { display: inline-flex; align-items: center; gap: 5px; padding: 3px 4px 3px 10px; border-radius: var(--r-pill); font-size: var(--fs-2xs); font-weight: 600; background: var(--surface); border: 1px solid var(--line); }
-.vr__chipx { display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; color: var(--ink-faint); }
+.vr__chip { display: inline-flex; align-items: center; gap: 0.3125rem; padding: 3px 4px 3px 0.625rem; border-radius: var(--r-pill); font-size: var(--fs-2xs); font-weight: 600; background: var(--surface); border: 1px solid var(--line); }
+.vr__chipx { display: grid; place-items: center; width: 1rem; height: 1rem; border-radius: 50%; color: var(--ink-faint); }
 .vr__chipx:hover { color: var(--coral); }
 .vr__trayhint { font-size: var(--fs-2xs); color: var(--ink-faint); }
 .vr__traygo { margin-left: auto; }
@@ -1828,12 +1765,12 @@ async function doExport(toDrive = false) {
 .tl__volitem { display: flex; flex-direction: column; gap: var(--s-2); padding-bottom: var(--s-2); }
 .tl__volitem + .tl__volitem { padding-top: var(--s-2); border-top: 1px solid color-mix(in srgb, var(--rose, #e8748b) 20%, transparent); }
 .tl__volmsg { display: flex; align-items: flex-start; gap: var(--s-2); font-size: var(--fs-xs); color: var(--ink-soft); line-height: var(--lh-body); }
-.tl__re2 { align-self: flex-start; font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); padding: 4px 10px; border-radius: var(--r-sm); border: 1px solid var(--azure); }
+.tl__re2 { align-self: flex-start; font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); padding: 4px 0.625rem; border-radius: var(--r-sm); border: 1px solid var(--azure); }
 .tl__re2:hover { background: var(--azure-haze); }
-.tl__manual { display: flex; flex-direction: column; gap: 6px; padding: var(--s-2); background: var(--surface); border-radius: var(--r-sm); }
+.tl__manual { display: flex; flex-direction: column; gap: 0.375rem; padding: var(--s-2); background: var(--surface); border-radius: var(--r-sm); }
 .tl__manualrow { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-xs); }
-.tl__manchin { width: 3.6rem; font-size: var(--fs-xs); padding: 3px 6px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); }
-.tl__maninput { width: 5rem; font-size: var(--fs-xs); padding: 3px 6px; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); }
+.tl__manchin { width: 3.6rem; font-size: var(--fs-xs); padding: 3px 0.375rem; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); }
+.tl__maninput { width: 5rem; font-size: var(--fs-xs); padding: 3px 0.375rem; border-radius: var(--r-sm); background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); }
 .tl__rmrow { color: var(--ink-faint); transition: color var(--t-fast); margin-left: auto; }
 .tl__rmrow:hover { color: var(--coral); }
 .tl__manualtotal { font-size: var(--fs-2xs); color: var(--ink-faint); }
@@ -1855,40 +1792,39 @@ async function doExport(toDrive = false) {
 .tomo__pick { grid-column: 2; grid-row: 1 / span 2; }
 
 .mdex__head { display: flex; align-items: center; justify-content: space-between; font-size: var(--fs-xs); color: var(--ink-faint); margin-bottom: var(--s-2); }
-.btn-xs { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); }
+.btn-xs { display: inline-flex; align-items: center; gap: 0.3125rem; padding: 4px 0.625rem; border-radius: var(--r-sm); font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); }
 .btn-xs:hover { background: var(--azure-haze); }
-.xspin { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--azure); animation: spin .7s linear infinite; display: inline-block; }
-.mdex__match { font-size: var(--fs-2xs); color: var(--jade); margin-bottom: var(--s-2); display: flex; align-items: center; gap: 5px; }
+.mdex__match { font-size: var(--fs-2xs); color: var(--jade); margin-bottom: var(--s-2); display: flex; align-items: center; gap: 0.3125rem; }
 .mdex__match.is-approx { color: var(--amber, var(--ink-faint)); }
 .mdex__match a { color: var(--azure-bright); text-decoration: none; }
 .mdex__search { display: flex; gap: var(--s-2); margin-bottom: var(--s-2); }
-.mdex__search input { flex: 1; min-width: 0; padding: 5px 9px; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-2xs); }
+.mdex__search input { flex: 1; min-width: 0; padding: 0.3125rem 0.5625rem; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-2xs); }
 .mdex__search input:focus { outline: none; border-color: var(--azure); }
-.mdex__results { display: flex; flex-direction: column; gap: 4px; max-height: 180px; overflow-y: auto; margin-bottom: var(--s-3); }
+.mdex__results { display: flex; flex-direction: column; gap: 4px; max-height: 11.25rem; overflow-y: auto; margin-bottom: var(--s-3); }
 .mdres { display: flex; align-items: center; gap: var(--s-2); padding: 4px; border-radius: var(--r-sm); border: 1px solid var(--line); text-align: left; transition: all var(--t-fast); }
 .mdres:hover { border-color: var(--azure); background: var(--azure-haze); }
-.mdres img { width: 28px; height: 40px; object-fit: cover; border-radius: var(--r-xs); flex-shrink: 0; }
+.mdres img { width: 1.75rem; height: 2.5rem; object-fit: cover; border-radius: var(--r-xs); flex-shrink: 0; }
 .mdres__t { font-size: var(--fs-2xs); color: var(--ink-soft); line-height: 1.25; }
 .mdres__t small { color: var(--ink-faint); }
-.mdex__vols { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: var(--s-3); }
-.volchip { padding: 4px 10px; border-radius: var(--r-pill); font-size: var(--fs-2xs); color: var(--violet); border: 1px solid color-mix(in srgb, var(--violet) 30%, transparent); transition: all var(--t-fast); }
+.mdex__vols { display: flex; flex-wrap: wrap; gap: 0.3125rem; margin-bottom: var(--s-3); }
+.volchip { padding: 4px 0.625rem; border-radius: var(--r-pill); font-size: var(--fs-2xs); color: var(--violet); border: 1px solid color-mix(in srgb, var(--violet) 30%, transparent); transition: all var(--t-fast); }
 .volchip:hover { background: color-mix(in srgb, var(--violet) 14%, transparent); }
-.mdex__covers { display: grid; grid-template-columns: repeat(auto-fill, minmax(3rem, 1fr)); gap: 6px; max-height: 180px; overflow-y: auto; }
+.mdex__covers { display: grid; grid-template-columns: repeat(auto-fill, minmax(3rem, 1fr)); gap: 0.375rem; max-height: 11.25rem; overflow-y: auto; }
 .covsel { position: relative; aspect-ratio: 2/3; border-radius: var(--r-xs); overflow: hidden; border: 2px solid transparent; }
 .covsel img { width: 100%; height: 100%; object-fit: cover; }
 .covsel.is-sel { border-color: var(--azure); }
-.covsel__v { position: absolute; bottom: 0; left: 0; right: 0; font-family: var(--font-mono); font-size: 8px; text-align: center; background: rgba(7,10,18,.75); color: var(--ice); }
+.covsel__v { position: absolute; bottom: 0; left: 0; right: 0; font-family: var(--font-mono); font-size: 0.5rem; text-align: center; background: rgba(7,10,18,.75); color: var(--ice); }
 .covsel__load { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(7,10,18,.6); }
 
 .tomo__form { display: flex; flex-direction: column; gap: var(--s-3); }
-.fld { display: flex; flex-direction: column; gap: 5px; font-size: var(--fs-xs); color: var(--ink-faint); }
+.fld { display: flex; flex-direction: column; gap: 0.3125rem; font-size: var(--fs-xs); color: var(--ink-faint); }
 .fld input[type=text], .fld select { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-sm); }
 .fld input:focus, .fld select:focus { outline: none; border-color: var(--azure); }
 .fld-row { display: flex; gap: var(--s-3); }
 .fld-row .fld { flex: 1; }
 .codec-hint { margin: calc(-1 * var(--s-1)) 0 0; font-size: var(--fs-2xs); line-height: 1.4; color: var(--ink-faint); }
-.chk { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--ink-soft); cursor: pointer; }
-.exportbtn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; margin-top: var(--s-2); padding: var(--s-3); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); transition: background var(--t-fast); }
+.chk { display: inline-flex; align-items: center; gap: 0.375rem; font-size: var(--fs-xs); color: var(--ink-soft); cursor: pointer; }
+.exportbtn { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; margin-top: var(--s-2); padding: var(--s-3); border-radius: var(--r-sm); background: var(--azure); color: #fff; font-weight: 600; font-size: var(--fs-sm); transition: background var(--t-fast); }
 .exportbtn:hover:not(:disabled) { background: var(--azure-bright); }
 .exportbtn:disabled { opacity: .5; cursor: not-allowed; }
 .exportbtn--drive { background: transparent; color: var(--azure-bright); border: 1px solid var(--azure); margin-top: var(--s-1); }
@@ -1897,20 +1833,20 @@ async function doExport(toDrive = false) {
   border: 1px solid var(--azure); border-radius: var(--r-sm); background: var(--azure-haze); }
 .mdex__auto-info { flex: 1 1 auto; font-size: var(--fs-xs); color: var(--ink-soft); }
 .mdex__auto-info strong { color: var(--azure-bright); }
-.mdex__auto-cov { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-2xs); color: var(--ink-faint); cursor: pointer; }
+.mdex__auto-cov { display: inline-flex; align-items: center; gap: 0.3125rem; font-size: var(--fs-2xs); color: var(--ink-faint); cursor: pointer; }
 .exportbtn--auto { margin-top: 0; padding: var(--s-2) var(--s-4); }
 .rangebox { display: inline-flex; align-items: center; gap: 3px; }
-.rangebox input { width: 42px; padding: 4px 6px; border-radius: var(--r-xs); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-2xs); text-align: center; }
-.rangebox button { padding: 4px 8px; border-radius: var(--r-xs); font-size: var(--fs-2xs); font-weight: 600; color: var(--cyan); border: 1px solid color-mix(in srgb, var(--cyan) 30%, transparent); }
+.rangebox input { width: 2.625rem; padding: 4px 0.375rem; border-radius: var(--r-xs); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-2xs); text-align: center; }
+.rangebox button { padding: 4px 0.5rem; border-radius: var(--r-xs); font-size: var(--fs-2xs); font-weight: 600; color: var(--cyan); border: 1px solid color-mix(in srgb, var(--cyan) 30%, transparent); }
 .rangebox button:hover { background: var(--cyan-glow); color: #d6fffb; }
-.chap__read-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--jade); flex-shrink: 0; }
+.chap__read-dot { width: 0.375rem; height: 0.375rem; border-radius: 50%; background: var(--jade); flex-shrink: 0; }
 .chap__flag { font-size: 1.05rem; line-height: 1; flex-shrink: 0; }
 .colors { margin-top: var(--s-2); }
 .colors--ws { margin: 0 0 var(--s-4); padding: var(--s-3); border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line); }
 .colors__head { display: flex; align-items: center; justify-content: space-between; gap: var(--s-2); }
 .colors__title { font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); }
 .colors__hint { font-size: var(--fs-2xs); color: var(--ink-faint); margin-top: var(--s-1); }
-.colors__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(2.75rem, 1fr)); gap: 5px; margin-top: var(--s-2); max-height: 150px; overflow-y: auto; }
+.colors__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(2.75rem, 1fr)); gap: 0.3125rem; margin-top: var(--s-2); max-height: 9.375rem; overflow-y: auto; }
 .colorpg { position: relative; aspect-ratio: 2/3; border-radius: var(--r-xs); overflow: hidden; border: 2px solid transparent; }
 .colorpg img { width: 100%; height: 100%; object-fit: cover; }
 .colorpg.is-excl { border-color: var(--coral); }
@@ -1918,7 +1854,7 @@ async function doExport(toDrive = false) {
 .colorpg__x { position: absolute; inset: 0; display: grid; place-items: center; color: var(--coral); background: rgba(7,10,18,.4); }
 .tprev { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin-top: var(--s-1); font-size: var(--fs-xs); color: var(--ink-soft); }
 .tprev__main { font-family: var(--font-mono); color: var(--ink); }
-.tprev__tag { font-size: var(--fs-2xs); padding: 1px 7px; border-radius: var(--r-pill); color: var(--ink-faint); border: 1px solid var(--line-2); }
+.tprev__tag { font-size: var(--fs-2xs); padding: 1px 0.4375rem; border-radius: var(--r-pill); color: var(--ink-faint); border: 1px solid var(--line-2); }
 .tprev__tag--4k { color: var(--cyan); border-color: var(--cyan-glow); }
 .dests { display: flex; flex-wrap: wrap; gap: var(--s-3); align-items: center; margin-top: var(--s-2); font-size: var(--fs-xs); }
 .dlink { color: var(--azure-bright); }
@@ -1926,11 +1862,11 @@ async function doExport(toDrive = false) {
 
 .tomo__pick { display: flex; flex-direction: column; min-height: 0; }
 .selall { align-self: flex-start; margin-bottom: var(--s-2); font-size: var(--fs-xs); color: var(--azure-bright); }
-.picklist { overflow-y: auto; max-height: 320px; display: flex; flex-direction: column; gap: 2px; }
-.pick { display: flex; align-items: center; gap: var(--s-2); padding: 6px var(--s-2); border-radius: var(--r-xs); cursor: pointer; transition: background var(--t-fast); }
+.picklist { overflow-y: auto; max-height: 20rem; display: flex; flex-direction: column; gap: 2px; }
+.pick { display: flex; align-items: center; gap: var(--s-2); padding: 0.375rem var(--s-2); border-radius: var(--r-xs); cursor: pointer; transition: background var(--t-fast); }
 .pick:hover { background: var(--surface); }
 .pick.is-sel { background: var(--azure-haze); }
-.pick__box { width: 18px; height: 18px; display: grid; place-items: center; border-radius: 4px; border: 1px solid var(--line-strong); color: #fff; flex-shrink: 0; }
+.pick__box { width: 1.125rem; height: 1.125rem; display: grid; place-items: center; border-radius: 4px; border: 1px solid var(--line-strong); color: #fff; flex-shrink: 0; }
 .pick.is-sel .pick__box { background: var(--azure); border-color: var(--azure); }
 .pick__num { flex: 1; font-size: var(--fs-sm); }
 .pick__4k { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--cyan); }
@@ -1946,7 +1882,7 @@ async function doExport(toDrive = false) {
 .mdupd__head { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); }
 .mdupd__badge { display: inline-grid; place-items: center; min-width: 1.4rem; height: 1.4rem; padding: 0 0.35rem; border-radius: var(--r-pill); background: var(--azure); color: #fff; font-size: var(--fs-2xs); font-weight: 800; }
 .mdupd__txt { font-weight: 700; font-size: var(--fs-sm); color: var(--azure-bright); }
-.mdupd__all { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: var(--r-pill); border: 1px solid var(--azure); background: var(--azure); color: #fff; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; transition: filter var(--t-fast); }
+.mdupd__all { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; padding: 4px 0.625rem; border-radius: var(--r-pill); border: 1px solid var(--azure); background: var(--azure); color: #fff; font-size: var(--fs-xs); font-weight: 600; cursor: pointer; transition: filter var(--t-fast); }
 .mdupd__all:hover { filter: brightness(1.12); }
 .mdupd__seen { display: inline-grid; place-items: center; width: 1.6rem; height: 1.6rem; border-radius: var(--r-sm); border: none; background: transparent; color: var(--ink-faint); cursor: pointer; }
 .mdupd__seen:hover { background: color-mix(in srgb, var(--azure) 18%, transparent); color: var(--ink); }
@@ -1955,24 +1891,41 @@ async function doExport(toDrive = false) {
 .mdupd__n { font-weight: 700; color: var(--ink); min-width: 5rem; }
 .mdupd__lang { color: var(--ink-soft); }
 .mdupd__date { color: var(--ink-faint); margin-left: auto; }
-.mdupd__dl { display: inline-flex; align-items: center; gap: 4px; padding: 3px 9px; border-radius: var(--r-pill); border: 1px solid var(--azure); background: transparent; color: var(--azure-bright); font-size: var(--fs-2xs); font-weight: 600; cursor: pointer; transition: background var(--t-fast); }
+.mdupd__dl { display: inline-flex; align-items: center; gap: 4px; padding: 3px 0.5625rem; border-radius: var(--r-pill); border: 1px solid var(--azure); background: transparent; color: var(--azure-bright); font-size: var(--fs-2xs); font-weight: 600; cursor: pointer; transition: background var(--t-fast); }
 .mdupd__dl:hover { background: color-mix(in srgb, var(--azure) 18%, transparent); }
-.contbar { display: flex; align-items: center; gap: var(--s-2); width: 100%; margin: var(--s-2) 0; padding: var(--s-2) var(--s-3); border-radius: var(--r-md); background: var(--azure-haze); border: 1px solid var(--azure); color: var(--azure-bright); font-size: var(--fs-sm); font-weight: 500; transition: background var(--t-fast); }
-.contbar:hover { background: color-mix(in oklab, var(--azure) 22%, transparent); }
-.contbar__t { flex: 1; text-align: left; }
-.contbar__p { font-size: var(--fs-2xs); color: var(--ink-faint); font-variant-numeric: tabular-nums; }
-.chap--read { opacity: .55; }
-.chap--read:hover { opacity: 1; }
-.chsrc { display: inline-flex; align-items: center; gap: 4px; margin-right: auto; margin-left: var(--s-3); padding: 2px 8px; border-radius: var(--r-pill); font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); background: var(--azure-haze); border: 1px solid color-mix(in srgb, var(--azure) 30%, transparent); }
-.langsel { padding: 4px 8px; border-radius: var(--r-sm); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-xs); }
-.langsel:focus { outline: none; border-color: var(--azure); }
-.chap { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid transparent; transition: background var(--t-fast), border-color var(--t-fast); }
+/* Leído: la fila entera se apaga (antes sólo un punto jade de 6px, invisible entre 250 filas).
+   Al hover recupera el color, para poder releer sin perderla de vista. */
+.chap--read { opacity: .45; }
+.chap--read:hover, .chap--read.chap--now { opacity: 1; }
+.chap--read .chap__num { font-weight: 500; }
+.chsrc { display: inline-flex; align-items: center; gap: 4px; margin-right: auto; margin-left: var(--s-3); padding: 2px 0.5rem; border-radius: var(--r-pill); font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); background: var(--azure-haze); border: 1px solid color-mix(in srgb, var(--azure) 30%, transparent); }
+.chap { position: relative; display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid transparent; transition: background var(--t-fast), border-color var(--t-fast), opacity var(--t-fast); }
 .chap:hover { background: var(--surface); border-color: var(--line); }
+
+/* Capítulo EN CURSO: filo azul a la izquierda. Sin esto nada decía "vas por aquí". */
+.chap--now::before {
+  content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 60%; border-radius: var(--r-pill);
+  background: var(--azure); box-shadow: 0 0 10px var(--azure-glow);
+}
+.chap--now { background: color-mix(in srgb, var(--azure) 7%, transparent); }
+.chap__now { display: inline-flex; align-items: center; gap: 4px; margin-left: auto;
+  font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; color: var(--azure-bright); }
+
+/* Acciones AL HOVER: en reposo la fila enseña sólo número, estado y progreso. Antes los 4-6
+   iconos estaban siempre visibles y con 250 capítulos eso es una pared de ruido. Se reserva su
+   ancho (visibility, no display) para que la fila no salte al pasar el ratón. */
+.chap__actions { display: flex; align-items: center; gap: 4px; visibility: hidden; opacity: 0; transition: opacity var(--t-fast); }
+.chap:hover .chap__actions,
+.chap:focus-within .chap__actions { visibility: visible; opacity: 1; }
+/* Con una tarea en marcha el progreso manda: se ve siempre, aunque no haya ratón encima. */
+.chap__actions:has(.chap__dlprog) { visibility: visible; opacity: 1; }
+@media (hover: none) { .chap__actions { visibility: visible; opacity: 1; } }
 .chap--sel { background: var(--azure-haze); border-color: color-mix(in srgb, var(--azure) 45%, transparent); }
 .chap--sel:hover { background: color-mix(in oklab, var(--azure) 20%, transparent); }
 
 /* Selección por lote: casilla + cabecera "seleccionar" + barra flotante de acciones */
-.batchbox { width: 17px; height: 17px; flex-shrink: 0; display: grid; place-items: center; border-radius: 5px;
+.batchbox { width: 1.0625rem; height: 1.0625rem; flex-shrink: 0; display: grid; place-items: center; border-radius: 0.3125rem;
   border: 1.5px solid var(--line-strong); color: var(--ink-inverse, #06101f); background: var(--surface); transition: all var(--t-fast); }
 .batchbox.is-on { background: var(--azure); border-color: var(--azure); color: #06101f; }
 .batchbox.is-part { background: color-mix(in srgb, var(--azure) 40%, transparent); border-color: var(--azure); color: #06101f; }
@@ -1988,45 +1941,44 @@ async function doExport(toDrive = false) {
 .batchbar__n { font-size: var(--fs-sm); font-weight: 600; color: var(--azure-bright); }
 .batchbar__acts { display: flex; align-items: center; gap: var(--s-2); }
 /* Fases de la cadena en la fila: minúsculo, mono, no compite con el nº de capítulo. */
-.steps { display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: var(--r-pill);
+.steps { display: inline-flex; align-items: center; gap: 3px; padding: 2px 0.375rem; border-radius: var(--r-pill);
          background: var(--surface-2); border: 1px solid var(--line); flex-shrink: 0; }
-.steps__s { font-family: var(--font-mono); font-size: 9px; font-weight: 700; color: var(--ink-ghost); line-height: 1; }
+.steps__s { font-family: var(--font-mono); font-size: 0.5625rem; font-weight: 700; color: var(--ink-ghost); line-height: 1; }
 .steps__s.is-done { color: var(--jade); }
 .steps__s.is-at { color: var(--azure-bright); }
-.steps__sep { font-size: 9px; color: var(--line-strong); line-height: 1; }
+.steps__sep { font-size: 0.5625rem; color: var(--line-strong); line-height: 1; }
 
 /* Cadena: se lee como una frase ("luego · 4K · ES") pegada al botón que la ejecuta. */
 .chain { display: flex; align-items: center; gap: 4px; padding-right: var(--s-2); margin-right: 2px; border-right: 1px solid var(--line); }
 .chain__lbl { font-size: var(--fs-2xs); color: var(--ink-ghost); text-transform: lowercase; margin-right: 2px; }
-.chain__chip { display: inline-flex; align-items: center; gap: 3px; padding: 3px 8px; border-radius: var(--r-pill);
+.chain__chip { display: inline-flex; align-items: center; gap: 3px; padding: 3px 0.5rem; border-radius: var(--r-pill);
                font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .03em;
                color: var(--ink-faint); border: 1px solid var(--line-2); transition: all var(--t-fast); }
 .chain__chip:hover:not(:disabled) { color: var(--ink); border-color: var(--line-strong); }
 .chain__chip.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 .chain__chip:disabled { opacity: .4; cursor: not-allowed; }
-.batchbar__clear { padding: 6px 8px; }
+.batchbar__clear { padding: 0.375rem 0.5rem; }
 .chap--4k { border-left: 2px solid var(--cyan); }
 .chap--part { border-left: 2px solid var(--gold); }
 .chap--src { border-left: 2px solid var(--violet); opacity: .85; }
 .chap--md { border-left: 2px solid var(--coral); opacity: .85; }
 .chap--src .chap__read, .chap--md .chap__read { cursor: default; }
 .chap__read { flex: 1; display: flex; align-items: center; gap: var(--s-3); text-align: left; min-width: 0; }
-.chap__num { font-family: var(--font-display); font-weight: 600; font-size: var(--fs-md); min-width: 48px; }
+.chap__num { font-family: var(--font-display); font-weight: 600; font-size: var(--fs-md); min-width: 3rem; }
 .chap__pages { font-size: var(--fs-xs); color: var(--ink-faint); }
-.chap__tag { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 1px 6px; border-radius: var(--r-xs); }
+.chap__tag { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 1px 0.375rem; border-radius: var(--r-xs); }
 .chap__tag--4k { color: var(--cyan); background: var(--cyan-glow); }
 .chap__tag--part { color: var(--gold); background: color-mix(in srgb, var(--gold) 16%, transparent); }
 .chap__tag--assigned { color: var(--azure-bright, var(--azure)); background: var(--azure-haze, color-mix(in srgb, var(--azure) 16%, transparent)); margin-left: 4px; }
 .chap__srcpin { position: relative; flex-shrink: 0; margin-right: var(--s-2); }
-.chap__srcpinbtn { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-2xs); color: var(--ink-faint); padding: 3px 8px; border-radius: var(--r-pill); border: 1px solid var(--line); background: var(--surface-2); }
+.chap__srcpinbtn { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-2xs); color: var(--ink-faint); padding: 3px 0.5rem; border-radius: var(--r-pill); border: 1px solid var(--line); background: var(--surface-2); }
 .chap__srcpinbtn:hover { color: var(--azure-bright); border-color: var(--azure); }
 .chap__srcmenu { position: absolute; z-index: 20; top: calc(100% + 4px); right: 0; min-width: 10rem; max-height: 12rem; overflow-y: auto; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--r-md); padding: 4px; box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,.35)); }
-.chap__srcmenu button { display: block; width: 100%; text-align: left; padding: 5px 8px; border-radius: var(--r-sm); font-size: var(--fs-2xs); color: var(--ink); }
+.chap__srcmenu button { display: block; width: 100%; text-align: left; padding: 0.3125rem 0.5rem; border-radius: var(--r-sm); font-size: var(--fs-2xs); color: var(--ink); }
 .chap__srcmenu button:hover { background: var(--surface); color: var(--azure-bright); }
-.chap__srcmenuempty { padding: 6px 8px; font-size: var(--fs-2xs); }
+.chap__srcmenuempty { padding: 0.375rem 0.5rem; font-size: var(--fs-2xs); }
 
-.chap__actions { display: flex; align-items: center; gap: 4px; }
-.ib { width: 32px; height: 30px; display: grid; place-items: center; border-radius: var(--r-xs); border: 1px solid var(--line); color: var(--ink-faint); transition: all var(--t-fast); }
+.ib { width: 2rem; height: 1.875rem; display: grid; place-items: center; border-radius: var(--r-xs); border: 1px solid var(--line); color: var(--ink-faint); transition: all var(--t-fast); }
 .ib:hover { color: var(--ink); border-color: var(--line-strong); background: var(--surface-2); }
 .ib--accent:hover { color: var(--cyan); border-color: var(--cyan-glow); }
 .ib--warn:hover { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 40%, transparent); }
@@ -2041,7 +1993,7 @@ async function doExport(toDrive = false) {
 .cpk__head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-3); padding: var(--s-4) var(--s-5); border-bottom: 1px solid var(--line); }
 .cpk__head h3 { font-size: var(--fs-md); font-weight: 700; color: var(--ink); }
 .cpk__head p { font-size: var(--fs-xs); color: var(--ink-soft); margin-top: 2px; }
-.cpk__x { width: 32px; height: 32px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); border: 1px solid var(--line); flex-shrink: 0; }
+.cpk__x { width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); border: 1px solid var(--line); flex-shrink: 0; }
 .cpk__x:hover { color: var(--ink); border-color: var(--line-strong); }
 .cpk__center { padding: var(--s-7); display: grid; place-items: center; }
 .cpk__grid { flex: 1; overflow-y: auto; padding: var(--s-4); display: grid; grid-template-columns: repeat(auto-fill, minmax(6rem, 1fr)); gap: var(--s-3); }
@@ -2056,31 +2008,31 @@ async function doExport(toDrive = false) {
 .cpk__pg:hover { border-color: var(--line-strong); }
 .cpk__pg.is-sel { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
 .cpk__pg img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.cpk__tag { position: absolute; top: 4px; left: 4px; padding: 1px 6px; border-radius: var(--r-pill); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: #fff; background: color-mix(in srgb, var(--cyan) 85%, black); }
-.cpk__check { position: absolute; bottom: 4px; right: 4px; width: 18px; height: 18px; display: grid; place-items: center; border-radius: 50%; background: rgba(10,14,24,.7); border: 1px solid rgba(255,255,255,.4); color: #fff; }
+.cpk__tag { position: absolute; top: 4px; left: 4px; padding: 1px 0.375rem; border-radius: var(--r-pill); font-size: 0.5625rem; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: #fff; background: color-mix(in srgb, var(--cyan) 85%, black); }
+.cpk__check { position: absolute; bottom: 4px; right: 4px; width: 1.125rem; height: 1.125rem; display: grid; place-items: center; border-radius: 50%; background: rgba(10,14,24,.7); border: 1px solid rgba(255,255,255,.4); color: #fff; }
 .cpk__check.is-on { background: var(--cyan); border-color: transparent; }
 .cpk__foot { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-5); border-top: 1px solid var(--line); }
 .cpk__n { flex: 1; font-size: var(--fs-xs); color: var(--ink-soft); }
 .cpk__cancel { padding: var(--s-2) var(--s-4); border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); }
 .cpk__cancel:hover { color: var(--ink); border-color: var(--line-strong); }
-.cpk__run { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); font-size: var(--fs-sm); font-weight: 600; color: #fff; background: var(--cyan); }
+.cpk__run { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-5); border-radius: var(--r-sm); font-size: var(--fs-sm); font-weight: 600; color: #fff; background: var(--cyan); }
 .cpk__run:hover:not(:disabled) { filter: brightness(1.1); }
 .cpk__run:disabled { opacity: .45; cursor: default; }
 .ib--read { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 35%, transparent); background: color-mix(in srgb, var(--jade) 10%, transparent); }
-.chap__dlbtn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); background: transparent; transition: all var(--t-fast); }
+.chap__dlbtn { display: inline-flex; align-items: center; gap: 0.375rem; padding: 0.375rem 0.75rem; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--azure-bright); border: 1px solid var(--azure); background: transparent; transition: all var(--t-fast); }
 .chap__dlbtn:hover:not(:disabled) { background: var(--azure-haze); color: #fff; }
 .chap__dlbtn:disabled { opacity: .5; cursor: not-allowed; }
 .chap__dlbtn--ghost { color: var(--ink-soft); border-color: var(--line-2); }
 .chap__dlbtn--ghost:hover:not(:disabled) { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
-.chap__srcmeta { font-size: var(--fs-2xs); color: var(--ink-ghost); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chap__dlprog { display: inline-flex; align-items: center; gap: var(--s-2); padding: 4px 10px; border-radius: var(--r-sm); background: var(--azure-haze); border: 1px solid var(--azure); }
-.chap__dlprog-n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--azure-bright); min-width: 28px; }
-.dl-ring { width: 16px; height: 16px; flex-shrink: 0; }
+.chap__srcmeta { font-size: var(--fs-2xs); color: var(--ink-ghost); max-width: 8.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chap__dlprog { display: inline-flex; align-items: center; gap: var(--s-2); padding: 4px 0.625rem; border-radius: var(--r-sm); background: var(--azure-haze); border: 1px solid var(--azure); }
+.chap__dlprog-n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--azure-bright); min-width: 1.75rem; }
+.dl-ring { width: 1rem; height: 1rem; flex-shrink: 0; }
 .dl-ring__track { fill: none; stroke: var(--surface-3); stroke-width: 3; }
 .dl-ring__fill { fill: none; stroke: var(--azure); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 56.5; transform: rotate(-90deg); transform-origin: 12px 12px; transition: stroke-dashoffset .4s var(--ease-silk); }
 
 .chap__prog { display: flex; align-items: center; gap: var(--s-2); }
-.chap__prog-bar { width: 80px; height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
+.chap__prog-bar { width: 5rem; height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
 .chap__prog-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--azure)); transition: width var(--t-base); }
 .chap__prog-n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--cyan); }
 

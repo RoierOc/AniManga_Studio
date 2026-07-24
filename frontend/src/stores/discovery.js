@@ -142,7 +142,15 @@ export const useDiscoveryStore = defineStore('discovery', {
       this.workLoading = true
       try {
         const d = await api.get(`/api/discovery/work/${encodeURIComponent(summary.id)}`)
-        if (this.work && this.work.id === summary.id) this.work = d.work || this.work
+        if (this.work && this.work.id === summary.id) {
+          const full = d.work || this.work
+          // Una obra con adaptación a manga (Konosuba, Mushoku Tensei…) viene clasificada
+          // como 'manga'/'other' en la ficha, aunque el listado de NOVELAS diga 'novel'.
+          // El listado refleja lo que el usuario está explorando, así que manda: si no,
+          // abrir una novela desde Novelas ofrecía leer el manga y no la novela.
+          const type = summary.type === 'novel' ? 'novel' : full.type
+          this.work = { ...full, type, readable: type === 'novel' ? false : full.readable }
+        }
       } catch (_) { /* nos quedamos con el summary */ }
       finally { this.workLoading = false }
     },

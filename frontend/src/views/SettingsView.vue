@@ -13,6 +13,7 @@ import HealthCard from '@/components/settings/HealthCard.vue'
 import NovelSourcesCard from '@/components/settings/NovelSourcesCard.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import FolderPicker from '@/components/anime/FolderPicker.vue'
+import Select from '@/components/ui/Select.vue'
 
 const ui = useUiStore()
 const manga = useMangaStore()
@@ -38,7 +39,7 @@ watch(() => anime.dlSettings.download_path, (v) => { dlPath.value = v || '' }, {
 const qaInfo = ref({ bytes: 0, flags: 0 })
 async function loadQa() { qaInfo.value = await manga.qaSize() }
 async function clearQa() {
-  if (!confirm('¿Borrar todos los datos QA (artefactos y páginas marcadas)?')) return
+  if (!await ui.confirm({ title: 'Borrar datos QA', danger: true, body: '¿Borrar todos los datos QA (artefactos y páginas marcadas)?', confirmLabel: 'Borrar' })) return
   await manga.qaClear(); loadQa()
 }
 
@@ -196,7 +197,7 @@ async function saveLib() {
   ui.toast(r.changed ? 'Biblioteca guardada en la nube ✓' : 'Sin cambios · ya estaba al día', 'ok')
 }
 async function restoreLib() {
-  if (!confirm('¿Recuperar la biblioteca desde la nube? Se fusiona con lo local (no borra tu progreso actual).')) return
+  if (!await ui.confirm({ title: 'Recuperar biblioteca', body: '¿Recuperar la biblioteca desde la nube?\nSe fusiona con lo local (no borra tu progreso actual).', confirmLabel: 'Recuperar' })) return
   const r = await settings.restoreLibrary()
   if (r.error) return ui.toast(r.error, 'error', 6000)
   const m = r.manga || { added: 0, merged: 0 }, a = r.anime || { added: 0, merged: 0 }
@@ -262,9 +263,9 @@ async function onImportFile(e) {
       <div class="row">
         <label class="fld">
           <span>Modelo</span>
-          <select :value="manga.activeModel" @change="manga.setModel($event.target.value)">
-            <option v-for="(label, key) in manga.models" :key="key" :value="key">{{ label }}</option>
-          </select>
+          <Select block :model-value="manga.activeModel" aria-label="Modelo de escalado"
+                  :options="Object.entries(manga.models).map(([key, label]) => ({ value: key, label, hint: manga.modelsColor[key] ? 'Color' : 'B&N' }))"
+                  @change="manga.setModel($event)" />
         </label>
         <label class="fld fld--chk">
           <span>Modo eco <em>· deja correr MPV mientras escala</em></span>
@@ -276,6 +277,13 @@ async function onImportFile(e) {
     
 
 <!-- Modo QA de traducción (testing) -->
+    <section class="card">
+      <div class="card__title"><Icon name="palette" :size="16" /> Cocina del diseño <span class="tag">interno</span></div>
+      <p class="hint">Todos los componentes del sistema en todos sus estados (vacío, cargando, error,
+        título kilométrico). Sirve para pulir los casos límite aquí en vez de descubrirlos en tu biblioteca.</p>
+      <button class="btn" @click="ui.goto('kitchen')"><Icon name="grid" :size="14" /> Abrir la cocina</button>
+    </section>
+
     <section class="card">
       <div class="card__title"><Icon name="spark" :size="16" /> Modo QA de traducción <span class="tag">testing</span></div>
       <label class="fld fld--chk">
@@ -672,7 +680,7 @@ async function onImportFile(e) {
 .set { max-width: var(--content-max); margin: 0 auto; padding: 0 var(--s-6) var(--s-8); }
 .set__head { padding: var(--s-5) 0 var(--s-5); }
 .eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
-.tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
+.tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
 
 /* ── two-pane shell: sticky category rail + content ─────────────────────── */
 .set__shell { display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: var(--s-6); align-items: start; }
@@ -686,7 +694,7 @@ async function onImportFile(e) {
 .set__pane { min-width: 0; display: flex; flex-direction: column; }
 .set__cat { display: flex; flex-direction: column; gap: var(--s-4); }
 .set__cathead { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-1); }
-.set__catic { display: grid; place-items: center; width: 40px; height: 40px; flex-shrink: 0; border-radius: var(--r-md); background: linear-gradient(140deg, color-mix(in srgb, var(--azure) 26%, transparent), color-mix(in srgb, var(--cyan) 18%, transparent)); border: 1px solid color-mix(in srgb, var(--azure) 30%, transparent); }
+.set__catic { display: grid; place-items: center; width: 2.5rem; height: 2.5rem; flex-shrink: 0; border-radius: var(--r-md); background: linear-gradient(140deg, color-mix(in srgb, var(--azure) 26%, transparent), color-mix(in srgb, var(--cyan) 18%, transparent)); border: 1px solid color-mix(in srgb, var(--azure) 30%, transparent); }
 .set__catic :deep(svg) { color: var(--azure); }
 .set__cathead h2 { font-family: var(--font-display); font-size: var(--fs-lg); font-weight: 600; color: var(--ink); line-height: 1.1; }
 .set__cathead p { font-size: var(--fs-xs); color: var(--ink-faint); margin-top: 2px; }
@@ -696,7 +704,7 @@ async function onImportFile(e) {
 .card__title :deep(svg) { color: var(--azure); }
 
 .row { display: flex; gap: var(--s-5); flex-wrap: wrap; align-items: center; }
-.fld { display: flex; flex-direction: column; gap: 6px; font-size: var(--fs-xs); color: var(--ink-faint); flex: 1; min-width: 220px; }
+.fld { display: flex; flex-direction: column; gap: 0.375rem; font-size: var(--fs-xs); color: var(--ink-faint); flex: 1; min-width: 13.75rem; }
 .fld em { font-style: normal; color: var(--ink-ghost); }
 .fld--chk { flex-direction: row; align-items: center; justify-content: space-between; }
 .fld--chk input { width: auto; }
@@ -704,16 +712,16 @@ async function onImportFile(e) {
 .fld select:focus, .inline input:focus { outline: none; border-color: var(--azure); }
 .inline { display: flex; gap: var(--s-2); align-items: center; }
 .inline--wrap { flex-wrap: wrap; margin-top: var(--s-2); }
-.inline input { flex: 1; min-width: 160px; }
+.inline input { flex: 1; min-width: 10rem; }
 .mono { font-family: var(--font-mono); }
-.btn { display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); flex-shrink: 0; }
+.btn { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink-soft); border: 1px solid var(--line-2); transition: all var(--t-fast); flex-shrink: 0; }
 .btn:hover { color: var(--ink); border-color: var(--line-strong); }
 .btn--accent { background: var(--azure); color: #fff; border-color: transparent; font-weight: 600; }
 .btn--accent:hover { background: var(--azure-bright); color: #fff; }
 .btn--danger { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
 .btn--danger:hover:not(:disabled) { color: #fff; background: var(--coral); border-color: transparent; }
 .btn--danger:disabled { opacity: .5; cursor: not-allowed; }
-.tag { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; letter-spacing: var(--tracking-caps); color: var(--coral); border: 1px solid color-mix(in srgb, var(--coral) 35%, transparent); border-radius: var(--r-pill); padding: 1px 8px; }
+.tag { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; letter-spacing: var(--tracking-caps); color: var(--coral); border: 1px solid color-mix(in srgb, var(--coral) 35%, transparent); border-radius: var(--r-pill); padding: 1px 0.5rem; }
 .qa-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; margin-bottom: var(--s-2); }
 .hint { font-size: var(--fs-xs); color: var(--ink-faint); margin-top: 2px; }
 .hint code, code { font-family: var(--font-mono); color: var(--ink-soft); }
@@ -721,26 +729,26 @@ async function onImportFile(e) {
 .sep { height: 1px; background: var(--line); margin: var(--s-4) 0; }
 .qbt__status { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); color: var(--ink-faint); }
 .qbt__status.is-on { color: var(--jade); }
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-ghost); }
+.dot { width: 0.4375rem; height: 0.4375rem; border-radius: 50%; background: var(--ink-ghost); }
 .qbt__status.is-on .dot { background: var(--jade); box-shadow: 0 0 8px color-mix(in srgb, var(--jade) 60%, transparent); }
 
 .dests { display: flex; flex-direction: column; gap: var(--s-3); }
 .dest { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
 .dest--col { flex-direction: column; align-items: flex-start; gap: var(--s-2); }
 .dest__row { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
-.dest__url { font-size: var(--fs-xs); font-family: var(--font-mono); color: var(--ink-faint); background: var(--surface-2); padding: 2px 6px; border-radius: var(--r-sm); user-select: all; }
+.dest__url { font-size: var(--fs-xs); font-family: var(--font-mono); color: var(--ink-faint); background: var(--surface-2); padding: 2px 0.375rem; border-radius: var(--r-sm); user-select: all; }
 .dest__hint { font-size: var(--fs-2xs); color: var(--ink-ghost); }
-.btn--xs { font-size: var(--fs-2xs); padding: 2px 8px; }
-.dest__lbl { font-weight: 500; min-width: 130px; }
+.btn--xs { font-size: var(--fs-2xs); padding: 2px 0.5rem; }
+.dest__lbl { font-weight: 500; min-width: 8.125rem; }
 .dest__ok { color: var(--jade); font-size: var(--fs-sm); }
 .dest__link { color: var(--azure-bright); font-size: var(--fs-sm); }
 .dest__muted { color: var(--ink-faint); font-size: var(--fs-sm); }
 
 /* Almacenamiento */
 .stg__total { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink-faint); font-weight: 500; }
-.stg__refresh { margin-left: auto; padding: 4px 8px; }
+.stg__refresh { margin-left: auto; padding: 4px 0.5rem; }
 .stg__loading { display: flex; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); color: var(--ink-faint); padding: var(--s-2) 0; }
-.stg__bar { display: flex; height: 10px; border-radius: var(--r-pill); overflow: hidden; background: var(--surface-2); margin-bottom: var(--s-3); }
+.stg__bar { display: flex; height: 0.625rem; border-radius: var(--r-pill); overflow: hidden; background: var(--surface-2); margin-bottom: var(--s-3); }
 .stg__seg { min-width: 2px; transition: flex-grow var(--t-base); }
 .stg__seg--orig { background: var(--azure); }
 .stg__seg--up { background: var(--cyan); }
@@ -748,7 +756,7 @@ async function onImportFile(e) {
 .stg__seg--cache { background: var(--ink-ghost); }
 .stg__legend { display: flex; gap: var(--s-4); flex-wrap: wrap; font-size: var(--fs-xs); color: var(--ink-faint); margin-bottom: var(--s-4); }
 .stg__legend b { color: var(--ink); font-weight: 600; margin-left: 3px; }
-.stg__dot { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; vertical-align: baseline; }
+.stg__dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 2px; margin-right: 0.3125rem; vertical-align: baseline; }
 .stg__dot--orig { background: var(--azure); }
 .stg__dot--up { background: var(--cyan); }
 .stg__dot--anime { background: var(--violet); }
@@ -757,15 +765,15 @@ async function onImportFile(e) {
 
 /* filtros por tipo de contenido (junto / por separado) */
 .stg__filters { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-bottom: var(--s-3); }
-.stg__chip { display: inline-flex; align-items: center; gap: 7px; padding: 5px var(--s-3); border-radius: var(--r-pill); border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink-faint); font-size: var(--fs-xs); font-weight: 500; cursor: pointer; transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast); }
+.stg__chip { display: inline-flex; align-items: center; gap: 0.4375rem; padding: 0.3125rem var(--s-3); border-radius: var(--r-pill); border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink-faint); font-size: var(--fs-xs); font-weight: 500; cursor: pointer; transition: color var(--t-fast), border-color var(--t-fast), background var(--t-fast); }
 .stg__chip:hover { color: var(--ink-soft); border-color: var(--line); }
 .stg__chip.is-on { color: var(--ink); background: color-mix(in srgb, var(--azure) 14%, transparent); border-color: color-mix(in srgb, var(--azure) 32%, transparent); }
-.stg__chip .stg__dot { width: 8px; height: 8px; border-radius: 2px; }
+.stg__chip .stg__dot { width: 0.5rem; height: 0.5rem; border-radius: 2px; }
 .stg__chipn { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-soft); }
 .stg__chip.is-on .stg__chipn { color: var(--ink); }
-.stg__chipc { font-style: normal; font-size: var(--fs-2xs); color: var(--ink-ghost); background: var(--base); border-radius: var(--r-pill); padding: 1px 6px; }
-.stg__disk { display: flex; flex-direction: column; gap: 5px; margin-bottom: var(--s-4); }
-.stg__diskbar { height: 8px; border-radius: var(--r-pill); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
+.stg__chipc { font-style: normal; font-size: var(--fs-2xs); color: var(--ink-ghost); background: var(--base); border-radius: var(--r-pill); padding: 1px 0.375rem; }
+.stg__disk { display: flex; flex-direction: column; gap: 0.3125rem; margin-bottom: var(--s-4); }
+.stg__diskbar { height: 0.5rem; border-radius: var(--r-pill); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
 .stg__diskfill { display: block; height: 100%; background: linear-gradient(90deg, var(--azure), var(--cyan)); border-radius: var(--r-pill); }
 .stg__diskn { font-size: var(--fs-xs); color: var(--ink-faint); }
 .stg__diskn b { color: var(--jade); font-weight: 600; }
@@ -791,7 +799,7 @@ async function onImportFile(e) {
 .keygrp:first-of-type { border-top: none; }
 .keygrp__head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s-2); }
 .keygrp__name { font-size: var(--fs-sm); font-weight: 600; color: var(--ink); }
-.keygrp__state { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
+.keygrp__state { display: inline-flex; align-items: center; gap: 0.375rem; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
 .keygrp__state.is-on { color: var(--jade); }
 .keygrp__state.is-on .dot { background: var(--jade); box-shadow: 0 0 8px color-mix(in srgb, var(--jade) 60%, transparent); }
 .keygrp__hint { color: var(--jade) !important; font-family: var(--font-mono); font-size: var(--fs-2xs); }

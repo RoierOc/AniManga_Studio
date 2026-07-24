@@ -63,24 +63,24 @@ const scoreTier = computed(() => {
 .sc:hover .sc__shine { animation: shine .8s var(--ease-silk) forwards; }
 @keyframes shine { to { transform: translateX(120%); } }
 
-.sc__score { position: absolute; top: var(--s-2); left: var(--s-2); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 8px; border-radius: var(--r-pill); backdrop-filter: blur(6px); background: rgba(7,10,18,.6); color: var(--ink-soft); }
+.sc__score { position: absolute; top: var(--s-2); left: var(--s-2); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.5rem; border-radius: var(--r-pill); backdrop-filter: blur(6px); background: rgba(7,10,18,.6); color: var(--ink-soft); }
 .sc__score.is-high { color: var(--jade); }
 .sc__score.is-mid { color: var(--gold); }
 .sc__score.is-low { color: var(--ink-faint); }
-.sc__airing { position: absolute; top: var(--s-2); right: var(--s-2); font-family: var(--font-mono); font-size: 8px; font-weight: 700; letter-spacing: .1em; padding: 2px 6px; border-radius: var(--r-xs); color: var(--cyan); background: var(--cyan-glow); }
+.sc__airing { position: absolute; top: var(--s-2); right: var(--s-2); font-family: var(--font-mono); font-size: 0.5rem; font-weight: 700; letter-spacing: .1em; padding: 2px 0.375rem; border-radius: var(--r-xs); color: var(--cyan); background: var(--cyan-glow); }
 
 .sc__overlay { position: absolute; inset: 0; display: flex; align-items: flex-end; padding: var(--s-3); opacity: 0; background: linear-gradient(0deg, rgba(5,7,13,.85), transparent 60%); transition: opacity var(--t-base); }
 .sc:hover .sc__overlay, .sc:focus-visible .sc__overlay { opacity: 1; }
-.sc__add { width: 100%; padding: 7px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: #fff; background: var(--azure); transition: background var(--t-fast); }
+.sc__add { width: 100%; padding: 0.4375rem; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: #fff; background: var(--azure); transition: background var(--t-fast); }
 .sc__add:hover { background: var(--azure-bright); }
 .sc__add.is-in { background: transparent; color: var(--jade); border: 1px solid color-mix(in srgb, var(--jade) 35%, transparent); cursor: default; }
 
 /* info below the cover — like the original seasonal card */
 .sc__info { padding: var(--s-3) var(--s-1) 0; }
 .sc__title { font-size: var(--fs-sm); font-weight: 600; line-height: var(--lh-snug); color: var(--ink); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.sc__meta { display: flex; gap: 5px; margin-top: 5px; font-size: var(--fs-xs); }
+.sc__meta { display: flex; gap: 0.3125rem; margin-top: 0.3125rem; font-size: var(--fs-xs); }
 .sc__eps { color: var(--azure-bright); font-weight: 600; }
 .sc__next { color: var(--ink-faint); }
 .sc__genres { display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--s-2); }
-.sc__gtag { font-size: var(--fs-2xs); padding: 2px 8px; border-radius: var(--r-pill); color: var(--ink-soft); background: var(--surface-2); border: 1px solid var(--line); }
+.sc__gtag { font-size: var(--fs-2xs); padding: 2px 0.5rem; border-radius: var(--r-pill); color: var(--ink-soft); background: var(--surface-2); border: 1px solid var(--line); }
 </style>

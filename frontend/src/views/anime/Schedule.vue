@@ -133,7 +133,7 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
         <button v-for="e in airedToday" :key="(e.anime.al_id || e.anime.id) + '-a' + e.ep"
                 class="tcard tcard--aired" @click="openEntry(e)">
           <div class="tcard__cov">
-            <img v-if="e.anime.cover" :src="imgProxy(e.anime.cover)" loading="lazy" alt=""
+            <img v-if="e.anime.cover" :src="imgProxy(e.anime.cover, 160)" loading="lazy" alt=""
                  @load="$event.target.classList.add('is-loaded')" />
             <span v-if="e.mine" class="tcard__mine" title="En tu biblioteca">★</span>
           </div>
@@ -159,7 +159,7 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
         <div v-if="!day.items.length" class="col__empty">—</div>
         <button v-for="e in day.items" :key="(e.anime.al_id || e.anime.id) + '-' + e.ep" class="ent" @click="openEntry(e)">
           <div class="ent__cov">
-            <img v-if="e.anime.cover" :src="imgProxy(e.anime.cover)" loading="lazy" alt=""
+            <img v-if="e.anime.cover" :src="imgProxy(e.anime.cover, 160)" loading="lazy" alt=""
                  @load="$event.target.classList.add('is-loaded')" />
             <span v-if="e.mine" class="ent__mine" title="En tu biblioteca">★</span>
           </div>
@@ -178,15 +178,15 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
 .sched { max-width: var(--content-max); margin: 0 auto; padding: 0 var(--s-6) var(--s-8); }
 .hero { padding: var(--s-5) 0; }
 .hero__eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
-.hero__tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
+.hero__tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
 
 /* Hoy — estrenos del día destacados con hora exacta */
 .today { margin-bottom: var(--s-7); }
 .today__head { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-4); flex-wrap: wrap; }
-.today__badge { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: var(--fs-2xs);
-  font-weight: 700; letter-spacing: var(--tracking-caps); color: var(--azure-bright); padding: 3px 10px;
+.today__badge { display: inline-flex; align-items: center; gap: 0.375rem; font-family: var(--font-mono); font-size: var(--fs-2xs);
+  font-weight: 700; letter-spacing: var(--tracking-caps); color: var(--azure-bright); padding: 3px 0.625rem;
   border-radius: var(--r-pill); background: var(--azure-haze); border: 1px solid var(--azure-glow); }
-.today__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--azure-bright); box-shadow: 0 0 6px var(--azure-glow); animation: pulse-live 2s var(--ease-drift) infinite; }
+.today__dot { width: 0.4375rem; height: 0.4375rem; border-radius: 50%; background: var(--azure-bright); box-shadow: 0 0 6px var(--azure-glow); animation: pulse-live 2s var(--ease-drift) infinite; }
 .today__date { font-family: var(--font-display); font-size: var(--fs-lg); text-transform: capitalize; }
 .today__n { font-size: var(--fs-xs); color: var(--ink-faint); }
 .today__row { display: flex; gap: var(--s-3); overflow-x: auto; padding-bottom: var(--s-2); }
@@ -203,7 +203,7 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
 .tcard__title { font-size: var(--fs-sm); font-weight: 600; color: var(--ink); line-height: var(--lh-snug);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .tcard__ep { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
-.tcard__time { display: flex; align-items: center; gap: 6px; margin-top: 2px; font-size: var(--fs-sm); color: var(--ink-soft); }
+.tcard__time { display: flex; align-items: center; gap: 0.375rem; margin-top: 2px; font-size: var(--fs-sm); color: var(--ink-soft); }
 .tcard__time :deep(svg) { color: var(--cyan); }
 .tcard__time strong { color: var(--ink); font-family: var(--font-display); }
 .tcard__cd { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--cyan); }
@@ -221,7 +221,7 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
 .col.is-today { border-color: var(--azure); box-shadow: inset 0 0 0 1px var(--azure-glow); }
 .col__head { display: flex; align-items: center; justify-content: space-between; padding-bottom: var(--s-2); border-bottom: 1px solid var(--line); }
 .col__day { font-family: var(--font-display); font-size: var(--fs-sm); font-weight: 600; color: var(--ink); }
-.col__today { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; color: var(--azure-bright); padding: 1px 6px; border-radius: var(--r-pill); background: var(--azure-haze); }
+.col__today { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; color: var(--azure-bright); padding: 1px 0.375rem; border-radius: var(--r-pill); background: var(--azure-haze); }
 .col__empty { color: var(--ink-ghost); font-size: var(--fs-sm); text-align: center; padding: var(--s-4) 0; }
 
 .ent { display: flex; gap: var(--s-2); text-align: left; padding: var(--s-2); border-radius: var(--r-sm); transition: background var(--t-fast); }

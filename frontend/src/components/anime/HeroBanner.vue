@@ -209,7 +209,7 @@ function secondary() {
 <style scoped>
 .hero {
   position: relative; margin: 0 0 var(--s-7);
-  height: clamp(500px, 58vw, 680px);
+  height: clamp(31.25rem, 58vw, 42.5rem);
   border-radius: var(--r-xl); overflow: hidden;
   background: var(--surface);
 }
@@ -218,7 +218,7 @@ function secondary() {
    el contenedor), y difuminado inferior FUERTE que llega al fondo de página → se funde sin costura. */
 .hero.is-bleed {
   border-radius: 0; margin: 0; background: transparent;
-  height: clamp(560px, 68vw, 820px);
+  height: clamp(35rem, 68vw, 51.25rem);
 }
 /* La IMAGEN misma se desvanece (alfa) en sus bordes arriba y abajo → se disuelve en el fondo de
    página en vez de oscurecerse con una capa encima. Así "deja de ser imagen y pasa a ser el color
@@ -239,7 +239,7 @@ function secondary() {
    Más padding inferior para que el logo/título caigan más abajo, sobre la zona oscura. */
 .hero.is-bleed .hero__inner { max-width: none; margin: 0; padding: var(--s-6) var(--alib-pad, var(--s-6)) var(--s-8); }
 /* Logo del anime más grande y bajo (se extiende más hacia abajo). */
-.hero.is-bleed .hero__logo { max-width: min(680px, 88%); max-height: clamp(140px, 19vw, 280px); }
+.hero.is-bleed .hero__logo { max-width: min(42.5rem, 88%); max-height: clamp(8.75rem, 19vw, 17.5rem); }
 
 /* Background art */
 .hero__bg { position: absolute; inset: 0; }
@@ -275,13 +275,13 @@ function secondary() {
   display: flex; align-items: flex-end;
   padding: var(--s-6) var(--s-7) var(--s-6);
 }
-.hero__body { max-width: 620px; }
+.hero__body { max-width: 38.75rem; }
 .hero__eyebrow {
   display: inline-flex; align-items: center; gap: var(--s-2);
   font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps);
   color: var(--cyan); margin-bottom: var(--s-3);
 }
-.hero__tick { width: 16px; height: 1px; background: var(--cyan); box-shadow: 0 0 8px var(--cyan-glow); }
+.hero__tick { width: 1rem; height: 1px; background: var(--cyan); box-shadow: 0 0 8px var(--cyan-glow); }
 .hero__title {
   font-family: var(--font-display); font-weight: 700; color: #fff;
   font-size: clamp(2.64rem, 5.3vw, 4.8rem); line-height: 1.04;
@@ -290,7 +290,7 @@ function secondary() {
 }
 /* TMDB logo title-treatment — sized like a big hero wordmark (Crunchyroll-style), shadow lifts it off the art. */
 .hero__logo {
-  max-width: min(560px, 82%); max-height: clamp(110px, 15vw, 200px);
+  max-width: min(35rem, 82%); max-height: clamp(6.875rem, 15vw, 12.5rem);
   width: auto; height: auto; object-fit: contain; object-position: left bottom;
   filter: drop-shadow(0 4px 20px rgba(0,0,0,.65));
   animation: logorise .6s var(--ease-silk) both;
@@ -305,15 +305,15 @@ function secondary() {
 .hero__dot { color: var(--ink-faint); }
 .hero__fresh {
   margin-left: var(--s-1); font-family: var(--font-mono); font-size: var(--fs-2xs);
-  color: var(--cyan); padding: 2px 8px; border-radius: var(--r-pill); background: var(--cyan-glow);
+  color: var(--cyan); padding: 2px 0.5rem; border-radius: var(--r-pill); background: var(--cyan-glow);
 }
 .hero__genres { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-3); }
 .hg {
-  font-size: var(--fs-2xs); padding: 3px 11px; border-radius: var(--r-pill);
+  font-size: var(--fs-2xs); padding: 3px 0.6875rem; border-radius: var(--r-pill);
   color: var(--ink); background: rgba(255,255,255,.10); backdrop-filter: blur(6px);
   border: 1px solid rgba(255,255,255,.12);
 }
-.hero__bar { margin-top: var(--s-4); width: 220px; max-width: 60%; height: 4px; border-radius: var(--r-pill); background: rgba(255,255,255,.22); overflow: hidden; }
+.hero__bar { margin-top: var(--s-4); width: 13.75rem; max-width: 60%; height: 4px; border-radius: var(--r-pill); background: rgba(255,255,255,.22); overflow: hidden; }
 .hero__bar span { display: block; height: 100%; background: var(--azure-bright); box-shadow: 0 0 8px var(--azure-glow); }
 
 .hero__btns { display: flex; gap: var(--s-3); margin-top: var(--s-5); flex-wrap: wrap; }
@@ -331,7 +331,7 @@ function secondary() {
 /* Nav */
 .hero__arr {
   position: absolute; top: 50%; transform: translateY(-50%); z-index: 2;
-  width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%;
+  width: 2.5rem; height: 2.5rem; display: grid; place-items: center; border-radius: 50%;
   color: #fff; background: rgba(7,10,18,.45); border: 1px solid rgba(255,255,255,.14);
   backdrop-filter: blur(6px); opacity: 0; transition: all var(--t-fast);
 }
@@ -339,13 +339,13 @@ function secondary() {
 .hero__arr:hover { background: rgba(7,10,18,.7); }
 .hero__arr--l { left: var(--s-4); }
 .hero__arr--r { right: var(--s-4); }
-.hero__dots { position: absolute; bottom: var(--s-4); right: var(--s-6); z-index: 2; display: flex; gap: 6px; }
+.hero__dots { position: absolute; bottom: var(--s-4); right: var(--s-6); z-index: 2; display: flex; gap: 0.375rem; }
 .hero__dots button {
-  width: 7px; height: 7px; border-radius: 50%; border: none; padding: 0; cursor: pointer;
+  width: 0.4375rem; height: 0.4375rem; border-radius: 50%; border: none; padding: 0; cursor: pointer;
   background: rgba(255,255,255,.35); transition: all var(--t-fast);
 }
 .hero__dots button:hover { background: rgba(255,255,255,.6); }
-.hero__dots button.is-on { background: #fff; width: 22px; border-radius: var(--r-pill); }
+.hero__dots button.is-on { background: #fff; width: 1.375rem; border-radius: var(--r-pill); }
 
 /* Transitions */
 .hero-bg-enter-active { transition: opacity .6s var(--ease-silk); }
@@ -357,9 +357,9 @@ function secondary() {
 .hero-content-leave-to { opacity: 0; transform: translateY(-8px); }
 
 @media (max-width: 640px) {
-  .hero { height: clamp(380px, 72vw, 480px); border-radius: var(--r-lg); }
+  .hero { height: clamp(23.75rem, 72vw, 30rem); border-radius: var(--r-lg); }
   .hero__inner { padding: var(--s-5) var(--s-4); }
   .hero__arr { display: none; }
-  .hero__logo { max-width: 64%; max-height: 96px; }
+  .hero__logo { max-width: 64%; max-height: 6rem; }
 }
 </style>

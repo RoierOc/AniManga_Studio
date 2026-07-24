@@ -1077,8 +1077,8 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 .wp :deep(canvas.JASSUB) { z-index: 2; }
 .wp__a4kload {
   position: absolute; top: var(--s-4); left: 50%; transform: translateX(-50%);
-  z-index: 5; display: flex; align-items: center; gap: 6px;
-  padding: 6px 12px; border-radius: var(--r-md);
+  z-index: 5; display: flex; align-items: center; gap: 0.375rem;
+  padding: 0.375rem 0.75rem; border-radius: var(--r-md);
   background: rgba(10, 14, 24, 0.75); backdrop-filter: blur(4px);
   color: var(--ink-soft); font-size: var(--fs-xs); font-weight: 600;
   pointer-events: none; animation: fade var(--t-fast);
@@ -1161,7 +1161,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 .wp__tc .wp__nextacts { justify-content: center; }
 .wp__nextacts { display: flex; gap: var(--s-2); margin-top: var(--s-3); }
 .wp__btnmain {
-  display: inline-flex; align-items: center; gap: 6px; padding: var(--s-2) var(--s-4);
+  display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-4);
   border-radius: var(--r-sm); border: none; background: var(--azure); color: #fff;
   font-weight: 600; cursor: pointer;
 }
@@ -1182,7 +1182,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 .wp__titles p { font-size: var(--fs-xs); color: var(--ink-soft); }
 .wp__badge {
   margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-2xs);
-  padding: 2px 8px; border-radius: var(--r-pill); color: var(--amber);
+  padding: 2px 0.5rem; border-radius: var(--r-pill); color: var(--amber);
   border: 1px solid color-mix(in srgb, var(--amber) 40%, transparent);
   background: color-mix(in srgb, var(--amber) 12%, transparent);
 }
@@ -1195,10 +1195,10 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 .wp.is-idle .wp__bar { opacity: 0; transform: translateY(8px); pointer-events: none; }
 
 .wp__timeline {
-  position: relative; height: 5px; border-radius: 3px; background: rgba(255,255,255,.18);
+  position: relative; height: 0.3125rem; border-radius: 3px; background: rgba(255,255,255,.18);
   cursor: pointer; margin-bottom: var(--s-3);
 }
-.wp__timeline:hover { height: 8px; }
+.wp__timeline:hover { height: 0.5rem; }
 .wp__tl-buf { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: rgba(255,255,255,.28); }
 /* bandas de intro/ending: franja tenue bajo el progreso (como Crunchyroll) */
 .wp__tl-mark {
@@ -1209,7 +1209,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 .wp__tl-cur { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--azure-bright); }
 .wp__tl-knob {
-  position: absolute; top: 50%; width: 14px; height: 14px; border-radius: 50%;
+  position: absolute; top: 50%; width: 0.875rem; height: 0.875rem; border-radius: 50%;
   background: var(--azure-bright); transform: translate(-50%, -50%);
   opacity: 0; transition: opacity var(--t-fast); box-shadow: 0 0 8px var(--azure-glow);
 }
@@ -1227,7 +1227,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 }
 .wp__preview-t {
   font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: 700; color: #fff;
-  padding: 2px 8px; border-radius: var(--r-pill); background: rgba(7,10,18,.85);
+  padding: 2px 0.5rem; border-radius: var(--r-pill); background: rgba(7,10,18,.85);
   border: 1px solid rgba(255,255,255,.2);
 }
 
@@ -1242,7 +1242,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 /* botón contextual de intro/ending — visible aunque los controles estén ocultos */
 .wp__skipfab {
   position: absolute; right: var(--s-6); bottom: 6.5rem; z-index: 3;
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; gap: 0.375rem;
   padding: var(--s-3) var(--s-5); border-radius: var(--r-sm);
   border: 1px solid rgba(255,255,255,.45); background: rgba(10,14,24,.82);
   color: #fff; font-size: var(--fs-sm); font-weight: 700; cursor: pointer;
@@ -1253,7 +1253,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 .wp__skipfab:hover { background: var(--azure); border-color: transparent; }
 
 .wp__skipop {
-  display: inline-flex; align-items: center; gap: 5px; padding: var(--s-2) var(--s-3);
+  display: inline-flex; align-items: center; gap: 0.3125rem; padding: var(--s-2) var(--s-3);
   border-radius: var(--r-pill); border: 1px solid rgba(255,255,255,.25);
   background: rgba(255,255,255,.08); color: #fff; font-size: var(--fs-xs); font-weight: 600;
   cursor: pointer; transition: all var(--t-fast);

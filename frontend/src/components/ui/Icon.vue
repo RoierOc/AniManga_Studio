@@ -1,6 +1,8 @@
-<script setup>
+<script>
 // Hand-picked icon set. Stroke-based, 1.6 weight — HUD-leaning, not generic.
-const PATHS = {
+// `PATHS` se exporta para que la Cocina del diseño liste el set REAL: un listado escrito a mano
+// se queda viejo en cuanto alguien añade un icono, y una página de sistema no puede mentir.
+export const PATHS = {
   library: '<path d="M4 19V5a1 1 0 0 1 1-1h4v16H5a1 1 0 0 1-1-1Z"/><path d="M9 4h5v16H9z"/><path d="m15 4.5 3.6.9a1 1 0 0 1 .7 1.2L16 20"/>',
   search:  '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.2-3.2"/>',
   alert:   '<path d="M12 4 2.5 20h19L12 4Z"/><path d="M12 10v4"/><path d="M12 17.5v.01"/>',
@@ -47,6 +49,10 @@ const PATHS = {
   // Flechas horizontales → dirección de lectura (Izq↔Der).
   'arrows-h': '<path d="M8 8 4 12l4 4M16 8l4 4-4 4M4 12h16"/>',
 }
+export const ICON_NAMES = Object.keys(PATHS).sort()
+</script>
+
+<script setup>
 defineProps({ name: { type: String, required: true }, size: { type: [Number, String], default: 20 } })
 </script>
 

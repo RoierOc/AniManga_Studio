@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted } from 'vue'
 import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
 import Icon from './Icon.vue'
+import Spinner from '@/components/ui/Spinner.vue'
 
 // Slide-over "glance" panel: everything processing right now, grouped by manga. Reads the
 // same store getters as the in-modal progress and the full Activity view → all in lockstep.
@@ -35,7 +36,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
         <div class="adr__scrim" @click="close" />
         <aside class="adr__panel" role="dialog" aria-label="Actividad">
           <header class="adr__head">
-            <span class="adr__spin" :class="{ 'is-idle': !store.activeCount }" />
+            <!-- Sin tareas se queda quieto: una rueda girando sin nada detrás miente. -->
+            <Spinner v-if="store.activeCount" :size="14" />
+            <span v-else class="adr__idle" />
             <h3 class="adr__title">
               {{ store.activeCount ? `${store.activeCount} en proceso` : 'Sin tareas activas' }}
             </h3>
@@ -103,26 +106,25 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
   border-left: 1px solid var(--line-2); box-shadow: var(--shadow-lg);
 }
 .adr__head { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-4) var(--s-4) var(--s-3); border-bottom: 1px solid var(--line); }
-.adr__spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--line-2); border-top-color: var(--azure); animation: spin .7s linear infinite; flex-shrink: 0; }
-.adr__spin.is-idle { border-top-color: var(--line-2); animation: none; }
+.adr__idle { width: 0.875rem; height: 0.875rem; border-radius: 50%; border: 2px solid var(--line-2); flex-shrink: 0; }
 .adr__title { flex: 1; font-size: var(--fs-md); font-weight: 600; }
 .adr__link { display: inline-flex; align-items: center; gap: 2px; font-size: var(--fs-xs); font-weight: 600; color: var(--azure-bright); }
 .adr__link:hover { color: #fff; }
-.adr__x { width: 28px; height: 28px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-faint); }
+.adr__x { width: 1.75rem; height: 1.75rem; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-faint); }
 .adr__x:hover { color: var(--ink); }
 
 .adr__body { flex: 1; overflow-y: auto; padding: var(--s-3); display: flex; flex-direction: column; gap: var(--s-3); }
 
 .grp { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); padding: var(--s-3); }
 .grp__head { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-2); }
-.grp__cover { width: 26px; height: 26px; border-radius: var(--r-xs); overflow: hidden; flex-shrink: 0; background: var(--surface-3); display: grid; place-items: center; }
+.grp__cover { width: 1.625rem; height: 1.625rem; border-radius: var(--r-xs); overflow: hidden; flex-shrink: 0; background: var(--surface-3); display: grid; place-items: center; }
 .grp__cover img { width: 100%; height: 100%; object-fit: cover; }
 .grp__mono { font-size: var(--fs-xs); font-weight: 700; color: var(--ink-faint); }
 .grp__title { flex: 1; font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .grp__pct { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
 .grp__pct.is-err { color: var(--coral); }
 
-.row { display: flex; align-items: center; gap: var(--s-2); padding: 6px 0; }
+.row { display: flex; align-items: center; gap: var(--s-2); padding: 0.375rem 0; }
 .row__kind { flex-shrink: 0; display: grid; place-items: center; }
 .row__main { flex: 1; min-width: 0; }
 .row__top { display: flex; justify-content: space-between; gap: var(--s-2); }
@@ -131,7 +133,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 .row__bar { height: 3px; margin-top: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
 .row__bar span { display: block; height: 100%; transition: width var(--t-base) var(--ease-silk); }
 .row__bar.is-err span { background: var(--coral) !important; width: 100% !important; }
-.row__act { width: 24px; height: 24px; display: grid; place-items: center; border-radius: var(--r-xs); color: var(--ink-faint); border: 1px solid var(--line); flex-shrink: 0; transition: all var(--t-fast); }
+.row__act { width: 1.5rem; height: 1.5rem; display: grid; place-items: center; border-radius: var(--r-xs); color: var(--ink-faint); border: 1px solid var(--line); flex-shrink: 0; transition: all var(--t-fast); }
 .row__act:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
 
 .adr__empty { margin: auto; text-align: center; color: var(--ink-faint); display: flex; flex-direction: column; align-items: center; gap: var(--s-2); padding: var(--s-6); }
@@ -139,7 +141,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 .adr__empty span { font-size: var(--fs-xs); max-width: 16rem; }
 
 .adr__foot { padding: var(--s-3); border-top: 1px solid var(--line); }
-.adr__histlink { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); color: var(--ink-faint); }
+.adr__histlink { display: inline-flex; align-items: center; gap: 0.375rem; font-size: var(--fs-xs); color: var(--ink-faint); }
 .adr__histlink:hover { color: var(--ink); }
 
 .adr-enter-active .adr__panel, .adr-leave-active .adr__panel { transition: transform var(--t-base) var(--ease-snap); }

@@ -156,6 +156,20 @@ ul, ol { list-style: none; }
    al posicionarla, el orden DOM decide y tapa al .blurup al cargar */
 .blurup + img { position: relative; }
 
+/* ── Rejilla que se REORGANIZA, no que se reemplaza ───────────────────────
+   Al cambiar de filtro o de orden, las tarjetas se deslizan a su nueva posición en vez de
+   aparecer de golpe. Se usa con <TransitionGroup name="grid" tag="div" class="grid">.
+   `position:absolute` al salir saca la tarjeta del flujo, que es lo que permite a las demás
+   animar su hueco (sin eso, el `move` no se aprecia). */
+.grid-move { transition: transform var(--t-slow) var(--ease-silk); }
+.grid-enter-active { transition: opacity var(--t-base) var(--ease-silk), transform var(--t-base) var(--ease-silk); }
+.grid-leave-active { transition: opacity var(--t-fast) var(--ease-silk), transform var(--t-fast) var(--ease-silk); position: absolute; }
+.grid-enter-from { opacity: 0; transform: scale(.94) translateY(0.75rem); }
+.grid-leave-to   { opacity: 0; transform: scale(.94); }
+@media (prefers-reduced-motion: reduce) {
+  .grid-move, .grid-enter-active, .grid-leave-active { transition: none; }
+}
+
 /* Staggered page-load reveal — children rise in sequence.
    Set --i on each child (0,1,2,…) to cascade.                              */
 .stagger > * {
@@ -172,3 +186,55 @@ ul, ol { list-style: none; }
     scroll-behavior: auto !important;
   }
 }
+
+/* ── Vocabulario de las vistas de biblioteca (Anime · Series y Películas) ──────────────────────
+   Vivían en el <style scoped> de AnimeLibrary.vue, así que Series y Películas no podía usarlos y
+   acababa con una copia propia que divergía. Al ser globales hay UNA definición: si se pule el
+   pill o el buscador, cambia en las dos secciones a la vez. */
+.eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono);
+  font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); }
+.tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
+
+.toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: var(--s-3); margin-bottom: var(--s-6); }
+.filters { display: flex; gap: var(--s-2); flex-wrap: wrap; }
+.pill { display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-pill); font-size: var(--fs-sm); font-weight: 500; color: var(--ink-soft);
+  border: 1px solid var(--line); transition: all var(--t-fast); }
+.pill:hover { color: var(--ink); border-color: var(--line-strong); }
+.pill.is-active { background: var(--azure-haze); border-color: var(--azure); color: var(--azure-bright); }
+.pill__n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
+
+.toolbar__right { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.toolbar__right .searchbox { width: min(15rem, 44vw); }
+.sorts { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: var(--surface);
+  border: 1px solid var(--line); }
+.sort { padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500;
+  color: var(--ink-faint); transition: all var(--t-fast); }
+.sort:hover { color: var(--ink); }
+.sort.is-active { background: var(--surface-3); color: var(--ink); }
+
+.searchbox { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3);
+  width: min(17.5rem, 50vw); background: var(--surface); border: 1px solid var(--line);
+  border-radius: var(--r-md); color: var(--ink-faint);
+  transition: border-color var(--t-fast), box-shadow var(--t-fast); }
+.searchbox:focus-within { border-color: var(--azure); box-shadow: 0 0 0 3px var(--azure-haze); }
+.searchbox input { flex: 1; border: none; outline: none; background: none; color: var(--ink); font-size: var(--fs-sm); }
+
+/* El aura del hero tiñe el fondo con el color dominante del banner activo. @property permite que
+   el color haga tween al rotar el carrusel. */
+@property --tint-c { syntax: '<color>'; inherits: false; initial-value: rgb(77, 141, 255); }
+
+/* Sub-navegación de sección (Anime · Series y Películas). Barra a ancho completo con separador,
+   alineada al mismo padding que el contenido → las pestañas cuadran con el hero y las tarjetas.
+   Vivía en el scoped de AnimeStudio.vue; global para que las dos secciones no divergan. */
+.subnav { display: flex; gap: var(--s-1); flex-wrap: wrap; align-items: center;
+  padding: var(--s-3) var(--s-6); border-bottom: 1px solid var(--line); margin-bottom: var(--s-5); }
+.subnav__tab { display: inline-flex; align-items: center; gap: var(--s-2);
+  padding: var(--s-2) var(--s-4); border-radius: var(--r-pill); font-size: var(--fs-sm);
+  font-weight: 500; color: var(--ink-faint); transition: all var(--t-fast) var(--ease-silk); }
+.subnav__tab:hover { color: var(--ink); background: var(--surface); }
+.subnav__tab.is-active { color: var(--azure-bright); background: var(--azure-haze); }
+.subnav__n { font-family: var(--font-mono); font-size: var(--fs-2xs); padding: 1px 6px;
+  border-radius: var(--r-pill); background: var(--azure); color: #fff; }
+@media (max-width: 640px) { .subnav { padding: var(--s-3) var(--s-4); } }

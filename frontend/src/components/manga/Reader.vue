@@ -1,9 +1,10 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMangaStore } from '@/stores/manga'
 import { useUiStore } from '@/stores/ui'
 import { pageUrl } from '@/lib/manga'
 import { imgProxy } from '@/lib/img'
+import { coverRGB, vivid, rgbaCss } from '@/lib/coverColor'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
@@ -51,6 +52,15 @@ const endOpen = ref(false)
 const webtoonEnd = ref(false)   // tarjeta de fin del webtoon: solo tras llegar al fondo del scroll
 const nextChapterNum = computed(() => store.chapterListAsc[store.chapterIndex + 1]?.chapter)
 const endCover = computed(() => imgProxy(store.reader?.cover || store.current?.cover || ''))
+
+// Tinte de fondo del lector: color dominante de la portada (mismo muestreo que las tarjetas).
+const rdTint = ref('')
+watch(endCover, async (u) => {
+  rdTint.value = ''
+  if (!u) return
+  const c = await coverRGB(u)
+  if (c && endCover.value === u) rdTint.value = rgbaCss(vivid(c), 0.16)
+}, { immediate: true })
 function reReadChapter() { endOpen.value = false; store.setPage(0) }
 
 // Page counter label — a range when showing a two-page spread.
@@ -110,7 +120,18 @@ async function maybePrefetchNextChapter() {
 }
 // New chapter/file → reset the cache-key set, then warm the neighbours.
 watch(() => store.pages, () => { preloaded = new Set(); endOpen.value = false; webtoonEnd.value = false; warmedNextFor = null; preloadNeighbors() })
-watch(() => store.page, () => { preloadNeighbors(); maybePrefetchNextChapter() })
+watch(() => store.page, () => { preloadNeighbors(); maybePrefetchNextChapter(); centerThumb() })
+
+// La tira de miniaturas no seguía a la lectura: pasabas de página y el recuadro activo se
+// quedaba fuera de la vista. `nearest` (no `center`) para no zarandear la tira cuando la
+// miniatura ya se ve.
+const thumbsEl = ref(null)
+function centerThumb() {
+  nextTick(() => {
+    const el = thumbsEl.value?.querySelector(`[data-page="${store.page}"]`)
+    el?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'nearest' })
+  })
+}
 watch(() => store.mode, () => { endOpen.value = false })
 
 // Advance: on the last page, open the chapter-end screen instead of a dead click (paged
@@ -245,7 +266,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 <template>
   <Teleport to="body">
     <Transition name="reader">
-      <div v-if="open" class="rd" @mousemove="poke">
+      <div v-if="open" class="rd" :style="{ '--rd-tint': rdTint }" @mousemove="poke">
         <!-- Top bar -->
         <header class="rd__bar" :class="{ 'is-hidden': store.barsHidden }">
           <button class="rd__btn" @click="store.closeReader()"><Icon name="chevron" :size="18" :style="{ transform: 'rotate(180deg)' }" /></button>
@@ -435,8 +456,9 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
                    :style="{ direction: isRTL ? 'rtl' : 'ltr' }" @input="store.setPage(Number($event.target.value))" />
             <button class="rd__chbtn" :disabled="!isManga || !store.canNextChapter" @click="store.goNextChapter()">Cap. ›</button>
           </div>
-          <div class="rd__thumbs">
-            <button v-for="(p, i) in store.pages" :key="i" class="rd__thumb" :class="{ 'is-active': i === store.page }" @click="store.setPage(i)">
+          <div class="rd__thumbs" ref="thumbsEl">
+            <button v-for="(p, i) in store.pages" :key="i" class="rd__thumb" :class="{ 'is-active': i === store.page }"
+                    :data-page="i" @click="store.setPage(i)">
               <img :src="pageUrl(p, 120)" loading="lazy" alt="" />
             </button>
           </div>
@@ -447,32 +469,37 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 </template>
 
 <style scoped>
-.rd { position: fixed; inset: 0; z-index: 110; background: #05070d; display: flex; flex-direction: column; }
+/* Fondo teñido con el color de la portada en vez del negro plano: abrir un capítulo deja de
+   ser un fogonazo negro y da continuidad entre la tarjeta y la lectura. Decorativo y muy
+   tenue — el arte de la página sigue sobre negro, que es lo que pide un manga B/N. */
+.rd { position: fixed; inset: 0; z-index: 110; display: flex; flex-direction: column;
+  background: radial-gradient(120% 90% at 50% 0%, var(--rd-tint, transparent) 0%, transparent 62%), #05070d;
+  transition: background 1.2s var(--ease-silk); }
 
-.rd__bar { position: absolute; top: 0; left: 0; right: 0; z-index: 6; display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-4); height: 52px;
+.rd__bar { position: absolute; top: 0; left: 0; right: 0; z-index: 6; display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-4); height: 3.25rem;
   background: linear-gradient(180deg, rgba(7,10,18,.95), rgba(7,10,18,.5)); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); transition: transform var(--t-base) var(--ease-silk); }
 .rd__bar.is-hidden { transform: translateY(-100%); }
-.rd__btn { min-width: 36px; height: 36px; padding: 0 8px; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
+.rd__btn { min-width: 2.25rem; height: 2.25rem; padding: 0 0.5rem; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .rd__btn:hover { color: var(--ink); border-color: var(--line-strong); background: var(--surface); }
 .rd__btn.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 .rd__txt, .rd__zoom { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600; }
 .rd__meta { display: flex; align-items: center; gap: var(--s-3); flex: 1; min-width: 0; }
 .rd__title { font-weight: 600; font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .rd__ch { color: var(--ink-faint); font-size: var(--fs-xs); white-space: nowrap; }
-.rd__src { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 7px; border-radius: var(--r-pill); color: var(--ink-faint); background: var(--surface); }
+.rd__src { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.4375rem; border-radius: var(--r-pill); color: var(--ink-faint); background: var(--surface); }
 .rd__src.is-4k { color: var(--cyan); background: var(--cyan-glow); }
 .rd__tools { display: flex; gap: var(--s-1); }
 .rd__btn--qa.is-on { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 50%, transparent); background: color-mix(in srgb, var(--coral) 12%, transparent); }
 
 /* QA: popover de marcado (testing) */
-.rd__qa { position: absolute; top: 56px; right: var(--s-4); z-index: 7; width: min(22rem, 92vw);
+.rd__qa { position: absolute; top: 3.5rem; right: var(--s-4); z-index: 7; width: min(22rem, 92vw);
   padding: var(--s-3); border-radius: var(--r-md); background: var(--glass-strong); backdrop-filter: blur(16px);
   border: 1px solid var(--line-2); box-shadow: var(--shadow-lg); transition: opacity var(--t-fast); }
 .rd__qa.is-hidden { opacity: 0; pointer-events: none; }
 .rd__qa-head { font-size: var(--fs-xs); color: var(--ink-soft); margin-bottom: var(--s-2); }
 .rd__qa-head b { color: var(--ink); }
 .rd__qa-reasons { display: flex; flex-wrap: wrap; gap: var(--s-1); margin-bottom: var(--s-2); }
-.rd__qa-chip { font-size: var(--fs-2xs); font-weight: 600; padding: 5px 10px; border-radius: var(--r-pill);
+.rd__qa-chip { font-size: var(--fs-2xs); font-weight: 600; padding: 0.3125rem 0.625rem; border-radius: var(--r-pill);
   color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .rd__qa-chip:hover { color: #fff; background: var(--coral); border-color: transparent; }
 .rd__qa-note { width: 100%; padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid var(--line);
@@ -495,7 +522,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 /* Modo noche — popover de brillo/inversión */
 .rd__night { position: relative; }
 .rd__night-pop {
-  position: absolute; top: calc(100% + 8px); right: 0; z-index: 20; width: 15rem;
+  position: absolute; top: calc(100% + 0.5rem); right: 0; z-index: 20; width: 15rem;
   display: flex; flex-direction: column; gap: var(--s-2);
   padding: var(--s-3); border-radius: var(--r-md);
   background: var(--glass-strong); backdrop-filter: blur(16px);
@@ -505,7 +532,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__night-row input[type=range] { flex: 1; accent-color: var(--azure); }
 .rd__night-val { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink); min-width: 2.6rem; text-align: right; }
 .rd__night-inv {
-  padding: 6px 10px; border-radius: var(--r-sm); cursor: pointer;
+  padding: 0.375rem 0.625rem; border-radius: var(--r-sm); cursor: pointer;
   border: 1px solid var(--line); background: transparent; color: var(--ink-soft);
   font-size: var(--fs-2xs); font-weight: 600; transition: all var(--t-fast);
 }
@@ -515,21 +542,21 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 /* ── Panel "Ajustes de lectura" (consolida los controles antes crípticos, con etiquetas) ── */
 .rd__setwrap { position: relative; }
 .rd__set {
-  position: absolute; top: calc(100% + 8px); right: 0; z-index: 20; width: 17rem;
+  position: absolute; top: calc(100% + 0.5rem); right: 0; z-index: 20; width: 17rem;
   display: flex; flex-direction: column; gap: var(--s-3);
   padding: var(--s-3); border-radius: var(--r-md);
   background: var(--glass-strong); backdrop-filter: blur(16px);
   border: 1px solid var(--line); box-shadow: var(--shadow-lg);
 }
-.rd__set-group { display: flex; flex-direction: column; gap: 6px; }
-.rd__set-lbl { display: flex; align-items: center; gap: 5px; font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--ink-ghost); }
+.rd__set-group { display: flex; flex-direction: column; gap: 0.375rem; }
+.rd__set-lbl { display: flex; align-items: center; gap: 0.3125rem; font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--ink-ghost); }
 /* Control segmentado: opciones lado a lado, la activa resaltada (claro qué está puesto). */
 .rd__seg { display: flex; gap: 4px; background: var(--surface-2); border-radius: var(--r-sm); padding: 3px; }
-.rd__seg button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 6px 4px; border-radius: calc(var(--r-sm) - 2px); font-size: var(--fs-2xs); font-weight: 600; color: var(--ink-soft); transition: all var(--t-fast); }
+.rd__seg button { flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 0.3125rem; padding: 0.375rem 4px; border-radius: calc(var(--r-sm) - 2px); font-size: var(--fs-2xs); font-weight: 600; color: var(--ink-soft); transition: all var(--t-fast); }
 .rd__seg button:hover { color: var(--ink); }
 .rd__seg button.is-on { background: var(--azure); color: #fff; box-shadow: var(--shadow-sm); }
 /* Toggle de línea con estado a la derecha (nada de glifos que adivinar). */
-.rd__set-toggle { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border-radius: var(--r-sm); border: 1px solid var(--line); color: var(--ink-soft); font-size: var(--fs-xs); font-weight: 600; transition: all var(--t-fast); }
+.rd__set-toggle { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.625rem; border-radius: var(--r-sm); border: 1px solid var(--line); color: var(--ink-soft); font-size: var(--fs-xs); font-weight: 600; transition: all var(--t-fast); }
 .rd__set-toggle span:first-of-type { flex: 1; text-align: left; }
 .rd__set-toggle:hover { border-color: var(--azure); color: var(--ink); }
 .rd__set-toggle.is-on { border-color: var(--azure); color: var(--ink); }
@@ -545,14 +572,14 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__paged.is-grab .rd__img,
 .rd__paged.is-grab .rd__spread,
 .rd__paged.is-grab .rd__cmp { will-change: transform; }
-.rd__img.fit-width { width: 100%; max-width: 1000px; height: auto; }
+.rd__img.fit-width { width: 100%; max-width: 62.5rem; height: auto; }
 .rd__img.fit-height { height: 100vh; width: auto; }
 .rd__img.fit-original { width: auto; height: auto; max-width: none; }
 
 /* two-page spread: both pages share one container; RTL flips reading order */
 .rd__spread { display: flex; align-items: flex-start; }
 .rd__spread.is-rtl { flex-direction: row-reverse; }
-.rd__spread.fit-width { width: 100%; max-width: 1800px; }
+.rd__spread.fit-width { width: 100%; max-width: 112.5rem; }
 .rd__spread.fit-width .rd__simg { width: 50%; height: auto; }
 .rd__spread.fit-height { height: 100vh; }
 .rd__spread.fit-height .rd__simg { height: 100vh; width: auto; }
@@ -563,7 +590,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__fade { animation: pageFade .18s var(--ease-silk); }
 @keyframes pageFade { from { opacity: .4 } to { opacity: 1 } }
 
-.rd__ghost { position: absolute; top: 0; bottom: 0; width: 80px; z-index: 4; display: flex; align-items: center; opacity: 0; transition: opacity var(--t-fast); border: none; background: linear-gradient(90deg, rgba(77,141,255,.18), transparent); }
+.rd__ghost { position: absolute; top: 0; bottom: 0; width: 5rem; z-index: 4; display: flex; align-items: center; opacity: 0; transition: opacity var(--t-fast); border: none; background: linear-gradient(90deg, rgba(77,141,255,.18), transparent); }
 .rd__ghost--prev { left: 0; justify-content: flex-start; padding-left: var(--s-3); }
 .rd__ghost--next { right: 0; justify-content: flex-end; padding-right: var(--s-3); background: linear-gradient(270deg, rgba(77,141,255,.18), transparent); }
 .rd__paged:hover .rd__ghost { opacity: 1; }
@@ -571,7 +598,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 
 .rd__cmp { position: relative; }
 /* Fit behaviour goes on the wrapper; both images fill it at identical dimensions. */
-.rd__cmp.fit-width  { width: 100%; max-width: 1000px; }
+.rd__cmp.fit-width  { width: 100%; max-width: 62.5rem; }
 .rd__cmp.fit-height { height: 100vh; }
 .rd__cmp.fit-original { width: auto; height: auto; }
 .rd__cmp-img { display: block; width: 100%; height: auto; }
@@ -583,33 +610,33 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
    dHash), así que el estiramiento por la pequeña diferencia de aspecto es imperceptible. */
 .rd__cmp-orig { position: absolute; inset: 0; width: 100% !important; height: 100% !important; object-fit: fill; }
 /* 24px-wide invisible grab zone centred on a 2px visible line — much easier to drag */
-.rd__divider { position: absolute; top: 0; bottom: 0; width: 24px; transform: translateX(-50%); cursor: col-resize; z-index: 5; display: grid; place-items: center; }
+.rd__divider { position: absolute; top: 0; bottom: 0; width: 1.5rem; transform: translateX(-50%); cursor: col-resize; z-index: 5; display: grid; place-items: center; }
 .rd__divider::before { content: ''; position: absolute; top: 0; bottom: 0; width: 2px; background: var(--azure); box-shadow: 0 0 12px var(--azure-glow); }
-.rd__handle { position: relative; width: 34px; height: 34px; display: grid; place-items: center; border-radius: 50%; background: var(--azure); color: #fff; font-size: 14px; box-shadow: var(--glow-azure); }
-.rd__clabel { position: absolute; top: var(--s-3); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 8px; border-radius: var(--r-xs); background: rgba(7,10,18,.7); }
+.rd__handle { position: relative; width: 2.125rem; height: 2.125rem; display: grid; place-items: center; border-radius: 50%; background: var(--azure); color: #fff; font-size: 0.875rem; box-shadow: var(--glow-azure); }
+.rd__clabel { position: absolute; top: var(--s-3); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.5rem; border-radius: var(--r-xs); background: rgba(7,10,18,.7); }
 .rd__clabel--l { left: var(--s-3); color: var(--ink-soft); }
 .rd__clabel--r { right: var(--s-3); color: var(--cyan); }
 
-.rd__counter { position: absolute; bottom: var(--s-4); left: 50%; transform: translateX(-50%); z-index: 8; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink); padding: 4px 12px; border-radius: var(--r-pill); background: rgba(7,10,18,.72); backdrop-filter: blur(6px); transition: bottom var(--t-base) var(--ease-silk); pointer-events: none; }
+.rd__counter { position: absolute; bottom: var(--s-4); left: 50%; transform: translateX(-50%); z-index: 8; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink); padding: 4px 0.75rem; border-radius: var(--r-pill); background: rgba(7,10,18,.72); backdrop-filter: blur(6px); transition: bottom var(--t-base) var(--ease-silk); pointer-events: none; }
 /* Sube por encima de la barra inferior (miniaturas + scrub) cuando está desplegada. */
 .rd__counter--up { bottom: 6.5rem; }
 .rd__counter.is-hidden { opacity: 0; }
 /* Contador webtoon: fijo abajo-derecha, no estorba la lectura de la tira. */
-.rd__wcount { position: fixed; bottom: var(--s-4); right: var(--s-4); z-index: 7; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink); padding: 5px 12px; border-radius: var(--r-pill); background: rgba(7,10,18,.72); backdrop-filter: blur(6px); pointer-events: none; }
+.rd__wcount { position: fixed; bottom: var(--s-4); right: var(--s-4); z-index: 7; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink); padding: 0.3125rem 0.75rem; border-radius: var(--r-pill); background: rgba(7,10,18,.72); backdrop-filter: blur(6px); pointer-events: none; }
 .rd__wcount span { color: var(--ink-ghost); }
 
-.rd__webtoon { flex: 1; overflow-y: auto; display: flex; flex-direction: column; align-items: center; padding-top: 52px; }
+.rd__webtoon { flex: 1; overflow-y: auto; display: flex; flex-direction: column; align-items: center; padding-top: 3.25rem; }
 .rd__wimg { width: 100%; height: auto; display: block; }
 
 .rd__bottom { position: absolute; bottom: 0; left: 0; right: 0; z-index: 6; padding: var(--s-3) var(--s-4); background: linear-gradient(0deg, rgba(7,10,18,.96), transparent); transition: transform var(--t-base) var(--ease-silk); }
 .rd__bottom.is-hidden { transform: translateY(100%); }
 .rd__chnav { display: flex; align-items: center; gap: var(--s-3); }
-.rd__chbtn { padding: 6px 12px; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
+.rd__chbtn { padding: 0.375rem 0.75rem; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .rd__chbtn:hover:not(:disabled) { color: var(--ink); border-color: var(--azure); }
 .rd__chbtn:disabled { opacity: .35; }
 .rd__scrub { flex: 1; accent-color: var(--azure); }
 .rd__thumbs { display: flex; gap: var(--s-2); overflow-x: auto; padding-top: var(--s-2); }
-.rd__thumb { flex-shrink: 0; width: 44px; height: 62px; border-radius: var(--r-xs); overflow: hidden; border: 2px solid transparent; opacity: .5; transition: all var(--t-fast); }
+.rd__thumb { flex-shrink: 0; width: 2.75rem; height: 3.875rem; border-radius: var(--r-xs); overflow: hidden; border: 2px solid transparent; opacity: .5; transition: all var(--t-fast); }
 .rd__thumb img { width: 100%; height: 100%; object-fit: cover; }
 .rd__thumb:hover { opacity: .85; }
 .rd__thumb.is-active { opacity: 1; border-color: var(--azure); }
@@ -661,7 +688,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__end-done { font-size: var(--fs-sm); color: var(--ink-faint); }
 .rd__end-sub { display: flex; gap: var(--s-2); }
 .rd__end-sbtn {
-  display: inline-flex; align-items: center; gap: 6px;
+  display: inline-flex; align-items: center; gap: 0.375rem;
   padding: var(--s-2) var(--s-4); border-radius: var(--r-md);
   font-size: var(--fs-xs); font-weight: 500; color: var(--ink-soft);
   background: rgba(255,255,255,.08); border: 1px solid var(--line-2);

@@ -22,7 +22,7 @@ defineProps({ label: { type: String, default: 'Vista' }, icon: { type: String, d
   animation: rise var(--t-cine) var(--ease-silk);
 }
 .ph__glyph {
-  width: 92px; height: 92px; display: grid; place-items: center;
+  width: 5.75rem; height: 5.75rem; display: grid; place-items: center;
   border-radius: var(--r-lg); color: var(--azure);
   background: var(--azure-haze); border: 1px solid var(--line-2);
   box-shadow: var(--glow-azure);

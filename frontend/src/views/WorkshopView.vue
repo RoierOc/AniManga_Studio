@@ -5,6 +5,7 @@ import { useMangaStore } from '@/stores/manga'
 import MangaCard from '@/components/manga/MangaCard.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useWorkshopStore()
 const manga = useMangaStore()
@@ -44,7 +45,7 @@ onMounted(() => store.loadList())
     <div v-if="!st" class="dz" :class="{ 'is-drag': dragging }"
          @dragover.prevent="dragging = true" @dragleave.prevent="dragging = false" @drop.prevent="onDrop">
       <template v-if="store.analyzing">
-        <span class="dz__spin dz__spin--lg" />
+        <Spinner :size="26" />
         <p class="dz__title">Analizando capítulos…</p>
         <p class="dz__hint">Leyendo el archivo y detectando los cortes</p>
       </template>
@@ -79,7 +80,7 @@ onMounted(() => store.loadList())
         <div class="pv__flatrow">
           <input v-model="anchorStart" type="number" min="0" step="1" placeholder="empieza en cap…" class="pv__numin" />
           <button class="btn-xs btn-xs--accent" :disabled="st.busy || !anchorStart" @click="store.anchor(anchorStart)">
-            <span v-if="st.busy" class="dz__spin" /> Auto-detectar por contenido
+            <Spinner v-if="st.busy" :size="14" tone="light" /> Auto-detectar por contenido
           </button>
         </div>
       </div>
@@ -126,7 +127,7 @@ onMounted(() => store.loadList())
       <div class="pv__actions">
         <button class="dz__browse" @click="reset">Cancelar</button>
         <button class="dz__go" :disabled="store.committing || !st.title.trim() || !st.chapters.length" @click="doCommit">
-          <span v-if="store.committing" class="dz__spin" /><Icon v-else name="spark" :size="15" />
+          <Spinner v-if="store.committing" :size="14" tone="light" /><Icon v-else name="spark" :size="15" />
           Importar {{ st.chapters.length }} capítulo(s)
         </button>
       </div>
@@ -140,7 +141,7 @@ onMounted(() => store.loadList())
     <EmptyState v-else-if="!store.items.length" icon="upload" title="Aún no has importado nada."
                 hint="Sube un archivo arriba para empezar." />
     <div v-else class="grid">
-      <MangaCard v-for="m in store.items" :key="m.id" :manga="m" @click="manga.open(m)" />
+      <MangaCard v-for="m in store.items" :key="m.id" :manga="m" @open="manga.open(m)" @play="manga.open(m)" />
     </div>
   </div>
 </template>
@@ -150,7 +151,7 @@ onMounted(() => store.loadList())
 
 .hero { padding: var(--s-5) 0 var(--s-6); }
 .hero__eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
-.hero__tick { width: 14px; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
+.hero__tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
 .hero__title { font-size: var(--fs-3xl); }
 .hero__sub { margin-top: var(--s-2); color: var(--ink-faint); font-size: var(--fs-sm); max-width: 42rem; }
 
@@ -168,8 +169,6 @@ onMounted(() => store.loadList())
 .dz__form { display: flex; gap: var(--s-2); width: 100%; max-width: 28rem; margin-top: var(--s-3); }
 .dz__go { display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-4); border-radius: var(--r-md); background: var(--azure); color: #fff; font-size: var(--fs-sm); font-weight: 500; box-shadow: var(--glow-azure); transition: opacity var(--t-fast); white-space: nowrap; }
 .dz__go:disabled { opacity: .45; box-shadow: none; }
-.dz__spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; animation: spin .7s linear infinite; }
-.dz__spin--lg { width: 26px; height: 26px; border-width: 3px; border-color: var(--azure-haze); border-top-color: var(--azure); }
 
 /* ── Previsualización ─────────────────────────────────────────────────── */
 .pv { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); padding: var(--s-5); }
@@ -214,9 +213,9 @@ onMounted(() => store.loadList())
 .pv__cell.is-start { border-color: var(--azure); }
 .pv__cell.is-cover { border-color: var(--azure-bright); }
 .pv__cellimg { width: 100%; height: 100%; object-fit: cover; display: block; }
-.pv__cellbadge { position: absolute; top: 2px; left: 2px; background: var(--azure); color: #fff; font-size: 10px; line-height: 1; padding: 2px 4px; border-radius: var(--r-sm); }
+.pv__cellbadge { position: absolute; top: 2px; left: 2px; background: var(--azure); color: #fff; font-size: 0.625rem; line-height: 1; padding: 2px 4px; border-radius: var(--r-sm); }
 .pv__cellbadge--cov { background: var(--azure-bright); }
-.pv__cellnum { position: absolute; bottom: 2px; right: 3px; font-size: 9px; color: #fff; text-shadow: 0 1px 2px #000; }
+.pv__cellnum { position: absolute; bottom: 2px; right: 3px; font-size: 0.5625rem; color: #fff; text-shadow: 0 1px 2px #000; }
 
 .pv__actions { display: flex; justify-content: flex-end; gap: var(--s-2); margin-top: var(--s-5); }
 
