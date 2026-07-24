@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# FlareSolverr (empaquetado con PyInstaller) exporta su propio LD_LIBRARY_PATH y luego lanza
+# subprocesos con `sh` para detectar la versión de Chromium. En Arch eso hace que /bin/sh cargue
+# la libreadline del paquete y muera con "undefined symbol: rl_trim_arg_from_keyseq", así que
+# FlareSolverr concluye "Chrome / Chromium version not detected!" y no arranca.
+# Este shim se antepone al PATH y ejecuta el shell real SIN esa variable.
+unset LD_LIBRARY_PATH
+exec /bin/bash "$@"

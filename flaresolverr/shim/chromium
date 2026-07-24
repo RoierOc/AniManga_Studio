@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Shim de Chromium para FlareSolverr en WSLg.
+#
+# FlareSolverr lanza Chromium con `--single-process`, que es oficialmente inestable y ABORTA
+# (SIGABRT en ThreadPoolForeg) bajo el JS pesado del reto de Cloudflare → "invalid session id:
+# browser has closed the connection", de forma intermitente, y Prowlarr fallaba con "blocked by
+# CloudFlare Protection". La solución NO es sólo quitar --single-process (sin zygote, chrome
+# multiproceso sin sandbox no arranca), sino cambiarlo por `--no-zygote`: multiproceso real pero
+# forkeando sin el zygote, que es lo que funciona en entornos sin sandbox (contenedores/WSL).
+args=()
+for a in "$@"; do
+  [ "$a" = "--single-process" ] && continue
+  args+=("$a")
+done
+exec /usr/sbin/chromium \
+  --no-zygote --disable-gpu --disable-dev-shm-usage \
+  "${args[@]}"
