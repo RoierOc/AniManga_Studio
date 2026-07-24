@@ -55,7 +55,8 @@ onMounted(() => {
       </div>
       <label class="searchbox">
         <Icon name="search" :size="16" />
-        <input v-model="store.query" @keyup.enter="store.search()" type="search" placeholder="Buscar manga…" />
+        <input v-model="store.query" @input="store.onQueryInput()" @keyup.enter="store.submitQuery()"
+               type="search" enterkeyhint="search" placeholder="Buscar manga…" />
       </label>
     </header>
 

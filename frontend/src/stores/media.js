@@ -35,6 +35,8 @@ export const useMediaStore = defineStore('media', {
     loading: false,
     loaded: false,
     loadError: '',       // la CARGA entera falló (≠ `errors`, que son fallos por indexer)
+    _searchReqId: 0,     // anti-carrera al buscar mientras se escribe
+    _searchTimer: 0,
 
     detail: null,        // serie/película abierta
     picker: null,        // selector de torrent abierto (ver ReleasePicker)
@@ -213,18 +215,31 @@ export const useMediaStore = defineStore('media', {
     // biblioteca entera con "s.search.trim is not a function". Estado y acción, nombres distintos.
     async runSearch(term) {
       const q = (term ?? this.search).trim()
-      if (!q) { this.results = null; return }
+      if (!q) { this._searchReqId++; this.results = null; this.searching = false; return }
+      // Anti-carrera: buscando mientras se escribe, la respuesta de "bre" puede llegar DESPUÉS
+      // que la de "breaking" y pisarla. Sólo escribe la petición más reciente.
+      const rid = ++this._searchReqId
       this.searching = true; this.searchErr = ''
       try {
         const kind = this.filter === 'movies' ? 'movie' : 'series'
-        this.results = (await api.get(`/api/media/search?q=${encodeURIComponent(q)}&kind=${kind}`)).results || []
+        const r = (await api.get(`/api/media/search?q=${encodeURIComponent(q)}&kind=${kind}`)).results || []
+        if (rid !== this._searchReqId) return
+        this.results = r
       } catch (e) {
+        if (rid !== this._searchReqId) return
         // Un fallo NO se pinta como "sin resultados": confundirlos hace creer que la serie no
         // existe cuando lo que pasa es que Sonarr está caído.
         this.searchErr = e?.body || e?.message || 'no se pudo buscar'
         this.results = null
-      } finally { this.searching = false }
+      } finally { if (rid === this._searchReqId) this.searching = false }
     },
+
+    /* Buscar mientras se escribe; Enter/el botón disparan ya, sin esperar al debounce. */
+    onSearchInput(term) {
+      clearTimeout(this._searchTimer)
+      this._searchTimer = setTimeout(() => this.runSearch(term), 350)
+    },
+    submitSearch(term) { clearTimeout(this._searchTimer); return this.runSearch(term) },
 
     async add(extId, kind) {
       const ui = useUiStore()

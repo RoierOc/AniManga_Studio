@@ -22,7 +22,13 @@ async function add(r) {
 
 async function run() {
   store.filter = kind.value === 'movie' ? 'movies' : 'series'
-  await store.runSearch(term.value)
+  await store.submitSearch(term.value)
+}
+
+// Buscar mientras se escribe (Enter/botón siguen disparando ya, sin esperar al debounce).
+function onType() {
+  store.filter = kind.value === 'movie' ? 'movies' : 'series'
+  store.onSearchInput(term.value)
 }
 </script>
 
@@ -39,7 +45,7 @@ async function run() {
       </div>
       <label class="searchbox">
         <Icon name="search" :size="15" />
-        <input v-model="term" type="search" enterkeyhint="search"
+        <input v-model="term" type="search" enterkeyhint="search" @input="onType"
                :placeholder="kind === 'series' ? 'Título de la serie…' : 'Título de la película…'" />
       </label>
       <button class="msearch__go" type="submit" :disabled="store.searching || !term.trim()">

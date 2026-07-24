@@ -28,9 +28,10 @@ const popularItems = computed(() => store.seasonalPopular.map(a => ({ anime: a }
       <h1>Buscar anime</h1>
       <label class="bigbox">
         <Icon name="search" :size="18" />
-        <input v-model="store.searchQuery" @keyup.enter="store.searchAnime()"
+        <input v-model="store.searchQuery" type="search" enterkeyhint="search"
+               @input="store.onSearchInput()" @keyup.enter="store.submitSearch()"
                placeholder="Título del anime…" autofocus />
-        <button class="bigbox__go" @click="store.searchAnime()">Buscar</button>
+        <button class="bigbox__go" @click="store.submitSearch()">Buscar</button>
       </label>
     </header>
 

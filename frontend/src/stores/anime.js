@@ -118,6 +118,8 @@ export const useAnimeStore = defineStore('anime', {
     searchQuery: '',
     searchResults: [],
     searchError: '',           // la búsqueda falló (≠ sin resultados)
+    _searchReqId: 0,           // anti-carrera al buscar mientras se escribe
+    _searchTimer: 0,
     searchLoading: false,
     torrentAnime: null,          // anime whose torrents are open (null = show results)
     torrents: [],
@@ -1406,21 +1408,39 @@ export const useAnimeStore = defineStore('anime', {
     /* ── Search + torrents ──────────────────────────────────────────────── */
     async searchAnime() {
       const q = this.searchQuery.trim()
-      if (q.length < 2) return
+      // Al BORRAR hasta menos de 2 letras hay que limpiar, o se quedan colgados los resultados
+      // de la consulta anterior bajo una caja que ya no dice eso.
+      if (q.length < 2) { this._searchReqId++; this.searchResults = []; this.searchError = ''; this.searchLoading = false; return }
+      // Anti-carrera: al buscar mientras se escribe, la respuesta de "nar" puede llegar DESPUÉS
+      // que la de "naruto" y pisarla. Sólo escribe el resultado la petición más reciente.
+      const rid = ++this._searchReqId
       this.searchLoading = true
       this.searchResults = []
       this.searchError = ''
       try {
         const d = await api.get(`/api/anime/search?q=${encodeURIComponent(q)}`)
+        if (rid !== this._searchReqId) return
         if (Array.isArray(d)) this.searchResults = d
       } catch (e) {
+        if (rid !== this._searchReqId) return
         // Una búsqueda que revienta NO es una búsqueda sin resultados: decir «nada coincide»
         // manda al usuario a probar otro título cuando el problema es que no hay conexión.
         this.searchError = e?.message || 'No se pudo contactar con el servidor.'
         useUiStore().toast('Error buscando anime', 'error')
       }
-      finally { this.searchLoading = false }
+      // Sólo la petición vigente apaga el spinner: si no, una respuesta vieja lo apagaría
+      // mientras la nueva sigue en vuelo y la rejilla parpadearía a "vacío".
+      finally { if (rid === this._searchReqId) this.searchLoading = false }
     },
+
+    /* Buscar MIENTRAS se escribe (mismo patrón que `discovery.js`). Enter sigue funcionando y
+       dispara ya, sin esperar al debounce. */
+    onSearchInput() {
+      clearTimeout(this._searchTimer)
+      this._searchTimer = setTimeout(() => this.searchAnime(), 350)
+    },
+    submitSearch() { clearTimeout(this._searchTimer); this.searchAnime() },
+
     closeTorrents() { this.torrentAnime = null },
 
     // extraQueries are fetched with category '1_0' (all anime) to also surface Spanish/Non-English

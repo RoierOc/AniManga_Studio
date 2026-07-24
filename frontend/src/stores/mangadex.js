@@ -10,6 +10,8 @@ export const useMangadexStore = defineStore('mangadex', {
     tab: 'followed',            // followed | latest | rating | search
     query: '',
     results: [],                // search results
+    _reqId: 0,                  // anti-carrera al buscar mientras se escribe
+    _qTimer: 0,
     popular: [],                // popular/latest/rating list
     loading: false,
     page: 1,
@@ -108,16 +110,31 @@ export const useMangadexStore = defineStore('mangadex', {
     },
     async search() {
       const q = this.query.trim()
-      if (q.length < 2 && !this.selectedTags.length) { this.results = []; return }
+      if (q.length < 2 && !this.selectedTags.length) { this._reqId++; this.results = []; this.loading = false; return }
       this.tab = 'search'
+      // Anti-carrera: buscando mientras se escribe, una respuesta vieja puede llegar la última
+      // y pisar la buena. Sólo escribe la petición más reciente.
+      const rid = ++this._reqId
       this.loading = true
       try {
         const qs = [`q=${encodeURIComponent(q)}`, this._ratingParams(), this._tagParams()].filter(Boolean).join('&')
-        this.results = await api.get(`/api/mangadex/search?${qs}`) || []
+        const r = await api.get(`/api/mangadex/search?${qs}`) || []
+        if (rid !== this._reqId) return
+        this.results = r
         this._fetchScores(this.results)
-      } catch (_) { useUiStore().toast('Error buscando', 'error') }
-      finally { this.loading = false }
+      } catch (_) {
+        if (rid !== this._reqId) return
+        useUiStore().toast('Error buscando', 'error')
+      }
+      finally { if (rid === this._reqId) this.loading = false }
     },
+
+    /* Buscar mientras se escribe; Enter dispara ya, sin esperar al debounce. */
+    onQueryInput() {
+      clearTimeout(this._qTimer)
+      this._qTimer = setTimeout(() => this.search(), 350)
+    },
+    submitQuery() { clearTimeout(this._qTimer); this.search() },
 
     async _fetchScores(list) {
       const ids = list.map(m => m.mal_id).filter(id => id && !(id in this.scores))
