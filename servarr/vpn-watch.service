@@ -1,0 +1,19 @@
+[Unit]
+# Reata qBittorrent a la VPN cuando Norton reconecta con otra IP de túnel.
+# Instalar:  sudo cp servarr/vpn-watch.service /etc/systemd/system/
+#            sudo systemctl enable --now vpn-watch
+# Ver:       systemctl status vpn-watch   ·   journalctl -u vpn-watch -f
+Description=Reata qBittorrent al adaptador de la VPN tras cada reconexion
+After=network.target
+
+[Service]
+Type=simple
+# Rutas absolutas: si mueves el repo, actualiza estas dos líneas.
+WorkingDirectory=/Manga_Upscaler_project/workspace/manga-upscaler
+ExecStart=/usr/bin/python3 /Manga_Upscaler_project/workspace/manga-upscaler/servarr/vpn-watch.py
+Restart=always
+# 10 s y no 1 s: si qBittorrent está cerrado, reintentar en bucle cerrado solo llena el journal.
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

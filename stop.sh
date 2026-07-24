@@ -26,6 +26,12 @@ if bash "$SCRIPT_DIR/suwayomi/stop.sh" 2>/dev/null | grep -q "stopped"; then
   echo -e "${GREEN}✓  Suwayomi detenido${RESET}"; stopped=1
 fi
 
+# 3b) Servarr: si la app los encendió, la app los apaga (si no, quedan tres .NET zombis
+#     comiendo RAM tras cerrar — el mismo fallo que ya arreglamos con Suwayomi).
+if bash "$SCRIPT_DIR/servarr/stop.sh" 2>/dev/null | grep -q " parado"; then
+  echo -e "${GREEN}✓  Servarr detenido${RESET}"; stopped=1
+fi
+
 # 4) MPV (Windows) que el backend lanzó para el anime — se registran sus PIDs de
 #    Windows en este archivo; los cerramos con taskkill.exe (interop WSL→Windows).
 #    Solo mata los mpv.exe que ESTA app abrió, nunca un mpv ajeno del usuario.

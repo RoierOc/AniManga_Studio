@@ -106,6 +106,15 @@ else
     echo "[start] Suwayomi en modo on-demand (arranca al usar Fuentes)" >&2
 fi
 
+# ── Servarr (Prowlarr + Sonarr + Radarr) ─────────────────────────────────────
+# Series y películas occidentales. Su start.sh ya es idempotente (no relanza lo que escucha),
+# pero espera hasta 60s a que respondan: eso va en SEGUNDO PLANO a propósito, porque arrancar
+# tres .NET no puede retrasar el arranque de la app. SERVARR_SKIP=1 lo desactiva.
+if [[ "${SERVARR_SKIP:-}" != "1" && -x "$SCRIPT_DIR/servarr/start.sh" ]]; then
+    echo "[start] Iniciando Servarr en segundo plano (Prowlarr/Sonarr/Radarr)..." >&2
+    bash "$SCRIPT_DIR/servarr/start.sh" >>"$SCRIPT_DIR/servarr/logs/start.log" 2>&1 &
+fi
+
 # ── qBittorrent ────────────────────────────────────────────────────────────
 # Health-check is OS-agnostic (WebAPI). Auto-launch when absent is just a
 # convenience and branches by OS; QBT_LAUNCH_CMD (.env) skips all detection

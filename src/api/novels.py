@@ -19,6 +19,7 @@ Endpoints (prefijo /api/novels):
 from flask import Blueprint, jsonify, request
 from pathlib import Path
 import os as _os
+import re
 import time as _time
 import threading as _threading
 import subprocess as _subprocess
@@ -160,6 +161,19 @@ def popular():
     return jsonify(data), code
 
 
+@novels_bp.route("/browse")
+def browse():
+    """Navegar el catálogo completo de una fuente nativa (hoy SkyNovels): descubrimiento ES
+    fiable con rating/estado, ordenable, paginado. Ver novels/sidecar/skynovels.cjs."""
+    pid = request.args.get("pluginId", "")
+    if not pid:
+        return jsonify({"error": "pluginId es obligatorio"}), 400
+    data, code = _call("/browse", {"pluginId": pid,
+                                   "page": request.args.get("page", 1),
+                                   "sort": request.args.get("sort", "views")})
+    return jsonify(data), code
+
+
 # ── "Buscar para leer" (fan-out por título) ───────────────────────────────────
 # 258 plugins es demasiado para consultar en cada búsqueda. Se consulta un puñado
 # CURADO por idioma (catálogos grandes y estables); el resto sigue disponible
@@ -170,8 +184,18 @@ def popular():
 # propósito: son catálogos grandes y con FlareSolverr configurado sí responden; si fallan,
 # `find` los reporta como fuente caída y sigue con las demás.
 _CURATED = {
-    "en": ["readnovelfull", "allnovel", "novelbin", "novelfull", "boxnovel"],
-    "es": ["skynovels", "novelasligera", "tunovelaligera", "yuukitls", "novelyra"],
+    # Medido con "Shadow Slave" sobre los 137 plugins EN del índice (86 respondieron, 17 la
+    # tenían): estas son las de catálogo más COMPLETO. libread/novelarrow/novelbuddy daban
+    # 3110 capítulos, readnovelfull/allnovel ~3098, y otras se quedaban en 1736 o en 25.
+    "en": ["libread", "novelarrow", "novelbuddy", "anf.net",
+           "readnovelfull", "allnovel", "novelcool", "novelbin", "novelfull", "boxnovel"],
+    # LNReader solo tiene 16 plugins en español (frente a 137 en inglés): ese es el techo del
+    # ecosistema, no una elección nuestra. De esos 16, responden 9 — se consultan TODOS los que
+    # responden, porque el fan-out es paralelo y con timeout, así que sobran pocos motivos para
+    # dejar fuera ninguno. De los 7 que fallan: 3 tienen el dominio MUERTO (lightnoveldaily,
+    # TCSega, panchotranslations: el DNS ni resuelve) y el resto pide captcha/FlareSolverr.
+    "es": ["skynovels", "tunovelaligera", "yuukitls", "novelyra", "novelasligera",
+           "HasuTL", "oasistranslations", "reinowuxia", "traducciones", "allnovelread"],
 }
 
 
@@ -224,21 +248,110 @@ def prefs():
     return jsonify({**p, "active": _active_ids()})
 
 
+def _queries_for(title: str, al_id=None) -> list:
+    """Títulos a probar. Una novela casi nunca está indexada con el título que
+    muestra el meta-source: los sitios usan el romaji ("Kono Subarashii Sekai ni
+    Shukufuku wo!") o el inglés oficial, y los ES el suyo propio. Se reusa la
+    misma maquinaria de alias que ya alimenta la búsqueda multi-fuente de manga."""
+    out = [title]
+    try:
+        from api import anilist
+        for v in anilist.title_variants(title, al_id=al_id) or []:
+            # Solo variantes en alfabeto latino: las fuentes que consultamos son EN/ES y
+            # no indexan en japonés/tailandés/ruso, así que esas variantes solo gastarían
+            # rondas de fan-out (medido: Konosuba probaba 4 títulos, 2 de ellos inútiles).
+            if v not in out and _is_latin(v):
+                out.append(v)
+    except Exception as e:
+        record_error("novels", e, op="title_variants", title=title)
+
+    # Título BASE (sin subtítulo). Los buscadores de estos sitios son literales y fallan con
+    # títulos largos: "Mushoku Tensei: Jobless Reincarnation" no encuentra nada en allnovel,
+    # pero "Mushoku Tensei" (que es como lo indexan) devuelve la versión de 285 capítulos.
+    for v in list(out):
+        base = re.split(r"[:\-–(]", v, 1)[0].strip()
+        if len(base) >= 4 and base not in out:
+            out.append(base)
+    return out[:6]  # acotado: cada consulta es otra tanda de fan-out (en paralelo)
+
+
+def _is_latin(s: str) -> bool:
+    letters = [c for c in (s or "") if c.isalpha()]
+    if not letters:
+        return False
+    return sum(c.isascii() for c in letters) / len(letters) > 0.6
+
+
+def _relevant(name: str, queries: list) -> bool:
+    """¿Este resultado tiene algo que ver con lo que se buscó?
+
+    Hace falta porque varias fuentes NO devuelven vacío cuando no encuentran nada:
+    devuelven novelas al azar (medido: buscar el título japonés de Konosuba en
+    readnovelfull devolvía "I Have Medicine", "Radiant Blade of the Wilderness"…).
+    Sin este filtro, "no la tienen" se mostraba como diez versiones falsas.
+    No vale el comparador de manga (`_titles_match`, contención simple): con títulos
+    cortos y genéricos mete ruido — buscando "Overlord" aceptaba "I Am Overlord",
+    "Silver Overlord" y "Overlord, Love Me Tender", y enterraba la buena. Aquí se
+    exige que uno sea PREFIJO del otro, que es como se comportan de verdad los
+    títulos ("Overlord (LN)" ✓, "I Am Overlord" ✗; "Mushoku Tensei" ✓ de
+    "Mushoku Tensei: Jobless Reincarnation")."""
+    def canon(s):
+        return "".join(c for c in (s or "").lower() if c.isalnum())
+    a = canon(name)
+    if len(a) < 3:
+        return False
+    for q in queries:
+        b = canon(q)
+        if len(b) < 3:
+            continue
+        if a.startswith(b) or b.startswith(a):
+            return True
+    return False
+
+
+def _best_per_source(results: list) -> list:
+    """Una versión por fuente: la de título más CORTO, que es la entrada canónica
+    (con 10 fuentes, dejar 5 coincidencias de cada una daba 23 opciones para elegir
+    entre 4 fuentes reales). "Overlord (LN)" gana a "Overlord, Love Me Tender"."""
+    best = {}
+    for r in results:
+        pid = r.get("pluginId")
+        if pid not in best or len(r.get("name") or "") < len(best[pid].get("name") or ""):
+            best[pid] = r
+    return list(best.values())
+
+
+def _rank(results: list, es_ids: set) -> list:
+    """Español primero (es el idioma en el que el usuario quiere leer), y dentro
+    de cada grupo se respeta el orden en que respondió cada fuente."""
+    return sorted(results, key=lambda r: 0 if r.get("pluginId") in es_ids else 1)
+
+
 @novels_bp.route("/find", methods=["POST"])
 def find():
-    """Busca un título en varios plugins a la vez → versiones para elegir."""
+    """Busca un título en varios plugins a la vez → versiones para elegir.
+
+    Reintenta con variantes del título hasta encontrar algo: buscar solo por el
+    título que muestra la ficha fallaba en cuanto el sitio lo indexaba en romaji
+    o en español."""
     body = request.get_json(silent=True) or {}
-    q = (body.get("title") or body.get("q") or "").strip()
-    if not q:
+    title = (body.get("title") or body.get("q") or "").strip()
+    if not title:
         return jsonify({"error": "title es obligatorio"}), 400
     # Prioridad: lo que pida la llamada → lo que el usuario haya configurado → curado.
     ids = body.get("pluginIds") or _active_ids()
-    data, code = _call("/find", payload={"q": q, "pluginIds": ids})
-    if code == 200 and isinstance(data, dict):
-        # Un plugin que ya no existe en el índice no es un error del usuario: se
-        # reporta como fuente no consultable, la búsqueda sigue con las demás.
-        data["query"] = q
-    return jsonify(data), code
+    es_ids = set(_CURATED.get("es", []))
+
+    queries = _queries_for(title, body.get("al_id"))
+    data, code = _call("/find", payload={"queries": queries, "pluginIds": ids})
+    if code != 200 or not isinstance(data, dict):
+        return jsonify(data), code
+    # Un plugin cuyo sitio cambió puede devolver objetos VACÍOS ("[{}]", medido en
+    # novelasligera): responde OK pero no parsea nada. Sin título o ruta no hay versión.
+    results = [r for r in (data.get("results") or [])
+               if r.get("name") and r.get("path") and _relevant(r.get("name"), queries)]
+    return jsonify({"results": _rank(_best_per_source(results), es_ids), "sources": data.get("sources") or [],
+                    "query": title, "tried": queries})
 
 
 # ── Biblioteca de novelas ─────────────────────────────────────────────────────
@@ -280,6 +393,21 @@ def library_add():
     })
     save_local_library(lib)
     return jsonify({"success": True, "id": entry_id})
+
+
+@novels_bp.route("/counts", methods=["POST"])
+def counts():
+    """Nº de capítulos de cada versión, para poder elegir con criterio.
+
+    Sin esto se elige a ciegas: la versión ES de Mushoku Tensei tiene 23 capítulos
+    y la EN 285, y ambas se veían igual en la lista."""
+    body = request.get_json(silent=True) or {}
+    items = [{"pluginId": i.get("pluginId"), "path": i.get("path")}
+             for i in (body.get("items") or []) if i.get("pluginId") and i.get("path")]
+    if not items:
+        return jsonify([])
+    data, code = _call("/counts", payload={"items": items})
+    return jsonify(data), code
 
 
 @novels_bp.route("/novel", methods=["POST"])

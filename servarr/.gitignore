@@ -1,0 +1,6 @@
+Prowlarr/
+Sonarr/
+Radarr/
+config/
+logs/
+.tmp-*/

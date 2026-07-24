@@ -14,6 +14,11 @@
 const fs = require('fs');
 const path = require('path');
 const { LIBS } = require('./libs.cjs');
+const { provider: skynovels } = require('./skynovels.cjs');
+
+// Proveedores NATIVOS (API oficial) que SUPLANTAN al plugin scraper del mismo id: más fiables y
+// con navegación de catálogo. Ver skynovels.cjs. `getPlugin`/`listPlugins` los prefieren.
+const NATIVE = { [skynovels.id]: skynovels };
 
 const REPO = process.env.LNREADER_REPO
   || 'https://raw.githubusercontent.com/lnreader/lnreader-plugins/plugins/v3.0.0';
@@ -50,6 +55,12 @@ async function getIndex() {
 async function listPlugins(lang) {
   const idx = await getIndex();
   const slim = idx.map((p) => ({ id: p.id, name: p.name, lang: p.lang, site: p.site, version: p.version, iconUrl: p.iconUrl }));
+  // Los nativos suplantan la entrada del índice del mismo id (o la añaden si no está).
+  for (const p of Object.values(NATIVE)) {
+    const row = { id: p.id, name: p.name, lang: p.lang, site: p.site, version: p.version, iconUrl: p.iconUrl || '', native: true };
+    const i = slim.findIndex((x) => x.id === p.id);
+    if (i >= 0) slim[i] = row; else slim.push(row);
+  }
   return lang ? slim.filter((p) => (p.lang || '').toLowerCase() === lang.toLowerCase()) : slim;
 }
 
@@ -69,6 +80,7 @@ function _evalBundle(src) {
 }
 
 async function getPlugin(id) {
+  if (NATIVE[id]) return NATIVE[id];   // el nativo gana al bundle scraper del mismo id
   if (_loaded.has(id)) return _loaded.get(id);
   const idx = await getIndex();
   const meta = idx.find((p) => p.id === id);
