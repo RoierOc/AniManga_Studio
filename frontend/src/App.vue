@@ -12,6 +12,7 @@ import { useDocTitle } from '@/lib/docTitle'
 import { supportsVT } from '@/lib/vt'
 import Toaster from '@/components/ui/Toaster.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
+import FileDropZone from '@/components/ui/FileDropZone.vue'
 import ActivityDrawer from '@/components/ui/ActivityDrawer.vue'
 import ShortcutsModal from '@/components/ui/ShortcutsModal.vue'
 import CommandPalette from '@/components/ui/CommandPalette.vue'
@@ -201,6 +202,7 @@ watch(() => ui.currentView, () => { crash.value = null })
     <CommandPalette />
     <ShortcutsModal />
     <ConfirmDialog />
+    <FileDropZone />
     <Toaster />
   </div>
 </template>

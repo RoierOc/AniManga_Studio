@@ -174,6 +174,13 @@ async function demoConfirm(danger) {
     </section>
 
     <section class="kit__s">
+      <h2 class="kit__h">Soltar archivos</h2>
+      <p class="kit__note"><Icon name="spark" :size="13" /> No se puede mostrar quieto: arrastra un
+        <strong>.cbz</strong> sobre la ventana (aquí mismo) y aparecerá el overlay a pantalla
+        completa. Funciona en toda la app y lleva el archivo al Taller.</p>
+    </section>
+
+    <section class="kit__s">
       <h2 class="kit__h">Estado de error</h2>
       <p class="kit__note"><Icon name="spark" :size="13" /> «Falló» no es «no había nada»: si una
         carga revienta, esto es lo que se pinta — <strong>nunca</strong> el estado vacío, que
