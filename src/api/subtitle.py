@@ -214,7 +214,7 @@ def _ext_search_jimaku(al_id: str, titles: list, episode: int) -> list:
     return results
 
 
-def _ext_search_opensubtitles(titles: list, episode: int, languages: str = '') -> list:
+def _ext_search_opensubtitles(titles: list, episode: int, languages: str = '', season: int = 1) -> list:
     """Search OpenSubtitles v3. Tries each title variant and filters by title similarity.
     Requires OPENSUBTITLES_API_KEY env var (free account at opensubtitles.com).
     Pass languages='es' to search for Spanish subtitles specifically."""
@@ -258,7 +258,11 @@ def _ext_search_opensubtitles(titles: list, episode: int, languages: str = '') -
         try:
             q: dict = {'query': title}
             if episode > 0:
-                q.update({'type': 'episode', 'season_number': 1, 'episode_number': episode})
+                # La temporada NO puede ir clavada a 1: el anime se numera de corrido (una sola
+                # "temporada" con episodios 1..N) pero una serie occidental es S03E05, y pedir
+                # S01E05 devuelve subtítulos de OTRO episodio — un fallo MUDO, porque el sub baja
+                # y se inyecta igual, sólo que desincronizado y con diálogo que no es el que suena.
+                q.update({'type': 'episode', 'season_number': season, 'episode_number': episode})
             if languages:
                 q['languages'] = languages
             params = _up.urlencode(q)
@@ -618,7 +622,7 @@ def _ext_find_subs(al_id: str, titles: list, episode: int) -> list:
     return results
 
 
-def _ext_find_spanish_subs(titles: list, episode: int) -> list:
+def _ext_find_spanish_subs(titles: list, episode: int, season: int = 1) -> list:
     """Search all sources for pre-made Spanish subtitles (direct inject, no LLM).
     Order: OpenSubtitles ES → Subdl LatAm → Subdivx (best LatAm fansub coverage)."""
     seen_t: set = set()
@@ -629,8 +633,8 @@ def _ext_find_spanish_subs(titles: list, episode: int) -> list:
             clean_titles.append(t)
     print(f'[subtitle] Buscando subs en español: titles={clean_titles}, ep={episode}')
     results = []
-    results.extend(_ext_search_opensubtitles(clean_titles, episode, languages='es'))
-    results.extend(_ext_search_subdl(clean_titles, episode))
+    results.extend(_ext_search_opensubtitles(clean_titles, episode, languages='es', season=season))
+    results.extend(_ext_search_subdl(clean_titles, episode, season=season))
     results.extend(_ext_search_subdivx(clean_titles, episode))
     # Mark all as direct Spanish (no translation needed)
     for r in results:
@@ -1036,24 +1040,33 @@ def fonts_route():
 
 
 # ── Estilo en vivo: qué estilos del archivo son diálogo y cuáles carteles ──────────────────────
-def _parse_style_names(ass_path: str) -> list:
-    """Nombres de los Style: de una cabecera ASS ya extraída."""
-    names, cols = [], None
+def _parse_style_header(ass_path: str) -> tuple:
+    """(nombres de Style:, PlayResY) de una cabecera ASS ya extraída.
+
+    El PlayResY hace falta porque el `Fontsize` de ASS es RELATIVO a él: `Fontsize=26` se ve el
+    DOBLE de grande en un script de PlayResY=360 que en uno de 720. Vive en [Script Info], antes
+    de [Events], así que se lee en la misma pasada. None si el script no lo declara."""
+    names, cols, res_y = [], None, None
     try:
         for line in open(ass_path, encoding='utf-8', errors='replace'):
             s = line.strip()
             low = s.lower()
             if low.startswith('[events]'):
                 break
-            if low.startswith('format:') and 'name' in low:
+            if low.startswith('playresy:'):
+                try:
+                    res_y = int(s.split(':', 1)[1].strip())
+                except ValueError:
+                    pass
+            elif low.startswith('format:') and 'name' in low:
                 cols = [c.strip().lower() for c in s.split(':', 1)[1].split(',')]
             elif low.startswith('style:') and cols:
                 vals = [v.strip() for v in s.split(':', 1)[1].split(',')]
                 if len(vals) == len(cols) and 'name' in cols:
                     names.append(vals[cols.index('name')])
     except OSError:
-        return []
-    return names
+        return [], None
+    return names, res_y
 
 
 def _ass_headers(path: str, sub_indexes: list) -> dict:
@@ -1082,7 +1095,7 @@ def _ass_headers(path: str, sub_indexes: list) -> dict:
         subprocess.run(cmd, capture_output=True, env={**os.environ, 'LC_ALL': 'C.UTF-8'})
         # Sin comprobar returncode: si UNA pista falla, ffmpeg devuelve != 0 pero el resto de
         # salidas sí se escribieron. Se toma lo que haya.
-        return {i: _parse_style_names(o) for i, o in outs.items() if os.path.exists(o)}
+        return {i: _parse_style_header(o) for i, o in outs.items() if os.path.exists(o)}
 
 
 _styles_cache: dict = {}
@@ -1109,12 +1122,24 @@ def ass_style_split(path: str) -> dict:
             return _styles_cache[key]
 
     dialogue, signs = set(), set()
+    res_ys = []
     idxs = [t['sub_index'] for t in _ffprobe_tracks(path) if t['codec'] in ('ass', 'ssa')]
-    for names in _ass_headers(path, idxs).values():
+    for names, res_y in _ass_headers(path, idxs).values():
+        has_dialogue = False
         for n in names:
-            (signs if _is_sign_style(n) else dialogue).add(n)
+            if _is_sign_style(n):
+                signs.add(n)
+            else:
+                dialogue.add(n); has_dialogue = True
+        # Solo cuentan las pistas con DIÁLOGO: es su Fontsize el que escalamos, no el de una
+        # pista de solo-carteles con otra resolución.
+        if has_dialogue and res_y:
+            res_ys.append(res_y)
     dialogue -= signs
-    res = {"dialogue": sorted(dialogue), "signs": sorted(signs)}
+    # PlayResY representativo = el más común entre las pistas de diálogo (un release suele ser
+    # homogéneo: todas 720 o todas 360). None si ninguna lo declara → no se escala.
+    play_res_y = max(set(res_ys), key=res_ys.count) if res_ys else None
+    res = {"dialogue": sorted(dialogue), "signs": sorted(signs), "play_res_y": play_res_y}
     with _styles_lock:
         if len(_styles_cache) > 64:         # cota: es un cache de conveniencia, no un índice
             _styles_cache.clear()
@@ -1122,8 +1147,27 @@ def ass_style_split(path: str) -> dict:
     return res
 
 
+# Resolución de referencia para el tamaño de subtítulo: el valor que pides ("26") significa
+# "26 a 720p". Los scripts de 720 se quedan igual; los de 360 se escalan a la mitad para que se
+# VEAN igual. 720 es la res más común en los releases de la biblioteca (medido).
+_SUB_REF_RES_Y = 720
+
+
+def _scale_metric(value: str, play_res_y) -> str:
+    """Escala un tamaño en unidades de script (Fontsize/Outline/Shadow) para que su tamaño VISUAL
+    no dependa del PlayResY del script. `26` a 360 → `13` (13/360 == 26/720). Entero, mínimo 1."""
+    if not play_res_y or play_res_y == _SUB_REF_RES_Y:
+        return value
+    try:
+        scaled = round(float(value) * play_res_y / _SUB_REF_RES_Y)
+    except ValueError:
+        return value
+    return str(max(1, scaled))
+
+
 def ass_style_overrides(styles: list, font: str = '', size: str = '',
-                        bold: str = '', outline: str = '', shadow: str = '') -> str:
+                        bold: str = '', outline: str = '', shadow: str = '',
+                        play_res_y=None) -> str:
     """Construye el valor de `sub-ass-style-overrides` de mpv para los estilos dados.
 
     MEDIDO sobre archivos reales: `Default.Fontname=X` deja los carteles BYTE A BYTE idénticos,
@@ -1131,12 +1175,21 @@ def ass_style_overrides(styles: list, font: str = '', size: str = '',
     emita una entrada POR ESTILO de diálogo en vez de una global: es la única forma de respetar
     el tipografiado que el grupo casó con el arte del vídeo.
 
+    `size`/`outline`/`shadow` se ESCALAN por el PlayResY del script (ver `_scale_metric`): sin
+    esto, el mismo tamaño se veía el doble de grande en un anime de PlayResY=360 que en uno de
+    720 — que era justo el bug ("el tamaño cambia según el anime").
+
     OJO: no se pueden usar estilos cuyo nombre lleve ',' o '=' (romperían el parseo de la opción
     y libass parte por el ÚLTIMO '='). La ',' es imposible en ASS (el formato es CSV), pero el
     '=' no, así que se descartan.
     """
-    fields = [(k, v) for k, v in (('Fontname', font), ('Fontsize', size), ('Bold', bold),
-                                  ('Outline', outline), ('Shadow', shadow)) if v != '']
+    fields = [(k, v) for k, v in (
+        ('Fontname', font),
+        ('Fontsize', _scale_metric(size, play_res_y)),
+        ('Bold', bold),
+        ('Outline', _scale_metric(outline, play_res_y)),
+        ('Shadow', _scale_metric(shadow, play_res_y)),
+    ) if v != '']
     if not fields:
         return ''
     out = []
@@ -1166,7 +1219,7 @@ def styles_route():
         split['dialogue'],
         font=request.args.get('font', ''), size=request.args.get('size', ''),
         bold=request.args.get('bold', ''), outline=request.args.get('outline', ''),
-        shadow=request.args.get('shadow', ''))})
+        shadow=request.args.get('shadow', ''), play_res_y=split.get('play_res_y'))})
 
 
 def _rebuild_ass(header: list, events: list, translated: list) -> str:
@@ -1469,8 +1522,10 @@ def _translate_batch_ollama_raw(texts: list, src_lang: str = 'eng') -> list:
 
 
 def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_subs: int,
-                  src_lang: str = 'eng', external_sub_info: dict = None):
+                  src_lang: str = 'eng', external_sub_info: dict = None, force_engine: str = None):
     global _OLLAMA_TASK_COUNT
+    # El lote fuerza el motor (Ollama) sin tocar la config global TRANSLATION_ENGINE.
+    engine = force_engine or _engine()
     task = _tasks[task_id]
     _cancel_flags.setdefault(task_id, False)
     done_count  = threading.Lock()
@@ -1558,7 +1613,7 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
             quota_hit  = False
             _cancelled = False
 
-            if key and _engine() != 'ollama':
+            if key and engine != 'ollama':
                 g_batches = [texts[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
                 n_g = len(g_batches)
                 try:
@@ -1622,7 +1677,7 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
 
             if missing_positions:
                 ollama_used[0] = True
-                if _engine() == 'ollama':
+                if engine == 'ollama':
                     reason = 'motor local'
                 elif not key:
                     reason = 'sin clave Gemini'
@@ -1813,6 +1868,10 @@ def subtitle_tracks():
     anime_id   = request.args.get('anime_id', '')
     local_path = request.args.get('local_path', '')
     ep_type    = request.args.get('ep_type', 'episode')
+    # Series/películas occidentales: no viven en la biblioteca de anime, así que traen su
+    # identidad puesta (títulos + temporada) en vez de buscarse por `anime_id`.
+    season     = int(request.args.get('season', 1) or 1)
+    ext_titles = [t for t in request.args.getlist('titles') if t.strip()]
 
     path = _resolve_video_path(info_hash, episode, anime_id, local_path)
     if not path or not os.path.exists(path):
@@ -1825,7 +1884,7 @@ def subtitle_tracks():
     embedded_spanish = [t for t in all_tracks if is_es_track(t)]
     tracks = [t for t in all_tracks if not is_es_track(t)]
 
-    titles = _get_anime_titles(anime_id)
+    titles = ext_titles or _get_anime_titles(anime_id)
     external_tracks = []
     spanish_tracks  = []
     sources_missing_key = []
@@ -1837,7 +1896,7 @@ def subtitle_tracks():
         sources_missing_key.append('opensubtitles')
     else:
         # Always search for pre-made Spanish subs (no GPU needed)
-        spanish_tracks = _ext_find_spanish_subs(titles, effective_episode)
+        spanish_tracks = _ext_find_spanish_subs(titles, effective_episode, season=season)
 
     # OJO: la condición mira `all_tracks`, no `tracks`. Un archivo que sólo trae subtítulos en
     # español TIENE pistas y no necesita nada; salir a buscar subs externos ahí sería absurdo.

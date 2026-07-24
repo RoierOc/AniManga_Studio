@@ -197,6 +197,22 @@ def test_zero_is_a_real_value_not_absence():
     assert ass_style_overrides(['Default'], shadow='0') == 'Default.Shadow=0'
 
 
+def test_fontsize_is_scaled_by_playresy_so_size_is_consistent_across_anime():
+    """EL BUG: el tamaño cambiaba según el anime. `Fontsize=26` se ve el DOBLE de grande en un
+    script de PlayResY=360 que en uno de 720 (26/360 vs 26/720). Se escala a la referencia 720
+    para que el tamaño VISUAL sea idéntico. Medido en Uma Musume (720) vs Kobayashi (360)."""
+    # 720 (referencia) → sin cambios.
+    assert ass_style_overrides(['Default'], size='26', play_res_y=720) == 'Default.Fontsize=26'
+    # 360 → la mitad, para VERSE igual: 13/360 == 26/720.
+    assert ass_style_overrides(['Default'], size='26', play_res_y=360) == 'Default.Fontsize=13'
+    # 1080 → mayor en unidades de script, mismo tamaño visual: 39/1080 == 26/720.
+    assert ass_style_overrides(['Default'], size='26', play_res_y=1080) == 'Default.Fontsize=39'
+    # Outline y sombra también son unidades de script → también se escalan.
+    assert ass_style_overrides(['Default'], outline='2', play_res_y=360) == 'Default.Outline=1'
+    # Sin PlayResY conocido → no se escala (comportamiento antiguo, seguro).
+    assert ass_style_overrides(['Default'], size='26') == 'Default.Fontsize=26'
+
+
 # --------------------------------------------------------------------------- ya está en español
 @pytest.mark.parametrize('lang, es', [
     ('spa', True), ('es', True),
