@@ -33,6 +33,7 @@ _ALLOWED_HOSTS = {
     'uploads.mangadex.org',
     'images.mangabaka.dev',   # Manga Hub: portadas raw del agregador
     'cdn.mangabaka.dev',      # Manga Hub: variantes dimensionadas (x350@2 ≈ 700px) — las que se usan
+    'artworks.thetvdb.com',   # Series/pelis: es lo que devuelve Sonarr en `remoteUrl`
 }
 
 
@@ -86,24 +87,66 @@ def warm(url):
         pass
 
 
-def _thumb_for(dest, key, width):
-    """Tiny downscaled JPEG next to the cached original — the blur-up
-    placeholder the cards paint (blurred) while the full cover loads.
-    Returns the thumb path, or None if the original can't be decoded."""
-    thumb = _CACHE_DIR / f'{key}_w{width}.thumb.jpg'
-    if thumb.exists() and thumb.stat().st_size > 0:
-        return thumb
+# ── Escalera de tamaños ───────────────────────────────────────────────────────────────────────
+# Anchos DISCRETOS: cada uno es un fichero en caché, así que aceptar cualquier `w` significaría
+# un fichero por píxel pedido (y un vector para llenar el disco desde fuera). El cliente pide el
+# ancho que necesita y aquí se sube al peldaño siguiente.
+#   28/48/96 → blur-up (se pintan desenfocados: la calidad da igual)
+#   320-900  → la imagen REAL de una tarjeta. Una portada 2:3 a 14rem mide ~225-295 px CSS, que
+#              en pantalla HiDPI (dpr 2) son ~590 px → 640 es el peldaño normal de una tarjeta.
+_LADDER = (28, 48, 96, 320, 480, 512, 640, 900)
+_BLUR_MAX = 96          # por encima de esto la imagen SE VE: sube la calidad
+
+# Sólo se re-codifica si el destino es MUCHO más pequeño que el original. MEDIDO: las portadas de
+# AniList llegan a 780 px y 223 KB, ya bien comprimidas; rehacerlas a 640 da 206 KB — un 8% menos
+# a cambio de una segunda pasada de JPEG (pérdida de generación). No compensa: por debajo de este
+# umbral se sirve el original, que pesa casi igual y se ve mejor. Donde SÍ compensa es lo que de
+# verdad viene enorme (pósters de TMDB de 1024-1200 px y >1 MB) y las pantallas sin HiDPI.
+_WORTH_IT = 0.75
+
+
+def _snap(width: int) -> int:
+    return next((w for w in _LADDER if width <= w), _LADDER[-1])
+
+
+def _render_variant(src, key: str, width: int):
+    """Rendición JPEG de `src` a `width` px de ancho, cacheada en disco. Devuelve la ruta, o
+    None si no se puede decodificar (el llamante sirve entonces el original).
+
+    NUNCA amplía, y tampoco reduce por poco (ver `_WORTH_IT`): en ambos casos devuelve None y el
+    llamante sirve el original, que se ve mejor y pesa lo mismo.
+    """
+    out = _CACHE_DIR / f'{key}_w{width}.thumb.jpg'
+    if out.exists() and out.stat().st_size > 0:
+        return out
     try:
         from PIL import Image
-        with Image.open(dest) as im:
-            im = im.convert('RGB')
-            im.thumbnail((width, width * 2))
-            tmp = thumb.with_suffix(f'.{os.getpid()}-{threading.get_ident()}.part')
-            im.save(tmp, 'JPEG', quality=55)
-        tmp.replace(thumb)
-        return thumb
+        with Image.open(src) as im:
+            # El blur-up SIEMPRE se genera (28 px desde 780 es una reducción brutal); para los
+            # tamaños visibles, sólo si el recorte merece la pena.
+            if width > _BLUR_MAX and width > im.width * _WORTH_IT:
+                return None
+            if im.width <= width:
+                return None
+            h = max(1, round(im.height * (width / float(im.width))))
+            # LANCZOS: las portadas de manga llevan TEXTO, y con bicúbico el título se emborrona
+            # al reducir. `subsampling=0` (4:4:4) evita el sangrado de color en los rótulos.
+            im = im.convert('RGB').resize((width, h), Image.LANCZOS)
+            q = 70 if width <= _BLUR_MAX else 86
+            tmp = out.with_suffix(f'.{os.getpid()}-{threading.get_ident()}.part')
+            im.save(tmp, 'JPEG', quality=q, subsampling=0, optimize=True, progressive=True)
+        tmp.replace(out)
+        return out
     except Exception:
         return None
+
+
+def render_cached(src, cache_key: str, width: int):
+    """Igual que `_render_variant` pero para ficheros de FUERA de este caché (p.ej. el cover.jpg
+    de una carpeta de la biblioteca). `cache_key` debe incluir algo que cambie con el contenido
+    —el mtime— o una portada nueva se serviría con la rendición vieja."""
+    _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    return _render_variant(src, hashlib.sha256(cache_key.encode()).hexdigest(), _snap(width))
 
 
 @imgproxy_bp.route('')
@@ -124,11 +167,10 @@ def proxy():
         width = int(request.args.get('w', 0))
     except ValueError:
         width = 0
-    if width:
-        width = max(8, min(width, 64))
-        thumb = _thumb_for(dest, hashlib.sha256(url.encode()).hexdigest(), width)
+    if width > 0:
+        thumb = _render_variant(dest, hashlib.sha256(url.encode()).hexdigest(), _snap(width))
         if thumb is not None:
             return send_file(str(thumb), max_age=_MAX_AGE, conditional=True)
-        # undecodable original → serve it as-is rather than 500 the placeholder
+        # original indescifrable, o ya más pequeño que lo pedido → se sirve tal cual
 
     return send_file(str(dest), max_age=_MAX_AGE, conditional=True)

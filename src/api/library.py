@@ -3,7 +3,7 @@
 Library API - Manage local manga library
 """
 
-from flask import Blueprint, jsonify, request, Response
+from flask import Blueprint, jsonify, request, Response, send_file
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
@@ -233,8 +233,7 @@ def _chapter_sort_key(value):
 
 library_bp = Blueprint('library', __name__)
 
-@library_bp.route('')
-def get_library():
+def _scan_folders():
     # Build a title→cover lookup from local_library.json + disk cover cache
     lib_covers: dict = _load_cover_cache()
     lib_json = Path(manga_dir()) / 'local_library.json'
@@ -316,7 +315,25 @@ def get_library():
     prune(_libcount_key, [x['name'] for x in folders])
     prune(_libup_key, [x['name'] for x in folders])
     folders.sort(key=lambda x: x['name'].lower())
-    return jsonify(folders)
+    return folders
+
+
+@library_bp.route('')
+def get_library():
+    return jsonify(_scan_folders())
+
+
+@library_bp.route('/overview')
+def get_overview():
+    """Biblioteca lista para pintar: disco + seguimiento ya cruzados.
+
+    El emparejamiento (por identidad de fuente, por id, y sólo en último recurso por título)
+    lo hacía el navegador con dos peticiones; ahora es una sola y la regla vive junto al resto
+    de la lógica de identidad. Ver `library_overview.py`.
+    """
+    from api.library_overview import build_overview, safe_tracked
+    from api.mangadex import load_local_library
+    return jsonify(build_overview(_scan_folders(), safe_tracked(load_local_library)))
 
 
 @library_bp.route('/cache_cover', methods=['POST'])
@@ -803,17 +820,15 @@ def find_manga_folder(query):
 _offline_cover_status = {"running": False, "done": 0, "total": 0, "errors": 0}
 
 
-def _micro_thumb(data: bytes, w: int):
-    """Miniatura minúscula (blur-up) desde bytes de portada. Devuelve JPEG o None."""
+def _cover_variant(path: Path, w: int):
+    """Rendición de la portada al ancho pedido, cacheada en disco. Delega en `imgproxy` para que
+    la escalera de anchos y la calidad estén definidas UNA vez (antes esto topaba en 96 px y
+    calidad 70: sólo servía para el blur-up, no para la imagen real de la tarjeta).
+
+    La clave de caché lleva el mtime → cambiar la portada invalida sus rendiciones."""
     try:
-        from io import BytesIO
-        from PIL import Image
-        im = Image.open(BytesIO(data)); im.load()
-        ow, oh = im.size
-        w = max(8, min(96, w))
-        im = im.resize((w, max(1, round(oh * (w / float(ow))))), Image.LANCZOS)
-        out = BytesIO(); im.convert('RGB').save(out, format='JPEG', quality=70)
-        return out.getvalue()
+        from api.imgproxy import render_cached
+        return render_cached(path, f'{path}:{path.stat().st_mtime_ns}', w)
     except Exception:
         return None
 
@@ -846,14 +861,14 @@ def serve_manga_thumb(folder):
     if resp is None:
         return 'not found', 404
 
-    # Blur-up: reescala a un thumb minúsculo desde el cover local recién servido.
+    # `?w=` sirve tanto el blur-up (28 px) como la imagen real de la tarjeta (640): una portada
+    # de 91 KB se pinta en una caja de ~250 px, así que servirla entera es tirar decodificación.
     if w:
         p = next((base / f'cover.{e}' for e in ('jpg', 'png', 'webp') if (base / f'cover.{e}').exists()), None)
         if p:
-            micro = _micro_thumb(p.read_bytes(), w)
-            if micro:
-                return Response(micro, mimetype='image/jpeg',
-                                headers={'Cache-Control': 'public, max-age=86400'})
+            variant = _cover_variant(p, w)
+            if variant is not None:
+                return send_file(str(variant), max_age=86400, conditional=True)
     return resp
 
 

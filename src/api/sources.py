@@ -597,6 +597,28 @@ def _resolve_source_manga_id(source_id: str, title: str, url: str = "", strict: 
     return (mangas[0]["id"], mangas[0].get("url") or "", "ok") if mangas else (None, "", "none")
 
 
+def reresolve_manga_id(source_id: str, title: str, url: str = "", current_id=None):
+    """Devuelve el mangaId ACTUAL de una obra cuyo id numérico pudo DERIVAR, y lo persiste.
+
+    El id numérico de Suwayomi es efímero: si su DB se reconstruye, el id guardado (en historial,
+    progreso o pin) apunta a nada — `_chapters_map` sale vacío, indistinguible de "sin páginas".
+    Re-resuelve por url (ancla estable) o título, persiste en `.source_meta.json` y lo devuelve.
+    `int | None` (None si no hay match fiable o la búsqueda falló). Ver [[project_source_id_drift]].
+    Reúne lo que el endpoint de capítulos hacía inline, para que TODO re-resolvedor (trasplante,
+    continuar-leyendo) pase por la misma costura en vez de reimplementarla."""
+    if not (source_id and title):
+        return None
+    new_id, new_url, _st = _resolve_source_manga_id(str(source_id), title, url, strict=True)
+    if not new_id:
+        return None
+    try:
+        if current_id is not None and int(new_id) != int(current_id):
+            _persist_source_meta_id(int(current_id), int(new_id), title, new_url)
+    except (TypeError, ValueError):
+        pass
+    return int(new_id)
+
+
 def _persist_source_meta_id(old_id: int, new_id: int, title: str = "", new_url: str = ""):
     """Reescribe el mangaId derivado en el `.source_meta.json`: TANTO el `mangaId` top-level
     (origen) COMO el `recommended_source.mangaId` (la versión FIJADA) — el cruce de Ao no Hako

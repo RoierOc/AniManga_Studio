@@ -1244,45 +1244,64 @@ def _candidate_chapter_urls(cand, title, want_num=None):
         uuid = parts[0]
         group = parts[2] if len(parts) > 2 else None
         return _md_candidate_chapter_urls(uuid, cand.get("sourceLang"), want_num, group)
-    cmap = _chapters_map(int(mid), timeout=_SAMPLE_TIMEOUT)
-    if not cmap:
-        return (None, [])
-    if want_num is not None:
-        # El capítulo pedido puede venir troceado en la fuente (45, 45.1, 45.2 …): fusiona sus
-        # partes contiguas y concatena sus páginas. Si no existe → vacío (NUNCA sustituir por
-        # otro capítulo; antes caía al 1º → trasplantaba el capítulo equivocado).
-        wn = _chnum(str(want_num))
-        units = list(_split_part_units(cmap.values(), lambda c: c.get("number")))
-        unit = next((u for u in units if _chnum(u["number"]) == wn), None)
-        members = unit["members"] if unit else None
-        if members is None:
-            # nº pedido = parte fusionada bajo su entero (serie numerada X.Y sin entero suelto):
-            # casa contra el número REAL de cada miembro y devuelve ese capítulo exacto.
-            for u in units:
-                m = [c for c in u["members"] if _chnum(c.get("number")) == wn]
-                if m:
-                    members = m
-                    break
-        if not members:
+    def _resolve(mid_):
+        """(numero, urls) de la obra Suwayomi `mid_`, o (None, []) si no da páginas."""
+        cmap = _chapters_map(int(mid_), timeout=_SAMPLE_TIMEOUT)
+        if not cmap:
             return (None, [])
-        urls = []
-        for c in members:
-            try:
-                urls += _chapter_page_urls(c["id"], timeout=_SAMPLE_TIMEOUT)
-            except Exception:
-                pass
-        return ((unit["number"] if unit else str(want_num)), urls)
-    # Sin capítulo pedido (muestreo de calidad): uno representativo.
-    ordered = sorted(cmap.values(),
-                     key=lambda c: float(c["number"]) if c["number"] is not None else 0)
-    with_pages = [c for c in ordered if (c.get("pageCount") or 1) > 0] or ordered
-    ch = with_pages[0] if with_pages else None
-    if not ch:
-        return (None, [])
-    try:
-        return (ch.get("number"), _chapter_page_urls(ch["id"], timeout=_SAMPLE_TIMEOUT))
-    except Exception:
-        return (ch.get("number"), [])
+        if want_num is not None:
+            # El capítulo pedido puede venir troceado en la fuente (45, 45.1, 45.2 …): fusiona sus
+            # partes contiguas y concatena sus páginas. Si no existe → vacío (NUNCA sustituir por
+            # otro capítulo; antes caía al 1º → trasplantaba el capítulo equivocado).
+            wn = _chnum(str(want_num))
+            units = list(_split_part_units(cmap.values(), lambda c: c.get("number")))
+            unit = next((u for u in units if _chnum(u["number"]) == wn), None)
+            members = unit["members"] if unit else None
+            if members is None:
+                # nº pedido = parte fusionada bajo su entero (serie numerada X.Y sin entero suelto):
+                # casa contra el número REAL de cada miembro y devuelve ese capítulo exacto.
+                for u in units:
+                    m = [c for c in u["members"] if _chnum(c.get("number")) == wn]
+                    if m:
+                        members = m
+                        break
+            if not members:
+                return (None, [])
+            urls = []
+            for c in members:
+                try:
+                    urls += _chapter_page_urls(c["id"], timeout=_SAMPLE_TIMEOUT)
+                except Exception:
+                    pass
+            return ((unit["number"] if unit else str(want_num)), urls)
+        # Sin capítulo pedido (muestreo de calidad): uno representativo.
+        ordered = sorted(cmap.values(),
+                         key=lambda c: float(c["number"]) if c["number"] is not None else 0)
+        with_pages = [c for c in ordered if (c.get("pageCount") or 1) > 0] or ordered
+        ch = with_pages[0] if with_pages else None
+        if not ch:
+            return (None, [])
+        try:
+            return (ch.get("number"), _chapter_page_urls(ch["id"], timeout=_SAMPLE_TIMEOUT))
+        except Exception:
+            return (ch.get("number"), [])
+
+    number, urls = _resolve(mid)
+    if not urls:
+        # El mangaId numérico de Suwayomi es EFÍMERO: si la DB se reconstruyó, el id guardado
+        # (historial/progreso/pin) apunta a una entrada MUERTA que conserva filas de capítulo
+        # obsoletas (cmap no vacío) pero sin páginas reales → "fuente sin páginas ahora" al
+        # reanudar. Comprobamos SÓLO cuando ya salió vacío (coste cero en el camino feliz):
+        # re-resolvemos el id por título+url (ancla estable) y reintentamos una vez.
+        # Ver [[project_source_id_drift]].
+        try:
+            from api.sources import reresolve_manga_id
+            new_mid = reresolve_manga_id(sid, title, cand.get("url") or "", current_id=mid)
+        except Exception:
+            new_mid = None
+        if new_mid and new_mid != int(mid):
+            number, urls = _resolve(new_mid)
+    return (number, urls)
 
 
 def _candidate_chapter_numbers(cand, title) -> list:

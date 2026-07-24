@@ -80,6 +80,7 @@ from api.cbz import cbz_bp
 from api.anilist import anilist_bp
 from api.anime import anime_bp
 from api.subtitle import subtitle_bp
+from api.subtitle_batch import subbatch_bp
 from api.imgproxy import imgproxy_bp
 from api.backup import backup_bp
 from api.transplant import transplant_bp
@@ -102,6 +103,7 @@ app.register_blueprint(cbz_bp, url_prefix='/api/cbz')
 app.register_blueprint(anilist_bp, url_prefix='/api/anilist')
 app.register_blueprint(anime_bp, url_prefix='/api/anime')
 app.register_blueprint(subtitle_bp, url_prefix='/api/subtitle')
+app.register_blueprint(subbatch_bp, url_prefix='/api/subtitle/batch')
 app.register_blueprint(imgproxy_bp, url_prefix='/api/img')
 app.register_blueprint(backup_bp, url_prefix='/api/backup')
 app.register_blueprint(transplant_bp, url_prefix='/api/transplant')
@@ -120,6 +122,8 @@ from api.config_store import config_bp
 app.register_blueprint(config_bp, url_prefix='/api/config')
 from api.sync import sync_bp
 app.register_blueprint(sync_bp, url_prefix='/api/sync')
+from api.media import media_bp
+app.register_blueprint(media_bp, url_prefix='/api/media')
 
 
 # Suwayomi es on-demand (ver sources.py: ensure_suwayomi + reaper de inactividad).
@@ -129,6 +133,19 @@ if os.environ.get('SUWAYOMI_EAGER') == '1':
     import threading as _threading
     _threading.Thread(target=_ensure_suwayomi, daemon=True).start()
     print('[startup] Suwayomi eager start requested', flush=True)
+
+
+# Precalienta la biblioteca de anime en segundo plano: el primer /api/anime/library en frío
+# cuesta ~1 s (escaneo DrvFS + qBittorrent) y es la vista de aterrizaje — sin esto, cada
+# arranque son un segundo de esqueletos. El test_client ejecuta la vista real, así que llena
+# exactamente los mismos cachés por carpeta que la petición del frontend.
+def _warm_anime_library():
+    from api.observability import swallow
+    with swallow('anime', 'warm_library'):
+        app.test_client().get('/api/anime/library')
+
+import threading as _t
+_t.Thread(target=_warm_anime_library, daemon=True).start()
 
 
 # ── Ciclo de vida (app de escritorio / sidecar) ───────────────────────────────
@@ -231,6 +248,14 @@ def legacy_index():
 @app.route('/assets/<path:filename>')
 def serve_spa_assets(filename):
     return send_from_directory(str(FRONTEND_DIST / 'assets'), filename)
+
+@app.route('/fonts/<path:filename>')
+def serve_spa_fonts(filename):
+    # Fuentes autoalojadas (frontend/public/fonts → dist/fonts). Inmutables por contenido no,
+    # pero cambian casi nunca: caché de un día para no re-pedirlas en cada arranque.
+    r = send_from_directory(str(FRONTEND_DIST / 'fonts'), filename)
+    r.headers['Cache-Control'] = 'public, max-age=86400'
+    return r
 
 @app.route('/favicon.svg')
 def serve_favicon():

@@ -495,6 +495,14 @@ def variants_route():
     return jsonify(title_variants(title or None, int(al_id) if al_id.isdigit() else None, media_type))
 
 
+@anilist_bp.route('/manga/banners', methods=['POST'])
+def manga_banners():
+    """Arte horizontal para el hero de Biblioteca. Ver `manga_banners.py` (lote + caché 7 d)."""
+    from api.manga_banners import banners_for
+    titles = (request.get_json(silent=True) or {}).get('titles') or []
+    return jsonify(banners_for(titles))
+
+
 @anilist_bp.route('/genres')
 def get_genres():
     """Genres + all non-adult non-spoiler tags from AniList, combined and sorted. Cached 1 h."""

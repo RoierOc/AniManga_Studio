@@ -938,10 +938,37 @@ def _scan_local_episodes(folder_path: str, overrides: dict = None) -> list:
 
     # Skip the filesystem entirely if we checked this folder recently — avoids
     # paying DrvFS stat latency again on every poll/page-load within the TTL.
+    # Pasado el TTL, Stale-While-Revalidate: se sirve el caché YA y un hilo re-escanea.
+    # Antes el recheck era síncrono → cada visita tras >10 s de reposo costaba ~1 s de
+    # stats DrvFS (medido) justo en la vista de aterrizaje. El dato fresco llega en la
+    # siguiente petición (el front re-pide cada 15 s mientras descarga, y en cada
+    # navegación); un episodio nuevo tarda un poll en aparecer, no un segundo en cada open.
     now = time.time()
     cached = _scan_cache.get(wsl_path)
-    if cached and cached[1] == overrides_key and now - _folder_checked_at.get(wsl_path, 0) < _FOLDER_MTIME_TTL:
+    if cached and cached[1] == overrides_key:
+        if now - _folder_checked_at.get(wsl_path, 0) < _FOLDER_MTIME_TTL:
+            return cached[2]
+        if wsl_path not in _scan_refreshing:
+            _scan_refreshing.add(wsl_path)
+            def _refresh(path=wsl_path, ov=dict(overrides)):
+                try:
+                    _scan_local_episodes_sync(path, ov)
+                finally:
+                    _scan_refreshing.discard(path)
+            threading.Thread(target=_refresh, daemon=True).start()
         return cached[2]
+    return _scan_local_episodes_sync(wsl_path, overrides)
+
+
+_scan_refreshing: set = set()
+
+
+def _scan_local_episodes_sync(wsl_path: str, overrides: dict) -> list:
+    """Escaneo real (bloqueante) de una carpeta; actualiza el caché. Lo llama el camino
+    frío (sin caché) y el hilo de refresco del SWR de arriba."""
+    overrides_key = str(sorted(overrides.items()))
+    now = time.time()
+    cached = _scan_cache.get(wsl_path)
 
     p = _Path(wsl_path)
     if not p.exists():
@@ -1633,6 +1660,15 @@ def _nyaa_search(query: str, category: str = '1_2', filter_code: str = '0') -> l
             el = item.find(f'{_NS}{tag}')
             return el.text.strip() if el is not None and el.text else ''
 
+        def _parse_size(s):
+            # Nyaa da el peso como texto ("1.4 GiB", "780.2 MiB"). Lo pasamos a bytes para ordenar.
+            try:
+                num, unit = s.split()
+                mult = {'B': 1, 'KiB': 1024, 'MiB': 1048576, 'GiB': 1073741824, 'TiB': 1099511627776}
+                return int(float(num) * mult.get(unit, 1))
+            except (ValueError, AttributeError):
+                return 0
+
         trusted_el = item.find(f'{_NS}trusted')
         trusted = trusted_el is not None and (trusted_el.text or '').strip().lower() == 'yes'
 
@@ -1657,7 +1693,8 @@ def _nyaa_search(query: str, category: str = '1_2', filter_code: str = '0') -> l
             'view_url':    view_url,
             'magnet':      _magnet(info_hash, ttl) if info_hash else '',
             'info_hash':   info_hash,
-            'size':        _t('size'),
+            'size':        _t('size'),           # string legible de Nyaa ("1.4 GiB")
+            'size_bytes':  _parse_size(_t('size')),  # numérico para ordenar
             'seeders':     seeders,
             'leechers':    leechers,
             'trusted':     trusted,
@@ -1857,6 +1894,29 @@ def _apply_hidden_anime_subdir(base: str) -> str:
     return base
 
 
+def _anime_save_dir(anime_title: str) -> str:
+    """Carpeta (ruta de Windows/qBittorrent) donde se guardan los torrents de este anime:
+    `<download_path>/<título saneado>`. Cae al save_path propio de qBittorrent si no hay
+    download_path configurado. Devuelve '' si no se puede determinar.
+
+    Vive aparte porque lo necesitan DOS sitios: `qbt/add`, que le dice a qBittorrent dónde
+    guardar, y `library/add`, que apunta esa misma carpeta como `local_path` del anime. Si cada
+    uno la calculase por su cuenta, en cuanto divergieran la biblioteca dejaría de encontrar los
+    ficheros al quitar el torrent — que es exactamente el fallo que esto arregla.
+    """
+    base = (_anime_settings_read().get('download_path') or '').strip()
+    if not base:
+        try:
+            base = (_q('get', '/app/preferences').json() or {}).get('save_path', '')
+        except Exception:
+            base = ''
+    base = _apply_hidden_anime_subdir(base)
+    if not base:
+        return ''
+    folder = _sanitize_folder(anime_title or '')
+    return _build_save_path(base, folder) if folder else base
+
+
 @anime_bp.route('/qbt/add', methods=['POST'])
 def qbt_add():
     data = request.get_json(silent=True) or {}
@@ -1871,16 +1931,9 @@ def qbt_add():
         else:
             # Prefer the user-configured anime download folder (another disk), falling
             # back to qBittorrent's own default save path. Each anime gets a subfolder.
-            base = (_anime_settings_read().get('download_path') or '').strip()
-            if not base:
-                try:
-                    base = (_q('get', '/app/preferences').json() or {}).get('save_path', '')
-                except Exception:
-                    base = ''
-            base = _apply_hidden_anime_subdir(base)
-            if base:
-                folder = _sanitize_folder(data.get('anime_title') or '')
-                form['savepath'] = _build_save_path(base, folder) if folder else base
+            save_dir = _anime_save_dir(data.get('anime_title') or '')
+            if save_dir:
+                form['savepath'] = save_dir
         r = _q('post', '/torrents/add', data=form)
         body = r.text.strip()
         ok = r.status_code in (200, 204) and body in ('Ok.', '')
@@ -2316,6 +2369,18 @@ def anime_library_add():
         if not lib[anime_id].get('format') and fmt:
             lib[anime_id]['format'] = fmt
 
+    # Apuntar la carpeta de descargas como local_path. Sin esto, un anime bajado por torrent
+    # SOLO existía para la app mientras el torrent siguiera en qBittorrent: al quitarlo (aunque
+    # se conserven los ficheros) el episodio desaparecía de la biblioteca, porque toda la UI
+    # decide con `in_local || (in_qbt && progress>=100)` y `local_path` únicamente se rellenaba
+    # al vincular una carpeta A MANO. Los vídeos seguían en disco; era la app la que no miraba.
+    # Solo se pone si falta y si la carpeta EXISTE de verdad: un local_path fantasma haría que
+    # la rama local gane y no muestre nada.
+    if not lib[anime_id].get('local_path'):
+        save_dir = _win_to_wsl(_anime_save_dir(title or data.get('title_romaji', '')))
+        if save_dir and os.path.isdir(save_dir):
+            lib[anime_id]['local_path'] = save_dir
+
     # track_only = add anime to library without registering any episode
     if not data.get('track_only'):
         ep_num = str(data.get('episode', -1))
@@ -2370,13 +2435,25 @@ def anime_episode_remove(anime_id, ep_num):
         return jsonify({'error': 'not found'}), 404
     ep_str = str(ep_num)
     ep_data = lib[anime_id].get('episodes', {}).get(ep_str, {})
-    if ep_data and data.get('delete_files'):
-        ih = ep_data.get('info_hash', '')
+    if data.get('delete_files'):
+        ih = (ep_data or {}).get('info_hash', '')
         if ih:
             try:
                 _q('post', '/torrents/delete', data={'hashes': ih, 'deleteFiles': 'true'})
             except Exception:
                 pass
+        # Y el fichero LOCAL, que puede existir sin torrent: al quitar el torrent conservando
+        # los datos (lo normal para dejar de sembrar) ya no hay info_hash por el que borrarlo.
+        # Sin esto, "borrar episodio" quitaba la ficha y dejaba el vídeo ocupando disco EN
+        # SILENCIO — el usuario cree que ha liberado espacio y no.
+        local_path = lib[anime_id].get('local_path', '')
+        if local_path:
+            try:
+                video = _find_video(local_path, int(ep_num))
+                if video:
+                    _Path(video).unlink(missing_ok=True)
+            except Exception as e:
+                record_error('anime', e, op='episode_remove_local', anime=anime_id, ep=ep_str)
     lib[anime_id].get('episodes', {}).pop(ep_str, None)
     _lib_write(lib)
     return jsonify({'ok': True})

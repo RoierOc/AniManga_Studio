@@ -71,6 +71,10 @@ def record_history():
         'source': data.get('source', 'local'),
         'kind': data.get('kind', 'local'),
         'chapter_ref': data.get('chapter_ref'),
+        # Objeto de fuente completo (sourceId/mangaId/lang) para re-resolver al reanudar desde el
+        # panel de historial. El campo `source` de arriba es una cadena de DISPLAY ('online'); sin
+        # esto, continuar un capítulo online desde el historial no tenía con qué re-resolver.
+        'source_obj': data.get('source_obj'),
         'read_at': int(time.time()),
     })
     _history_write(history)
