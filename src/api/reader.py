@@ -10,7 +10,7 @@ import random
 import time
 from decimal import Decimal, InvalidOperation
 
-from api.runtime import manga_dir, upscaled_dir, normalize_chapter
+from api.runtime import manga_dir, upscaled_dir, normalize_chapter, write_json_atomic
 
 
 def _chapter_prefix(chapter):
@@ -41,9 +41,7 @@ def _history_read():
 
 def _history_write(history):
     try:
-        _history_path().write_text(
-            json.dumps(history[:500], ensure_ascii=False, indent=2), encoding='utf-8'
-        )
+        write_json_atomic(_history_path(), history[:500], indent=2, keep_backup=True)
     except Exception:
         pass
 
@@ -84,6 +82,102 @@ def record_history():
 def clear_history():
     _history_write([])
     return jsonify({'success': True})
+
+# ── Progreso de lectura (qué capítulos has leído y por dónde vas) ─────────
+# Vivía SÓLO en el localStorage del WebView, y no es una preferencia: es el mapa de
+# capítulos leídos de toda la biblioteca más la página exacta de cada obra. Ni la copia
+# semanal al repo ni "Recuperar biblioteca" lo traían, y limpiar el almacenamiento del
+# navegador (o cambiar de máquina) lo borraba entero. El historial NO lo reconstruye:
+# `reading_history.json` son los últimos 500 capítulos terminados, no el mapa por obra.
+#
+# El fichero es la copia DURABLE; el localStorage sigue siendo la copia local (respuesta
+# instantánea y funciona sin backend). Se reconcilian fusionando, nunca pisando.
+
+def _progress_path():
+    return Path(manga_dir()) / 'manga_progress.json'
+
+
+def _progress_read() -> dict:
+    from api.runtime import read_json_safe
+    d = read_json_safe(_progress_path(), default={}, component='reader')
+    return d if isinstance(d, dict) else {}
+
+
+def merge_progress(base: dict, incoming: dict) -> dict:
+    """Funde dos progresos SIN destruir (mismo criterio que `backup.apply_payload`).
+
+    - `read` (capítulos leídos) se UNE: marcar leído es acumulativo, y perder una marca
+      por sincronizar es peor que conservar una de más.
+    - La POSICIÓN (lastChapter/lastPage/...) es la del `ts` más reciente: ahí sí manda
+      quién leyó después, o al reanudar volverías a un punto viejo.
+    """
+    out = {k: dict(v) for k, v in (base or {}).items() if isinstance(v, dict)}
+    for title, inc in (incoming or {}).items():
+        if not isinstance(inc, dict):
+            continue
+        cur = out.get(title)
+        if not cur:
+            out[title] = dict(inc)
+            continue
+        merged = dict(cur)
+        merged['read'] = {**(cur.get('read') or {}), **(inc.get('read') or {})}
+        if int(inc.get('ts') or 0) >= int(cur.get('ts') or 0):
+            for k, v in inc.items():
+                if k != 'read':
+                    merged[k] = v
+        out[title] = merged
+    return out
+
+
+@reader_bp.route('/progress')
+def get_progress():
+    return jsonify(_progress_read())
+
+
+@reader_bp.route('/progress', methods=['POST'])
+def put_progress():
+    """Funde lo que manda el cliente con lo que hay en disco y devuelve el resultado.
+
+    Fusionar (en vez de sustituir) es lo que hace seguro tener la app abierta en dos
+    sitios y lo que permite restaurar en una máquina nueva sin perder lo de aquí.
+    """
+    incoming = request.get_json(silent=True)
+    if not isinstance(incoming, dict):
+        return jsonify({'error': 'se esperaba un objeto {obra: progreso}'}), 400
+    merged = merge_progress(_progress_read(), incoming)
+    write_json_atomic(_progress_path(), merged, indent=2, keep_backup=True)
+    return jsonify(merged)
+
+
+@reader_bp.route('/progress/forget', methods=['POST'])
+def forget_progress():
+    """Borra progreso A PROPÓSITO (desmarcar un capítulo, borrar una obra).
+
+    Hace falta una ruta aparte porque la fusión de `/progress` UNE los capítulos leídos: sin
+    esto, desmarcar un capítulo o borrar un manga volvería a aparecer en la siguiente
+    sincronización, que es justo el fallo que hace que la gente deje de fiarse del sync.
+    Un borrado es una intención explícita; una fusión, no.
+
+    Cuerpo: {"titles": ["Obra"], "chapters": {"Obra": ["12", "13"]}}
+    """
+    body = request.get_json(silent=True) or {}
+    data = _progress_read()
+    for t in (body.get('titles') or []):
+        data.pop(str(t), None)
+    for t, chapters in (body.get('chapters') or {}).items():
+        entry = data.get(str(t))
+        if not isinstance(entry, dict):
+            continue
+        for c in (chapters or []):
+            (entry.get('read') or {}).pop(str(c), None)
+            # Si era el capítulo por el que ibas, la posición deja de tener sentido.
+            if str(entry.get('lastChapter')) == str(c):
+                for k in ('lastChapter', 'lastPage', 'lastTotal', 'ts',
+                          'lastKind', 'lastRef', 'lastSource'):
+                    entry.pop(k, None)
+    write_json_atomic(_progress_path(), data, indent=2, keep_backup=True)
+    return jsonify({'ok': True})
+
 
 @reader_bp.route('/read_chapter', methods=['POST'])
 def read_chapter():

@@ -127,7 +127,7 @@ function openMenu(ev) {
     <!-- Título BAJO la miniatura (Crunchyroll/Netflix): misma tipografía, ahora sin competir
          con el arte de la portada. El nº se queda arriba sobre la imagen. -->
     <div class="ep__foot">
-      <div class="ep__eptitle" :title="epTitle">{{ epTitle }}</div>
+      <div class="ep__eptitle" :data-tip="epTitle">{{ epTitle }}</div>
       <div v-if="metaLine" class="ep__meta" :class="metaLine.cls">{{ metaLine.text }}</div>
     </div>
 

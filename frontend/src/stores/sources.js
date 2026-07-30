@@ -20,6 +20,10 @@ export const useSourcesStore = defineStore('sources', {
     resultGroups: [],          // [{ source, results }] for search display
     searching: false,
     progress: { done: 0, total: 0 },
+    // Fuentes que REVENTARON en la última búsqueda (timeout, Cloudflare, extensión rota). Antes
+    // devolvían [] igual que las que no tenían el título: la búsqueda parecía completa y no lo era.
+    failedSources: [],
+    reloading: '',          // '' | 'soft' | 'hard'
     _es: null,
 
     // Popular
@@ -107,6 +111,35 @@ export const useSourcesStore = defineStore('sources', {
       }
     },
 
+    /* Recargar fuentes sin apagar la app.
+     *
+     * Una extensión atascada (reto de Cloudflare, timeout, extensión rota) dejaba el listado y las
+     * búsquedas tocados hasta reiniciar el servidor entero — el usuario lo sufrió. Dos niveles:
+     * `restart:false` tira las cachés del backend y vuelve a preguntar; `restart:true` reinicia
+     * además la JVM de Suwayomi. El segundo tarda ~15-20 s, por eso no es el de un solo clic.
+     */
+    async reloadSources(restart = false) {
+      const ui = useUiStore()
+      this.reloading = restart ? 'hard' : 'soft'
+      this.failedSources = []
+      try {
+        const r = await api.post('/api/sources/reload', { restart })
+        this.sources = r?.list || []
+        this.online = true
+        // Las fuentes seleccionadas que ya no existen se caen solas; el resto se conserva.
+        const ids = new Set(this.sources.map(s => s.id))
+        this.activeSources = this.activeSources.filter(id => ids.has(id))
+        ui.toast(restart ? `Suwayomi reiniciado · ${r.sources} fuentes` : `${r.sources} fuentes recargadas`, 'ok')
+        return r?.sources || 0
+      } catch (e) {
+        // "no pude recargar" ≠ "no hay fuentes": no vaciamos la lista que ya se veía.
+        ui.toast(restart ? 'El reinicio de Suwayomi falló' : 'No se pudieron recargar las fuentes', 'error')
+        return -1
+      } finally {
+        this.reloading = ''
+      }
+    },
+
     toggleSource(id) {
       const idx = this.activeSources.indexOf(id)
       if (idx >= 0) this.activeSources.splice(idx, 1)
@@ -140,6 +173,7 @@ export const useSourcesStore = defineStore('sources', {
       this._stopStream()
       this.resultGroups = []
       this.popular = []
+      this.failedSources = []
       this.searching = true
       this.progress = { done: 0, total: this.sources.length }
 
@@ -160,7 +194,10 @@ export const useSourcesStore = defineStore('sources', {
               else this.resultGroups.push({ source: d.source, results: [...d.results] })
             }
           }
-          else if (d.type === 'progress') this.progress = { done: d.done, total: d.total }
+          else if (d.type === 'progress') {
+            this.progress = { done: d.done, total: d.total }
+            if (d.failed) this.failedSources.push({ name: d.failed.source?.name || '?', error: d.failed.error })
+          }
           else if (d.type === 'done') { this._stopStream(); this.progress.done = this.progress.total }
         }
         es.onerror = () => this._stopStream()
@@ -171,6 +208,7 @@ export const useSourcesStore = defineStore('sources', {
     loadPopular() {
       this._stopStream()
       this.popular = []
+      this.failedSources = []
       this.popularLoading = true
       this.progress = { done: 0, total: this.sources.length }
 
@@ -185,7 +223,10 @@ export const useSourcesStore = defineStore('sources', {
           let d; try { d = JSON.parse(e.data) } catch { return }
           if (d.type === 'start') this.progress.total = d.total
           else if (d.type === 'result' && d.results) d.results.forEach(m => this.popular.push(m))
-          else if (d.type === 'progress') this.progress = { done: d.done, total: d.total }
+          else if (d.type === 'progress') {
+            this.progress = { done: d.done, total: d.total }
+            if (d.failed) this.failedSources.push({ name: d.failed.source?.name || '?', error: d.failed.error })
+          }
           else if (d.type === 'done') { this._stopStream(); this.progress.done = this.progress.total }
         }
         es.onerror = () => this._stopStream()

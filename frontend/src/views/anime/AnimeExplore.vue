@@ -4,6 +4,7 @@ import { useAnimeStore } from '@/stores/anime'
 import DiscoverCard from '@/components/anime/DiscoverCard.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import Select from '@/components/ui/Select.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
@@ -69,7 +70,12 @@ onMounted(() => {
     <div v-if="store.exploreLoading && !store.explore.length" class="grid">
       <Skeleton v-for="n in 12" :key="n" variant="poster" />
     </div>
-    <EmptyState v-else-if="!store.explore.length" icon="spark" title="Sin resultados con estos filtros." />
+    <!-- El fallo va ANTES del vacío: con AniList caída, «sin resultados» sería mentira. -->
+    <ErrorState v-else-if="store.exploreError && !store.explore.length"
+                title="No se pudo cargar el catálogo." :detail="store.exploreError"
+                @retry="store.loadExplore()" />
+    <EmptyState v-else-if="!store.explore.length" icon="spark" title="Sin resultados con estos filtros."
+                hint="Prueba a quitar un filtro: género, año o formato." />
     <template v-else>
       <div class="grid">
         <DiscoverCard v-for="a in store.explore" :key="a.al_id" :anime="a" />
@@ -101,12 +107,13 @@ onMounted(() => {
 .gchip:hover { color: var(--ink); border-color: var(--line-strong); }
 .gchip.is-active { background: var(--azure-haze); border-color: var(--azure); color: var(--azure-bright); }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.875rem, 1fr)); gap: var(--s-5); }
+/* Ancho base propio; el resto de la rejilla (densidad, hueco, móvil) vive en base.css */
+.grid { --card-min: 11.875rem; gap: var(--s-5); }
 
 .more { display: flex; justify-content: center; padding: var(--s-6) 0 0; }
 .morebtn { display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-3) var(--s-5); border-radius: var(--r-pill); border: 1px solid var(--line-2); background: var(--surface); color: var(--ink-soft); font-size: var(--fs-sm); font-weight: 600; transition: all var(--t-fast); }
 .morebtn:hover:not(:disabled) { color: var(--ink); border-color: var(--azure); background: var(--azure-haze); }
 .morebtn:disabled { opacity: .6; cursor: default; }
 
-@media (max-width: 640px) { .expl { padding: 0 var(--s-4) var(--s-8); } .grid { grid-template-columns: repeat(auto-fill, minmax(8.75rem, 1fr)); } }
+@media (max-width: 640px) { .expl { padding: 0 var(--s-4) var(--s-8); } .grid { --card-min: 8.75rem; } }
 </style>

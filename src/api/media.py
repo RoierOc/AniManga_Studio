@@ -8,8 +8,14 @@ Por qué esto es una piel y no otro `anime.py`: el flujo de anime existe porque 
 sin metadatos, así que hay que buscar torrents, parsear títulos, adivinar el episodio y hablar con
 qBittorrent a mano. Aquí NADA de eso hace falta — Sonarr/Radarr ya hacen búsqueda, matcheo
 (TVDB/TMDB), calidad, descarga, importación y renombrado. Replicarlo sería escribir un Sonarr peor
-justo al lado de uno que funciona. Por eso este módulo **no habla con qBittorrent**: un cliente con
-dos dueños es una fuente de líos (ver [[project_servarr_stack]]).
+justo al lado de uno que funciona.
+
+**Excepción medida a "aquí no se habla con qBittorrent"**: liberar espacio. Sonarr sólo borra SU
+copia importada, y como la importación es por *hardlink*, mientras el torrent siga sembrando la
+misma data no se libera ni un byte — y en el siguiente escaneo Sonarr la re-importa, así que el
+episodio "borrado" reaparece. Anime ya lo resolvía quitando el torrent (`clear_episodes`); ésa era
+toda la diferencia entre los dos módulos. Se REUTILIZA el cliente de anime (`anime._q`) en vez de
+abrir uno propio: el cliente sigue teniendo un solo dueño (ver [[project_servarr_stack]]).
 
 TMDB se usará solo para PRESENTACIÓN (portadas, descubrimiento). La identidad canónica de una serie
 es la de Sonarr/Radarr; buscar por TMDB y luego reconciliar dos identidades es el problema que ya
@@ -33,10 +39,16 @@ import time as _time
 
 from api.resilient_http import http as http_requests
 from api.observability import record_error
+from api.runtime import write_json_atomic
 
 media_bp = Blueprint("media", __name__)
 
 _TIMEOUT = 10
+# (connect, read): son servicios LOCALES — si el puerto no acepta la conexión en 2 s es que no
+# está arriba, no que la red vaya lenta. Con un connect de 10 s, arrancar la app y entrar en
+# Series y Películas eran 34 s de rueda antes de admitir que Radarr aún no había levantado.
+_CONNECT = 2
+
 _CFG = Path(__file__).resolve().parents[2] / "servarr" / "config"
 
 APPS = {
@@ -65,7 +77,7 @@ def _get(which: str, path: str, **params):
     cfg = APPS[which]
     r = http_requests.get(f"{cfg['url']}/api/{cfg.get('api', 'v3')}/{path}",
                           headers={"X-Api-Key": _apikey(cfg["app"])},
-                          params=params or None, timeout=_TIMEOUT)
+                          params=params or None, timeout=(_CONNECT, _TIMEOUT))
     r.raise_for_status()
     return r.json()
 
@@ -77,7 +89,7 @@ def _get_slow(which: str, path: str, **params):
     cfg = APPS[which]
     r = http_requests.get(f"{cfg['url']}/api/{cfg.get('api', 'v3')}/{path}",
                           headers={"X-Api-Key": _apikey(cfg["app"])},
-                          params=params or None, timeout=120)
+                          params=params or None, timeout=(_CONNECT, 120))
     r.raise_for_status()
     return r.json()
 
@@ -86,7 +98,7 @@ def _post(which: str, path: str, payload: dict):
     cfg = APPS[which]
     r = http_requests.post(f"{cfg['url']}/api/v3/{path}",
                            headers={"X-Api-Key": _apikey(cfg["app"])},
-                           json=payload, timeout=30)
+                           json=payload, timeout=(_CONNECT, 30))
     r.raise_for_status()
     return r.json()
 
@@ -95,7 +107,7 @@ def _put(which: str, path: str, payload):
     cfg = APPS[which]
     r = http_requests.put(f"{cfg['url']}/api/v3/{path}",
                           headers={"X-Api-Key": _apikey(cfg["app"])},
-                          json=payload, timeout=30)
+                          json=payload, timeout=(_CONNECT, 30))
     r.raise_for_status()
     return r.json() if r.content else {}
 
@@ -104,7 +116,7 @@ def _delete(which: str, path: str, **params):
     cfg = APPS[which]
     r = http_requests.delete(f"{cfg['url']}/api/v3/{path}",
                              headers={"X-Api-Key": _apikey(cfg["app"])},
-                             params=params or None, timeout=30)
+                             params=params or None, timeout=(_CONNECT, 30))
     r.raise_for_status()
     return r
 
@@ -259,11 +271,8 @@ def _prog_write(data: dict):
     # fichero truncado a mitad de write_text → JSONDecodeError → _prog_read devolvía {} y
     # "Seguir viendo" salía vacío (10 casos en el log de un solo día). Con replace, un lector
     # ve siempre la versión vieja o la nueva, nunca media.
-    p = _prog_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, p)
+    # (ahora vía el helper compartido: mismo tmp+replace, y además fsync + respaldo)
+    write_json_atomic(_prog_path(), data, indent=2, keep_backup=True)
 
 
 def _watched(position: float, duration: float) -> bool:
@@ -513,12 +522,64 @@ def media_episodes(series_id):
     return jsonify({"episodes": out})
 
 
+def _torrent_hashes(which: str, path: str, season=None, **params) -> set:
+    """Hashes de los torrents que trajeron este contenido, según el historial de Sonarr/Radarr.
+
+    `downloadId` es el info_hash con el que qBittorrent conoce el torrent. Se mira el historial
+    y no la cola porque la cola sólo tiene lo que está descargando AHORA — lo que ocupa disco es
+    justo lo que ya terminó. Un fallo aquí NO es "no había torrents": lo propaga quien llama.
+    """
+    if season not in (None, ""):
+        params["includeEpisode"] = True   # sin esto no se sabe de qué temporada es cada registro
+    recs = _get(which, path, **params)
+    # Sonarr/Radarr devuelven a veces {records: [...]} y a veces la lista pelada.
+    if isinstance(recs, dict):
+        recs = recs.get("records") or []
+    out = set()
+    for r in recs:
+        dl = (r.get("downloadId") or "").strip().lower()
+        if not dl:
+            continue
+        if season not in (None, ""):
+            ep = r.get("episode") or {}
+            if str(ep.get("seasonNumber")) != str(season):
+                continue
+        out.add(dl)
+    return out
+
+
+def _drop_torrents(hashes: set) -> tuple:
+    """Quita los torrents (con sus datos) de qBittorrent. Devuelve (quitados, fallidos).
+
+    Se reutiliza el cliente de anime a propósito — es el MISMO qBittorrent y la misma sesión;
+    un segundo login aquí sería una segunda verdad que mantener. Import perezoso para no atar
+    la carga de este módulo al god-module.
+
+    Borrar los datos es seguro para lo que se conserva: Sonarr importa por hardlink, así que
+    mientras quede un enlace (los episodios que NO se han borrado) los bytes siguen ahí.
+    """
+    if not hashes:
+        return 0, 0
+    from api.anime import _q
+    ok, failed = 0, 0
+    for h in hashes:
+        try:
+            _q("post", "/torrents/delete", data={"hashes": h, "deleteFiles": "true"})
+            ok += 1
+        except Exception as e:
+            failed += 1
+            record_error("media", e, op="qbt_delete", hash=h)
+    return ok, failed
+
+
 @media_bp.route("/series/<int:series_id>/files", methods=["DELETE"])
 def media_delete_files(series_id):
     """Borra los ficheros de vídeo para liberar espacio, sin quitar la serie de la biblioteca.
 
     Equivale al "Borrar eps" de anime: la serie sigue ahí con su ficha y su progreso, sólo
     desaparece lo que ocupa disco. Con `season` se acota a una temporada; sin él, va toda.
+    Se quita también el torrent — si no, el hardlink que siembra qBittorrent deja los bytes
+    en el disco y Sonarr re-importa el episodio en el siguiente escaneo (ver cabecera).
     """
     season = request.args.get("season")
     try:
@@ -530,6 +591,17 @@ def media_delete_files(series_id):
     if season is not None and season != "":
         files = [f for f in files if str(f.get("seasonNumber")) == str(season)]
 
+    # Los hashes se leen ANTES de borrar: el historial sobrevive al borrado, pero así el
+    # resultado no depende de en qué orden decida limpiar Sonarr.
+    hashes, hashes_err = set(), ""
+    try:
+        hashes = _torrent_hashes("sonarr", "history/series", season, seriesId=series_id)
+    except Exception as e:
+        # No poder consultar el historial NO es "no había torrents": se borran los ficheros
+        # igual, pero se dice que el torrent quedó sin tocar en vez de callar.
+        hashes_err = str(e)[:200]
+        record_error("media", e, op="delete_files_history", series=series_id)
+
     freed = sum(f.get("size") or 0 for f in files)
     deleted, failed = 0, 0
     for f in files:
@@ -539,9 +611,53 @@ def media_delete_files(series_id):
         except Exception as e:
             failed += 1
             record_error("media", e, op="delete_file", file=f.get("id"))
+
+    torrents, torrents_failed = _drop_torrents(hashes) if deleted else (0, 0)
     # `failed` viaja aparte: "no había nada que borrar" y "no se pudo borrar" no pueden
-    # leerse igual desde la UI.
-    return jsonify({"ok": failed == 0, "deleted": deleted, "failed": failed, "freed": freed})
+    # leerse igual desde la UI. Lo mismo para el torrent: que no se pudiera quitar significa
+    # que el espacio NO se ha liberado del todo, y eso hay que decirlo.
+    return jsonify({"ok": failed == 0 and torrents_failed == 0 and not hashes_err,
+                    "deleted": deleted, "failed": failed, "freed": freed,
+                    "torrents": torrents, "torrents_failed": torrents_failed,
+                    "torrents_error": hashes_err})
+
+
+@media_bp.route("/movie/<int:movie_id>/file", methods=["DELETE"])
+def media_delete_movie_file(movie_id):
+    """Liberar espacio de una PELÍCULA: el mismo gesto que en series, que hasta ahora no existía
+    (el botón sólo se ofrecía en series, así que en películas no había forma de soltar disco)."""
+    try:
+        m = _get("radarr", f"movie/{movie_id}")
+    except Exception as e:
+        record_error("media", e, op="delete_movie_file", movie=movie_id)
+        return jsonify({"error": str(e)[:200]}), 502
+
+    f = m.get("movieFile") or {}
+    if not f.get("id"):
+        # 0 borrados con ok=True: "no había fichero" es un vacío legítimo, no un fallo.
+        return jsonify({"ok": True, "deleted": 0, "failed": 0, "freed": 0,
+                        "torrents": 0, "torrents_failed": 0, "torrents_error": ""})
+
+    hashes, hashes_err = set(), ""
+    try:
+        hashes = _torrent_hashes("radarr", "history/movie", None, movieId=movie_id)
+    except Exception as e:
+        hashes_err = str(e)[:200]
+        record_error("media", e, op="delete_movie_history", movie=movie_id)
+
+    deleted, failed = 0, 0
+    try:
+        _delete("radarr", f"moviefile/{f['id']}")
+        deleted = 1
+    except Exception as e:
+        failed = 1
+        record_error("media", e, op="delete_movie_file", movie=movie_id, file=f.get("id"))
+
+    torrents, torrents_failed = _drop_torrents(hashes) if deleted else (0, 0)
+    return jsonify({"ok": failed == 0 and torrents_failed == 0 and not hashes_err,
+                    "deleted": deleted, "failed": failed, "freed": f.get("size") or 0,
+                    "torrents": torrents, "torrents_failed": torrents_failed,
+                    "torrents_error": hashes_err})
 
 
 @media_bp.route("/movie/<int:movie_id>/file")
@@ -618,6 +734,21 @@ def media_genres():
     return jsonify(out)
 
 
+def _library_tmdb_ids(kind: str):
+    """Ids de TMDB que YA están en la biblioteca, o `None` si no se pudo preguntar.
+
+    `None` y `set()` no significan lo mismo: con Sonarr caído, "no la tengo" sería mentira, así
+    que la UI prefiere no decir nada a decir algo falso (regla «falló ≠ no había»).
+    Sonarr trae `tmdbId` en cada serie además del `tvdbId`, así que el cruce es por id exacto.
+    """
+    k = KINDS[kind]
+    try:
+        return {x["tmdbId"] for x in _get(k["app"], k["res"]) if x.get("tmdbId")}
+    except Exception as e:
+        record_error("media", e, op="library_ids", kind=kind)
+        return None
+
+
 @media_bp.route("/discover")
 def media_discover():
     """Qué ver: tendencias, populares o mejor valoradas, según TMDB."""
@@ -644,6 +775,7 @@ def media_discover():
         record_error("media", e, op="discover", kind=kind, list=which)
         return jsonify({"error": str(e)[:200]}), 502
 
+    have = _library_tmdb_ids(kind)
     out = []
     skipped_anime = 0
     for x in raw.get("results", []):
@@ -668,6 +800,8 @@ def media_discover():
             "overview": x.get("overview") or "",
             "poster": f"{_TMDB_IMG}{x['poster_path']}" if x.get("poster_path") else "",
             "score": round(x.get("vote_average") or 0, 1),
+            # Ausente (no `false`) si no se pudo consultar la biblioteca: ver `_library_tmdb_ids`.
+            **({"already": x.get("id") in have} if have is not None else {}),
         })
     # `skipped_anime` viaja para que una lista corta no parezca un fallo de TMDB: si de 20
     # resultados quedan 12, la UI puede decir por qué faltan los otros 8.
@@ -692,9 +826,30 @@ def media_resolve():
     kind = request.args.get("kind") or "series"
     title = (request.args.get("title") or "").strip()
     year = request.args.get("year")
-    if kind not in KINDS or not title:
-        return jsonify({"error": "kind y title son obligatorios"}), 400
+    tmdb_id = (request.args.get("tmdb_id") or "").strip()
+    if kind not in KINDS or not (title or tmdb_id):
+        return jsonify({"error": "kind y title/tmdb_id son obligatorios"}), 400
     k = KINDS[kind]
+
+    # Camino exacto: Sonarr y Radarr aceptan `term=tmdb:<id>` en su lookup y devuelven UNA obra.
+    # Como Descubrir viene de TMDB, ese id lo tenemos siempre — y así no hay nada que emparejar
+    # por título (que es de donde salía el "varias coincidencias, elige tú").
+    if tmdb_id.isdigit():
+        try:
+            raw = _get(k["app"], f"{k['res']}/lookup", term=f"tmdb:{tmdb_id}")
+        except Exception as e:
+            record_error("media", e, op="resolve", kind=kind, tmdb_id=tmdb_id)
+            return jsonify({"error": str(e)[:200]}), 502
+        if len(raw) == 1:
+            x = raw[0]
+            it = (_norm_series if kind == "series" else _norm_movie)(x)
+            it["ext_id"] = x.get(k["ext_id"])
+            it["already"] = bool(x.get("id"))
+            return jsonify({"match": it, "candidates": [it]})
+        # Sin mapeo TMDB→TVDB en el catálogo: se sigue por título, abajo.
+        if not title:
+            return jsonify({"match": None, "candidates": []})
+
     try:
         raw = _get(k["app"], f"{k['res']}/lookup", term=title)
     except Exception as e:

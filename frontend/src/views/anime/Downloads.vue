@@ -6,6 +6,7 @@ import { formatBytes, formatSpeed, formatEta, qbtStateLabel } from '@/lib/format
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import FolderPicker from '@/components/anime/FolderPicker.vue'
 
 const store = useAnimeStore()
@@ -82,7 +83,13 @@ const isPaused = (t) => /^(paused|stopped)/.test(t.state || '')
       </section>
 
       <div v-if="store.qbtLoading && !store.qbtTorrents.length" class="center"><Spinner /></div>
-      <EmptyState v-else-if="!store.qbtTorrents.length" icon="download" title="No hay descargas activas." />
+      <!-- qBittorrent apagado (o la VPN caída) NO es «no hay descargas»: son estados distintos y
+           el segundo te haría creer que tus torrents desaparecieron. -->
+      <ErrorState v-else-if="store.qbtError" title="No se pudo hablar con qBittorrent."
+                  hint="Comprueba que está abierto y, si usas VPN, que sigue conectada."
+                  :detail="store.qbtError" @retry="store.loadQbt()" />
+      <EmptyState v-else-if="!store.qbtTorrents.length" icon="download" title="No hay descargas activas."
+                  hint="Lo que descargues desde Buscar Anime aparecerá aquí." />
 
       <div v-else class="dl__list">
         <div v-for="t in store.qbtTorrents" :key="t.hash" class="trow" :class="{ 'trow--done': isDone(t) }">
@@ -99,16 +106,16 @@ const isPaused = (t) => /^(paused|stopped)/.test(t.state || '')
             </div>
           </div>
           <div class="trow__actions">
-            <button class="ti" :class="{ 'is-on': isPaused(t) }" :title="isPaused(t) ? 'Reanudar' : 'Pausar'"
+            <button class="ti" :class="{ 'is-on': isPaused(t) }" :data-tip="isPaused(t) ? 'Reanudar' : 'Pausar'"
                     @click="store.qbtAction(isPaused(t) ? 'resume' : 'pause', t.hash)">
               <Icon :name="isPaused(t) ? 'play' : 'pause'" :size="14" />
             </button>
-            <button class="ti" title="Verificar" @click="store.qbtAction('recheck', t.hash)"><Icon name="spark" :size="14" /></button>
+            <button class="ti" data-tip="Verificar" @click="store.qbtAction('recheck', t.hash)"><Icon name="spark" :size="14" /></button>
             <!-- Quitar de qBittorrent CONSERVANDO los archivos: la forma de dejar de sembrar sin
                  perder el episodio. Es la acción habitual, por eso va antes y sin estilo de peligro. -->
-            <button class="ti" title="Dejar de sembrar (conserva los archivos)"
+            <button class="ti" data-tip="Dejar de sembrar (conserva los archivos)"
                     @click="store.qbtAction('delete', t.hash, false)"><Icon name="close" :size="14" /></button>
-            <button class="ti ti--danger" title="Eliminar CON los archivos"
+            <button class="ti ti--danger" data-tip="Eliminar CON los archivos"
                     @click="removeWithFiles(t)"><Icon name="trash" :size="14" /></button>
           </div>
         </div>

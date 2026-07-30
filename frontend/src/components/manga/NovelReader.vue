@@ -113,7 +113,7 @@ const textStyle = computed(() => ({
       <div v-if="open" class="nr" :class="`nr--${novels.theme}`" @mousemove="poke">
         <!-- Barra superior -->
         <header class="nr__bar" :class="{ 'is-hidden': barsHidden }">
-          <button class="nr__btn" title="Cerrar (Esc)" @click="novels.closeReader()">
+          <button class="nr__btn" data-tip="Cerrar (Esc)" @click="novels.closeReader()">
             <Icon name="chevron" :size="18" :style="{ transform: 'rotate(180deg)' }" />
           </button>
           <div class="nr__meta">
@@ -121,10 +121,10 @@ const textStyle = computed(() => ({
             <span class="nr__ch">{{ novels.reader.chapterName }}</span>
           </div>
           <div class="nr__tools">
-            <button class="nr__btn nr__btn--wide" :class="{ 'is-on': tocOpen }" title="Índice de capítulos"
+            <button class="nr__btn nr__btn--wide" :class="{ 'is-on': tocOpen }" data-tip="Índice de capítulos"
                     @click.stop="openToc()"><Icon name="library" :size="16" /> Capítulos</button>
             <div class="nr__setwrap">
-              <button class="nr__btn" :class="{ 'is-on': setOpen }" title="Ajustes de lectura"
+              <button class="nr__btn" :class="{ 'is-on': setOpen }" data-tip="Ajustes de lectura"
                       @click.stop="setOpen = !setOpen; tocOpen = false"><Icon name="settings" :size="16" /></button>
               <!-- Todo etiquetado en texto, como el panel del lector de manga -->
               <div v-if="setOpen" class="nr__set" @click.stop>

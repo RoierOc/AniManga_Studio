@@ -14,6 +14,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import ContentToolbar from '@/components/ui/ContentToolbar.vue'
+import DensityToggle from '@/components/ui/DensityToggle.vue'
 
 const store = useMediaStore()
 const ui = useUiStore()
@@ -132,11 +133,13 @@ function play(it) {
                     :filter="store.filter" @update:filter="store.filter = $event"
                     :sorts="SORTS" :sort="store.sort" @update:sort="store.sort = $event"
                     :search="store.search" @update:search="store.search = $event"
-                    search-placeholder="Buscar en tu biblioteca…" />
+                    search-placeholder="Buscar en tu biblioteca…">
+      <template #extra><DensityToggle /></template>
+    </ContentToolbar>
 
     <!-- Mismo esqueleto que Manga y Anime: la rejilla ya tiene forma antes de llegar los datos,
          en vez del parpadeo en blanco con el que el contenido saltaba de golpe. -->
-    <div v-if="store.loading && !store.items.length" class="mlib__grid">
+    <div v-if="store.loading && !store.items.length" class="grid mlib__grid">
       <Skeleton v-for="n in 12" :key="n" variant="poster" />
     </div>
 
@@ -159,7 +162,7 @@ function play(it) {
       </template>
     </EmptyState>
 
-    <TransitionGroup v-else name="grid" tag="div" class="mlib__grid">
+    <TransitionGroup v-else name="grid" tag="div" class="grid mlib__grid">
       <MediaCard v-for="it in store.items" :key="it.kind + it.id" v-bind="cardFor(it)"
                  :play-label="it.kind === 'movie' ? 'Ver' : 'Episodios'"
                  alt-label="Torrents" alt-icon="download"
@@ -187,8 +190,6 @@ function play(it) {
   color: var(--warn); font-size: var(--fs-sm); }
 .mlib__hero { margin-bottom: var(--s-6); }
 .toolbar, .mlib__grid { position: relative; padding-inline: var(--alib-pad); }
-.mlib__grid {
-  display: grid; gap: var(--s-5); padding-bottom: var(--s-8);
-  grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr));
-}
+/* La rejilla es la compartida (`.grid` en base.css); aquí sólo su ancho base y el respiro. */
+.mlib__grid { --card-min: 11rem; gap: var(--s-5); padding-bottom: var(--s-8); }
 </style>

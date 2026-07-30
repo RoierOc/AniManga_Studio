@@ -16,7 +16,9 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          # Igual que el venv local (3.14.3): si CI corre en otra menor, un fallo de sintaxis
+          # o de stdlib sólo aparece en uno de los dos lados.
+          python-version: "3.14"
 
       - name: Instalar ruff + pytest
         # pydantic: los contratos de la frontera (api/contracts.py) se importan al cargar

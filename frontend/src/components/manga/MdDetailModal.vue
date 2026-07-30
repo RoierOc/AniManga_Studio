@@ -51,7 +51,7 @@ useModal(() => !!d.value, () => store.closeDetail(), modalEl)
                   {{ inLib ? 'En biblioteca' : 'Mi biblioteca' }}
                 </button>
                 <button v-if="store.authed" class="abtn" @click="store.follow(d)"><Icon name="spark" :size="13" /> Seguir</button>
-                <a v-if="d.id" :href="'https://mangadex.org/title/' + d.id" target="_blank" rel="noopener" class="abtn abtn--mdlink" title="Ver en MangaDex">
+                <a v-if="d.id" :href="'https://mangadex.org/title/' + d.id" target="_blank" rel="noopener" class="abtn abtn--mdlink" data-tip="Ver en MangaDex">
                   <Icon name="globe" :size="13" /> MangaDex
                 </a>
               </div>

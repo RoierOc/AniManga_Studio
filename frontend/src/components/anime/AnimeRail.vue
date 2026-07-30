@@ -43,10 +43,10 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
     <div class="rail__head">
       <h3 class="rail__title">{{ title }}</h3>
       <div v-if="canL || canR" class="rail__nav">
-        <button class="rail__arrow" :disabled="!canL" title="Anterior" @click="page(-1)">
+        <button class="rail__arrow" :disabled="!canL" data-tip="Anterior" @click="page(-1)">
           <Icon name="chevron" :size="16" :style="{ transform: 'rotate(180deg)' }" />
         </button>
-        <button class="rail__arrow" :disabled="!canR" title="Siguiente" @click="page(1)">
+        <button class="rail__arrow" :disabled="!canR" data-tip="Siguiente" @click="page(1)">
           <Icon name="chevron" :size="16" />
         </button>
       </div>

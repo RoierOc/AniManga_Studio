@@ -139,10 +139,8 @@ KEY_SPECS = [
 
     ('TMDB', 'TMDB_API_KEY', 'API Key', True, 'para portadas HD de anime'),
 
-    ('Traducción', 'GEMINI_API_KEY',      'Gemini API Key',  True,  ''),
     ('Traducción', 'OLLAMA_URL',          'Ollama URL',      False, 'http://localhost:11434'),
     ('Traducción', 'OLLAMA_MODEL',        'Modelo Ollama',   False, 'qwen2.5:14b'),
-    ('Traducción', 'TRANSLATION_ENGINE',  'Motor (ollama/gemini)', False, 'ollama'),
 
     ('Subtítulos', 'JIMAKU_API_KEY',          'Jimaku API Key',       True,  ''),
     ('Subtítulos', 'OPENSUBTITLES_API_KEY',   'OpenSubtitles API Key',True,  ''),

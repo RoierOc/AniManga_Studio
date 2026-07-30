@@ -83,7 +83,7 @@ function openManga(g) {
               <span :style="{ width: t.pct + '%', background: kind(t.kind).color }" />
             </div>
             <span class="row__pct">{{ t.status === 'error' ? '—' : t.pct + '%' }}</span>
-            <button class="row__act" title="Cancelar" @click="store.cancelAnyTask(t)"><Icon name="close" :size="13" /></button>
+            <button class="row__act" data-tip="Cancelar" @click="store.cancelAnyTask(t)"><Icon name="close" :size="13" /></button>
           </div>
         </article>
       </div>
@@ -108,8 +108,8 @@ function openManga(g) {
             <span class="row__label">{{ t.label }}</span>
             <span class="pill" :class="'pill--' + t.status">{{ STATUS_LABEL[t.status] || t.status }}</span>
             <span class="row__ts">{{ relativeTime(Math.floor(t.ts / 1000)) }}</span>
-            <button v-if="t.kind === 'export' && t.file" class="row__act row__act--dl" title="Descargar tomo" @click="store.downloadExportFile(t.id)"><Icon name="download" :size="13" /></button>
-            <button class="row__act" title="Quitar del historial" @click="store.hideFromHistory(t.id)"><Icon name="close" :size="13" /></button>
+            <button v-if="t.kind === 'export' && t.file" class="row__act row__act--dl" data-tip="Descargar tomo" @click="store.downloadExportFile(t.id)"><Icon name="download" :size="13" /></button>
+            <button class="row__act" data-tip="Quitar del historial" @click="store.hideFromHistory(t.id)"><Icon name="close" :size="13" /></button>
           </div>
         </article>
       </div>

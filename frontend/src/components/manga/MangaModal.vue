@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch, onMounted, onBeforeUnmount, onUnmounted } from 'vue'
+import { computed, ref, watch, onUnmounted } from 'vue'
 import { useMangaStore } from '@/stores/manga'
 import { formatChapter, MANGA_STATUS, pageUrl } from '@/lib/manga'
 import { formatBytes } from '@/lib/format'
@@ -16,6 +16,7 @@ import VersionsCoverageGrid from '@/components/manga/VersionsCoverageGrid.vue'
 import MangaRecRail from '@/components/manga/MangaRecRail.vue'
 import Select from '@/components/ui/Select.vue'
 import { useModal } from '@/lib/useModal'
+import { useMultiSelect } from '@/lib/useMultiSelect'
 
 const store = useMangaStore()
 const ui = useUiStore()
@@ -134,6 +135,34 @@ function isCurrent(ch) {
   return !!i && String(i.chapter) === String(ch)
 }
 
+/* Miniatura de la PÁGINA por la que vas, en la fila del capítulo en curso. La lista era una hoja
+ * de cálculo («Cap. 44 · 31 pág.») y lo único que quieres reconocer de un vistazo es dónde te
+ * quedaste. Una sola petición, sólo para ese capítulo y sólo si está descargado; si falla, la fila
+ * se queda exactamente como estaba. */
+const nowThumb = ref('')
+watch(
+  () => {
+    const i = store.continueInfo()
+    // `chapters.length` entra en la clave a propósito: al abrir el modal la lista aún no ha
+    // llegado, y sin esto la comprobación de «¿está descargado?» fallaba una vez y no reintentaba.
+    return [store.current?.id, i?.chapter, i?.page, store.chapters?.length || 0].join('|')
+  },
+  async () => {
+    nowThumb.value = ''
+    const i = store.continueInfo()
+    const title = store.current?.id
+    if (!i || !title) return
+    if (!store.chapters?.some(c => String(c.chapter) === String(i.chapter))) return   // no descargado
+    try {
+      const d = await api.post('/api/reader/read_chapter', { title, chapter: String(i.chapter) })
+      const pages = d?.pages || []
+      const pg = pages[Math.min(i.page || 0, pages.length - 1)]
+      if (pg) nowThumb.value = pageUrl(pg, 160)
+    } catch (_) { /* sin miniatura: la fila sigue siendo la de siempre */ }
+  },
+  { immediate: true },
+)
+
 // Progreso de lectura de la serie, para la barra de la cabecera.
 const chapterTotal = computed(() => store.collectionChapters.length)
 const readTotal = computed(() => store.collectionChapters.filter(c => store.isChapterRead(c.chapter)).length)
@@ -151,61 +180,13 @@ const flag = (l) => LANG_FLAG[l] || l
 // batchSel = Set de claves de capítulo marcadas. Una barra flotante actúa sobre ellas:
 // Descargar (capítulos remotos) o Escalar 4K (capítulos locales). Se limpia al cambiar de
 // pestaña/manga.
-const batchSel = ref(new Set())
-function clearBatch() { batchSel.value = new Set(); lastTouched.value = null }
-
-// ── Selección múltiple: shift+clic (rango) y clic-arrastre (pincel) ───────────────────────────
-// Las dos, porque cubren cosas distintas: arrastrar va bien para rachas cortas y adyacentes, pero
-// para marcar 50 capítulos tendrías que arrastrar por una lista que scrollea. Shift+clic lo hace
-// en dos clics y es el estándar que todo el mundo ya conoce (Explorador, Gmail).
-const lastTouched = ref(null)      // ancla del rango: último capítulo marcado con un clic normal
-const painting = ref(null)         // null | true (pintando selección) | false (pintando borrado)
-
-function _order() { return store.collectionChapters.map(c => String(c.chapter)) }
-
-function _applyRange(from, to, on) {
-  const order = _order()
-  const i = order.indexOf(String(from)), j = order.indexOf(String(to))
-  if (i < 0 || j < 0) return
-  const s = new Set(batchSel.value)
-  for (const k of order.slice(Math.min(i, j), Math.max(i, j) + 1)) on ? s.add(k) : s.delete(k)
-  batchSel.value = s
-}
-
-function _setSel(ch, on) {
-  const s = new Set(batchSel.value)
-  on ? s.add(String(ch)) : s.delete(String(ch))
-  batchSel.value = s
-}
-
-// mousedown (no click): hay que empezar a pintar ANTES de soltar el botón.
-function batchDown(ch, ev) {
-  if (ev.shiftKey && lastTouched.value != null) {
-    // Rango: extiende con el mismo estado que tenga el ancla, como en un explorador.
-    _applyRange(lastTouched.value, ch, batchSel.value.has(String(lastTouched.value)))
-    ev.preventDefault()          // evita que shift+clic seleccione texto de la lista
-    return
-  }
-  const on = !batchSel.value.has(String(ch))
-  _setSel(ch, on)
-  lastTouched.value = ch
-  painting.value = on            // arrastrar sigue haciendo LO MISMO que el primer clic
-}
-
-// Al entrar en otra fila con el botón pulsado, se pinta igual que el primero: si empezaste
-// marcando, marcas; si empezaste desmarcando, desmarcas. Nunca alterna (eso haría que pasar por
-// encima dos veces deshiciera el trabajo).
-function batchOver(ch) {
-  if (painting.value === null) return
-  _setSel(ch, painting.value)
-  lastTouched.value = ch
-}
-
-// El mouseup se escucha en window, no en la lista: si sueltas fuera (muy fácil al arrastrar hasta
-// el borde para scrollear) el pincel se quedaría pegado y seguirías seleccionando sin pulsar.
-function endPaint() { painting.value = null }
-onMounted(() => window.addEventListener('mouseup', endPaint))
-onBeforeUnmount(() => window.removeEventListener('mouseup', endPaint))
+// El mecanismo (shift+clic para rango, clic-arrastre para pincel) vive en `lib/useMultiSelect.js`:
+// era la mejor interacción de la app y sólo la tenía esta lista. Aquí queda el cableado.
+const _ms = useMultiSelect(() => store.collectionChapters.map(c => String(c.chapter)))
+const batchSel = _ms.selected      // ref<Set> → en la plantilla se desenvuelve solo, como antes
+const clearBatch = _ms.clear
+const batchDown = _ms.down
+const batchOver = _ms.over
 // De lo marcado: cuántos son locales (escalables) vs remotos (descargables).
 const batchStats = computed(() => {
   let local = 0, remote = 0
@@ -545,14 +526,14 @@ useModal(() => !!m.value, closeModal, modalEl)
                 <span v-if="coverage?.full" class="modal__4k">{{ coverage.full }} en 4K<template v-if="coverage.partial"> · {{ coverage.partial }} parcial</template></span>
                 <span v-if="m.source_meta?.sourceName" class="modal__dot" />
                 <span v-if="m.source_meta?.sourceName">{{ m.source_meta.sourceName }}</span>
-                <a v-if="store.mdId" :href="'https://mangadex.org/title/' + store.mdId" target="_blank" rel="noopener" class="mdlink" title="Ver en MangaDex">
+                <a v-if="store.mdId" :href="'https://mangadex.org/title/' + store.mdId" target="_blank" rel="noopener" class="mdlink" data-tip="Ver en MangaDex">
                   <Icon name="globe" :size="12" /> MangaDex
                 </a>
               </p>
 
               <!-- Progreso de lectura de la SERIE: con 250 capítulos, un punto por fila no deja
                    ver el patrón; esta barra sí. -->
-              <div v-if="readTotal && chapterTotal" class="modal__prog" :title="`${readTotal} de ${chapterTotal} capítulos leídos`">
+              <div v-if="readTotal && chapterTotal" class="modal__prog" :data-tip="`${readTotal} de ${chapterTotal} capítulos leídos`">
                 <span class="modal__prog-fill" :style="{ width: readPct + '%' }" />
               </div>
 
@@ -562,7 +543,7 @@ useModal(() => !!m.value, closeModal, modalEl)
               <div class="modal__hacts">
                 <button v-if="store.continueInfo()" class="hgo" @click="store.resumeCurrent()">
                   <Icon name="play" :size="15" />
-                  <span>Continuar · Cap. {{ formatChapter(store.continueInfo().chapter) }}</span>
+                  <span>Continuar · {{ formatChapter(store.continueInfo().chapter) }}</span>
                   <em v-if="store.continueInfo().total">pág. {{ store.continueInfo().page + 1 }}/{{ store.continueInfo().total }}</em>
                 </button>
                 <button v-else-if="firstChapter != null" class="hgo" @click="store.read(firstChapter)">
@@ -615,18 +596,18 @@ useModal(() => !!m.value, closeModal, modalEl)
                   <div v-if="store.coverPicker.loading" class="cvp__load"><Spinner :size="11" /> Buscando portadas online…</div>
                   <template v-else>
                     <div class="cvp__grid">
-                      <div v-if="store.coverPicker.current" class="cvp__item is-current" title="Portada actual">
+                      <div v-if="store.coverPicker.current" class="cvp__item is-current" data-tip="Portada actual">
                         <img :src="imgProxy(store.coverPicker.current)" referrerpolicy="no-referrer" alt="" />
                         <span class="cvp__tag">Actual</span>
                       </div>
                       <button v-for="c in store.coverPicker.anilist" :key="'al' + c.url" class="cvp__item"
-                              :disabled="!!store.coverPicker.applying" @click="store.applyCover(c.url)" title="Usar esta portada">
+                              :disabled="!!store.coverPicker.applying" @click="store.applyCover(c.url)" data-tip="Usar esta portada">
                         <img :src="imgProxy(c.thumb)" referrerpolicy="no-referrer" loading="lazy" decoding="async" alt="" />
                         <span class="cvp__tag cvp__tag--al">AniList</span>
                         <span v-if="store.coverPicker.applying === c.url" class="cvp__busy"><Spinner :size="11" /></span>
                       </button>
                       <button v-for="(c, i) in store.coverPicker.mangadex" :key="'md' + i" class="cvp__item"
-                              :disabled="!!store.coverPicker.applying" @click="store.applyCover(c.url)" title="Usar esta portada">
+                              :disabled="!!store.coverPicker.applying" @click="store.applyCover(c.url)" data-tip="Usar esta portada">
                         <img :src="imgProxy(c.thumb)" referrerpolicy="no-referrer" loading="lazy" decoding="async" alt="" />
                         <span v-if="c.volume && c.volume !== '?'" class="cvp__tag">Vol {{ c.volume }}</span>
                         <span v-if="store.coverPicker.applying === c.url" class="cvp__busy"><Spinner :size="11" /></span>
@@ -639,7 +620,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                 </div>
 
                 <div class="manage__actions">
-                  <button class="delbtn" @click="store.deleteManga()" title="Eliminar este manga de la biblioteca"><Icon name="close" :size="13" /> Eliminar manga</button>
+                  <button class="delbtn" @click="store.deleteManga()" data-tip="Eliminar este manga de la biblioteca"><Icon name="close" :size="13" /> Eliminar manga</button>
                   <span class="manage__spacer" />
                   <label class="upbtn"><Icon name="library" :size="13" /> Subir portada<input type="file" accept="image/*" @change="onCoverFile" hidden /></label>
                   <button class="savebtn" @click="saveMeta">Guardar cambios</button>
@@ -662,7 +643,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                   </label>
                 </div>
                 <div class="manage__row manage__row--color" v-if="hasColorModel">
-                  <button class="colorbtn" @click="store.openColorPickerAll()" title="Muestra las páginas a color de todo el manga para que elijas cuáles escalar con el modelo a color">
+                  <button class="colorbtn" @click="store.openColorPickerAll()" data-tip="Muestra las páginas a color de todo el manga para que elijas cuáles escalar con el modelo a color">
                     <Icon name="palette" :size="13" /> Escalar páginas a color
                   </button>
                   <span class="manage__hint">Detecta las páginas a color de todo el manga y te deja elegir cuáles escalar con el modelo a color. El progreso sale en Actividad.</span>
@@ -751,7 +732,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                   </button>
                   <div v-if="store.colorPages.length" class="colors__grid">
                     <button v-for="cp in store.colorPages" :key="cp.filename" class="colorpg" :class="{ 'is-excl': store.excludedPages.includes(cp.filename) }"
-                            :title="cp.label + (store.excludedPages.includes(cp.filename) ? ' (excluida)' : '')" @click="store.toggleExclude(cp.filename)">
+                            :data-tip="cp.label + (store.excludedPages.includes(cp.filename) ? ' (excluida)' : '')" @click="store.toggleExclude(cp.filename)">
                       <img :src="cp.url" loading="lazy" decoding="async" alt="" />
                       <span v-if="store.excludedPages.includes(cp.filename)" class="colorpg__x"><Icon name="close" :size="12" /></span>
                     </button>
@@ -854,7 +835,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                       ...verLangs.map(l => ({ value: l, label: `${flag(l)} ${l}`, hint: String(ver.byLang[l].length) }))]"
                       @change="store.verSetLangFilter($event)" />
                   </div>
-                  <button class="btn-xs" @click="store.verDiscover(true)" title="Volver a buscar (ignora la caché)">↻ Buscar de nuevo</button>
+                  <button class="btn-xs" @click="store.verDiscover(true)" data-tip="Volver a buscar (ignora la caché)">↻ Buscar de nuevo</button>
                 </div>
 
                 <!-- versión principal fijada -->
@@ -891,7 +872,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                     <span v-else-if="chaptersBehind(localCand)" class="vr__behind">faltan {{ chaptersBehind(localCand) }}</span>
                   </div>
                   <div class="vr__acts">
-                    <button class="vr__eye" :class="{ 'is-on': isInCompare(localCand) }" @click="store.verToggleCompare(localCand)" title="Añadir a comparación A|B">
+                    <button class="vr__eye" :class="{ 'is-on': isInCompare(localCand) }" @click="store.verToggleCompare(localCand)" data-tip="Añadir a comparación A|B">
                       <Icon name="globe" :size="13" /> A|B
                     </button>
                   </div>
@@ -909,22 +890,22 @@ useModal(() => !!m.value, closeModal, modalEl)
                           <span v-else-if="c === verBest" class="vr__badge vr__badge--best">★ mejor calidad</span>
                         </span>
                         <span class="vr__q">{{ c.quality?.height }}px · score {{ c.quality?.score }}<template v-if="c.quality?.totalChapters"> · <strong class="vr__caps">{{ c.quality.totalChapters }} cap.</strong></template></span>
-                        <span v-if="isUpToDate(c)" class="vr__complete" :title="`Llega al capítulo ${versionReach(c)} — al día con el manga (${refChapters})`">✓ al día</span>
-                        <span v-else-if="chaptersBehind(c)" class="vr__behind" :title="`Su último capítulo es el ${versionReach(c)}; el manga va por el ${refChapters}`">faltan {{ chaptersBehind(c) }}</span>
-                        <span v-if="c.match != null" class="vg__match" :class="{ 'vg__match--low': c.match < 0.95 }" :title="'Parecido de título con &quot;' + m?.name + '&quot; — mismo match que la Cobertura por capítulo'">{{ Math.round(c.match * 100) }}% título</span>
-                        <span v-if="isIrregular(c.quality)" class="vr__irr" :title="`Calidad irregular entre capítulos (${c.quality.heightMin}–${c.quality.heightMax}px). Algún capítulo es notablemente peor — penalizado en el ranking.`">⚠ irregular</span>
+                        <span v-if="isUpToDate(c)" class="vr__complete" :data-tip="`Llega al capítulo ${versionReach(c)} — al día con el manga (${refChapters})`">✓ al día</span>
+                        <span v-else-if="chaptersBehind(c)" class="vr__behind" :data-tip="`Su último capítulo es el ${versionReach(c)}; el manga va por el ${refChapters}`">faltan {{ chaptersBehind(c) }}</span>
+                        <span v-if="c.match != null" class="vg__match" :class="{ 'vg__match--low': c.match < 0.95 }" :data-tip="'Parecido de título con &quot;' + m?.name + '&quot; — mismo match que la Cobertura por capítulo'">{{ Math.round(c.match * 100) }}% título</span>
+                        <span v-if="isIrregular(c.quality)" class="vr__irr" :data-tip="`Calidad irregular entre capítulos (${c.quality.heightMin}–${c.quality.heightMax}px). Algún capítulo es notablemente peor — penalizado en el ranking.`">⚠ irregular</span>
                       </div>
                       <div class="vr__acts">
-                        <button class="vr__eye" :class="{ 'is-on': ver.sample.key === verSampleKey(c) && ver.sample.open }" @click="store.verReadSample(c)" title="Leer páginas de muestra">
+                        <button class="vr__eye" :class="{ 'is-on': ver.sample.key === verSampleKey(c) && ver.sample.open }" @click="store.verReadSample(c)" data-tip="Leer páginas de muestra">
                           <Icon name="search" :size="13" />
                         </button>
-                        <button class="vr__eye" :class="{ 'is-on': isInCompare(c) }" @click="store.verToggleCompare(c)" title="Añadir a comparación A|B">
+                        <button class="vr__eye" :class="{ 'is-on': isInCompare(c) }" @click="store.verToggleCompare(c)" data-tip="Añadir a comparación A|B">
                           <Icon name="globe" :size="13" /> A|B
                         </button>
-                        <button class="vr__eye" :disabled="!!ver.dl" @click="store.verDownloadVersion(c)" title="Descargar de esta versión los capítulos que falten">
+                        <button class="vr__eye" :disabled="!!ver.dl" @click="store.verDownloadVersion(c)" data-tip="Descargar de esta versión los capítulos que falten">
                           <Icon name="download" :size="13" />
                         </button>
-                        <button class="vr__fix" :class="{ 'is-on': isPrimary(c) }" @click="store.verSetPrimary(c)" :title="isPrimary(c) ? 'Quitar como principal' : 'Fijar como versión principal'">
+                        <button class="vr__fix" :class="{ 'is-on': isPrimary(c) }" @click="store.verSetPrimary(c)" :data-tip="isPrimary(c) ? 'Quitar como principal' : 'Fijar como versión principal'">
                           {{ isPrimary(c) ? 'Fijada ✓' : 'Fijar' }}
                         </button>
                       </div>
@@ -933,7 +914,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                     <div v-if="ver.sample.key === verSampleKey(c) && ver.sample.open" class="vr__prev">
                       <div v-if="ver.sample.loading" class="vr__prevload"><Spinner :size="16" /></div>
                       <div v-else-if="ver.sample.pages.length" class="tl__strip">
-                        <a v-for="(u, i) in ver.sample.pages" :key="i" :href="u" target="_blank" rel="noopener" class="tl__thumb" :title="`Página ${i + 1}`">
+                        <a v-for="(u, i) in ver.sample.pages" :key="i" :href="u" target="_blank" rel="noopener" class="tl__thumb" :data-tip="`Página ${i + 1}`">
                           <img :src="u" loading="lazy" decoding="async" referrerpolicy="no-referrer" />
                         </a>
                       </div>
@@ -952,14 +933,14 @@ useModal(() => !!m.value, closeModal, modalEl)
                     <button v-if="vg.phase !== 'ready'" class="hbtn" :disabled="vg.loading" @click="loadCoverage(false)">
                       <Spinner v-if="vg.loading" :size="13" /><Icon v-else name="grid" :size="14" /> Ver cobertura
                     </button>
-                    <button v-if="vg.phase === 'ready'" class="hbtn" :disabled="vg.loading" @click="loadCoverage(true)" title="Recalcular saltando la caché (vuelve a medir todas las fuentes)">
+                    <button v-if="vg.phase === 'ready'" class="hbtn" :disabled="vg.loading" @click="loadCoverage(true)" data-tip="Recalcular saltando la caché (vuelve a medir todas las fuentes)">
                       <Spinner v-if="vg.loading" :size="13" /><Icon v-else name="refresh" :size="14" /> Recalcular
                     </button>
                     <button v-if="vg.phase === 'ready'" class="hbtn" @click="toggleFreshness">
                       <Icon name="spark" :size="14" /> Revisar actualizaciones
                     </button>
                     <button v-if="vg.hasAssignments" class="hbtn hbtn--danger" @click="clearAllAssignments"
-                      title="Elimina todas las asignaciones de este manga y vuelve al modo normal (fuente de origen + MangaDex)">
+                      data-tip="Elimina todas las asignaciones de este manga y vuelve al modo normal (fuente de origen + MangaDex)">
                       <Icon name="trash" :size="14" /> Vaciar selección
                     </button>
                   </div>
@@ -973,7 +954,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                   <ul v-else-if="vg.freshness.suggestions.length" class="vg__suglist">
                     <li v-for="sug in vg.freshness.suggestions" :key="sug.chapter + sug.reason" class="vg__sug">
                       <span class="vg__sugtxt">
-                        Cap. {{ formatChapter(sug.chapter) }} —
+                        {{ formatChapter(sug.chapter) }} —
                         <template v-if="sug.reason === 'new'">nuevo en {{ sug.betterSource.sourceName }}</template>
                         <template v-else>mejor calidad en {{ sug.betterSource.sourceName }} (+{{ sug.delta }})</template>
                       </span>
@@ -992,7 +973,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                       <span class="vg__srcname">{{ s.sourceName }} <em class="vr__lang">{{ flag(s.sourceLang) }}</em></span>
                       <!-- El backend ya descarta <85% de match (_COVERAGE_MATCH_MIN); lo cercano al piso
                            (<95%) se resalta como "aún así, vale la pena mirarlo dos veces". -->
-                      <span v-if="s.match != null" class="vg__match" :class="{ 'vg__match--low': s.match < 0.95 }" :title="'Parecido de título con &quot;' + m?.name + '&quot; — valores cercanos al 85% pueden ser una obra distinta, revisa antes de confiar'">{{ Math.round(s.match * 100) }}% título</span>
+                      <span v-if="s.match != null" class="vg__match" :class="{ 'vg__match--low': s.match < 0.95 }" :data-tip="'Parecido de título con &quot;' + m?.name + '&quot; — valores cercanos al 85% pueden ser una obra distinta, revisa antes de confiar'">{{ Math.round(s.match * 100) }}% título</span>
                       <span class="vg__srcmeta">{{ s.count }} cap.<template v-if="s.completeness != null"> · {{ Math.round(s.completeness * 100) }}% completo</template><template v-if="s.updateFrequency?.medianDaysBetweenChapters"> · ~{{ s.updateFrequency.medianDaysBetweenChapters }}d/cap</template></span>
                       <button class="vr__fix" @click="openRangePanel(s)">Asignar rango…</button>
                     </li>
@@ -1085,7 +1066,7 @@ useModal(() => !!m.value, closeModal, modalEl)
               <template v-else>
                 <div class="tl__picks">
                   <div class="tl__pick">
-                    <div class="tl__pickh">Arte <button class="tl__re" @click="store.tpDiscover()" title="Volver a buscar">↻</button></div>
+                    <div class="tl__pickh">Arte <button class="tl__re" @click="store.tpDiscover()" data-tip="Volver a buscar">↻</button></div>
                     <div v-if="tp.artSel?.local" class="tl__cand">
                       <span class="tl__src">{{ m?.source_meta?.imported ? 'Arte local (importado)' : 'Arte local (descargado + escalado 4K)' }}</span>
                     </div>
@@ -1138,20 +1119,20 @@ useModal(() => !!m.value, closeModal, modalEl)
                       <span class="tl__chip" :class="'tl__chip--' + (tp.runStatus?.chapter === c.chapter && tp.running ? 'doing' : c.status)">
                         {{ tp.runStatus?.chapter === c.chapter && tp.running ? 'traduciendo' : c.status === 'done' ? 'hecho' : c.status === 'failed' ? 'falló' : 'pendiente' }}
                       </span>
-                      <span v-if="artOverrideFor(c.chapter)" class="chap__tag chap__tag--assigned" :title="`Este capítulo usará el arte de ${artOverrideFor(c.chapter).sourceName} (asignado en Cobertura) en vez del arte global`">
+                      <span v-if="artOverrideFor(c.chapter)" class="chap__tag chap__tag--assigned" :data-tip="`Este capítulo usará el arte de ${artOverrideFor(c.chapter).sourceName} (asignado en Cobertura) en vez del arte global`">
                         arte: {{ artOverrideFor(c.chapter).sourceName }}
                       </span>
-                      <span v-if="esOverrideFor(c.chapter)" class="chap__tag chap__tag--assigned" :title="`Este capítulo tomará el español de ${esOverrideFor(c.chapter).sourceName} (anclado en Cobertura) en vez de la fuente ES global`">
+                      <span v-if="esOverrideFor(c.chapter)" class="chap__tag chap__tag--assigned" :data-tip="`Este capítulo tomará el español de ${esOverrideFor(c.chapter).sourceName} (anclado en Cobertura) en vez de la fuente ES global`">
                         ES: {{ esOverrideFor(c.chapter).sourceName }}
                       </span>
-                      <button class="tl__eye" :class="{ 'is-on': tp.preview[c.chapter]?.open }" @click.stop="store.tpTogglePreview(c.chapter)" title="Vista previa del arte">
+                      <button class="tl__eye" :class="{ 'is-on': tp.preview[c.chapter]?.open }" @click.stop="store.tpTogglePreview(c.chapter)" data-tip="Vista previa del arte">
                         <Icon name="search" :size="13" />
                       </button>
                     </div>
                     <div v-if="tp.preview[c.chapter]?.open" class="tl__prev">
                       <div v-if="tp.preview[c.chapter].loading" class="tl__prevload"><Spinner :size="16" /></div>
                       <div v-else-if="tp.preview[c.chapter].pages.length" class="tl__strip">
-                        <a v-for="(u, i) in tp.preview[c.chapter].pages" :key="i" :href="u" target="_blank" rel="noopener" class="tl__thumb" :title="`Página ${i + 1}`">
+                        <a v-for="(u, i) in tp.preview[c.chapter].pages" :key="i" :href="u" target="_blank" rel="noopener" class="tl__thumb" :data-tip="`Página ${i + 1}`">
                           <img :src="u" loading="lazy" decoding="async" referrerpolicy="no-referrer" />
                         </a>
                       </div>
@@ -1174,7 +1155,7 @@ useModal(() => !!m.value, closeModal, modalEl)
               </div>
               <div v-if="store.colorPages.length" class="colors__grid">
                 <button v-for="cp in store.colorPages" :key="cp.filename" class="colorpg" :class="{ 'is-excl': store.excludedPages.includes(cp.filename) }"
-                        :title="cp.label + (store.excludedPages.includes(cp.filename) ? ' (excluida)' : '')" @click="store.toggleExclude(cp.filename)">
+                        :data-tip="cp.label + (store.excludedPages.includes(cp.filename) ? ' (excluida)' : '')" @click="store.toggleExclude(cp.filename)">
                   <img :src="cp.url" loading="lazy" decoding="async" alt="" />
                   <span v-if="store.excludedPages.includes(cp.filename)" class="colorpg__x"><Icon name="close" :size="12" /></span>
                 </button>
@@ -1206,7 +1187,7 @@ useModal(() => !!m.value, closeModal, modalEl)
             </div>
             <div class="modal__chhead">
               <span>Capítulos</span>
-              <span v-if="store.effectiveSource?.pinned" class="chsrc" :title="`Fuente fijada: ${store.effectiveSource.sourceName}`">
+              <span v-if="store.effectiveSource?.pinned" class="chsrc" :data-tip="`Fuente fijada: ${store.effectiveSource.sourceName}`">
                 <Icon name="spark" :size="11" /> {{ store.effectiveSource.sourceName || 'versión fijada' }}
               </span>
               <Select v-if="store.mdLangs.length > 1" v-model="store.mdLang" aria-label="Idioma"
@@ -1217,7 +1198,7 @@ useModal(() => !!m.value, closeModal, modalEl)
 
             <!-- Barra de selección por lote: marca capítulos y actúa sobre ellos (descargar/escalar) -->
             <div v-if="store.collectionChapters.length" class="batchhead">
-              <button class="batchhead__all" @click="toggleAllBatch" :title="batchSel.size === store.collectionChapters.length ? 'Deseleccionar todo' : 'Seleccionar todo'">
+              <button class="batchhead__all" @click="toggleAllBatch" :data-tip="batchSel.size === store.collectionChapters.length ? 'Deseleccionar todo' : 'Seleccionar todo'">
                 <span class="batchbox" :class="{ 'is-on': batchSel.size && batchSel.size === store.collectionChapters.length, 'is-part': batchSel.size && batchSel.size < store.collectionChapters.length }">
                   <Icon v-if="batchSel.size" name="check" :size="11" />
                 </span>
@@ -1232,7 +1213,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                 <!-- Fases pendientes de la cadena. Sin esto lanzabas "descargar, traducir y
                      escalar" y sólo veías la descarga: no había forma de saber si lo demás
                      seguía en pie o se había quedado por el camino. -->
-                <div v-if="store.chainStepsFor(c.chapter)" class="steps" :title="`Pendiente: ${store.chainStepsFor(c.chapter).steps.map(s => s.label).join(' → ')}`">
+                <div v-if="store.chainStepsFor(c.chapter)" class="steps" :data-tip="`Pendiente: ${store.chainStepsFor(c.chapter).steps.map(s => s.label).join(' → ')}`">
                   <template v-for="(s, i) in store.chainStepsFor(c.chapter).steps" :key="s.k">
                     <span v-if="i" class="steps__sep">›</span>
                     <span class="steps__s"
@@ -1244,18 +1225,22 @@ useModal(() => !!m.value, closeModal, modalEl)
                 </div>
                 <!-- Casilla de selección por lote -->
                 <button class="chap__check" @mousedown.stop.left="batchDown(c.chapter, $event)" @click.stop
-                        :title="batchSel.has(String(c.chapter)) ? 'Quitar de la selección' : 'Añadir · shift+clic marca hasta aquí · arrastra para marcar varios'">
+                        :data-tip="batchSel.has(String(c.chapter)) ? 'Quitar de la selección' : 'Añadir · shift+clic marca hasta aquí · arrastra para marcar varios'">
                   <span class="batchbox" :class="{ 'is-on': batchSel.has(String(c.chapter)) }"><Icon v-if="batchSel.has(String(c.chapter))" name="check" :size="11" /></span>
                 </button>
                 <!-- Downloaded chapter: clic = leer · clic derecho = marcar/desmarcar leído -->
                 <template v-if="!c._sourceId && !c._mdChapterId && !c._covMulti">
                   <button class="chap__read" @click="store.read(c.chapter)"
-                          @contextmenu.prevent="store.toggleChapterRead(c.chapter)" :title="store.isChapterRead(c.chapter) ? 'Leído · clic derecho para desmarcar' : 'Clic derecho: marcar leído'">
-                    <span v-if="store.isChapterRead(c.chapter)" class="chap__read-dot" title="Leído" />
+                          @contextmenu.prevent="store.toggleChapterRead(c.chapter)" :data-tip="store.isChapterRead(c.chapter) ? 'Leído · clic derecho para desmarcar' : 'Clic derecho: marcar leído'">
+                    <span v-if="isCurrent(c.chapter) && nowThumb" class="chap__thumb">
+                      <img :src="nowThumb" alt="" loading="lazy" decoding="async" />
+                      <Icon name="play" :size="12" />
+                    </span>
+                    <span v-if="store.isChapterRead(c.chapter)" class="chap__read-dot" data-tip="Leído" />
                     <span class="chap__num">{{ formatChapter(c.chapter) }}</span>
                     <span class="chap__pages">{{ c.page_count }} pág.</span>
                     <span v-if="upState(c.chapter) === true" class="chap__tag chap__tag--4k">4K</span>
-                    <span v-else-if="upState(c.chapter) === 'partial'" class="chap__tag chap__tag--part" :title="store.health[c.chapter] ? `Faltan ${store.health[c.chapter].missing_upscaled} págs.` : ''">PARCIAL<template v-if="store.health[c.chapter]?.missing_upscaled"> ·{{ store.health[c.chapter].missing_upscaled }}</template></span>
+                    <span v-else-if="upState(c.chapter) === 'partial'" class="chap__tag chap__tag--part" :data-tip="store.health[c.chapter] ? `Faltan ${store.health[c.chapter].missing_upscaled} págs.` : ''">PARCIAL<template v-if="store.health[c.chapter]?.missing_upscaled"> ·{{ store.health[c.chapter].missing_upscaled }}</template></span>
                     <!-- Dónde te quedaste DENTRO del capítulo en curso -->
                     <span v-if="isCurrent(c.chapter)" class="chap__now">
                       <Icon name="play" :size="10" /> pág. {{ store.continueInfo().page + 1 }}<template v-if="store.continueInfo().total">/{{ store.continueInfo().total }}</template>
@@ -1263,7 +1248,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                   </button>
                   <!-- Fuente asignada a este capítulo (chapter_sources) + reasignación puntual -->
                   <div v-if="vg.sources.length" class="chap__srcpin">
-                    <button class="chap__srcpinbtn" @click="toggleReassign(String(c.chapter))" :title="c._assignedSourceName ? `Asignado: ${c._assignedSourceName}` : 'Asignar fuente para completar/actualizar este capítulo'">
+                    <button class="chap__srcpinbtn" @click="toggleReassign(String(c.chapter))" :data-tip="c._assignedSourceName ? `Asignado: ${c._assignedSourceName}` : 'Asignar fuente para completar/actualizar este capítulo'">
                       <Icon name="grid" :size="11" /> {{ c._assignedSourceName || 'Fuente' }}
                     </button>
                     <ul v-if="reassignOpen === String(c.chapter)" class="chap__srcmenu">
@@ -1279,9 +1264,9 @@ useModal(() => !!m.value, closeModal, modalEl)
                      del manga completo — nunca se muestran las dos a la vez. -->
                 <div v-else class="chap__read"
                      @contextmenu.prevent="store.toggleChapterRead(c.chapter)"
-                     :title="store.isChapterRead(c.chapter) ? 'Leído · clic derecho para desmarcar' : 'Clic derecho: marcar leído'">
-                  <span v-if="store.isChapterRead(c.chapter)" class="chap__read-dot" title="Leído" />
-                  <span v-if="c._mdLang" class="chap__flag" :title="c._mdLang">{{ flag(c._mdLang) }}</span>
+                     :data-tip="store.isChapterRead(c.chapter) ? 'Leído · clic derecho para desmarcar' : 'Clic derecho: marcar leído'">
+                  <span v-if="store.isChapterRead(c.chapter)" class="chap__read-dot" data-tip="Leído" />
+                  <span v-if="c._mdLang" class="chap__flag" :data-tip="c._mdLang">{{ flag(c._mdLang) }}</span>
                   <span class="chap__num">{{ formatChapter(c.chapter) }}</span>
                   <span class="chap__pages" v-if="c._assignedSourceName">vía {{ c._assignedSourceName }}</span>
                   <span class="chap__pages" v-else-if="c._sourceId">vía {{ store.current.source_meta?.sourceName }}</span>
@@ -1346,24 +1331,24 @@ useModal(() => !!m.value, closeModal, modalEl)
                       <circle class="dl-ring__fill" cx="12" cy="12" r="9" :style="{ strokeDashoffset: 56.5 - (56.5 * (store.upscaleByChapter[c.chapter].pct / 100)) }" />
                     </svg>
                     <span class="chap__dlprog-n" v-if="store.upscaleByChapter[c.chapter].total">{{ store.upscaleByChapter[c.chapter].pct }}%</span>
-                    <button class="ib ib--danger" title="Cancelar" @click="store.cancelUpscale(c.chapter)"><Icon name="close" :size="13" /></button>
+                    <button class="ib ib--danger" data-tip="Cancelar" @click="store.cancelUpscale(c.chapter)"><Icon name="close" :size="13" /></button>
                   </div>
                   <template v-else>
-                    <button class="ib" :class="{ 'ib--read': store.isChapterRead(c.chapter) }" :title="store.isChapterRead(c.chapter) ? 'Marcar no leído' : 'Marcar leído'" @click="store.toggleChapterRead(c.chapter)"><Icon name="check" :size="14" /></button>
-                    <button class="ib" title="Leer original" @click="store.read(c.chapter, 'original')"><Icon name="library" :size="14" /></button>
-                    <button v-if="upState(c.chapter) === 'partial'" class="ib ib--warn" title="Reparar upscale" @click="store.repairChapter(c.chapter)"><Icon name="spark" :size="14" /></button>
-                    <button v-else-if="upState(c.chapter) !== true" class="ib ib--accent" title="Escalar a 4K" @click="store.upscaleChapter(c.chapter, m.source_meta?.imported ? { excludePages: store.excludedPages } : {})"><Icon name="spark" :size="14" /></button>
+                    <button class="ib ib--lbl" :class="{ 'ib--read': store.isChapterRead(c.chapter) }" :data-tip="store.isChapterRead(c.chapter) ? 'Marcar no leído' : 'Marcar leído'" @click="store.toggleChapterRead(c.chapter)"><Icon name="check" :size="14" /><em>{{ store.isChapterRead(c.chapter) ? 'No leído' : 'Leído' }}</em></button>
+                    <button class="ib ib--lbl" data-tip="Leer el arte original (sin escalar ni traducir)" @click="store.read(c.chapter, 'original')"><Icon name="library" :size="14" /><em>Original</em></button>
+                    <button v-if="upState(c.chapter) === 'partial'" class="ib ib--lbl ib--warn" data-tip="Reparar upscale" @click="store.repairChapter(c.chapter)"><Icon name="spark" :size="14" /><em>Reparar</em></button>
+                    <button v-else-if="upState(c.chapter) !== true" class="ib ib--lbl ib--accent" data-tip="Escalar a 4K" @click="store.upscaleChapter(c.chapter, m.source_meta?.imported ? { excludePages: store.excludedPages } : {})"><Icon name="spark" :size="14" /><em>4K</em></button>
                     <template v-if="hasColorModel">
-                      <div v-if="store.colorByChapter[c.chapter] && store.colorByChapter[c.chapter].status === 'upscaling'" class="chap__dlprog" :title="`Color: ${store.colorByChapter[c.chapter].pct}%`">
+                      <div v-if="store.colorByChapter[c.chapter] && store.colorByChapter[c.chapter].status === 'upscaling'" class="chap__dlprog" :data-tip="`Color: ${store.colorByChapter[c.chapter].pct}%`">
                         <svg class="dl-ring" viewBox="0 0 24 24">
                           <circle class="dl-ring__track" cx="12" cy="12" r="9" />
                           <circle class="dl-ring__fill" cx="12" cy="12" r="9" :style="{ strokeDashoffset: 56.5 - (56.5 * (store.colorByChapter[c.chapter].pct / 100)) }" />
                         </svg>
                       </div>
-                      <button v-else-if="store.colorDone[String(c.chapter)]" class="ib ib--colordone" title="Páginas a color ya escaladas" disabled><Icon name="palette" :size="14" /></button>
-                      <button v-else class="ib ib--color" title="Escalar páginas a color de este capítulo (elige cuáles)" @click="store.openColorPicker(c.chapter)"><Icon name="palette" :size="14" /></button>
+                      <button v-else-if="store.colorDone[String(c.chapter)]" class="ib ib--colordone" data-tip="Páginas a color ya escaladas" disabled><Icon name="palette" :size="14" /></button>
+                      <button v-else class="ib ib--color" data-tip="Escalar páginas a color de este capítulo (elige cuáles)" @click="store.openColorPicker(c.chapter)"><Icon name="palette" :size="14" /></button>
                     </template>
-                    <button class="ib ib--danger" title="Borrar capítulo" @click="store.deleteChapter(c.chapter)"><Icon name="close" :size="14" /></button>
+                    <button class="ib ib--lbl ib--danger" data-tip="Borrar capítulo" @click="store.deleteChapter(c.chapter)"><Icon name="close" :size="14" /><em>Borrar</em></button>
                   </template>
                   </template>
                 </div>
@@ -1382,13 +1367,13 @@ useModal(() => !!m.value, closeModal, modalEl)
                     <span class="chain__lbl">luego</span>
                     <button class="chain__chip" :class="{ 'is-on': store.chain.upscale }"
                             @click="store.setChain({ upscale: !store.chain.upscale })"
-                            title="Escalar a 4K los capítulos al terminar de descargarlos">
+                            data-tip="Escalar a 4K los capítulos al terminar de descargarlos">
                       <Icon v-if="store.chain.upscale" name="check" :size="11" /> 4K
                     </button>
                     <button class="chain__chip" :class="{ 'is-on': store.chain.translate && tpReady }"
                             :disabled="!tpReady"
                             @click="store.setChain({ translate: !store.chain.translate })"
-                            :title="tpReady ? 'Traducir antes de escalar (traducir invalida el 4K, así que el orden importa)' : 'Elige fuente de arte y de español en la pestaña Traducir'">
+                            :data-tip="tpReady ? 'Traducir antes de escalar (traducir invalida el 4K, así que el orden importa)' : 'Elige fuente de arte y de español en la pestaña Traducir'">
                       <Icon v-if="store.chain.translate && tpReady" name="check" :size="11" /> ES
                     </button>
                   </div>
@@ -1399,7 +1384,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                     <Icon name="spark" :size="14" /> Escalar 4K {{ batchStats.local }}
                   </button>
                   <button v-if="batchStats.local" class="hbtn" @click="batchColor"
-                          title="El escalado 4K salta las páginas a color: éstas van con el modelo de color, y eliges cuáles">
+                          data-tip="El escalado 4K salta las páginas a color: éstas van con el modelo de color, y eliges cuáles">
                     <Icon name="palette" :size="14" /> Páginas a color
                   </button>
                   <button class="hbtn batchbar__clear" @click="clearBatch"><Icon name="close" :size="14" /></button>
@@ -1421,7 +1406,7 @@ useModal(() => !!m.value, closeModal, modalEl)
           <header class="cpk__head">
             <div>
               <h3 v-if="store.colorPicker.mode === 'all'">Escalar a color · Todo el manga</h3>
-              <h3 v-else>Escalar a color · Cap. {{ formatChapter(store.colorPicker.chapter) }}</h3>
+              <h3 v-else>Escalar a color · {{ formatChapter(store.colorPicker.chapter) }}</h3>
               <p>Solo se muestran las páginas a color. Marca las que quieras escalar con {{ colorModelLabel }}.</p>
             </div>
             <label class="cpk__model" v-if="colorModelKeys.length > 1">Modelo
@@ -1443,7 +1428,7 @@ useModal(() => !!m.value, closeModal, modalEl)
           <!-- Todo el manga: agrupado por capítulo -->
           <div v-else class="cpk__scroll">
             <section v-for="c in store.colorPicker.chapters" :key="c.chapter" class="cpk__chap">
-              <h4>Cap. {{ formatChapter(c.chapter) }} <em v-if="c.done">· ya escalado</em></h4>
+              <h4>{{ formatChapter(c.chapter) }} <em v-if="c.done">· ya escalado</em></h4>
               <div class="cpk__grid">
                 <button v-for="p in c.pages" :key="p.name" class="cpk__pg" :class="{ 'is-sel': p.sel }" @click="store.toggleColorPage(p.name, c.chapter)">
                   <img :src="pageUrl(p.url, 180)" loading="lazy" decoding="async" alt="" />
@@ -1901,6 +1886,12 @@ useModal(() => !!m.value, closeModal, modalEl)
 .chsrc { display: inline-flex; align-items: center; gap: 4px; margin-right: auto; margin-left: var(--s-3); padding: 2px 0.5rem; border-radius: var(--r-pill); font-size: var(--fs-2xs); font-weight: 600; color: var(--azure-bright); background: var(--azure-haze); border: 1px solid color-mix(in srgb, var(--azure) 30%, transparent); }
 .chap { position: relative; display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid transparent; transition: background var(--t-fast), border-color var(--t-fast), opacity var(--t-fast); }
 .chap:hover { background: var(--surface); border-color: var(--line); }
+/* Miniatura de la página en curso: alta fija para que la fila no cambie de tamaño al cargar. */
+.chap__thumb { position: relative; flex: none; width: 2.125rem; height: 2.875rem; margin: -0.25rem 0.125rem -0.25rem 0;
+  border-radius: var(--r-xs); overflow: hidden; background: var(--surface-2);
+  box-shadow: 0 2px 10px rgba(0,0,0,.45), inset 0 0 0 1px rgba(255,255,255,.08); display: grid; place-items: center; }
+.chap__thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: .82; }
+.chap__thumb svg { position: relative; color: #fff; filter: drop-shadow(0 1px 3px rgba(0,0,0,.9)); }
 
 /* Capítulo EN CURSO: filo azul a la izquierda. Sin esto nada decía "vas por aquí". */
 .chap--now::before {
@@ -1979,6 +1970,11 @@ useModal(() => !!m.value, closeModal, modalEl)
 .chap__srcmenuempty { padding: 0.375rem 0.5rem; font-size: var(--fs-2xs); }
 
 .ib { width: 2rem; height: 1.875rem; display: grid; place-items: center; border-radius: var(--r-xs); border: 1px solid var(--line); color: var(--ink-faint); transition: all var(--t-fast); }
+/* Cinco iconos sin texto obligaban a pasar el ratón por cada uno para saber qué hacían. El nombre
+   aparece con la fila: como las acciones ya sólo se muestran al hover, no añade ningún salto. */
+.ib--lbl { width: auto; grid-auto-flow: column; gap: 0.3125rem; padding: 0 0.5rem; }
+.ib--lbl em { font-style: normal; font-size: var(--fs-2xs); font-weight: 600; letter-spacing: .01em; }
+@media (max-width: 900px) { .ib--lbl em { display: none; } .ib--lbl { width: 2rem; padding: 0; } }
 .ib:hover { color: var(--ink); border-color: var(--line-strong); background: var(--surface-2); }
 .ib--accent:hover { color: var(--cyan); border-color: var(--cyan-glow); }
 .ib--warn:hover { color: var(--gold); border-color: color-mix(in srgb, var(--gold) 40%, transparent); }

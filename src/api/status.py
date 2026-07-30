@@ -48,7 +48,7 @@ def _all_status():
     # Translation/version-download tasks ride the same aggregated snapshot as everything
     # else so the unified Activity center + the in-modal progress read ONE source of truth.
     transplant_tasks = get_transplant_tasks()
-    # Traducción de subtítulos de anime (modelo Gemini/Qwen) — misma vía unificada, para
+    # Traducción de subtítulos de anime (modelo local Qwen) — misma vía unificada, para
     # que Actividad sea el registro global. Las descargas de anime NO se incluyen (vista propia).
     subtitle_tasks = get_subtitle_tasks()
     # Lote de subtítulos: UNA entrada agregada por lote (5/12). Las traducciones IA hijas van en

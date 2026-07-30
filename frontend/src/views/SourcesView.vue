@@ -1,14 +1,26 @@
 <script setup>
 import { onMounted } from 'vue'
 import { useSourcesStore } from '@/stores/sources'
+import { useUiStore } from '@/stores/ui'
 import SourceDetailModal from '@/components/manga/SourceDetailModal.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
 const store = useSourcesStore()
+const ui = useUiStore()
 // Siempre re-chequear al entrar: con Suwayomi on-demand la JVM puede haberse
 // apagado por inactividad desde la última visita — el wake=1 la despierta.
 onMounted(() => { store.checkHealth() })
+
+// El reinicio de la JVM corta lo que esté en curso y tarda ~20 s: se pregunta antes.
+async function restartSuwayomi() {
+  const ok = await ui.confirm({
+    title: '¿Reiniciar el servidor de fuentes?',
+    body: 'Suwayomi se apaga y vuelve a arrancar (~20 s). Se cancela lo que esté descargando de una fuente.\nTu biblioteca no se toca.',
+    confirmLabel: 'Reiniciar',
+  })
+  if (ok) store.reloadSources(true)
+}
 
 function openManga(m) {
   store.openDetail(m)
@@ -32,8 +44,13 @@ function openMangaFromGroup(m, groupSource) {
         <h1>Fuentes</h1>
       </div>
       <div class="src__head-r">
+        <button class="src__webui" :disabled="!!store.reloading" @click="store.reloadSources()"
+          data-tip="Volver a preguntar por las fuentes (tira las cachés del backend)">
+          <Spinner v-if="store.reloading === 'soft'" :size="14" /><Icon v-else name="refresh" :size="15" />
+          {{ store.reloading === 'soft' ? 'Recargando…' : 'Recargar' }}
+        </button>
         <button class="src__webui" :disabled="store.openingWebUI" @click="store.openWebUI()"
-          title="Abrir Suwayomi (:4567) para instalar extensiones y elegir fuentes">
+          data-tip="Abrir Suwayomi (:4567) para instalar extensiones y elegir fuentes">
           <Icon name="external" :size="15" />
           {{ store.openingWebUI ? 'Abriendo…' : 'Gestionar fuentes' }}
         </button>
@@ -153,6 +170,23 @@ function openMangaFromGroup(m, groupSource) {
         <p v-if="store.hasSelection">Selecciona fuentes y pulsa Buscar o Populares.</p>
         <p v-else>Selecciona una o más fuentes para buscar y ver sus populares.</p>
       </div>
+
+      <!-- Fuentes caídas: la búsqueda "termina" aunque media docena de extensiones hayan
+           reventado. Sin esto, el resultado parece completo y no lo es. -->
+      <div v-if="store.failedSources.length && !store.searching && !store.popularLoading" class="srcfail">
+        <Icon name="alert" :size="14" />
+        <span class="srcfail__t"><b>{{ store.failedSources.length }}</b> fuente{{ store.failedSources.length > 1 ? 's' : '' }}
+          no respondió: {{ store.failedSources.map(f => f.name).join(' · ') }}</span>
+        <!-- Una extensión atascada se queda así hasta reiniciar: aquí está la salida, en el
+             mismo sitio donde te enteras del problema. El reinicio duro va aparte porque
+             tarda ~20 s y no debe dispararse por un clic distraído. -->
+        <button class="srcfail__b" :disabled="!!store.reloading" @click="store.reloadSources()">
+          <Spinner v-if="store.reloading === 'soft'" :size="12" /> Recargar fuentes
+        </button>
+        <button class="srcfail__b" :disabled="!!store.reloading" @click="restartSuwayomi">
+          <Spinner v-if="store.reloading === 'hard'" :size="12" /> Reiniciar Suwayomi
+        </button>
+      </div>
     </template>
 
     <SourceDetailModal />
@@ -174,6 +208,19 @@ function openMangaFromGroup(m, groupSource) {
 .src__webui:hover:not(:disabled) { color: var(--ink); border-color: var(--azure); background: var(--azure-haze); }
 .src__webui:hover:not(:disabled) :deep(svg) { color: var(--azure-bright); }
 .src__webui:disabled { opacity: .6; cursor: default; }
+
+/* Aviso de fuentes caídas: informativo, no alarmante — hay resultados válidos arriba. */
+.srcfail__t { flex: 1; min-width: 12rem; }
+.srcfail__b { display: inline-flex; align-items: center; gap: var(--s-2); flex: none;
+  padding: 0.25rem 0.625rem; border-radius: var(--r-pill); font-size: var(--fs-2xs); font-weight: 600;
+  color: var(--ink); border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+  background: var(--surface); transition: all var(--t-fast); }
+.srcfail__b:hover:not(:disabled) { border-color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.srcfail__b:disabled { opacity: .6; cursor: default; }
+.srcfail { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin: var(--s-4) 0 0;
+  padding: var(--s-2) var(--s-3); border-radius: var(--r-md); font-size: var(--fs-xs);
+  color: var(--warn); background: color-mix(in srgb, var(--warn) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 24%, transparent); }
 
 .offline { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-9) 0; color: var(--ink-faint); text-align: center; }
 .offline__btns { display: flex; gap: var(--s-3); flex-wrap: wrap; justify-content: center; }
@@ -207,7 +254,8 @@ function openMangaFromGroup(m, groupSource) {
 
 .center { display: grid; place-items: center; padding: var(--s-8); }
 .hint { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-9) 0; color: var(--ink-faint); }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: var(--s-4); }
+/* Ancho base propio; el resto de la rejilla (densidad, hueco, móvil) vive en base.css */
+.grid { --card-min: 10rem; gap: var(--s-4); }
 
 .sc { outline: none; cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }
 .sc:hover, .sc:focus-visible { transform: translateY(-5px); }
@@ -234,5 +282,5 @@ function openMangaFromGroup(m, groupSource) {
 .src-group__lang { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); padding: 1px 0.3125rem; border-radius: var(--r-xs); border: 1px solid var(--line-2); }
 .src-group__count { margin-left: auto; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
 
-@media (max-width: 540px) { .src { padding: 0 var(--s-4) var(--s-8); } .grid { grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); } }
+@media (max-width: 540px) { .src { padding: 0 var(--s-4) var(--s-8); } .grid { --card-min: 7.5rem; } }
 </style>

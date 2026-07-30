@@ -80,7 +80,7 @@ from api.cbz import cbz_bp
 from api.anilist import anilist_bp
 from api.anime import anime_bp
 from api.subtitle import subtitle_bp
-from api.subtitle_batch import subbatch_bp
+from api.subtitle_batch import subbatch_bp, load_batches
 from api.imgproxy import imgproxy_bp
 from api.backup import backup_bp
 from api.transplant import transplant_bp
@@ -120,8 +120,10 @@ from api.storage import storage_bp
 app.register_blueprint(storage_bp, url_prefix='/api/storage')
 from api.config_store import config_bp
 app.register_blueprint(config_bp, url_prefix='/api/config')
-from api.sync import sync_bp
+from api.sync import sync_bp, start_auto_sync
 app.register_blueprint(sync_bp, url_prefix='/api/sync')
+start_auto_sync()   # copia semanal del perfil al repo privado (no hace nada sin repo+token)
+load_batches()      # lotes de subtítulos de antes del reinicio (los vivos se declaran rotos)
 from api.media import media_bp
 app.register_blueprint(media_bp, url_prefix='/api/media')
 

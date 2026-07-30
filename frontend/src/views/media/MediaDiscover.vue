@@ -1,6 +1,7 @@
 <script setup>
-/* Descubrir (TMDB). Añadir desde aquí traduce el id de TMDB al de Sonarr/Radarr vía `/resolve`:
-   si la traducción no es inequívoca NO se elige por el usuario, se le enseñan los candidatos. */
+/* Descubrir (TMDB). Añadir traduce el id de TMDB al de Sonarr/Radarr vía `/resolve`, que hace un
+   lookup EXACTO por `tmdb:<id>` — antes se emparejaba por título y cada obra con nombre no inglés
+   abría un «varias coincidencias, elige la correcta» que era puro peaje. */
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api } from '@/lib/api'
 import { useMediaStore } from '@/stores/media'
@@ -8,10 +9,10 @@ import { useUiStore } from '@/stores/ui'
 import MediaCard from '@/components/media/MediaCard.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 
 const store = useMediaStore()
 const ui = useUiStore()
-const candidates = ref(null)
 
 const LISTS = [
   { id: 'trending', label: 'Tendencias' },
@@ -47,17 +48,17 @@ watch(sentinel, (el, prev) => {
 onBeforeUnmount(() => io?.disconnect())
 
 async function add(it) {
+  if (it.already) { ui.toast('Ya está en tu biblioteca', 'info'); return }
   store.adding = it.tmdb_id
   try {
     const t = it.title_original || it.title
     const r = await api.get(`/api/media/resolve?kind=${store.discoverKind}` +
-      `&title=${encodeURIComponent(t)}&year=${it.year || ''}`)
+      `&tmdb_id=${it.tmdb_id}&title=${encodeURIComponent(t)}&year=${it.year || ''}`)
     if (!r.match) {
-      candidates.value = { term: t, list: r.candidates || [] }
-      ui.toast('Varias coincidencias: elige cuál es', 'info')
+      ui.toast(`«${t}» no está en el catálogo de ${store.discoverKind === 'movie' ? 'Radarr' : 'Sonarr'}`, 'error')
       return
     }
-    if (r.match.already) { ui.toast('Ya la tienes', 'info'); it.already = true; return }
+    if (r.match.already) { ui.toast('Ya está en tu biblioteca', 'info'); it.already = true; return }
     const ok = await store.add(r.match.ext_id, store.discoverKind)
     if (ok) it.already = true
   } catch (e) {
@@ -94,29 +95,15 @@ async function add(it) {
               @click="pickGenre(String(g.id))">{{ g.name }}</button>
     </div>
 
-    <!-- Candidatos: aparece cuando el título de TMDB no casa con uno solo de Sonarr/Radarr. -->
-    <section v-if="candidates" class="mdisc__cands">
-      <p class="mdisc__candsh">
-        Varias coincidencias para <b>{{ candidates.term }}</b> — elige la correcta:
-        <button class="mdisc__close" @click="candidates = null">Cerrar</button>
-      </p>
-      <ul>
-        <li v-for="c in candidates.list.slice(0, 8)" :key="c.ext_id">
-          <span>{{ c.title }} <em>{{ c.year || '—' }}</em></span>
-          <button :disabled="c.already" @click="store.add(c.ext_id, store.discoverKind).then(() => candidates = null)">
-            {{ c.already ? 'Ya la tienes' : 'Añadir' }}
-          </button>
-        </li>
-      </ul>
-    </section>
-
     <p v-if="store.discoverSkipped" class="mdisc__note">
       {{ store.discoverSkipped }} anime{{ store.discoverSkipped > 1 ? 's' : '' }} fuera de la lista —
       tienen su propia sección en <b>Anime</b>.
     </p>
 
     <Spinner v-if="store.discoverLoading" />
-    <EmptyState v-else-if="store.discoverErr" icon="alert" title="No se pudo cargar TMDB" :hint="store.discoverErr" />
+    <ErrorState v-else-if="store.discoverErr" title="No se pudo cargar TMDB."
+                hint="Requiere TMDB_API_KEY y conexión a internet." :detail="store.discoverErr"
+                @retry="store.loadDiscover()" />
 
     <template v-else>
       <div class="mdisc__grid stagger">
@@ -124,8 +111,9 @@ async function add(it) {
                    :cover="d.poster" :title="d.title"
                    :kind-label="store.discoverKind === 'movie' ? 'PELÍCULA' : 'SERIE'"
                    :status="d.score ? { label: `★ ${d.score}`, color: 'var(--cyan)' } : null"
+                   :flag="d.already ? { tone: 'soft', icon: 'check', label: 'EN TU BIBLIOTECA' } : null"
                    :tags="[d.year ? String(d.year) : ''].filter(Boolean)"
-                   :play-label="d.already ? 'Añadida' : (store.adding === d.tmdb_id ? 'Añadiendo…' : 'Añadir')"
+                   :play-label="d.already ? 'Ya la tienes' : (store.adding === d.tmdb_id ? 'Añadiendo…' : 'Añadir')"
                    :play-icon="d.already ? 'check' : (store.adding === d.tmdb_id ? 'refresh' : 'plus')"
                    :play-done="!!d.already" :play-busy="store.adding === d.tmdb_id"
                    alt-label=""
@@ -159,21 +147,4 @@ async function add(it) {
   font-weight: 600; color: var(--ink); background: var(--surface); border: 1px solid var(--line);
   cursor: pointer; transition: all var(--t-fast); }
 .mdisc__morebtn:hover { color: #fff; border-color: var(--azure); background: var(--azure-haze); }
-.mdisc__add { width: 100%; margin-top: var(--s-2); padding: var(--s-2); border-radius: var(--r-sm);
-  background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); font: inherit;
-  font-size: var(--fs-xs); font-weight: 600; cursor: pointer; transition: all var(--t-fast); }
-.mdisc__add:hover:not(:disabled) { border-color: var(--azure); color: var(--azure-bright); }
-.mdisc__add:disabled { opacity: .55; cursor: default; }
-.mdisc__cands { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md);
-  padding: var(--s-3); margin-bottom: var(--s-5); }
-.mdisc__candsh { margin: 0 0 var(--s-2); font-size: var(--fs-sm); color: var(--ink-soft); }
-.mdisc__close { margin-left: var(--s-3); background: none; border: 0; color: var(--ink-faint);
-  cursor: pointer; font: inherit; font-size: var(--fs-xs); text-decoration: underline; }
-.mdisc__cands ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
-.mdisc__cands li { display: flex; justify-content: space-between; align-items: center; gap: var(--s-3);
-  padding: var(--s-2); background: var(--surface-2); border-radius: var(--r-sm); font-size: var(--fs-sm); }
-.mdisc__cands em { color: var(--ink-faint); font-style: normal; }
-.mdisc__cands button { background: var(--azure); color: #fff; border: 0; border-radius: var(--r-sm);
-  padding: 4px 0.625rem; font: inherit; font-size: var(--fs-xs); cursor: pointer; }
-.mdisc__cands button:disabled { background: var(--surface-3); color: var(--ink-faint); cursor: default; }
 </style>

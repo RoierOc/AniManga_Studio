@@ -12,6 +12,7 @@ import Skeleton from '@/components/ui/Skeleton.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
 import ContentToolbar from '@/components/ui/ContentToolbar.vue'
+import DensityToggle from '@/components/ui/DensityToggle.vue'
 
 const store = useAnimeStore()
 
@@ -154,7 +155,8 @@ function openMenu(e, a) {
                     :search="store.libSearch" @update:search="store.libSearch = $event"
                     search-placeholder="Buscar en tu anime…">
       <template #extra>
-        <button class="iconbtn" @click="store.openScan()" title="Carpetas de anime local"
+        <DensityToggle />
+        <button class="iconbtn" @click="store.openScan()" data-tip="Carpetas de anime local"
                 aria-label="Carpetas de anime local"><Icon name="folder" :size="16" /></button>
       </template>
     </ContentToolbar>
@@ -221,11 +223,11 @@ function openMenu(e, a) {
   transition: all var(--t-fast); }
 .iconbtn:hover { color: var(--azure-bright); border-color: var(--azure); }
 
-.grid { position: relative; display: grid; grid-template-columns: repeat(auto-fill, minmax(14.0625rem, 1fr)); gap: var(--s-6) var(--s-5); }
+/* Ancho base propio; el resto de la rejilla (densidad, hueco, móvil) vive en base.css */
+.grid { --card-min: 14.0625rem; }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-9) 0; color: var(--ink-faint); }
 
 @media (max-width: 540px) {
   .alib { --alib-pad: var(--s-4); }
-  .grid { grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: var(--s-5) var(--s-3); }
 }
 </style>

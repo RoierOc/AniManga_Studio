@@ -5,6 +5,7 @@ import { SEASON_ES } from '@/lib/anime'
 import DiscoverCard from '@/components/anime/DiscoverCard.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import Select from '@/components/ui/Select.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
@@ -68,7 +69,11 @@ onMounted(() => { if (!store.seasonal.length) store.loadSeasonal() })
     <div v-if="store.seasonalLoading" class="grid">
       <Skeleton v-for="n in 12" :key="n" variant="poster" />
     </div>
-    <EmptyState v-else-if="!filtered.length" icon="spark" title="Sin resultados para esta temporada." />
+    <ErrorState v-else-if="store.seasonalError && !store.seasonal.length"
+                title="No se pudo cargar la temporada." :detail="store.seasonalError"
+                @retry="store.loadSeasonal()" />
+    <EmptyState v-else-if="!filtered.length" icon="spark" title="Sin resultados para esta temporada."
+                :hint="store.seasonGenre ? `Ningún título de esta temporada es de ${store.seasonGenre}.` : ''" />
     <div v-else class="grid">
       <DiscoverCard v-for="a in filtered" :key="a.al_id" :anime="a" />
     </div>
@@ -90,13 +95,16 @@ onMounted(() => { if (!store.seasonal.length) store.loadSeasonal() })
 .segm button:hover { color: var(--ink); }
 .segm button.is-active { background: var(--surface-3); color: var(--ink); }
 
-.genres { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-bottom: var(--s-5); }
-.gchip { padding: 0.3125rem 0.75rem; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
-.gchip:hover { color: var(--ink); border-color: var(--line-strong); }
+.genres { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-bottom: var(--s-5); }
+/* 19 filtros con contorno = 19 objetos compitiendo con el contenido. En reposo son texto; el
+   contorno y el color se los gana el que está activo, que es el único que hay que ver de un vistazo. */
+.gchip { padding: 0.3125rem 0.625rem; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-faint); border: 1px solid transparent; transition: color var(--t-fast), background var(--t-fast), border-color var(--t-fast); }
+.gchip:hover { color: var(--ink); background: var(--surface-2); }
 .gchip.is-active { background: var(--azure-haze); border-color: var(--azure); color: var(--azure-bright); }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.875rem, 1fr)); gap: var(--s-5); }
+/* Ancho base propio; el resto de la rejilla (densidad, hueco, móvil) vive en base.css */
+.grid { --card-min: 11.875rem; gap: var(--s-5); }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-8) 0; color: var(--ink-faint); }
 
-@media (max-width: 640px) { .season { padding: 0 var(--s-4) var(--s-8); } .grid { grid-template-columns: repeat(auto-fill, minmax(8.75rem, 1fr)); } }
+@media (max-width: 640px) { .season { padding: 0 var(--s-4) var(--s-8); } .grid { --card-min: 8.75rem; } }
 </style>

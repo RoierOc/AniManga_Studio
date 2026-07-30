@@ -36,7 +36,7 @@ const fmtLabel = (f) => ({ MANGA: 'Manga', MANHWA: 'Manhwa', MANHUA: 'Manhua', N
 
     <div v-else class="rec__rail" :class="{ 'rec__rail--grid': layout === 'grid' }">
       <button v-for="r in items" :key="r.al_id" class="rc" @click="emit('select', r)"
-              :title="`Buscar «${r.title}» en Explorar`">
+              :data-tip="`Buscar «${r.title}» en Explorar`">
         <div class="rc__cov">
           <img v-if="r.cover" :src="imgProxy(r.cover, 160)" alt="" loading="lazy" decoding="async" />
           <span v-else class="rc__mono">{{ (r.title || '?').charAt(0) }}</span>

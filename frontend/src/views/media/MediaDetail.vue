@@ -18,6 +18,7 @@ import { useSubBatchStore } from '@/stores/subbatch'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import ReleasePicker from './ReleasePicker.vue'
 import { imgProxy } from '@/lib/img'
 import { coverRGB, vivid } from '@/lib/coverColor'
@@ -134,17 +135,21 @@ async function remove() {
 /* Liberar espacio: se ofrece primero la temporada que estás mirando, que es lo que uno suele
    querer soltar. Aviso explícito del seeding — borrar el fichero rompe el torrent que lo siembra. */
 async function freeSpace() {
-  const soloTemp = seasons.value.length > 1 && await ui.confirm({
+  // En una película no hay temporadas que elegir: es un solo fichero.
+  const soloTemp = !isMovie.value && seasons.value.length > 1 && await ui.confirm({
     title: 'Liberar espacio',
     body: `¿Borrar sólo los archivos de la temporada ${season.value}?`,
     confirmLabel: `Sólo la T${season.value}`, cancelLabel: 'La serie entera',
   })
-  const alcance = soloTemp ? `la temporada ${season.value}` : 'TODAS las temporadas'
+  const alcance = isMovie.value
+    ? 'el archivo'
+    : (soloTemp ? `los archivos de la temporada ${season.value}` : 'los archivos de TODAS las temporadas')
   if (!await ui.confirm({
     title: 'Borrar archivos', danger: true,
-    body: `Se borrarán los archivos de ${alcance} de «${props.item.title}».\n` +
-          'La serie y tu progreso se conservan; sólo se libera disco.\n' +
-          'Si algún episodio se está sembrando, ese torrent quedará roto.',
+    body: `Se borrará ${alcance} de «${props.item.title}».\n` +
+          `${isMovie.value ? 'La película' : 'La serie'} y tu progreso se conservan; sólo se libera disco.\n` +
+          'También se quita el torrent: si no, qBittorrent sigue sembrando esos mismos bytes y ' +
+          'no se libera nada. Dejarás de sembrarlo.',
     confirmLabel: 'Borrar',
   })) return
   const d = await store.freeSpace(props.item, { season: soloTemp ? season.value : null })
@@ -221,12 +226,12 @@ function epWatched(ep) { const l = live(ep); return l ? l.watched : !!ep.watched
               <Icon name="globe" :size="14" /> Subtítulos ES
             </button>
             <button v-else-if="!isMovie && item.have" class="mbtn" @click="openSubBatch"
-                    title="Buscar o traducir subtítulos en español de varios episodios">
+                    data-tip="Buscar o traducir subtítulos en español de varios episodios">
               <Icon name="globe" :size="14" /> Subtítulos ES (lote)
             </button>
             <!-- Liberar espacio NO es eliminar: la serie y tu progreso se quedan, sólo se van
                  los archivos. Por eso vive separado del botón rojo. -->
-            <button v-if="!isMovie && item.size" class="mbtn" @click="freeSpace">
+            <button v-if="item.size" class="mbtn" @click="freeSpace">
               <Icon name="folder" :size="14" /> Liberar {{ formatBytes(item.size) }}
             </button>
             <button class="mbtn mbtn--danger" @click="remove">
@@ -245,7 +250,8 @@ function epWatched(ep) { const l = live(ep); return l ? l.watched : !!ep.watched
       </nav>
 
       <Spinner v-if="loading" />
-      <EmptyState v-else-if="error" icon="alert" title="No se pudieron cargar los episodios" :hint="error" />
+      <ErrorState v-else-if="error" title="No se pudieron cargar los episodios."
+                  :detail="error" @retry="load()" />
 
       <template v-else-if="tab === 'eps'">
         <div class="toolbar">
@@ -265,7 +271,7 @@ function epWatched(ep) { const l = live(ep); return l ? l.watched : !!ep.watched
                  columna de texto; con ella se reconoce el capítulo de un vistazo, como en anime.
                  Si no hay imagen se cae al número, no a un hueco gris. -->
             <button class="ep__thumb" :disabled="!ep.has_file"
-                    :title="ep.has_file ? 'Reproducir' : 'No descargado'" @click="play(ep)">
+                    :data-tip="ep.has_file ? 'Reproducir' : 'No descargado'" @click="play(ep)">
               <img v-if="ep.still" :src="imgProxy(ep.still)" :alt="ep.title" loading="lazy" decoding="async" />
               <span v-else class="ep__thumbph">{{ epLabel(ep) }}</span>
               <span class="ep__thumbgo"><Icon :name="ep.has_file ? 'play' : 'download'" :size="16" /></span>
@@ -289,11 +295,11 @@ function epWatched(ep) { const l = live(ep); return l ? l.watched : !!ep.watched
             </div>
 
             <div class="ep__acts">
-              <button v-if="ep.has_file" class="ep__icon" title="Buscar subtítulos en español"
+              <button v-if="ep.has_file" class="ep__icon" data-tip="Buscar subtítulos en español"
                       @click="store.openSubs(item, ep)">
                 <Icon name="globe" :size="13" />
               </button>
-              <button class="ep__icon" :title="ep.has_file ? 'Descargar otra versión' : 'Elegir torrent'"
+              <button class="ep__icon" :data-tip="ep.has_file ? 'Descargar otra versión' : 'Elegir torrent'"
                       @click="pickEpisode(ep)">
                 <Icon name="download" :size="13" />
               </button>

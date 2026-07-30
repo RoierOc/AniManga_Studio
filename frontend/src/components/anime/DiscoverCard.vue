@@ -43,7 +43,7 @@ const scoreTier = computed(() => {
         <span v-if="anime.next_episode" class="sc__next">· EP {{ anime.next_episode }}</span>
       </div>
       <div v-if="anime.genres?.length" class="sc__genres">
-        <span v-for="g in anime.genres.slice(0, 3)" :key="g" class="sc__gtag">{{ g }}</span>
+        <span v-for="(g, i) in anime.genres.slice(0, 3)" :key="g" class="sc__gtag">{{ i ? ' · ' : '' }}{{ g }}</span>
       </div>
     </div>
   </article>
@@ -67,7 +67,10 @@ const scoreTier = computed(() => {
 .sc__score.is-high { color: var(--jade); }
 .sc__score.is-mid { color: var(--gold); }
 .sc__score.is-low { color: var(--ink-faint); }
-.sc__airing { position: absolute; top: var(--s-2); right: var(--s-2); font-family: var(--font-mono); font-size: 0.5rem; font-weight: 700; letter-spacing: .1em; padding: 2px 0.375rem; border-radius: var(--r-xs); color: var(--cyan); background: var(--cyan-glow); }
+/* Cian sobre `--cyan-glow` (cian translúcido) es ilegible en cuanto el arte es claro — medido
+   sobre cielos y fondos rosas de Verano 2026. Mismo fondo opaco que la nota: el color lo pone el
+   texto, no el fondo. */
+.sc__airing { position: absolute; top: var(--s-2); right: var(--s-2); font-family: var(--font-mono); font-size: 0.5rem; font-weight: 700; letter-spacing: .1em; padding: 2px 0.375rem; border-radius: var(--r-xs); color: var(--cyan); background: rgba(7,10,18,.66); backdrop-filter: blur(6px); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cyan) 28%, transparent); }
 
 .sc__overlay { position: absolute; inset: 0; display: flex; align-items: flex-end; padding: var(--s-3); opacity: 0; background: linear-gradient(0deg, rgba(5,7,13,.85), transparent 60%); transition: opacity var(--t-base); }
 .sc:hover .sc__overlay, .sc:focus-visible .sc__overlay { opacity: 1; }
@@ -81,6 +84,8 @@ const scoreTier = computed(() => {
 .sc__meta { display: flex; gap: 0.3125rem; margin-top: 0.3125rem; font-size: var(--fs-xs); }
 .sc__eps { color: var(--azure-bright); font-weight: 600; }
 .sc__next { color: var(--ink-faint); }
-.sc__genres { display: flex; flex-wrap: wrap; gap: 4px; margin-top: var(--s-2); }
-.sc__gtag { font-size: var(--fs-2xs); padding: 2px 0.5rem; border-radius: var(--r-pill); color: var(--ink-soft); background: var(--surface-2); border: 1px solid var(--line); }
+/* Los géneros eran 3 píldoras POR TARJETA: 75 cápsulas en una pantalla de Temporada, todas del
+   mismo peso que los controles reales. Como texto son dato, no interfaz. */
+.sc__genres { margin-top: 0.375rem; font-size: var(--fs-2xs); color: var(--ink-faint); letter-spacing: .01em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc__gtag { color: var(--ink-faint); }
 </style>

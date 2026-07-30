@@ -78,7 +78,7 @@ const keyOf = (t) => t.info_hash || t.torrent_url
           <input v-model="store.torrentQuery" @keyup.enter="store.searchTorrents()" placeholder="Refinar búsqueda en Nyaa…" />
           <button class="tp__sbtn" @click="store.searchTorrents()"><Icon name="search" :size="14" /> Nyaa</button>
         </div>
-        <div v-if="store.torrentVariants.length > 1" class="tp__alias" title="Alias de AniList que se buscan en Nyaa">
+        <div v-if="store.torrentVariants.length > 1" class="tp__alias" data-tip="Alias de AniList que se buscan en Nyaa">
           <Icon name="search" :size="11" />
           <span class="tp__alias-lbl">Alias:</span>
           <button v-for="al in store.torrentVariants" :key="al" class="tp__chip"
@@ -154,7 +154,7 @@ const keyOf = (t) => t.info_hash || t.torrent_url
                 <span class="muted">▼ {{ t.leechers }}</span>
               </div>
             </div>
-            <a v-if="t.view_url" :href="t.view_url" target="_blank" rel="noopener" class="tr__nyaa" title="Ver en Nyaa" @click.stop>
+            <a v-if="t.view_url" :href="t.view_url" target="_blank" rel="noopener" class="tr__nyaa" data-tip="Ver en Nyaa" @click.stop>
               <Icon name="external" :size="14" /> Nyaa
             </a>
             <button class="tr__add" :class="{ 'is-added': store.isAdded(keyOf(t)) }"

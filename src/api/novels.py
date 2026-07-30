@@ -208,7 +208,7 @@ def _curated_ids(langs):
 
 # Preferencias de fuentes: qué plugins consultar y en qué idiomas. No son secretos,
 # así que van en su propio json (no en config.json, que es el almacén de claves).
-from api.runtime import DATA_ROOT  # noqa: E402
+from api.runtime import DATA_ROOT, write_json_atomic  # noqa: E402
 import json as _json  # noqa: E402
 
 _PREFS_PATH = Path(DATA_ROOT) / "novels_prefs.json"
@@ -240,8 +240,7 @@ def prefs():
     p = {"langs": body.get("langs") or _DEFAULT_PREFS["langs"],
          "pluginIds": body.get("pluginIds") or []}
     try:
-        _PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _PREFS_PATH.write_text(_json.dumps(p, ensure_ascii=False, indent=2), "utf-8")
+        write_json_atomic(_PREFS_PATH, p, indent=2, keep_backup=True)
     except Exception as e:
         record_error("novels", e, op="write_prefs")
         return jsonify({"error": "no se pudieron guardar las preferencias"}), 500

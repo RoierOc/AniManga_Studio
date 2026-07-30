@@ -29,7 +29,7 @@ useModal(() => store.scan.show, () => store.scan.show = false, modalEl)
               </div>
               <div class="addrow">
                 <input v-model="store.scan.newPath" placeholder="/ruta/a/carpeta de anime…" @keyup.enter="store.addScanPath()" />
-                <button class="btn-sm" @click="store.browse('')" title="Explorar"><Icon name="folder" :size="14" /></button>
+                <button class="btn-sm" @click="store.browse('')" data-tip="Explorar"><Icon name="folder" :size="14" /></button>
                 <button class="btn-sm btn-sm--accent" @click="store.addScanPath()">Añadir</button>
               </div>
             </div>

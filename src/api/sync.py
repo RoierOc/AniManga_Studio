@@ -22,14 +22,16 @@ import os
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 
-from api.runtime import DATA_ROOT
+from api.runtime import DATA_ROOT, write_json_atomic
 from api.config_store import get_secret, set_secrets, get_prefs, set_prefs
+from api.observability import record_error
 
 sync_bp = Blueprint('sync', __name__)
 
@@ -110,7 +112,7 @@ def _ensure_repo():
 # ── profile assembly (what gets synced) ──────────────────────────────────────
 
 def _write_json(name, obj):
-    (_PROFILE_DIR / name).write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding='utf-8')
+    write_json_atomic(_PROFILE_DIR / name, obj, indent=2, durable=False)
 
 
 def _read_json(name, default):
@@ -124,12 +126,16 @@ def _read_json(name, default):
 def _collect_profile():
     """Snapshot the local state into the profile dir (one file per domain)."""
     from api.backup import build_payload
-    from api.reader import _history_read
+    from api.reader import _history_read, _progress_read
 
     payload = build_payload()
     _write_json('manga.json', payload.get('manga', []))
     _write_json('anime.json', payload.get('anime', []))
     _write_json('reading.json', _history_read())
+    # Qué capítulos has leído y por dónde vas en cada obra. NO lo cubre reading.json (que son
+    # los últimos 500 capítulos terminados): sin esto, restaurar en otra máquina traía la
+    # biblioteca pero la dejaba entera "sin leer".
+    _write_json('manga_progress.json', _progress_read())
     _write_json('settings.json', get_prefs())
     # Collections are a planned concept; keep the file present but empty for forward-compat.
     if not (_PROFILE_DIR / 'collections.json').exists():
@@ -139,7 +145,8 @@ def _collect_profile():
 def _apply_profile():
     """Merge the profile files back into local state (additive, never destroys)."""
     from api.backup import apply_payload
-    from api.reader import _history_read, _history_write
+    from api.reader import (_history_read, _history_write, _progress_path,
+                            _progress_read, merge_progress)
 
     counts = apply_payload({
         'manga': _read_json('manga.json', None),
@@ -156,6 +163,13 @@ def _apply_profile():
                 merged[k] = h
         ordered = sorted(merged.values(), key=lambda h: h.get('read_at', 0), reverse=True)
         _history_write(ordered)
+
+    # Progreso de manga: se FUNDE con lo local (unión de leídos, la posición más reciente
+    # gana), nunca se sustituye — restaurar no puede borrar lo que has leído en esta máquina.
+    prog_in = _read_json('manga_progress.json', {})
+    if isinstance(prog_in, dict) and prog_in:
+        write_json_atomic(_progress_path(), merge_progress(_progress_read(), prog_in),
+                          indent=2, keep_backup=True)
 
     prefs = _read_json('settings.json', {})
     if isinstance(prefs, dict) and prefs:
@@ -187,6 +201,8 @@ class GitBackend(SyncBackend):
     def status(self):
         url = _remote_url()
         st = {'remote_set': bool(url), 'pat_set': bool(_pat()), 'last_saved_at': None,
+              'auto': auto_enabled(), 'auto_every_days': _AUTO_EVERY // 86400,
+              'auto_last_error': _auto_state.get('error'),
               'identity': f'{_COMMIT_NAME} <{_COMMIT_EMAIL}>'}
         if (_PROFILE_DIR / '.git').exists():
             r = _run_git(['log', '-1', '--format=%ct'], check=False)
@@ -252,6 +268,66 @@ class GitBackend(SyncBackend):
 _backend = GitBackend()
 
 
+# ── copia automática ─────────────────────────────────────────────────────────
+# Un respaldo que hay que acordarse de pulsar no es un respaldo. Este hilo hace el mismo
+# `save()` que el botón cuando ha pasado una semana desde el ÚLTIMO COMMIT del perfil.
+#
+# La fecha del último guardado NO se guarda aparte: se lee del propio historial de git
+# (`status()['last_saved_at']`). Así no hay un segundo estado que pueda desincronizarse —
+# si guardas a mano, la semana se cuenta desde ahí, y si el repo se restaura en otra
+# máquina, el reloj viene con él.
+#
+# Fallar es normal (sin red, VPN caída, token caducado): se registra y se reintenta en el
+# siguiente latido, nunca tumba el proceso ni bloquea nada del camino del usuario.
+
+_AUTO_EVERY = int(os.environ.get('SYNC_AUTO_EVERY', 7 * 86400))   # cada cuánto toca copia
+_AUTO_CHECK = 6 * 3600                                            # cada cuánto se comprueba
+_AUTO_FIRST = 120                                                 # margen tras arrancar
+_auto_state = {'error': None, 'thread': None}
+
+
+def auto_enabled() -> bool:
+    """Encendida salvo que el usuario la apague (get_prefs es el sitio portable)."""
+    return bool(get_prefs().get('sync_auto', True))
+
+
+def _auto_tick():
+    """Una comprobación. Devuelve el motivo de no hacer nada, o 'saved'."""
+    if not auto_enabled():
+        return 'off'
+    if not _remote_url() or not _pat():
+        return 'unconfigured'          # sin repo/token no hay nada que hacer: no es un fallo
+    last = _backend.status().get('last_saved_at') or 0
+    if time.time() - last < _AUTO_EVERY:
+        return 'fresh'
+    _backend.save()
+    return 'saved'
+
+
+def _auto_loop():
+    time.sleep(_AUTO_FIRST)
+    while True:
+        try:
+            if _auto_tick() == 'saved':
+                _auto_state['error'] = None
+                print('[sync] copia semanal automática subida', flush=True)
+        except Exception as e:
+            # Que falle es esperable (sin red, token caducado). Lo que NO puede ser es
+            # que falle en silencio y el usuario crea que tiene copias al día.
+            _auto_state['error'] = str(e)
+            record_error('sync', e, op='auto_save')
+        time.sleep(_AUTO_CHECK)
+
+
+def start_auto_sync():
+    """Arranca el hilo (idempotente). Lo llama app.py al registrar los blueprints."""
+    if _auto_state['thread'] and _auto_state['thread'].is_alive():
+        return
+    t = threading.Thread(target=_auto_loop, name='sync-auto', daemon=True)
+    _auto_state['thread'] = t
+    t.start()
+
+
 # ── routes ───────────────────────────────────────────────────────────────────
 
 @sync_bp.route('/status')
@@ -285,3 +361,11 @@ def restore():
         return jsonify(_backend.restore())
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@sync_bp.route('/auto', methods=['POST'])
+def set_auto():
+    """Enciende/apaga la copia semanal automática."""
+    body = request.get_json(silent=True) or {}
+    set_prefs({'sync_auto': bool(body.get('enabled', True))})
+    return jsonify(_backend.status())

@@ -18,6 +18,7 @@ from pathlib import Path
 from flask import Blueprint, after_this_request, jsonify, request, send_file
 
 from api.platform import is_wsl as _is_wsl2, first_windows_user_dir
+from api.runtime import write_json_atomic
 
 _SETTINGS_FILE = Path(__file__).resolve().parents[2] / "library_settings.json"
 
@@ -28,7 +29,7 @@ def _load_settings() -> dict:
         return {}
 
 def _save_settings(d: dict):
-    _SETTINGS_FILE.write_text(json.dumps(d, indent=2))
+    write_json_atomic(_SETTINGS_FILE, d, indent=2, keep_backup=True)
 
 def _default_export_dir() -> Path:
     """Default: Documents/Mangas on Windows, ~/MangaExports elsewhere."""

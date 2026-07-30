@@ -9,19 +9,18 @@ import uuid
 import zipfile
 import urllib.request as _ur
 import urllib.parse as _up
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from flask import Blueprint, request, jsonify
 
 from api.config_store import get_secret  # runtime-editable API keys (Ajustes)
 from api import sub_lang  # detección robusta ES/LAT (código + título), fuente única de verdad
 from api.platform import first_windows_user_dir
+from api.observability import record_error
 
 subtitle_bp = Blueprint('subtitle', __name__)
 
 _tasks: dict = {}
 _cancel_flags: dict = {}
-BATCH_SIZE = 60
 OLLAMA_BATCH_SIZE = 80          # 80 lines/batch → 25% fewer round trips; fits in 3200-token ctx
 # Inter-batch pause — 0 by default (max speed). Set OLLAMA_BATCH_PAUSE_SECS=3 if MPV lags.
 _OLLAMA_BATCH_PAUSE = float(os.environ.get('OLLAMA_BATCH_PAUSE_SECS', '0'))
@@ -29,12 +28,10 @@ _OLLAMA_TIMEOUT = 300           # seconds per batch (generous for 60 lines)
 
 # Translation credentials/config are resolved at call time from the config store
 # (Ajustes) → env → .env, so keys saved from the UI apply without a restart.
-# 'ollama' → Qwen local first, Gemini fallback if Ollama fails
-# 'gemini' → Gemini first, Qwen fallback on quota exhaustion
-def _gemini_key():   from api.config_store import get_secret; return get_secret('_gemini_key()')
+# El motor es SIEMPRE Ollama local (Qwen): el fallback a Gemini se retiró el 29-jul-2026 — la
+# calidad medida del local es suficiente y la nube añadía clave, cuota y una segunda ruta de fallo.
 def _ollama_url():   from api.config_store import get_secret; return get_secret('OLLAMA_URL', 'http://localhost:11434')
 def _ollama_model(): from api.config_store import get_secret; return get_secret('OLLAMA_MODEL', 'qwen2.5:14b')
-def _engine():       from api.config_store import get_secret; return get_secret('TRANSLATION_ENGINE', 'ollama')
 
 # Reference counter — model is only unloaded when the LAST concurrent task finishes
 _OLLAMA_TASK_COUNT = 0
@@ -155,12 +152,15 @@ def _ffprobe_tracks(path: str) -> list:
                 sub_idx += 1  # still count it so sub_index stays correct for ffmpeg
                 continue
             tags = s.get('tags', {})
+            disp = s.get('disposition') or {}
             subs.append({
                 'index':     s.get('index'),
                 'sub_index': sub_idx,
                 'codec':     codec,
                 'language':  tags.get('language', 'und'),
                 'title':     tags.get('title', ''),
+                # `forced` suele marcar la pista de carteles: útil para no elegirla como fuente.
+                'forced':    bool(disp.get('forced')),
             })
             sub_idx += 1
     return subs
@@ -214,15 +214,36 @@ def _ext_search_jimaku(al_id: str, titles: list, episode: int) -> list:
     return results
 
 
-def _ext_search_opensubtitles(titles: list, episode: int, languages: str = '', season: int = 1) -> list:
+
+def _note_source(report, source: str, found: int, error=None, unconfigured: bool = False) -> None:
+    """Apunta CÓMO le fue a una fuente de subtítulos.
+
+    Sin esto, «Subdivx devolvió 403» y «Subdivx no tenía nada» eran el mismo valor de retorno (una
+    lista vacía) y la UI decía «no se encontraron subtítulos» con dos de tres fuentes reventadas.
+    MEDIDO el 29-jul-2026: Subdivx falló en 22 de 22 búsquedas (Cloudflare) sin que nada lo dijera.
+    """
+    if report is None:
+        return
+    report.append({
+        'source': source,
+        'found': found,
+        'status': 'unconfigured' if unconfigured else ('error' if error and not found else 'ok'),
+        'error': (str(error)[:140] if error else None),
+    })
+
+
+def _ext_search_opensubtitles(titles: list, episode: int, languages: str = '', season: int = 1,
+                              report: list = None) -> list:
     """Search OpenSubtitles v3. Tries each title variant and filters by title similarity.
     Requires OPENSUBTITLES_API_KEY env var (free account at opensubtitles.com).
     Pass languages='es' to search for Spanish subtitles specifically."""
     key = get_secret('OPENSUBTITLES_API_KEY')
     if not key:
         print('[subtitle] OpenSubtitles: sin OPENSUBTITLES_API_KEY — saltando')
+        _note_source(report, 'opensubtitles', 0, unconfigured=True)
         return []
     results = []
+    fails: list = []
     seen_ids: set = set()
     # Build set of significant words (5+ chars) from all title variants for relevance filtering
     _STOP = {'nanatsu', 'taizai', 'anime', 'episode', 'season', 'part', 'the', 'and', 'for'}
@@ -293,8 +314,10 @@ def _ext_search_opensubtitles(titles: list, episode: int, languages: str = '', s
                 })
         except Exception as e:
             print(f'[subtitle] OpenSubtitles search error (title="{title}"): {e}')
+            fails.append(e)
     lang_label = f' [{languages}]' if languages else ''
     print(f'[subtitle] OpenSubtitles{lang_label}: {len(results)} encontrados')
+    _note_source(report, 'opensubtitles', len(results), fails[0] if fails else None)
     return results
 
 
@@ -337,14 +360,16 @@ def _ext_search_nyaa(titles: list, episode: int) -> list:
     return results
 
 
-def _ext_search_subdl(titles: list, episode: int, season: int = 1) -> list:
+def _ext_search_subdl(titles: list, episode: int, season: int = 1, report: list = None) -> list:
     """Search Subdl.com for Spanish/LatAm subtitles. Requires SUBDL_API_KEY env var.
     Free account at subdl.com — returns ZIP archives containing .srt/.ass files."""
     key = get_secret('SUBDL_API_KEY')
     if not key:
         print('[subtitle] Subdl: sin SUBDL_API_KEY — saltando')
+        _note_source(report, 'subdl', 0, unconfigured=True)
         return []
     results = []
+    fails: list = []
     seen_ids: set = set()
     for title in titles[:2]:
         if not title:
@@ -385,14 +410,17 @@ def _ext_search_subdl(titles: list, episode: int, season: int = 1) -> list:
                     })
         except Exception as e:
             print(f'[subtitle] Subdl search error (title="{title}"): {e}')
+            fails.append(e)
     print(f'[subtitle] Subdl: {len(results)} encontrados')
+    _note_source(report, 'subdl', len(results), fails[0] if fails else None)
     return results
 
 
-def _ext_search_subdivx(titles: list, episode: int) -> list:
+def _ext_search_subdivx(titles: list, episode: int, report: list = None) -> list:
     """Search Subdivx.com for Spanish LatAm subtitles. No API key required.
     Best source for Latin American fansub groups."""
     results = []
+    fails: list = []
     seen_ids: set = set()
     ep_variants = {str(episode), f'{episode:02d}', f'{episode:03d}'}
     for title in titles[:2]:
@@ -431,7 +459,9 @@ def _ext_search_subdivx(titles: list, episode: int) -> list:
                 })
         except Exception as e:
             print(f'[subtitle] Subdivx search error (title="{title}"): {e}')
+            fails.append(e)
     print(f'[subtitle] Subdivx: {len(results)} encontrados')
+    _note_source(report, 'subdivx', len(results), fails[0] if fails else None)
     return results
 
 
@@ -518,6 +548,10 @@ def _ext_download_sub(sub_info: dict, tmpdir: str) -> str:
                 body = ''
                 try: body = e.read().decode('utf-8', errors='replace')[:200]
                 except Exception: pass
+                # El cuerpo dice POR QUÉ (OpenSubtitles manda el motivo en texto): sin él, un 406
+                # de cuota y uno de otra causa se leen igual.
+                if body:
+                    print(f'[subtitle] OpenSubtitles {e.code}: {body}')
                 if e.code == 406:
                     raise RuntimeError('Cuota diaria agotada (20/día cuenta gratuita)') from e
                 if e.code == 401:
@@ -622,7 +656,7 @@ def _ext_find_subs(al_id: str, titles: list, episode: int) -> list:
     return results
 
 
-def _ext_find_spanish_subs(titles: list, episode: int, season: int = 1) -> list:
+def _ext_find_spanish_subs(titles: list, episode: int, season: int = 1, report: list = None) -> list:
     """Search all sources for pre-made Spanish subtitles (direct inject, no LLM).
     Order: OpenSubtitles ES → Subdl LatAm → Subdivx (best LatAm fansub coverage)."""
     seen_t: set = set()
@@ -633,9 +667,10 @@ def _ext_find_spanish_subs(titles: list, episode: int, season: int = 1) -> list:
             clean_titles.append(t)
     print(f'[subtitle] Buscando subs en español: titles={clean_titles}, ep={episode}')
     results = []
-    results.extend(_ext_search_opensubtitles(clean_titles, episode, languages='es', season=season))
-    results.extend(_ext_search_subdl(clean_titles, episode, season=season))
-    results.extend(_ext_search_subdivx(clean_titles, episode))
+    results.extend(_ext_search_opensubtitles(clean_titles, episode, languages='es', season=season,
+                                             report=report))
+    results.extend(_ext_search_subdl(clean_titles, episode, season=season, report=report))
+    results.extend(_ext_search_subdivx(clean_titles, episode, report=report))
     # Mark all as direct Spanish (no translation needed)
     for r in results:
         r['direct'] = True
@@ -656,7 +691,7 @@ def _extract_sub(mkv_path: str, sub_index: int, codec: str, tmpdir: str) -> str:
         stderr = result.stderr.decode('utf-8', errors='replace')
         if 'image' in stderr.lower() or 'pgs' in stderr.lower() or 'dvdsub' in stderr.lower():
             raise RuntimeError('El archivo tiene subtítulos de imagen (PGS/VOBSUB) que no se pueden traducir')
-        raise RuntimeError(f'No se pudo extraer el subtítulo. El archivo puede no tener pistas de texto.')
+        raise RuntimeError('No se pudo extraer el subtítulo. El archivo puede no tener pistas de texto.')
     return out
 
 
@@ -675,6 +710,35 @@ def _mark_es_injected(video_path: str) -> None:
         pass
 
 
+def _drop_es_sidecars(video_path: str, keep: str = '') -> int:
+    """Borra los sidecars en español que ESTE proyecto dejó junto al vídeo (`<base>.spa.*`).
+
+    Sin esto, rehacer un subtítulo que antes salió `.spa.srt` y ahora sale `.spa.ass` deja LOS DOS
+    junto al vídeo: el reproductor lista dos pistas «Español» y elige la que no toca. Sólo toca
+    nuestros archivos — el MKV y las pistas incrustadas no se rozan.
+    """
+    base = os.path.splitext(video_path)[0]
+    pref = os.path.basename(base) + '.spa.'
+    d = os.path.dirname(base) or '.'
+    n = 0
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return 0
+    for name in names:
+        if not name.startswith(pref):
+            continue
+        p = os.path.join(d, name)
+        if os.path.abspath(p) == os.path.abspath(keep or ''):
+            continue
+        try:
+            os.remove(p)
+            n += 1
+        except OSError as e:
+            record_error('subtitle', e, op='drop_sidecar', file=name)
+    return n
+
+
 def _save_sub_external(video_path: str, sub_path: str) -> str:
     """Save subtitle as a sidecar file next to the video (same basename, .srt/.ass).
     MPV auto-loads subtitle files that match the video filename.
@@ -683,6 +747,7 @@ def _save_sub_external(video_path: str, sub_path: str) -> str:
     ext = os.path.splitext(sub_path)[1].lower() or '.srt'
     # Use language suffix so MPV picks it up: video.spa.srt
     out = f'{base}.spa{ext}'
+    _drop_es_sidecars(video_path, keep=out)   # rehacer sustituye, no acumula
     import shutil
     shutil.copy2(sub_path, out)
     _mark_es_injected(video_path)
@@ -933,6 +998,40 @@ _SIGN_PREFIX_PAT = re.compile(
     r'^\s*(sign|cart|letrero|rotulo|rótulo|titul|title|note|nota|op\b|ed\b)', re.I)
 _SIGN_ANY_PAT = re.compile(
     r'(song|cancion|canción|karaoke|kfx|credit|credito|crédito)', re.I)
+
+
+# El TÍTULO de una pista no sigue la convención de los nombres de Style, así que tiene su propio
+# patrón. MEDIDO en Terror in Resonance [Judas]: hay dos pistas inglesas, `English [Signs/Lyrics]`
+# (69 líneas, sólo carteles y karaoke) y `English [Full]` (339, el diálogo). Elegir la primera
+# producía un subtítulo español SIN DIÁLOGO, y el fallo era mudo: sale un .spa.ass, se ve la barra
+# de progreso, y sólo lo notas al reproducir.
+_SIGNS_TRACK_PAT = re.compile(
+    r'(sign|lyric|song|karaoke|forced|forzad|cartel|letrero|s\s*&\s*l)', re.I)
+
+
+def untranslated_dialogue(originals: list, translated: list) -> int:
+    """Cuántas líneas de DIÁLOGO volvieron idénticas al original (= sin traducir).
+
+    Se descartan a propósito:
+      - líneas de menos de 4 palabras («Hmm.», «Nueve», un nombre propio): coinciden por
+        legítimas, no por fallo;
+      - romaji de karaoke (letras de OP/ED), que no se traduce.
+    Sin este filtro el recuento sube a ~12 % en un episodio perfectamente traducido.
+    """
+    n = 0
+    for orig, tr in zip(originals, translated):
+        o = (orig or '').strip()
+        if not o or o != (tr or '').strip():
+            continue
+        if len(o.split()) < 4:
+            continue
+        n += 1
+    return n
+
+
+def _is_signs_track(title: str) -> bool:
+    """True si el título de la PISTA la delata como carteles/karaoke en vez de diálogo."""
+    return bool(_SIGNS_TRACK_PAT.search(title or ''))
 
 
 def _is_sign_style(name: str) -> bool:
@@ -1234,56 +1333,6 @@ def _rebuild_ass(header: list, events: list, translated: list) -> str:
     return out
 
 
-# ── Gemini translation ────────────────────────────────────────────────────────
-
-def _translate_batch(texts: list, client, model_name: str, src_lang: str = 'eng') -> list:
-    """Translate a list of strings via Gemini. Returns same-length list."""
-    if not texts:
-        return []
-
-    numbered = '\n'.join(f'{i+1}|{t}' for i, t in enumerate(texts))
-    prompt = f'{_build_prompt(src_lang)}\n\nTraduce estas {len(texts)} líneas:\n\n{numbered}'
-
-    for attempt in range(3):
-        try:
-            response = client.models.generate_content(model=model_name, contents=prompt)
-            raw = (response.text or '').strip()
-            break
-        except Exception as e:
-            err = str(e)
-            if '429' in err or 'RESOURCE_EXHAUSTED' in err:
-                if 'limit: 0' in err:
-                    raise RuntimeError(
-                        'Cuota Gemini es 0 — activa la API en tu proyecto: '
-                        'console.cloud.google.com → APIs & Services → Library → '
-                        '"Generative Language API" → Enable. '
-                        'O crea una nueva key en aistudio.google.com con "Create API key in new project".'
-                    ) from e
-                delay = re.search(r'(\d+)s', err)
-                wait = int(delay.group(1)) + 2 if delay else (15 * (attempt + 1))
-                print(f'[subtitle] 429 on {model_name}, waiting {wait}s (attempt {attempt+1})')
-                time.sleep(wait)
-                if attempt == 2:
-                    raise
-            elif '400' in err or 'BAD_REQUEST' in err:
-                raise RuntimeError(f'Bad request al modelo {model_name}: {err[:200]}') from e
-            elif '404' in err or 'NOT_FOUND' in err:
-                raise RuntimeError(f'Modelo {model_name} no disponible') from e
-            else:
-                raise
-    else:
-        return list(texts)
-
-    result = list(texts)
-    for line in raw.splitlines():
-        m = re.match(r'^(\d+)\|(.*)$', line)
-        if m:
-            idx = int(m.group(1)) - 1
-            if 0 <= idx < len(texts):
-                result[idx] = m.group(2)
-    return result
-
-
 # ── Main worker ───────────────────────────────────────────────────────────────
 
 def _resolve_video_path(info_hash: str, episode: int, anime_id: str, local_path: str = '') -> str | None:
@@ -1312,48 +1361,7 @@ def _resolve_video_path(info_hash: str, episode: int, anime_id: str, local_path:
         return None
 
 
-# Best free-tier models ordered by RPD (requests/day): flash-lite ~1500, flash ~250
-# Models ordered by free-tier RPD (highest first):
-# gemma-4-26b-a4b-it  ~1500 RPD  (MoE: 26B total / 4B active, instruction-tuned)
-# gemma-4-31b-it      ~1500 RPD
-# gemini-2.5-flash-lite ~1000 RPD
-# gemini-2.5-flash      ~500 RPD
-_MODELS = [
-    'models/gemma-4-26b-a4b-it',
-    'models/gemma-4-31b-it',
-    'models/gemini-2.5-flash-lite',
-    'models/gemini-2.5-flash',
-    'models/gemini-flash-lite-latest',
-]
-_PARALLEL_WORKERS = 6  # concurrent batch requests
-
-
-def _translate_batch_with_fallback(texts: list, client, src_lang: str = 'eng') -> list:
-    """Try each model in order; return translated list. Los tags ASS se protegen aquí (igual que
-    en Ollama) para que ambos motores compartan EXACTAMENTE la misma garantía de formato."""
-    return translate_with_tag_protection(texts, lambda p: _translate_batch_raw(p, client, src_lang))
-
-
-def _translate_batch_raw(texts: list, client, src_lang: str = 'eng') -> list:
-    last_err = None
-    for mn in _MODELS:
-        try:
-            return _translate_batch(texts, client, mn, src_lang)
-        except RuntimeError as e:
-            if 'Cuota Gemini es 0' in str(e):
-                raise
-            last_err = e
-            print(f'[subtitle] {mn} failed: {e} — trying next model')
-    raise last_err or RuntimeError('Todos los modelos fallaron')
-
-
 # ── Ollama / local-model translation ─────────────────────────────────────────
-
-def _is_quota_error(exc: Exception) -> bool:
-    err = str(exc)
-    return ('429' in err or 'RESOURCE_EXHAUSTED' in err
-            or 'quota' in err.lower() or 'exhausted' in err.lower())
-
 
 def _ollama_available() -> bool:
     import urllib.request as _ur
@@ -1367,8 +1375,10 @@ def _ollama_available() -> bool:
 def _ollama_preload():
     """Load model into VRAM once; keep alive 30 min. May take 30-60 s on first call."""
     import urllib.request as _ur
-    if not os.environ.get('OLLAMA_FLASH_ATTENTION'):
-        print('[subtitle] TIP: inicia Ollama con OLLAMA_FLASH_ATTENTION=1 para ~20-30% más velocidad')
+    # (Aquí había un "TIP: inicia Ollama con OLLAMA_FLASH_ATTENTION=1" que miraba el entorno de
+    # ESTE proceso para adivinar cómo está arrancado OTRO — el servicio de Ollama. VERIFICADO el
+    # 29-jul-2026: la variable SÍ estaba puesta en `ollama.service` y en el proceso vivo, y el aviso
+    # salía igual 11 veces por lote. Un consejo que no puede comprobar lo que aconseja es ruido.)
     payload = json.dumps({
         'model': _ollama_model(),
         'messages': [{'role': 'user', 'content': '1|ok'}],
@@ -1406,7 +1416,7 @@ def _ollama_unload():
 def translate_with_tag_protection(texts: list, engine) -> list:
     """Envuelve a CUALQUIER motor: enmascara los tags ASS, traduce sólo el texto y los repone.
 
-    Punto ÚNICO donde se protege el formato, para que Ollama y Gemini no puedan divergir.
+    Punto ÚNICO donde se protege el formato del subtítulo traducido.
     Las líneas de dibujo (\\p1) ni se mandan: se devuelven intactas."""
     idx, payload, masks = [], [], []
     out = list(texts)
@@ -1513,19 +1523,25 @@ def _translate_batch_ollama_raw(texts: list, src_lang: str = 'eng') -> list:
             except Exception:
                 pass
 
-    # Warn if result lines are identical to input (translation may not have happened)
-    unchanged = sum(1 for orig, tr in zip(texts, result) if orig.strip() and orig == tr)
-    if unchanged > n * 0.15:
-        print(f'[subtitle] Ollama warning: {unchanged}/{n} lines sin cambio — posible fallo de traducción')
+    # Aviso de "esto no se ha traducido". Sólo cuenta DIÁLOGO: una línea corta o una de karaoke
+    # romaji es idéntica al original porque debe serlo, no porque haya fallado.
+    #
+    # MEDIDO el 29-jul-2026 sobre 948 líneas ya traducidas (Terror in Resonance eps 2/5/9,
+    # alineadas por marca de tiempo): 12 % de líneas idénticas, pero **diálogo real sin traducir =
+    # 13 (1,4 %)**, y de ésas sólo 2 eran diálogo de verdad; el resto, carteles con nombres propios.
+    # Con el umbral viejo (15 % de TODO) el aviso saltaba en todos los episodios y no significaba
+    # nada — un aviso que siempre suena es un aviso apagado.
+    unchanged = untranslated_dialogue(texts, result)
+    if unchanged > max(3, n * 0.10):
+        print(f'[subtitle] Ollama warning: {unchanged}/{n} líneas de DIÁLOGO sin traducir '
+              f'— posible fallo de traducción')
 
     return result
 
 
 def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_subs: int,
-                  src_lang: str = 'eng', external_sub_info: dict = None, force_engine: str = None):
+                  src_lang: str = 'eng', external_sub_info: dict = None):
     global _OLLAMA_TASK_COUNT
-    # El lote fuerza el motor (Ollama) sin tocar la config global TRANSLATION_ENGINE.
-    engine = force_engine or _engine()
     task = _tasks[task_id]
     _cancel_flags.setdefault(task_id, False)
     done_count  = threading.Lock()
@@ -1608,64 +1624,7 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
             # Expanded to original positions at the end before rebuild.
             dedup_tm: dict[int, str] = {}
 
-            # ── Phase 1: Gemini (parallel) — only when engine != 'ollama' ────────
-            key = _gemini_key() or os.environ.get('_gemini_key()', '')
-            quota_hit  = False
             _cancelled = False
-
-            if key and engine != 'ollama':
-                g_batches = [texts[i:i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
-                n_g = len(g_batches)
-                try:
-                    from google import genai
-                    client = genai.Client(api_key=key)
-                except Exception as ie:
-                    print(f'[subtitle] Gemini import error: {ie}')
-                    client = None
-
-                if client:
-                    completed_g = [0]
-                    _prog_label = f'{total} únicas' if _n_saved > 0 else str(total)
-                    upd('translating', 10,
-                        f'Traduciendo {_prog_label} líneas con Gemini…', engine='gemini')
-                    pool = ThreadPoolExecutor(max_workers=min(_PARALLEL_WORKERS, n_g))
-                    try:
-                        futures = {
-                            pool.submit(_translate_batch_with_fallback, batch, client, src_lang): (idx, i_start)
-                            for idx, (i_start, batch) in enumerate(
-                                (i * BATCH_SIZE, g_batches[i]) for i in range(n_g)
-                            )
-                        }
-                        for fut in as_completed(futures):
-                            if _cancelled_now():
-                                _cancelled = True
-                                pool.shutdown(wait=False, cancel_futures=True)
-                                break
-                            idx, i_start = futures[fut]
-                            try:
-                                for j, t in enumerate(fut.result()):
-                                    dedup_tm[i_start + j] = t
-                            except Exception as e:
-                                if _is_quota_error(e):
-                                    quota_hit = True
-                                    pool.shutdown(wait=False, cancel_futures=True)
-                                    pct = 10 + int(78 * len(dedup_tm) / total)
-                                    upd('translating', pct,
-                                        '⚠ Gemini agotado — cambiando a Qwen local…',
-                                        engine='gemini')
-                                    break
-                                raise
-                            with done_count:
-                                completed_g[0] += 1
-                            pct = 10 + int(78 * len(dedup_tm) / total)
-                            upd('translating', pct,
-                                f'Gemini: {len(dedup_tm)}/{total} líneas…',
-                                engine='gemini')
-                        if not quota_hit and not _cancelled:
-                            pool.shutdown(wait=True)
-                    except Exception:
-                        pool.shutdown(wait=False, cancel_futures=True)
-                        raise
 
             if _cancelled or _cancel_flags.pop(task_id, False):
                 _cancel_flags.pop(task_id, None)
@@ -1677,12 +1636,6 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
 
             if missing_positions:
                 ollama_used[0] = True
-                if engine == 'ollama':
-                    reason = 'motor local'
-                elif not key:
-                    reason = 'sin clave Gemini'
-                else:
-                    reason = 'cuota Gemini agotada'
 
                 if not _ollama_available():
                     raise RuntimeError(
@@ -1696,7 +1649,7 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                     _OLLAMA_TASK_COUNT += 1
 
                 upd('translating', 10 + int(78 * len(dedup_tm) / total),
-                    f'Cargando {_ollama_model()} en VRAM ({reason})…', engine='ollama')
+                    f'Cargando {_ollama_model()} en VRAM…', engine='ollama')
                 _ollama_preload()
 
                 lang_label = _LANG_NAMES.get((src_lang or 'eng').lower(), src_lang or 'inglés')
@@ -1782,9 +1735,8 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                 task.update(status='cancelled', progress=0, message='Traducción cancelada')
                 return
 
-        engine_label = 'Qwen local' if ollama_used[0] else 'Gemini'
         task.update(status='done', progress=100,
-                    message=f'¡Completado! ({engine_label})', output=out_mkv)
+                    message='¡Completado! (Qwen local)', output=out_mkv)
 
     except Exception as e:
         task.update(status='error', progress=0,
@@ -1816,7 +1768,7 @@ def _get_anime_titles(anime_id: str) -> list:
 
 
 # ── Centro de Actividad: exponer las traducciones de subtítulos ────────────────
-# La traducción de subtítulos de anime por el modelo (Gemini/Qwen) es una tarea
+# La traducción de subtítulos de anime por el modelo local (Qwen) es una tarea
 # "importante" que faltaba en Actividad. Se cuela en el MISMO snapshot SSE
 # (/api/status/stream → clave `subtitles`) que descargas/upscale/tomo/transplant,
 # para que Actividad sea el punto central de seguimiento. Las descargas de anime
@@ -1888,15 +1840,19 @@ def subtitle_tracks():
     external_tracks = []
     spanish_tracks  = []
     sources_missing_key = []
+    # Parte por fuente: qué respondió cada una. Sin él, «no hay subtítulos» y «dos de tres fuentes
+    # reventaron» se veían igual en la UI.
+    sources_report: list = []
 
     # Specials/OVAs are not indexed by episode number — search by title only
     effective_episode = 0 if ep_type == 'special' else episode
 
-    if not get_secret('OPENSUBTITLES_API_KEY'):
-        sources_missing_key.append('opensubtitles')
-    else:
-        # Always search for pre-made Spanish subs (no GPU needed)
-        spanish_tracks = _ext_find_spanish_subs(titles, effective_episode, season=season)
+    # Se buscan SIEMPRE los subs ES ya hechos (no gastan GPU). Antes esto colgaba de tener clave de
+    # OpenSubtitles: sin ella no se probaba NINGUNA fuente, ni las que no necesitan clave (Subdivx).
+    # Ahora cada fuente declara lo suyo en el parte y de ahí sale qué falta configurar.
+    spanish_tracks = _ext_find_spanish_subs(titles, effective_episode, season=season,
+                                            report=sources_report)
+    sources_missing_key += [r['source'] for r in sources_report if r['status'] == 'unconfigured']
 
     # OJO: la condición mira `all_tracks`, no `tracks`. Un archivo que sólo trae subtítulos en
     # español TIENE pistas y no necesita nada; salir a buscar subs externos ahí sería absurdo.
@@ -1915,6 +1871,7 @@ def subtitle_tracks():
         'external_tracks': external_tracks,
         'spanish_tracks': spanish_tracks,
         'sources_missing_key': sources_missing_key,
+        'sources_report': sources_report,
     })
 
 
@@ -1931,7 +1888,7 @@ def _sync_sub_to_reference(sub_path: str, mkv_path: str, tmpdir: str) -> str:
             offset = result.get('offset_seconds', 0)
             print(f'[subtitle] ffsubsync: sincronizado (offset={offset:.2f}s) → {os.path.basename(out)}')
             return out
-        print(f'[subtitle] ffsubsync: sin cambios necesarios')
+        print('[subtitle] ffsubsync: sin cambios necesarios')
         return sub_path
     except Exception as e:
         print(f'[subtitle] ffsubsync error (usando sub original): {e}')
@@ -2045,7 +2002,7 @@ def subtitle_translate():
 
 @subtitle_bp.route('/reinject', methods=['POST'])
 def subtitle_reinject():
-    """Re-extract the existing Spanish track and re-inject it (no Gemini). Fixes format without retranslating."""
+    """Re-extract the existing Spanish track and re-inject it (sin traducir). Fixes format only."""
     data       = request.get_json(silent=True) or {}
     info_hash  = data.get('info_hash', '')
     episode    = int(data.get('episode', 1))

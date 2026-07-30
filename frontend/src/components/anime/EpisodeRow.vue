@@ -11,10 +11,25 @@ const props = defineProps({
   ep: { type: Object, required: true },
   batch: { type: Object, required: true },
   current: { type: Boolean, default: false },   // episodio "en curso" (coincide con el atajo de arriba)
+  // Selección múltiple (lib/useMultiSelect). Opcional: sin ella la fila se comporta como siempre.
+  // Solo se puede marcar lo que está EN DISCO — es lo único sobre lo que actúa el lote (borrar).
+  sel: { type: Object, default: null },
 })
 const store = useAnimeStore()
 
 const playable = computed(() => isEpisodePlayable(props.ep, props.batch))
+// Marcable solo si hay selección activa Y el episodio está en disco (el lote borra archivos).
+const selectable = computed(() => !!props.sel && !!props.ep.in_local)
+
+/* Un solo `mouseenter` para las dos cosas. Antes eran dos atributos (`@mouseenter.once` +
+ * `@mouseenter`) y que Vue registre ambos depende de cómo compile el modificador `.once` — si
+ * alguna vez colapsaran en uno, el pincel dejaría de pintar SIN error, que es la clase de fallo
+ * mudo que este repo persigue. Con un flag local no hay nada que confiar. */
+let skipLoaded = false
+function onEnter() {
+  if (!skipLoaded) { skipLoaded = true; store.loadSkip(props.anime, props.ep) }
+  if (selectable.value) props.sel.over(props.ep.num)
+}
 const downloading = computed(() =>
   (props.ep.in_qbt && props.ep.progress < 100 && !props.batch.hasBatch) ||
   (props.ep.num > 0 && props.batch.hasBatch && !props.batch.batchDone)
@@ -48,8 +63,15 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 </script>
 
 <template>
-  <div class="eprow" :class="{ 'eprow--watched': ep.watched, 'eprow--dl': downloading, 'eprow--missing': !playable && !downloading, 'eprow--current': current }"
-       @mouseenter.once="store.loadSkip(anime, ep)">
+  <div class="eprow" :class="{ 'eprow--watched': ep.watched, 'eprow--dl': downloading, 'eprow--missing': !playable && !downloading, 'eprow--current': current, 'eprow--sel': selectable && sel.has(ep.num) }"
+       @mouseenter="onEnter">
+    <!-- Casilla de lote: oculta hasta el hover mientras no haya nada marcado, para no meter ruido
+         en la lista cuando no estás seleccionando (mismo criterio que las acciones del capítulo). -->
+    <button v-if="selectable" class="eprow__check" :class="{ 'is-on': sel.has(ep.num) }"
+            @mousedown.stop.left="sel.down(ep.num, $event)" @click.stop
+            :data-tip="sel.has(ep.num) ? 'Quitar de la selección' : 'Añadir · shift+clic marca hasta aquí · arrastra para marcar varios'">
+      <span class="eprow__box"><Icon v-if="sel.has(ep.num)" name="check" :size="11" /></span>
+    </button>
     <div class="eprow__main">
       <div class="eprow__thumb" @click="onPlay">
         <div class="eprow__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 120)}')` : ''" />
@@ -85,32 +107,32 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
       <div class="eprow__acts">
         <template v-if="playable">
           <button v-if="!subRunning && subTask?.status !== 'done'" class="eprow__icon eprow__icon--sub" :disabled="subFetching"
-                  :title="subFetching ? 'Buscando…' : 'Subtítulos en español'" @click.stop="store.translateSubs(anime, ep)">
+                  :data-tip="subFetching ? 'Buscando…' : 'Subtítulos en español'" @click.stop="store.translateSubs(anime, ep)">
             <Spinner v-if="subFetching" :size="12" tone="ok" /><span v-else class="eprow__sub-lbl">ES</span>
           </button>
           <button v-if="subTask?.status === 'error' || subTask?.status === 'done'" class="eprow__icon eprow__icon--retry"
-                  :title="subTask?.status === 'error' ? 'Reintentar' : 'Re-inyectar subtítulo'"
+                  :data-tip="subTask?.status === 'error' ? 'Reintentar' : 'Re-inyectar subtítulo'"
                   @click.stop="store.translateSubs(anime, ep)">
             <Icon name="spark" :size="13" />
           </button>
-          <button v-if="anime.mal_id || meta?.overview" class="eprow__icon" :class="{ 'is-on': infoOpen }" title="Descripción"
+          <button v-if="anime.mal_id || meta?.overview" class="eprow__icon" :class="{ 'is-on': infoOpen }" data-tip="Descripción"
                   @click.stop="store.loadEpInfo(anime, ep)">
             <span class="eprow__i">i</span>
           </button>
-          <button class="eprow__icon" :class="{ 'is-on': ep.watched }" :title="ep.watched ? 'No visto' : 'Visto'"
+          <button class="eprow__icon" :class="{ 'is-on': ep.watched }" :data-tip="ep.watched ? 'No visto' : 'Visto'"
                   @click.stop="store.toggleWatched(anime, ep)">
             <Icon name="check" :size="14" />
           </button>
-          <button v-if="ep.in_local" class="eprow__icon" title="Cambiar tipo de episodio"
+          <button v-if="ep.in_local" class="eprow__icon" data-tip="Cambiar tipo de episodio"
                   @click.stop="store.openEpOverrideMenu($event, anime, ep)">
             <span class="eprow__dots3">⋮</span>
           </button>
-          <button v-if="!ep.in_local" class="eprow__icon eprow__icon--danger" title="Borrar"
+          <button v-if="!ep.in_local" class="eprow__icon eprow__icon--danger" data-tip="Borrar"
                   @click.stop="store.deleteEpisode(anime, ep)">
             <Icon name="close" :size="13" />
           </button>
         </template>
-        <button v-else-if="!downloading" class="eprow__searchbtn" :title="'Buscar torrent para Ep. ' + ep.num"
+        <button v-else-if="!downloading" class="eprow__searchbtn" :data-tip="'Buscar torrent para Ep. ' + ep.num"
                 @click.stop="store.openTorrents(anime, ep.num)">
           <Icon name="search" :size="13" /> Buscar
         </button>
@@ -141,6 +163,22 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
   transition: border-color var(--t-base) var(--ease-silk), box-shadow var(--t-base); }
 .eprow:hover { border-color: var(--line-strong); box-shadow: var(--shadow-sm); }
 .eprow--current { border-color: var(--azure); box-shadow: inset 0 0 0 1px var(--azure-glow); }
+.eprow--sel { border-color: var(--azure); background: var(--azure-haze); }
+
+/* Casilla de lote. Se revela al pasar por encima; una fila ya marcada la mantiene visible (si no,
+   al mover el ratón fuera no verías qué has seleccionado).
+   Va SUPERPUESTA a la miniatura, no en el flujo: reservar hueco o empujar con padding haría saltar
+   la fila entera en cada pasada del ratón por la lista. */
+.eprow__check { position: absolute; top: 0.5rem; left: 0.5rem; z-index: 4;
+  width: 1.5rem; height: 1.5rem; display: grid; place-items: center; border-radius: var(--r-xs);
+  visibility: hidden; }
+.eprow:hover .eprow__check, .eprow__check.is-on { visibility: visible; }
+@media (hover: none) { .eprow__check { visibility: visible; } }
+.eprow__box { width: 1.0625rem; height: 1.0625rem; display: grid; place-items: center; border-radius: 4px;
+  border: 1px solid rgba(255,255,255,.55); background: rgba(7,10,18,.72); backdrop-filter: blur(4px);
+  color: #fff; transition: all var(--t-fast); }
+.eprow__check:hover .eprow__box { border-color: var(--azure-bright); }
+.eprow__check.is-on .eprow__box { background: var(--azure); border-color: var(--azure); }
 .eprow--watched { background: color-mix(in srgb, var(--surface) 92%, transparent); }
 
 .eprow__main { display: flex; align-items: stretch; gap: var(--s-3); padding: var(--s-2); }

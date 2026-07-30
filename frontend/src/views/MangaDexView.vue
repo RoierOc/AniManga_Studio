@@ -5,6 +5,7 @@ import MdCard from '@/components/manga/MdCard.vue'
 import MdDetailModal from '@/components/manga/MdDetailModal.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
 const store = useMangadexStore()
@@ -50,7 +51,6 @@ onMounted(() => {
   <div class="md">
     <header class="md__head">
       <div>
-        <p class="eyebrow"><span class="tick" /> EXPLORA MANGADEX</p>
         <h1>MangaDex</h1>
       </div>
       <label class="searchbox">
@@ -89,6 +89,9 @@ onMounted(() => {
       <div v-if="store.loading && !store.followed.length" class="grid">
         <Skeleton v-for="n in 12" :key="n" variant="poster" />
       </div>
+      <ErrorState v-else-if="store.error && !store.followed.length"
+                  title="No se pudo cargar tu lista de MangaDex." :detail="store.error"
+                  @retry="store.loadFollowed()" />
       <EmptyState v-else-if="!store.followed.length" icon="heart"
                   :title="store.authed ? 'No sigues ningún manga aún.' : 'Inicia sesión en MangaDex para ver tus seguidos.'">
         <template v-if="!store.authed" #action>
@@ -103,7 +106,10 @@ onMounted(() => {
     <!-- AniList Top -->
     <template v-else-if="store.tab === 'anilist'">
       <div v-if="store.alLoading && !store.alTop.length" class="grid"><Skeleton v-for="n in 12" :key="n" variant="poster" /></div>
-      <EmptyState v-else-if="!store.alTop.length" icon="spark" title="Sin resultados." />
+      <ErrorState v-else-if="store.alError && !store.alTop.length" title="No se pudo cargar AniList."
+                  :detail="store.alError" @retry="store.loadAnilistTop(1)" />
+      <EmptyState v-else-if="!store.alTop.length" icon="spark" title="Sin resultados."
+                  hint="Prueba con otro orden o quita el filtro." />
       <template v-else>
         <div class="grid">
           <MdCard v-for="m in store.alTop" :key="m.al_id" :manga="{ ...m, contentRating: 'safe' }" :score="m.score" @open="store.openAnilistResult($event)" />
@@ -119,7 +125,14 @@ onMounted(() => {
       <div v-if="store.loading && !store.list.length" class="grid">
         <Skeleton v-for="n in 12" :key="n" variant="poster" />
       </div>
-      <EmptyState v-else-if="!store.list.length" icon="search" :title="store.tab === 'search' ? 'Sin resultados.' : 'Nada que mostrar.'" />
+      <!-- Con MangaDex caída, «Sin resultados» sería mentira: es un fallo, y con reintento. -->
+      <ErrorState v-else-if="store.error && !store.list.length" title="No se pudo hablar con MangaDex."
+                  hint="Puede ser un corte temporal del servicio o de tu conexión."
+                  :detail="store.error"
+                  @retry="store.tab === 'search' ? store.search() : store.loadPopular(store.tab, 1)" />
+      <EmptyState v-else-if="!store.list.length" icon="search"
+                  :title="store.tab === 'search' ? 'Sin resultados.' : 'Nada que mostrar.'"
+                  :hint="store.tab === 'search' ? 'Prueba con menos palabras o con el título en inglés.' : ''" />
       <template v-else>
         <div class="grid">
           <MdCard v-for="m in store.list" :key="m.id" :manga="m" :score="store.score(m)" @open="store.openDetail($event)" />
@@ -139,8 +152,6 @@ onMounted(() => {
 <style scoped>
 .md { max-width: var(--content-max); margin: 0 auto; padding: 0 var(--s-6) var(--s-8); }
 .md__head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: var(--s-4); padding: var(--s-5) 0; }
-.eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
-.tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
 .searchbox { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); width: min(18.75rem, 50vw); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); color: var(--ink-faint); transition: border-color var(--t-fast), box-shadow var(--t-fast); }
 .searchbox:focus-within { border-color: var(--azure); box-shadow: 0 0 0 3px var(--azure-haze); }
 .searchbox input { flex: 1; border: none; outline: none; background: none; color: var(--ink); font-size: var(--fs-sm); }
@@ -162,11 +173,12 @@ onMounted(() => {
 .tagchip:hover { color: var(--ink); border-color: var(--line-strong); }
 .tagchip.is-active { background: var(--azure); color: #fff; border-color: transparent; }
 
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.25rem, 1fr)); gap: var(--s-5); }
+/* Ancho base propio; el resto de la rejilla (densidad, hueco, móvil) vive en base.css */
+.grid { --card-min: 11.25rem; gap: var(--s-5); }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-8) 0; color: var(--ink-faint); }
 .more { display: grid; place-items: center; padding: var(--s-6) 0; }
 .morebtn { padding: var(--s-3) var(--s-6); border-radius: var(--r-pill); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink-soft); font-weight: 600; font-size: var(--fs-sm); transition: all var(--t-fast); }
 .morebtn:hover { color: var(--ink); border-color: var(--azure); }
 
-@media (max-width: 540px) { .md { padding: 0 var(--s-4) var(--s-8); } .grid { grid-template-columns: repeat(auto-fill, minmax(8.75rem, 1fr)); } }
+@media (max-width: 540px) { .md { padding: 0 var(--s-4) var(--s-8); } }
 </style>

@@ -15,6 +15,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from api.runtime import (
+    write_json_atomic,
     MANGA_DIR,
     manga_dir,
     upscaled_dir,
@@ -47,9 +48,7 @@ def _load_download_status() -> dict:
 
 def _persist_download_status():
     try:
-        _STATUS_FILE.write_text(
-            json.dumps(download_status, ensure_ascii=False), encoding='utf-8'
-        )
+        write_json_atomic(_STATUS_FILE, download_status, durable=False)
     except Exception:
         pass
 
@@ -558,7 +557,7 @@ def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=
             if lang:
                 meta['sourceLang'] = lang
             try:
-                meta_path.write_text(_json.dumps(meta))
+                write_json_atomic(meta_path, meta)
             except Exception:
                 pass
         prefix = _chapter_file_prefix(chapter_norm)

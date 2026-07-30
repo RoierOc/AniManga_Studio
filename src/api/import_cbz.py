@@ -29,7 +29,8 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 
-from api.runtime import MANGA_DIR, UPSCALED_DIR, manga_dir, upscaled_dir, normalize_chapter
+from api.runtime import (MANGA_DIR, UPSCALED_DIR, manga_dir, upscaled_dir, normalize_chapter,
+                         write_json_atomic)
 from api.cbz import _list_entries, _extract, _ARCHIVE_EXTS, _MIME
 
 import_bp = Blueprint('import_cbz', __name__)
@@ -71,7 +72,7 @@ def _read_meta(folder: Path) -> dict:
 
 def _write_meta(folder: Path, meta: dict):
     try:
-        (folder / '.source_meta.json').write_text(json.dumps(meta, ensure_ascii=False), encoding='utf-8')
+        write_json_atomic(folder / '.source_meta.json', meta)
     except Exception:
         pass
 

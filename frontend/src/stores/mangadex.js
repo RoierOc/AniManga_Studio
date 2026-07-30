@@ -14,6 +14,8 @@ export const useMangadexStore = defineStore('mangadex', {
     _qTimer: 0,
     popular: [],                // popular/latest/rating list
     loading: false,
+    error: '',                  // '' = sin fallo. Un toast de 3 s no puede ser el ÚNICO aviso:
+                                // se va y deja una rejilla vacía que miente («Sin resultados»)
     page: 1,
     total: 0,
 
@@ -38,6 +40,7 @@ export const useMangadexStore = defineStore('mangadex', {
     // AniList Top
     alTop: [],
     alLoading: false,
+    alError: '',
     alPage: 1,
     alHasMore: false,
     alSort: 'SCORE_DESC',
@@ -97,6 +100,7 @@ export const useMangadexStore = defineStore('mangadex', {
 
     async loadPopular(type, page = 1) {
       this.loading = true
+      this.error = ''
       this.page = page
       try {
         const qs = [`type=${type}`, `page=${page}`, this._ratingParams(), this._tagParams()].filter(Boolean).join('&')
@@ -105,8 +109,10 @@ export const useMangadexStore = defineStore('mangadex', {
         this.popular = page === 1 ? results : [...this.popular, ...results]
         this.total = d.total || 0
         this._fetchScores(results)
-      } catch (_) { useUiStore().toast('Error cargando MangaDex', 'error') }
-      finally { this.loading = false }
+      } catch (e) {
+        this.error = e?.body || e?.message || 'MangaDex no responde'
+        useUiStore().toast('Error cargando MangaDex', 'error')
+      } finally { this.loading = false }
     },
     async search() {
       const q = this.query.trim()
@@ -116,14 +122,16 @@ export const useMangadexStore = defineStore('mangadex', {
       // y pisar la buena. Sólo escribe la petición más reciente.
       const rid = ++this._reqId
       this.loading = true
+      this.error = ''
       try {
         const qs = [`q=${encodeURIComponent(q)}`, this._ratingParams(), this._tagParams()].filter(Boolean).join('&')
         const r = await api.get(`/api/mangadex/search?${qs}`) || []
         if (rid !== this._reqId) return
         this.results = r
         this._fetchScores(this.results)
-      } catch (_) {
+      } catch (e) {
         if (rid !== this._reqId) return
+        this.error = e?.body || e?.message || 'La búsqueda falló'
         useUiStore().toast('Error buscando', 'error')
       }
       finally { if (rid === this._reqId) this.loading = false }
@@ -144,7 +152,14 @@ export const useMangadexStore = defineStore('mangadex', {
         Object.assign(this.scores, d || {})
       } catch (_) {}
     },
-    score(m) { return m.mal_id ? this.scores[m.mal_id] : null },
+    /* `/api/anilist/scores` devuelve un OBJETO por id (`{score, genres, popularity, al_id}`), pero
+     * la búsqueda (línea de abajo) guarda el número pelado. La tarjeta espera un número: pasarle el
+     * objeto pintaba `★ NaN` en todas las tarjetas (y el color por nota nunca se activaba). */
+    score(m) {
+      const s = m.mal_id ? this.scores[m.mal_id] : null
+      const n = typeof s === 'object' && s !== null ? s.score : s
+      return typeof n === 'number' && !Number.isNaN(n) ? n : null
+    },
 
     async openDetail(m) {
       this.detail = m
@@ -209,8 +224,9 @@ export const useMangadexStore = defineStore('mangadex', {
 
     async loadFollowed() {
       this.loading = true
+      this.error = ''
       try { this.followed = await api.get('/api/mangadex/library') || []; this._fetchScores(this.followed) }
-      catch (_) { this.followed = [] }
+      catch (e) { this.followed = []; this.error = e?.body || e?.message || 'No se pudo leer tu biblioteca de MangaDex' }
       finally { this.followedLoaded = true; this.loading = false }
     },
     async follow(m) {
@@ -230,6 +246,7 @@ export const useMangadexStore = defineStore('mangadex', {
     },
     async loadAnilistTop(page = 1) {
       this.alLoading = true
+      this.alError = ''
       this.alPage = page
       try {
         const qs = [`sort=${this.alSort}`, `page=${page}`]
@@ -240,8 +257,10 @@ export const useMangadexStore = defineStore('mangadex', {
         this.alHasMore = !!d.hasNextPage
         // these carry mal_id → reuse the score cache directly
         for (const m of results) if (m.mal_id && m.score) this.scores[m.mal_id] = m.score
-      } catch (_) { useUiStore().toast('Error cargando AniList', 'error') }
-      finally { this.alLoading = false }
+      } catch (e) {
+        this.alError = e?.body || e?.message || 'AniList no responde'
+        useUiStore().toast('Error cargando AniList', 'error')
+      } finally { this.alLoading = false }
     },
     // open an AniList result by searching MangaDex for its title
     openAnilistResult(m) {

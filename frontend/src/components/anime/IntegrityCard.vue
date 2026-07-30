@@ -59,7 +59,7 @@ const signed = (n) => (n > 0 ? `+${formatBytes(n)}` : `−${formatBytes(-n)}`)
 
     <template v-else-if="bad.length">
       <div v-for="b in bad" :key="b.file" class="int__row">
-        <span class="int__name" :title="b.file">{{ b.file }}</span>
+        <span class="int__name" :data-tip="b.file">{{ b.file }}</span>
         <span class="int__diff">{{ signed(b.diff) }}</span>
         <span class="int__state">{{ b.state }}</span>
       </div>

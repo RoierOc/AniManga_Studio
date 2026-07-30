@@ -70,7 +70,7 @@ function search() {
               <template v-else>· <span class="nv__dim">contando…</span></template>
             </span>
           </div>
-          <button class="nv__read" title="Ver capítulos y leer" @click="novels.openDetail({ title, cover: v.cover, novel: v })">
+          <button class="nv__read" data-tip="Ver capítulos y leer" @click="novels.openDetail({ title, cover: v.cover, novel: v })">
             <Icon name="book" :size="14" /> Abrir
           </button>
           <button class="nv__add" :class="{ 'is-added': novels.inLibrary(v) }"

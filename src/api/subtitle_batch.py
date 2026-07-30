@@ -25,6 +25,7 @@ from flask import Blueprint, jsonify, request
 
 from api.observability import record_error
 from api.subtitle import (
+    _is_signs_track,
     _ffprobe_tracks, is_es_track, _resolve_video_path,
     _ext_find_spanish_subs, _ext_download_sub, _sync_sub_to_reference, _inject_sub,
     _do_translate, _mk_sub_task, _tasks,
@@ -157,6 +158,50 @@ _batches: dict = {}
 _batch_cancel: dict = {}
 _batch_lock = threading.Lock()
 
+# Un lote de 8 episodios son ~30 min (MEDIDO: 3,5-4 min/episodio con Ollama). Todo ese estado vivía
+# SÓLO en memoria: reiniciar el servidor a mitad dejaba el modal en 404 y el trabajo ya hecho sin
+# rastro, aunque los subtítulos estuvieran en disco. Se persiste tras cada episodio (una escritura
+# cada varios minutos, no por línea) para poder contarlo al volver.
+_STATE_NAME = 'subtitle_batches.json'
+
+
+def _state_path():
+    from api.runtime import DATA_ROOT
+    return os.path.join(DATA_ROOT, _STATE_NAME)
+
+
+def _save_batches() -> None:
+    from api.runtime import write_json_atomic
+    try:
+        write_json_atomic(_state_path(),
+                          {bid: _batch_public(b) for bid, b in _batches.items()},
+                          durable=False)
+    except Exception as e:                      # persistir es comodidad: nunca tumba el lote
+        record_error("subbatch", e, op="save_state")
+
+
+def load_batches() -> None:
+    """Recupera los lotes al arrancar. Uno que estaba 'running' NO puede seguir vivo: el hilo murió
+    con el proceso, así que se declara interrumpido en vez de mentir con una barra que no avanza."""
+    from api.runtime import read_json_safe
+    data = read_json_safe(_state_path(), default={}, component='subbatch')
+    if not isinstance(data, dict):
+        return
+    for bid, b in data.items():
+        if not isinstance(b, dict):
+            continue
+        if b.get('status') == 'running':
+            b['status'] = 'interrupted'
+            b['ended_at'] = b.get('ended_at') or time.time()
+            b['error'] = 'el servidor se reinició durante el lote'
+            for it in b.get('items') or []:
+                if it.get('status') in ('processing', 'pending'):
+                    it['status'] = 'cancelled'
+                    it['message'] = 'interrumpido por el reinicio'
+        b['_items'] = []                        # sin los items originales no se reanuda: sólo se lee
+        _batches[bid] = b
+        _batch_cancel[bid] = False
+
 
 def _titles_of(item: dict) -> list:
     ts = [t for t in (item.get("titles") or []) if t and t.strip()]
@@ -167,12 +212,74 @@ def _titles_of(item: dict) -> list:
 
 
 def _pick_source_track(tracks: list):
-    """Mejor pista fuente para traducir: preferir inglés (mejor calidad de traducción), luego la
-    primera no-española. None si no hay ninguna de texto."""
+    """Mejor pista fuente para traducir.
+
+    Orden: descartar las de CARTELES/karaoke (título o disposición `forced`) → preferir inglés →
+    la primera que quede. MEDIDO: con dos pistas inglesas (`[Signs/Lyrics]` y `[Full]`) esto elegía
+    la de carteles por ir primera, y el lote producía un subtítulo español sin una sola línea de
+    diálogo. Si TODAS son de carteles no se descarta ninguna: traducir carteles es mejor que nada,
+    y quedarse sin fuente sería una regresión.
+    """
     src = [t for t in tracks if not is_es_track(t)]
     if not src:
         return None
-    return next((t for t in src if (t.get("language") or "").lower().startswith("en")), src[0])
+    dialogo = [t for t in src if not (t.get("forced") or _is_signs_track(t.get("title") or ""))]
+    pool = dialogo or src
+    return next((t for t in pool if (t.get("language") or "").lower().startswith("en")), pool[0])
+
+
+def _use_premade(path: str, tracks: list, info: dict, label: str) -> dict:
+    """Descarga un subtítulo ES ya hecho, lo sincroniza y lo deja junto al vídeo."""
+    with tempfile.TemporaryDirectory() as td:
+        sub_file = _ext_download_sub(info, td)
+        sub_file = _sync_sub_to_reference(sub_file, path, td)
+        _inject_sub(path, sub_file, len([t for t in tracks if not is_es_track(t)]))
+    return {"status": "done", "method": "premade", "message": label}
+
+
+def _translate_with(batch: dict, item: dict, path: str, tracks: list, sub_index: int,
+                    codec: str, src_lang: str, external: dict = None) -> dict:
+    """Traduce con IA (Ollama) una pista concreta o un subtítulo externo, como child task."""
+    ep = item.get("episode")
+    child_id = uuid.uuid4().hex[:8]
+    _mk_sub_task(child_id, item.get("anime_id", "") or "", int(ep or 1), fallback=os.path.basename(path))
+    _tasks[child_id]["batch_id"] = batch["batch_id"]
+    _do_translate(child_id, path, sub_index, codec, len(tracks), src_lang,
+                  external_sub_info=external)
+    st = _tasks.get(child_id, {}).get("status")
+    if st == "done":
+        return {"status": "done", "method": "ia", "message": "traducido con IA"}
+    if st == "cancelled":
+        return {"status": "cancelled", "method": "ia", "message": "cancelado"}
+    return {"status": "error", "method": "ia",
+            "message": _tasks.get(child_id, {}).get("message") or "error de traducción"}
+
+
+def _do_choice(batch: dict, item: dict, path: str, tracks: list, choice: dict) -> dict:
+    """Aplica la fuente que el usuario eligió A MANO para ESTE episodio.
+
+    Una elección explícita NO cae a otra fuente si falla: el usuario pidió ésa, y cambiársela en
+    silencio es exactamente lo que le hizo desconfiar del lote. Se declara el error y punto.
+    """
+    kind = choice.get("kind")
+    info = choice.get("info") or {}
+    if kind == "premade":
+        return _use_premade(path, tracks, info, f"elegido: {info.get('source') or 'premade'}")
+    if kind == "external":
+        return _translate_with(batch, item, path, tracks, 0, "subrip",
+                               info.get("language") or "eng", external=info)
+    if kind == "track":
+        want = int(choice.get("sub_index", -1))
+        # Buscar la pista por su sub_index REAL: mandar el índice de otra lista traduciría una
+        # pista distinta a la elegida, y el fallo sería mudo (ver el bug del índice absoluto).
+        t = next((t for t in tracks if int(t.get("sub_index", -1)) == want), None)
+        if not t:
+            avail = ", ".join(f"{x.get('sub_index')}={x.get('language')}" for x in tracks)
+            return {"status": "error", "method": None,
+                    "message": f"la pista elegida ya no está (hay: {avail or 'ninguna'})"}
+        return _translate_with(batch, item, path, tracks, t["sub_index"], t["codec"],
+                               t.get("language") or "eng")
+    return {"status": "error", "method": None, "message": f"elección desconocida: {kind!r}"}
 
 
 def _process_episode(batch: dict, item: dict, policy: str, target_lang: str, force: bool) -> dict:
@@ -183,48 +290,54 @@ def _process_episode(batch: dict, item: dict, policy: str, target_lang: str, for
         return {"status": "error", "method": None, "message": "archivo no encontrado"}
 
     tracks = _ffprobe_tracks(path)
+    choice = item.get("choice") or {}
     from api.anime import _es_sub_injected
-    if not force and (any(is_es_track(t) for t in tracks) or _es_sub_injected(path)):
+    # Elegir una fuente a mano ES la intención de rehacerlo: no hace falta marcar además "forzar".
+    if not force and not choice and (any(is_es_track(t) for t in tracks) or _es_sub_injected(path)):
         return {"status": "skipped", "method": "skip", "message": "ya tiene español"}
+
+    if choice:
+        try:
+            return _do_choice(batch, item, path, tracks, choice)
+        except Exception as e:
+            record_error("subbatch", e, op="choice", episode=ep, kind=choice.get("kind"))
+            return {"status": "error", "method": None, "message": str(e)[:120]}
 
     # 1) Premade primero (salvo política solo_ia): humano, gratis, sin GPU.
     if policy != "solo_ia":
         titles = _titles_of(item)
+        report: list = []
         try:
-            found = _ext_find_spanish_subs(titles, int(ep or 1), season=int(item.get("season", 1) or 1))
+            found = _ext_find_spanish_subs(titles, int(ep or 1), season=int(item.get("season", 1) or 1),
+                                           report=report)
         except Exception as e:
             record_error("subbatch", e, op="find_premade", episode=ep)
             found = []
         if found:
             try:
-                with tempfile.TemporaryDirectory() as td:
-                    sub_file = _ext_download_sub(found[0], td)
-                    sub_file = _sync_sub_to_reference(sub_file, path, td)
-                    _inject_sub(path, sub_file, len([t for t in tracks if not is_es_track(t)]))
-                return {"status": "done", "method": "premade",
-                        "message": f"premade de {found[0].get('source', 'fuente')}"}
+                return _use_premade(path, tracks, found[0],
+                                    f"premade de {found[0].get('source', 'fuente')}")
             except Exception as e:
                 record_error("subbatch", e, op="inject_premade", episode=ep)
                 # cae a IA (si la política lo permite) en vez de fallar
         if policy == "solo_buscar":
-            return {"status": "error", "method": None, "message": "sin subtítulo premade"}
+            # "Ninguna fuente lo tenía" y "las fuentes se cayeron" no pueden decirse igual: con lo
+            # segundo el episodio SÍ podría tener subtítulo, y reintentar mañana tiene sentido.
+            rotas = [r["source"] for r in report if r["status"] == "error"]
+            sin_clave = [r["source"] for r in report if r["status"] == "unconfigured"]
+            msg = "sin subtítulo premade"
+            if rotas:
+                msg += f" · fuentes caídas: {', '.join(rotas)}"
+            if sin_clave:
+                msg += f" · sin API key: {', '.join(sin_clave)}"
+            return {"status": "error", "method": None, "message": msg, "sources": report}
 
     # 2) Traducir con IA (Ollama). Reusa _do_translate SÍNCRONO — el worker YA es serial.
     track = _pick_source_track(tracks)
     if not track:
         return {"status": "error", "method": None, "message": "sin pista de texto que traducir"}
-    child_id = uuid.uuid4().hex[:8]
-    _mk_sub_task(child_id, item.get("anime_id", "") or "", int(ep or 1), fallback=os.path.basename(path))
-    _tasks[child_id]["batch_id"] = batch["batch_id"]
-    _do_translate(child_id, path, track["sub_index"], track["codec"],
-                  len(tracks), track.get("language") or "eng", force_engine="ollama")
-    st = _tasks.get(child_id, {}).get("status")
-    if st == "done":
-        return {"status": "done", "method": "ia", "message": "traducido con IA"}
-    if st == "cancelled":
-        return {"status": "cancelled", "method": "ia", "message": "cancelado"}
-    return {"status": "error", "method": "ia",
-            "message": _tasks.get(child_id, {}).get("message") or "error de traducción"}
+    return _translate_with(batch, item, path, tracks, track["sub_index"], track["codec"],
+                           track.get("language") or "eng")
 
 
 def _run_batch(batch_id: str):
@@ -241,6 +354,7 @@ def _run_batch(batch_id: str):
             res = _process_episode(batch, it, policy, target_lang, force)
             item_state.update(res)
             batch["done"] += 1
+            _save_batches()
         batch["status"] = "cancelled" if _batch_cancel.get(batch_id) else "done"
     except Exception as e:
         record_error("subbatch", e, op="run_batch", batch_id=batch_id)
@@ -249,6 +363,7 @@ def _run_batch(batch_id: str):
     finally:
         batch["current_episode"] = None
         batch["ended_at"] = time.time()
+        _save_batches()
 
 
 @subbatch_bp.route("/start", methods=["POST"])
@@ -283,6 +398,7 @@ def start():
     }
     _batches[batch_id] = batch
     _batch_cancel[batch_id] = False
+    _save_batches()
     threading.Thread(target=_run_batch, args=(batch_id,), daemon=True).start()
     return jsonify({"batch_id": batch_id})
 
@@ -328,4 +444,6 @@ def get_batch_tasks() -> dict:
     for bid in stale:
         _batches.pop(bid, None)
         _batch_cancel.pop(bid, None)
+    if stale:
+        _save_batches()
     return out

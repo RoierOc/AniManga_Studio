@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
+import { useAnimeStore } from '@/stores/anime'
 
 /* Traducción/búsqueda de subtítulos POR LOTES (anime + series/pelis).
  *
@@ -20,6 +21,13 @@ export const useSubBatchStore = defineStore('subbatch', {
     summary: null,
     selected: new Set(),  // episodios (num) elegidos para procesar
     policy: 'buscar_o_traducir',
+    // Reinyectar: rehacer episodios que YA tienen español (el anterior salió mal). Sin esto el
+    // worker los salta con «ya tiene español» y no hay forma de repetirlos desde la UI.
+    force: false,
+    // Fuente elegida A MANO por episodio: { [ep]: {kind:'premade'|'track'|'external', …} }.
+    // Con elección explícita el worker no aplica la política ni cae a otra fuente si falla.
+    choices: {},
+    picking: 0,           // episodio cuyo selector se está abriendo (o 0)
     // Ejecución
     batchId: '',
     batch: null,          // agregado de GET /<id>
@@ -29,6 +37,8 @@ export const useSubBatchStore = defineStore('subbatch', {
   getters: {
     // Un episodio es elegible si tiene archivo y aún no está en español (o se fuerza).
     processable: (s) => s.episodes.filter(e => e.file_present && e.recommended === 'process'),
+    // Rehacer sólo tiene sentido sobre NUESTRO sidecar: el ES incrustado es el oficial del grupo.
+    redoable: (s) => s.episodes.filter(e => e.file_present && e.es_status === 'sidecar'),
     itemByEp: (s) => (ep) => s.items.find(i => i.episode === ep),
     // Estado en vivo por episodio durante la ejecución.
     liveOf: (s) => (ep) => s.batch?.items?.find(i => i.episode === ep) || null,
@@ -43,6 +53,8 @@ export const useSubBatchStore = defineStore('subbatch', {
       this.summary = null
       this.selected = new Set()
       this.policy = 'buscar_o_traducir'
+      this.force = false
+      this.choices = {}
       this.batchId = ''
       this.batch = null
       this.running = false
@@ -77,14 +89,54 @@ export const useSubBatchStore = defineStore('subbatch', {
     selectAll() { this.selected = new Set(this.episodes.filter(e => e.file_present).map(e => e.episode)) },
     selectNone() { this.selected = new Set() },
     selectProcess() { this.selected = new Set(this.processable.map(e => e.episode)) },
+    // Rehacer los ya hechos: sin `force` el worker los saltaría, así que van juntos.
+    selectRedo() { this.force = true; this.selected = new Set(this.redoable.map(e => e.episode)) },
     setPolicy(p) { this.policy = p },
+    setForce(v) { this.force = !!v },
+
+    /* Elegir A MANO la fuente de UN episodio, con el mismo selector del clic derecho → Traducir.
+     * Se reutiliza `translateSubs` en modo `onPick`: en vez de lanzar la traducción, devuelve lo
+     * elegido y aquí se apunta para el lote. Es una llamada de red por episodio (busca premade en
+     * OpenSubtitles y compañía), por eso es bajo demanda y no parte del escaneo. */
+    async pickSource(ep) {
+      const item = this.itemByEp(ep)
+      if (!item) return
+      const anime = useAnimeStore()
+      this.picking = ep
+      try {
+        await anime.translateSubs(
+          { id: item.anime_id || '', title: this.title },
+          {
+            num: ep, season: item.season || 1, titles: item.titles || [],
+            ep_type: item.ep_type || 'episode', info_hash: item.info_hash || '',
+            local_path: item.local_path || item.path || '',
+          },
+          {
+            onPick: (choice) => {
+              this.choices = { ...this.choices, [ep]: choice }
+              this.selected = new Set(this.selected).add(ep)   // elegir fuente = querer procesarlo
+              anime.subTrackModal = null
+            },
+          },
+        )
+      } finally { this.picking = 0 }
+    },
+
+    clearChoice(ep) {
+      const c = { ...this.choices }
+      delete c[ep]
+      this.choices = c
+    },
 
     async start() {
       const ui = useUiStore()
-      const chosen = this.items.filter(i => this.selected.has(i.episode))
+      const chosen = this.items
+        .filter(i => this.selected.has(i.episode))
+        .map(i => (this.choices[i.episode] ? { ...i, choice: this.choices[i.episode] } : i))
       if (!chosen.length) { ui.toast('Selecciona al menos un episodio', 'warn'); return }
       try {
-        const d = await api.post('/api/subtitle/batch/start', { items: chosen, policy: this.policy, title: this.title })
+        const d = await api.post('/api/subtitle/batch/start',
+          { items: chosen, policy: this.policy, title: this.title, force: this.force })
         if (d.error) { ui.toast(d.error, 'error'); return }
         this.batchId = d.batch_id
         this.running = true
@@ -109,8 +161,12 @@ export const useSubBatchStore = defineStore('subbatch', {
             const prem = b.items.filter(i => i.method === 'premade').length
             const ia = b.items.filter(i => i.method === 'ia').length
             const err = b.items.filter(i => i.status === 'error').length
-            if (b.status === 'cancelled') ui.toast('Lote cancelado', 'info')
+            if (b.status === 'interrupted') ui.toast(`El servidor se reinició durante el lote · ${done} episodios sí quedaron listos`, 'warn', 9000)
+            else if (b.status === 'cancelled') ui.toast('Lote cancelado', 'info')
             else ui.toast(`Lote terminado: ${done} listos (${prem} premade, ${ia} IA)${err ? `, ${err} sin fuente` : ''}`, 'ok', 8000)
+            // Una elección ya aplicada no debe repetirse sola en el siguiente lanzamiento; las de
+            // los que fallaron se conservan para poder reintentar sin volver a elegir.
+            for (const i of b.items) if (i.status === 'done') this.clearChoice(i.episode)
             // Re-escanea para reflejar los nuevos ES sin cerrar el modal.
             this.runScan()
           }

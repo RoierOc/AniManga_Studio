@@ -36,7 +36,7 @@ const current = computed(() => {
         <button
           class="topbar__gear"
           :class="{ 'is-active': statsOpen }"
-          title="Estadísticas"
+          data-tip="Estadísticas"
           @click.stop="statsOpen = !statsOpen"
         >
           <Icon name="chart" :size="18" />
@@ -47,14 +47,14 @@ const current = computed(() => {
       <button
         class="topbar__gear topbar__kbd"
         :class="{ 'is-active': ui.showShortcuts }"
-        title="Atajos de teclado (?)"
+        data-tip="Atajos de teclado (?)"
         aria-label="Atajos de teclado"
         @click="ui.showShortcuts = !ui.showShortcuts"
       >?</button>
       <button
         class="topbar__gear"
         :class="{ 'is-active': ui.currentView === 'settings' }"
-        title="Ajustes"
+        data-tip="Ajustes"
         @click="ui.goto('settings')"
       >
         <Icon name="settings" :size="18" />

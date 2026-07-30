@@ -415,7 +415,7 @@ async function onImportFile(e) {
     <section class="card">
       <div class="card__title">
         <Icon name="settings" :size="16" /> Conexiones y claves API
-        <button class="btn btn--xs stg__refresh" @click="triggerEnvImport" title="Importar un archivo .env">
+        <button class="btn btn--xs stg__refresh" @click="triggerEnvImport" data-tip="Importar un archivo .env">
           <Icon name="upload" :size="13" /> Importar .env
         </button>
         <input ref="envInput" type="file" accept=".env,text/plain" hidden @change="onEnvFile" />
@@ -492,7 +492,7 @@ async function onImportFile(e) {
       <div class="card__title">
         <Icon name="folder" :size="16" /> Almacenamiento
         <span v-if="storage" class="stg__total">{{ formatBytes(storage.totals.total) }}</span>
-        <button class="btn btn--xs stg__refresh" :disabled="storageLoading" @click="loadStorage" title="Recalcular">
+        <button class="btn btn--xs stg__refresh" :disabled="storageLoading" @click="loadStorage" data-tip="Recalcular">
           <Icon name="refresh" :size="13" />
         </button>
       </div>
@@ -502,10 +502,10 @@ async function onImportFile(e) {
       <template v-else-if="storage">
         <!-- Desglose por tipo -->
         <div class="stg__bar" :aria-label="'Uso de disco'">
-          <span class="stg__seg stg__seg--orig" :style="{ flexGrow: storage.totals.original || 0.0001 }" title="Originales descargados" />
-          <span class="stg__seg stg__seg--up" :style="{ flexGrow: storage.totals.upscaled || 0.0001 }" title="Escalado 4K" />
-          <span class="stg__seg stg__seg--anime" :style="{ flexGrow: storage.totals.anime || 0.0001 }" title="Anime (vídeo)" />
-          <span class="stg__seg stg__seg--cache" :style="{ flexGrow: (storage.totals.stream_cache + storage.totals.qa) || 0.0001 }" title="Cachés" />
+          <span class="stg__seg stg__seg--orig" :style="{ flexGrow: storage.totals.original || 0.0001 }" data-tip="Originales descargados" />
+          <span class="stg__seg stg__seg--up" :style="{ flexGrow: storage.totals.upscaled || 0.0001 }" data-tip="Escalado 4K" />
+          <span class="stg__seg stg__seg--anime" :style="{ flexGrow: storage.totals.anime || 0.0001 }" data-tip="Anime (vídeo)" />
+          <span class="stg__seg stg__seg--cache" :style="{ flexGrow: (storage.totals.stream_cache + storage.totals.qa) || 0.0001 }" data-tip="Cachés" />
         </div>
         <div class="stg__legend">
           <span><i class="stg__dot stg__dot--orig" /> Manga <b>{{ formatBytes(storage.totals.original) }}</b></span>
@@ -553,7 +553,7 @@ async function onImportFile(e) {
         <div class="stg__list">
           <div v-for="s in stgSeries.slice(0, 20)" :key="(s.kind || 'manga') + s.name" class="stg__row">
             <div class="stg__row-main">
-              <span class="stg__name" :title="s.name">{{ s.name }}</span>
+              <span class="stg__name" :data-tip="s.name">{{ s.name }}</span>
               <span class="stg__meta">
                 <template v-if="s.kind === 'anime'">{{ s.episodes }} episodio(s) · <span class="stg__an">anime</span></template>
                 <template v-else>
@@ -616,6 +616,17 @@ async function onImportFile(e) {
           </button>
         </div>
       </div>
+      <div class="sep" />
+      <!-- Un respaldo que hay que acordarse de pulsar no es un respaldo. -->
+      <label class="fld fld--chk">
+        <span>Copia automática cada semana
+          <em>· en segundo plano, sólo si hay repo y token; si falla lo dice aquí</em></span>
+        <input type="checkbox" :checked="settings.sync.auto !== false"
+               @change="settings.setSyncAuto($event.target.checked)" />
+      </label>
+      <p v-if="settings.sync.auto_last_error" class="hint hint--warn">
+        La última copia automática falló: {{ settings.sync.auto_last_error }}
+      </p>
       <p v-if="settings.sync.identity" class="hint">Los commits se firman como <code>{{ settings.sync.identity }}</code>.</p>
     </section>
 
@@ -725,6 +736,7 @@ async function onImportFile(e) {
 .qa-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); flex-wrap: wrap; margin-bottom: var(--s-2); }
 .hint { font-size: var(--fs-xs); color: var(--ink-faint); margin-top: 2px; }
 .hint code, code { font-family: var(--font-mono); color: var(--ink-soft); }
+.hint--warn { color: var(--warn); }
 
 .sep { height: 1px; background: var(--line); margin: var(--s-4) 0; }
 .qbt__status { display: inline-flex; align-items: center; gap: var(--s-2); font-size: var(--fs-sm); color: var(--ink-faint); }

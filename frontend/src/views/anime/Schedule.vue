@@ -135,7 +135,7 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
           <div class="tcard__cov">
             <img v-if="e.anime.cover" :src="imgProxy(e.anime.cover, 160)" loading="lazy" decoding="async" alt=""
                  @load="$event.target.classList.add('is-loaded')" />
-            <span v-if="e.mine" class="tcard__mine" title="En tu biblioteca">★</span>
+            <span v-if="e.mine" class="tcard__mine" data-tip="En tu biblioteca">★</span>
           </div>
           <div class="tcard__info">
             <span class="tcard__title">{{ e.anime.title }}</span>
@@ -161,7 +161,7 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
           <div class="ent__cov">
             <img v-if="e.anime.cover" :src="imgProxy(e.anime.cover, 160)" loading="lazy" decoding="async" alt=""
                  @load="$event.target.classList.add('is-loaded')" />
-            <span v-if="e.mine" class="ent__mine" title="En tu biblioteca">★</span>
+            <span v-if="e.mine" class="ent__mine" data-tip="En tu biblioteca">★</span>
           </div>
           <div class="ent__info">
             <span class="ent__title">{{ e.anime.title }}</span>

@@ -44,6 +44,42 @@ def _identity_snapshot() -> dict:
     return {"unresolved": unresolved, "unchecked": unchecked, "total": len(folders)}
 
 
+def _services_snapshot() -> list:
+    """¿Está escuchando cada servicio local? Sonda TCP, no llamada a la API, a propósito:
+
+    no necesita claves, no despierta a nadie y **acota el coste** — un puerto que no acepta la
+    conexión responde en microsegundos, mientras que preguntar por HTTP a un Sonarr que aún
+    arranca cuesta segundos. Aquí sólo interesa la respuesta binaria "hay alguien"; los detalles
+    (versión, error) los da cada módulo en su propio `/status`.
+
+    Hasta ahora sólo Suwayomi tenía dónde verse: que Sonarr, Radarr, Prowlarr o qBittorrent
+    estuvieran caídos se notaba únicamente por una lista vacía, que es la regla del repo al revés
+    ("falló" ≠ "no había"). Ver el constraint 3 de `docs/dev/PENDING_BUGS.md`.
+    """
+    import socket
+    from urllib.parse import urlparse
+    from api.config_store import get_secret
+
+    qbt = urlparse(get_secret("QBT_URL", "http://localhost:8080"))
+    servicios = [
+        ("Suwayomi", "localhost", 4567, "Fuentes de manga", "suwayomi/start.sh"),
+        ("Sonarr", "localhost", 8989, "Series", "servarr/start.sh"),
+        ("Radarr", "localhost", 7878, "Películas", "servarr/start.sh"),
+        ("Prowlarr", "localhost", 9696, "Indexers de torrents", "servarr/start.sh"),
+        ("qBittorrent", qbt.hostname or "localhost", qbt.port or 8080, "Descargas", None),
+    ]
+    out = []
+    for nombre, host, port, para, arranque in servicios:
+        try:
+            with socket.create_connection((host, port), timeout=0.5):
+                online = True
+        except OSError:
+            online = False        # rehusada o sin respuesta: para la UI es lo mismo, no está
+        out.append({"name": nombre, "port": port, "online": online,
+                    "for": para, "start": arranque})
+    return out
+
+
 @health_bp.route("/check", methods=["GET"])
 def check():
     """Instantánea de salud (solo lectura, rápida). Fuentes cruzadas + identidad sin verificar +
@@ -69,12 +105,17 @@ def check():
     except Exception:
         errors = {}
 
-    problems = len(broken) + len(ident["unresolved"])
+    services = _services_snapshot()
+    caidos = [s for s in services if not s["online"]]
+
+    # Un servicio caído CUENTA como problema: es la causa más frecuente de "no me sale nada".
+    problems = len(broken) + len(ident["unresolved"]) + len(caidos)
     return jsonify({
         "ok": True,
         "problems": problems,
         "sources": {"broken": broken, "autoheal": autoheal, "unreachable": unreachable},
         "identity": ident,
+        "services": services,
         "errors": errors,
     })
 

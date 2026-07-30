@@ -28,7 +28,7 @@ defineEmits(['update:filter', 'update:sort', 'update:search'])
       <button v-for="f in filters" :key="f.id"
               v-show="f.n == null || f.n > 0 || f.id === filter"
               class="pill" :class="{ 'is-active': filter === f.id }"
-              :title="f.title || f.label"
+              :data-tip="f.title || f.label"
               :style="filter === f.id && f.color ? { color: f.color, borderColor: f.color } : {}"
               @click="$emit('update:filter', f.id)">
         <Icon v-if="f.icon" :name="f.icon" :size="13" />

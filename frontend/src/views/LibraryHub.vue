@@ -30,7 +30,7 @@ const current = computed(() => (tab.value === 'local' ? LocalView : LibraryView)
         </button>
       </div>
       <div class="libhub__right">
-        <button class="libhub__import" title="Importar un CBZ/CBR y trocearlo en capítulos" @click="ui.goto('workshop')">
+        <button class="libhub__import" data-tip="Importar un CBZ/CBR y trocearlo en capítulos" @click="ui.goto('workshop')">
           <Icon name="upload" :size="16" /> Importar
         </button>
       </div>

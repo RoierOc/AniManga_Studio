@@ -5,12 +5,15 @@
 //
 // Only genuine DISPLAY preferences are portable. Excluded on purpose:
 //  - GPU/machine-specific (anime-a4k*, volumes) — differ per device
-//  - data, not prefs (manga-progress-v1, act-hidden) — progress rides reading_history
+//  - data, not prefs (manga-progress-v1, act-hidden). OJO: el progreso de lectura NO viaja
+//    aquí ni en reading_history (que son los últimos 500 capítulos terminados, no el mapa
+//    por obra): tiene su propia copia durable en /api/reader/progress, que se FUNDE en vez
+//    de pisarse. Ver `_hydrateProgress` en stores/manga.js.
 //  - keys with their own backend toggle (upscale-eco, tp-qa)
 import { api } from '@/lib/api'
 
 export const PORTABLE_PREFS = [
-  'lib-sort', 'anime-libsort', 'anime-epview',
+  'lib-sort', 'anime-libsort', 'anime-epview', 'grid-density',
   'reader-spread', 'reader-mode', 'reader-fit', 'reader-dir',
   'anime-player-mode',
 ]

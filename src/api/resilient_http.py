@@ -75,6 +75,14 @@ _HOSTS = {
     # Suwayomi (local) — cheap to retry, no spacing needed.
     "127.0.0.1:4567":     _HostConfig(retries=2, min_interval=0.0),
     "localhost:4567":     _HostConfig(retries=2, min_interval=0.0),
+    # Sonarr/Radarr/Prowlarr (local). Arrancan en segundo plano con la app y tardan ~1 min en
+    # levantar el .NET, así que hay una ventana en la que el puerto no acepta conexiones. Con los
+    # 3 reintentos por defecto y 10 s de connect timeout, `/api/media/library` tardaba **34 s
+    # medidos** en decir "Radarr no responde". Un servicio local que no acepta la conexión no la
+    # va a aceptar 10 s después: se corta pronto y la UI ofrece reintentar.
+    "localhost:8989":     _HostConfig(retries=2, min_interval=0.0),
+    "localhost:7878":     _HostConfig(retries=2, min_interval=0.0),
+    "localhost:9696":     _HostConfig(retries=2, min_interval=0.0),
     # Nyaa needs a browser UA (default python UA gets blocked there).
     "nyaa.si":            _HostConfig(retries=3, min_interval=0.0,
                                       headers={"User-Agent": "Mozilla/5.0"}),

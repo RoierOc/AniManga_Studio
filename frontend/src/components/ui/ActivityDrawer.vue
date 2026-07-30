@@ -43,7 +43,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
               {{ store.activeCount ? `${store.activeCount} en proceso` : 'Sin tareas activas' }}
             </h3>
             <button class="adr__link" @click="viewAll">Ver todo <Icon name="chevron" :size="13" /></button>
-            <button class="adr__x" @click="close" title="Cerrar"><Icon name="close" :size="16" /></button>
+            <button class="adr__x" @click="close" data-tip="Cerrar"><Icon name="close" :size="16" /></button>
           </header>
 
           <div class="adr__body">
@@ -71,7 +71,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
                       <span :style="{ width: t.pct + '%', background: kind(t.kind).color }" />
                     </div>
                   </div>
-                  <button class="row__act" title="Cancelar" @click="store.cancelAnyTask(t)">
+                  <button class="row__act" data-tip="Cancelar" @click="store.cancelAnyTask(t)">
                     <Icon name="close" :size="13" />
                   </button>
                 </div>

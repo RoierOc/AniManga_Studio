@@ -27,6 +27,15 @@ function esChip(e) {
   return { cls: 'is-none', text: 'Sin fuente' }
 }
 
+// Etiqueta de la fuente elegida a mano: hay que poder leer de un vistazo QUÉ se va a usar.
+const SRC = { jimaku: 'Jimaku', opensubtitles: 'OpenSubtitles', subdl: 'Subdl', subdivx: 'Subdivx', nyaa: 'Nyaa' }
+function choiceLabel(c) {
+  if (!c) return ''
+  if (c.kind === 'premade') return SRC[c.info?.source] || c.info?.source || 'Premade'
+  if (c.kind === 'external') return `IA · ${SRC[c.info?.source] || c.info?.source || 'externo'}`
+  return `IA · ${(c.language || 'und').toUpperCase().slice(0, 3)}`
+}
+
 // Estado en vivo por episodio (durante la ejecución).
 const LIVE = {
   processing: { cls: 'is-run', text: 'Procesando…' },
@@ -72,13 +81,20 @@ const LIVE = {
             <div v-if="!store.running" class="sbb__cfg">
               <div class="sbb__policies">
                 <button v-for="p in POLICIES" :key="p.id" class="sbb__pol" :class="{ 'is-active': store.policy === p.id }"
-                        :title="p.hint" @click="store.setPolicy(p.id)">{{ p.label }}</button>
+                        :data-tip="p.hint" @click="store.setPolicy(p.id)">{{ p.label }}</button>
               </div>
               <div class="sbb__sel">
                 <button @click="store.selectProcess()">Solo los que faltan</button>
+                <button v-if="store.redoable.length" @click="store.selectRedo()">
+                  Rehacer los {{ store.redoable.length }} ya hechos
+                </button>
                 <button @click="store.selectAll()">Todos</button>
                 <button @click="store.selectNone()">Ninguno</button>
               </div>
+              <label class="sbb__force" data-tip="Vuelve a buscar/traducir aunque el episodio ya tenga español. Sustituye el subtítulo anterior que dejó la app; las pistas del propio archivo no se tocan.">
+                <input type="checkbox" :checked="store.force" @change="store.setForce($event.target.checked)" />
+                Reinyectar subtítulos (rehacer los que ya tienen)
+              </label>
             </div>
 
             <!-- Tabla de episodios -->
@@ -98,6 +114,20 @@ const LIVE = {
                   <em v-else-if="store.liveOf(e.episode).method === 'ia'">IA</em>
                 </span>
                 <span v-else class="sbb__chip" :class="esChip(e).cls">{{ esChip(e).text }}</span>
+
+                <!-- Fuente elegida a mano para ESTE episodio (manda sobre la política). -->
+                <button v-if="!store.running && store.choices[e.episode]" class="sbb__pick-chip"
+                        data-tip="Quitar la fuente elegida y volver a la política del lote"
+                        @click="store.clearChoice(e.episode)">
+                  {{ choiceLabel(store.choices[e.episode]) }} <Icon name="close" :size="11" />
+                </button>
+                <button v-else-if="!store.running && e.file_present" class="sbb__srcbtn"
+                        :disabled="store.picking === e.episode"
+                        data-tip="Ver las fuentes de este episodio y elegir cuál usar"
+                        @click="store.pickSource(e.episode)">
+                  <Spinner v-if="store.picking === e.episode" :size="11" />
+                  <template v-else>Fuente…</template>
+                </button>
               </div>
             </div>
 
@@ -115,7 +145,8 @@ const LIVE = {
               <template v-else>
                 <span class="sbb__count">{{ store.selected.size }} seleccionados</span>
                 <button class="sbb__btn sbb__btn--primary" :disabled="!store.selected.size" @click="store.start()">
-                  <Icon name="globe" :size="16" /> Traducir {{ store.selected.size }} episodio{{ store.selected.size === 1 ? '' : 's' }}
+                  <Icon name="globe" :size="16" /> {{ store.force || Object.keys(store.choices).length ? 'Rehacer' : 'Traducir' }}
+                  {{ store.selected.size }} episodio{{ store.selected.size === 1 ? '' : 's' }}
                 </button>
               </template>
             </footer>
@@ -159,6 +190,10 @@ const LIVE = {
 .sbb__sel { display: flex; gap: var(--s-3); }
 .sbb__sel button { font-size: var(--fs-xs); color: var(--ink-faint); text-decoration: underline; }
 .sbb__sel button:hover { color: var(--azure-bright); }
+.sbb__force { flex-basis: 100%; display: flex; align-items: center; gap: var(--s-2);
+  font-size: var(--fs-xs); color: var(--ink-soft); cursor: pointer; }
+.sbb__force input { accent-color: var(--azure); width: .875rem; height: .875rem; }
+.sbb__force:hover { color: var(--ink); }
 
 .sbb__list { overflow-y: auto; padding: var(--s-2) var(--s-3); flex: 1; }
 .sbb__row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3);
@@ -180,6 +215,15 @@ const LIVE = {
 .sbb__chip.is-ok { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 40%, transparent); }
 .sbb__chip.is-skip { color: var(--ink-faint); }
 .sbb__chip.is-err { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+
+.sbb__srcbtn, .sbb__pick-chip { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0;
+  font-size: var(--fs-2xs); font-weight: 600; padding: 3px 0.5rem; border-radius: var(--r-pill);
+  border: 1px solid var(--line); cursor: pointer; transition: all var(--t-fast); }
+.sbb__srcbtn { color: var(--ink-faint); }
+.sbb__srcbtn:hover:not(:disabled) { color: var(--azure-bright); border-color: var(--azure); }
+.sbb__pick-chip { color: var(--azure-bright); border-color: var(--azure);
+  background: color-mix(in srgb, var(--azure) 12%, transparent); }
+.sbb__pick-chip:hover { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 50%, transparent); }
 
 .sbb__prog { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-5); border-top: 1px solid var(--line); }
 .sbb__prog-bar { flex: 1; height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }

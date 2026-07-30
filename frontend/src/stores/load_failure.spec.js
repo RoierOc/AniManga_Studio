@@ -79,3 +79,27 @@ describe('una carga que falla no puede parecer una biblioteca vacía', () => {
     expect(s.searchResults).toEqual([])
   })
 })
+
+describe('un servicio que falla al LISTAR también se dice', () => {
+  it('offline incluye lo que reventó en /library, no sólo lo que no contesta al ping', async () => {
+    // El caso que se colaba: Radarr responde a `system/status` (online) pero `movie` revienta.
+    // El backend lo declaraba en `errors.radarr`… que no leía ninguna vista, así que la sección
+    // de películas salía vacía como si no tuvieras ninguna.
+    api.get.mockImplementation((u) => {
+      if (u === '/api/media/status') return Promise.resolve({
+        sonarr: { online: true }, radarr: { online: true },
+      })
+      if (u === '/api/media/library') return Promise.resolve({
+        series: [{ id: 1, kind: 'series', title: 'A' }], movies: [],
+        errors: { radarr: 'Connection refused' },
+      })
+      return Promise.resolve({})
+    })
+    const store = useMediaStore()
+    await store.load()
+
+    expect(store.loadError).toBe('')          // la carga no falló entera
+    expect(store.offline).toContain('radarr') // pero la vista tiene qué decir
+    expect(store.movies).toEqual([])
+  })
+})

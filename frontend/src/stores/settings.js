@@ -48,6 +48,13 @@ export const useSettingsStore = defineStore('settings', () => {
     try { const r = await api.post('/api/sync/save', {}); if (!r.error) sync.value = { ...sync.value, ...r }; return r }
     finally { syncBusy.value = '' }
   }
+  async function setSyncAuto(enabled) {
+    const prev = sync.value.auto
+    sync.value = { ...sync.value, auto: enabled }          // respuesta inmediata al clic
+    try { sync.value = await api.post('/api/sync/auto', { enabled }) }
+    catch (e) { sync.value = { ...sync.value, auto: prev }; throw e }
+  }
+
   async function restoreLibrary() {
     syncBusy.value = 'restore'
     try { return await api.post('/api/sync/restore', {}) }
@@ -56,6 +63,6 @@ export const useSettingsStore = defineStore('settings', () => {
 
   return {
     keyGroups, keysLoading, keysSaving, loadKeys, saveKeys, importEnv,
-    sync, syncBusy, loadSyncStatus, configureSync, saveLibrary, restoreLibrary,
+    sync, syncBusy, loadSyncStatus, configureSync, saveLibrary, setSyncAuto, restoreLibrary,
   }
 })

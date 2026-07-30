@@ -1,11 +1,15 @@
 <script setup>
-/* Hero cinematográfico genérico (carrusel + Ken Burns + aura de color).
+/* Hero cinematográfico ÚNICO de la app (carrusel + Ken Burns + aura de color).
  *
- * Comparte el lenguaje visual de `components/anime/HeroBanner.vue` pero NO su lógica: aquel está
- * casado con el dominio de anime (emisión, recomendaciones, `enrichPreview`, `openTorrents`…).
- * Envolverlo habría significado pasarle una docena de callbacks — más acoplamiento, no menos.
- * Aquí todo entra como datos: cada item es `{ id, art, artFallback, overline, title, meta[],
- * tags[], progress, actions[] }` y las acciones son `{label, icon, primary?, run}`.
+ * Durante meses hubo DOS: éste y `components/anime/HeroBanner.vue` (365 líneas), con el mismo
+ * markup y el mismo CSS copiado — la historia de `MangaCard`/`MediaCard` otra vez. Cada mejora
+ * visual costaba el doble y las dos versiones divergieron (el logo de TMDB y la pastilla «Emitido
+ * hace 2h» sólo existían en anime; el botón primario era blanco allí y azul aquí).
+ * Ahora `HeroBanner` es un ENVOLTORIO que traduce el store de anime a estos datos, igual que
+ * `AnimeCard` envuelve a `MediaCard`. Toda la presentación vive aquí y sólo aquí.
+ *
+ * Cada item: `{ id, art, artFallback, logo, overline, title, meta[], tags[], progress, actions[] }`.
+ * `meta` acepta strings o `{ text, chip?, lead? }`; las acciones son `{label, icon, primary?, run}`.
  */
 import { computed, onUnmounted, ref, watch } from 'vue'
 import { imgProxy } from '@/lib/img'
@@ -22,12 +26,35 @@ const c = computed(() => props.items[active.value] || null)
 
 // Cascada de arte: si la capa ancha falla (URL rota o bloqueada), se pasa a la siguiente en vez
 // de dejar el hero en blanco. `is-cover` difumina y escala el póster vertical para llenar el marco.
+// `art` es SIEMPRE arte ancho (banner/fanart) y puede faltar; `artFallback` admite una URL o una
+// lista de portadas verticales (anime encadena cover_xl → cover). De ahí sale `isWide`: sólo la
+// capa 0 se muestra sin difuminar, así que una portada vertical nunca se estira a lo ancho.
 const bgIdx = ref(0)
-const tiers = computed(() => [c.value?.art, c.value?.artFallback].filter(Boolean).map(imgProxy))
+const tiers = computed(() => [c.value?.art, ...[].concat(c.value?.artFallback || [])]
+  .filter(Boolean).map(imgProxy))
 const bgUrl = computed(() => tiers.value[bgIdx.value] || '')
 const isWide = computed(() => bgIdx.value === 0 && !!c.value?.art)
 function onBgError() { if (bgIdx.value < tiers.value.length - 1) bgIdx.value++ }
-watch(() => c.value?.id, () => { bgIdx.value = 0 })
+
+// Title treatment (el logo PNG de TMDB, estilo Crunchyroll). Si no hay o la URL falla → título.
+const logoFailed = ref(false)
+const logoUrl = computed(() => c.value?.logo || '')
+const hasLogo = computed(() => !!logoUrl.value && !logoFailed.value)
+watch(() => c.value?.id, () => { bgIdx.value = 0; logoFailed.value = false })
+
+// `meta` admite string o `{text, chip, lead}`: el primero va destacado y `chip` se pinta como
+// pastilla (la de «Emitido hace 2 h» del anime).
+const metaItems = computed(() => (c.value?.meta || [])
+  .filter(Boolean)
+  .map((m, i) => (typeof m === 'string' ? { text: m, lead: i === 0 } : { lead: i === 0, ...m }))
+  .map(m => ({ ...m, ...splitNum(m.text) })))
+
+// «51 capítulos · 3 leídos · 1669 en 4K» iba entero en el mismo gris: la cifra, que es el dato,
+// pesaba lo mismo que su unidad. Se separa el número inicial para poder darle peso propio.
+function splitNum(text) {
+  const m = /^(\d[\d.,]*)(\s+)(.+)$/.exec(String(text ?? ''))
+  return m ? { num: m[1], rest: m[3] } : { num: '', rest: String(text ?? '') }
+}
 
 // Color dominante del fondo → el home lo usa como aura sutil detrás de los rieles.
 // imgProxy sirve TMDB/TVDB desde /api/img (mismo origen), así que el canvas es legible.
@@ -52,6 +79,19 @@ watch(bgUrl, sampleTint, { immediate: true })
 
 function goTo(i) { const n = props.items.length; if (n) active.value = ((i % n) + n) % n }
 
+// Precargar los vecinos: sin esto el carrusel parpadea en blanco al pasar de diapositiva.
+function preload(i) {
+  const n = props.items.length
+  if (!n) return
+  const it = props.items[((i % n) + n) % n]
+  const art = it?.art || [].concat(it?.artFallback || [])[0]
+  for (const u of [art, it?.logo]) if (u) { const im = new Image(); im.src = imgProxy(u) }
+}
+watch([() => props.items, active], () => {
+  if (active.value >= props.items.length) active.value = 0
+  preload(active.value + 1); preload(active.value - 1)
+}, { immediate: true })
+
 let timer = null
 function startTimer() { clearInterval(timer); if (props.items.length > 1) timer = setInterval(() => goTo(active.value + 1), 8000) }
 watch(() => props.items.length, () => {
@@ -64,7 +104,10 @@ onUnmounted(() => clearInterval(timer))
 <template>
   <section v-if="items.length" class="hero" :class="{ 'is-cover': !isWide, 'is-bleed': bleed }">
     <div class="hero__bg">
-      <Transition name="hero-bg" mode="out-in">
+      <!-- SIN `mode="out-in"`: con él la diapositiva vieja se desvanece ENTERA antes de que entre la
+           nueva, así que entre las dos se ve el fondo — un parpadeo oscuro cada 8 s. Superpuestas
+           (las dos son `position:absolute`) es un fundido cruzado de verdad. -->
+      <Transition name="hero-bg">
         <div v-if="c" :key="String(c.id) + bgUrl" class="hero__img">
           <div class="hero__kb" :style="{ backgroundImage: `url('${bgUrl}')` }" />
           <!-- sonda invisible: detecta una URL rota y avanza de capa -->
@@ -72,18 +115,24 @@ onUnmounted(() => clearInterval(timer))
         </div>
       </Transition>
       <div class="hero__shade" />
+      <!-- Grano + viñeta: es lo que separa un fotograma de un `background-image`. El grano rompe
+           el banding de los degradados sobre arte oscuro y la viñeta cierra los bordes. -->
+      <div class="hero__grain" />
     </div>
 
     <div class="hero__inner">
       <Transition name="hero-content" mode="out-in" :duration="380">
         <div v-if="c" :key="c.id" class="hero__body">
           <p v-if="c.overline" class="hero__eyebrow"><span class="hero__tick" /> {{ c.overline }}</p>
-          <h1 class="hero__title">{{ c.title }}</h1>
+          <img v-if="hasLogo" class="hero__logo" :src="logoUrl" :alt="c.title" @error="logoFailed = true" />
+          <h1 v-else class="hero__title">{{ c.title }}</h1>
 
-          <div v-if="c.meta?.length" class="hero__meta">
-            <template v-for="(m, i) in c.meta" :key="i">
-              <span v-if="i" class="hero__dot">·</span>
-              <span :class="{ 'hero__lead': i === 0 }">{{ m }}</span>
+          <div v-if="metaItems.length" class="hero__meta">
+            <template v-for="(m, i) in metaItems" :key="i">
+              <span v-if="i && !m.chip" class="hero__dot">·</span>
+              <span :class="{ 'hero__lead': m.lead && !m.chip, 'hero__chip': m.chip }">
+                <b v-if="m.num && !m.chip" class="hero__num">{{ m.num }}</b>{{ m.num && !m.chip ? m.rest : m.text }}
+              </span>
             </template>
           </div>
 
@@ -119,6 +168,18 @@ onUnmounted(() => clearInterval(timer))
 <style scoped>
 .hero { position: relative; margin: 0 0 var(--s-7); height: clamp(31.25rem, 58vw, 42.5rem);
   border-radius: var(--r-xl); overflow: hidden; background: var(--surface); }
+/* El fundido cruzado necesita que la diapositiva SALIENTE siga ocupando su sitio mientras se va. */
+.hero-bg-leave-active { position: absolute; inset: 0; }
+
+/* Grano fino (turbulencia SVG, sin pedir ningún archivo) + viñeta. `overlay` mantiene el color del
+   arte y sólo altera la luminancia, así que no lava los negros. */
+.hero__grain { position: absolute; inset: 0; pointer-events: none;
+  background-image:
+    radial-gradient(120% 90% at 50% 45%, transparent 52%, rgba(0,0,0,.42) 100%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.82' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.5'/%3E%3C/svg%3E");
+  background-size: cover, 140px 140px;
+  mix-blend-mode: overlay; opacity: .5; }
+
 /* A sangre: la IMAGEN se desvanece por arriba y abajo (máscara alfa) en vez de oscurecerse con
    una capa encima → se disuelve en el fondo de página sin costura. */
 .hero.is-bleed { border-radius: 0; margin: 0; background: transparent; height: clamp(35rem, 68vw, 51.25rem); }
@@ -161,7 +222,21 @@ onUnmounted(() => clearInterval(timer))
 .hero__meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin-top: var(--s-3);
   font-size: var(--fs-sm); color: var(--ice); text-shadow: 0 1px 8px rgba(0,0,0,.7); }
 .hero__lead { font-weight: 600; color: #fff; }
+/* La cifra en la display, tabular y un punto más grande: se lee de un vistazo sin negritas por
+   todas partes. `tabular-nums` evita que el ancho baile cuando el número cambia. */
+.hero__num { font-family: var(--font-display); font-weight: 700; font-size: 1.12em; color: #fff;
+  font-variant-numeric: tabular-nums; letter-spacing: -.01em; margin-right: .3em; }
 .hero__dot { color: var(--ink-faint); }
+/* Pastilla de frescura («Emitido hace 2 h», «Descargado ayer»): dato con caducidad, por eso se
+   separa del resto de la meta en vez de encadenarse con un punto. */
+.hero__chip { margin-left: var(--s-1); font-family: var(--font-mono); font-size: var(--fs-2xs);
+  color: var(--cyan); padding: 2px 0.5rem; border-radius: var(--r-pill); background: var(--cyan-glow); }
+/* Title treatment de TMDB. La sombra lo despega del arte; el `logorise` evita que aparezca seco. */
+.hero__logo { max-width: min(35rem, 82%); max-height: clamp(6.875rem, 15vw, 12.5rem);
+  width: auto; height: auto; object-fit: contain; object-position: left bottom;
+  filter: drop-shadow(0 4px 20px rgba(0,0,0,.65)); animation: logorise .6s var(--ease-silk) both; }
+@keyframes logorise { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: none; } }
+.hero.is-bleed .hero__logo { max-width: min(42.5rem, 88%); max-height: clamp(8.75rem, 19vw, 17.5rem); }
 .hero__tags { display: flex; flex-wrap: wrap; gap: var(--s-2); margin-top: var(--s-3); }
 .hg { font-size: var(--fs-2xs); padding: 3px 0.6875rem; border-radius: var(--r-pill); color: var(--ink);
   background: rgba(255,255,255,.10); backdrop-filter: blur(6px); border: 1px solid rgba(255,255,255,.12); }
@@ -169,14 +244,17 @@ onUnmounted(() => clearInterval(timer))
   background: rgba(255,255,255,.20); overflow: hidden; }
 .hero__bar span { display: block; height: 100%; background: var(--azure-bright); box-shadow: var(--glow-azure); }
 
+/* Botonera: gana la versión de anime (primario BLANCO sobre el arte). Era la divergencia más
+   visible entre los dos heroes — aquí el primario era azul y se peleaba con el aura de color de
+   fondo; el blanco funciona sobre cualquier arte, que es justo lo que un hero no controla. */
 .hero__btns { display: flex; flex-wrap: wrap; gap: var(--s-3); margin-top: var(--s-5); }
 .hbtn { display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-3) var(--s-5);
-  border-radius: var(--r-pill); font-weight: 600; font-size: var(--fs-sm); color: #fff;
-  border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.08); backdrop-filter: blur(8px);
-  transition: all var(--t-fast); cursor: pointer; }
-.hbtn:hover { border-color: rgba(255,255,255,.5); background: rgba(255,255,255,.16); }
-.hbtn--play { background: var(--azure); border-color: transparent; }
-.hbtn--play:hover { background: var(--azure-bright); box-shadow: var(--glow-azure); }
+  border-radius: var(--r-md); font-weight: 600; font-size: var(--fs-sm); color: var(--ink);
+  border: 1px solid rgba(255,255,255,.16); background: rgba(255,255,255,.12); backdrop-filter: blur(8px);
+  transition: all var(--t-fast) var(--ease-silk); cursor: pointer; }
+.hbtn:hover { background: rgba(255,255,255,.2); transform: translateY(-1px); }
+.hbtn--play { background: #fff; color: #0b0f1a; border-color: transparent; box-shadow: var(--shadow-md); }
+.hbtn--play:hover { background: #fff; color: #0b0f1a; box-shadow: var(--glow-azure); }
 
 .hero__arr { position: absolute; top: 50%; transform: translateY(-50%); z-index: 2;
   width: 2.6rem; height: 2.6rem; display: grid; place-items: center; border-radius: 50%;
@@ -196,4 +274,12 @@ onUnmounted(() => clearInterval(timer))
 .hero-content-leave-active { transition: opacity .2s var(--ease-silk); }
 .hero-content-enter-from { opacity: 0; transform: translateY(12px); }
 .hero-content-leave-to { opacity: 0; }
+
+/* En móvil el hero no puede comerse la pantalla entera antes de ver una sola tarjeta. */
+@media (max-width: 640px) {
+  .hero { height: clamp(23.75rem, 72vw, 30rem); border-radius: var(--r-lg); }
+  .hero__inner { padding: var(--s-5) var(--s-4); }
+  .hero__arr { display: none; }
+  .hero__logo { max-width: 64%; max-height: 6rem; }
+}
 </style>

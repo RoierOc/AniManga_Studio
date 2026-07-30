@@ -9,7 +9,7 @@ from pathlib import Path
 import json as _json
 from api.resilient_http import http as http_requests  # retry + backoff + per-host rate limiting
 
-from api.runtime import manga_dir, cache_get, cache_set
+from api.runtime import manga_dir, cache_get, cache_set, cache_invalidate, write_json_atomic
 from api.observability import record_error
 
 sources_bp = Blueprint("sources", __name__)
@@ -158,13 +158,9 @@ _TTL_SEARCH = 300
 _TTL_POPULAR = 600
 
 
-@sources_bp.route("/list", methods=["GET"])
-def list_sources():
-    cached = cache_get("sources_list", "all", _TTL_LIST)
-    if cached is not None:
-        return jsonify(cached)
-    try:
-        data = _gql("""
+def _fetch_sources():
+    """Lista viva de fuentes desde Suwayomi (sin caché). Lanza si la JVM no contesta."""
+    data = _gql("""
             query {
               sources {
                 nodes {
@@ -178,20 +174,28 @@ def list_sources():
               }
             }
         """)
-        nodes = data["sources"]["nodes"]
-        # Filter out the local source (id "0") — not useful for search
-        sources = [
-            {
-                "id": n["id"],
-                "name": n["name"],
-                "lang": n["lang"],
-                "iconUrl": SUWAYOMI_BASE + n["iconUrl"] if n.get("iconUrl") else None,
-                "isNsfw": n.get("isNsfw", False),
-                "supportsLatest": n.get("supportsLatest", False),
-            }
-            for n in nodes
-            if n["id"] != "0"
-        ]
+    # Filter out the local source (id "0") — not useful for search
+    return [
+        {
+            "id": n["id"],
+            "name": n["name"],
+            "lang": n["lang"],
+            "iconUrl": SUWAYOMI_BASE + n["iconUrl"] if n.get("iconUrl") else None,
+            "isNsfw": n.get("isNsfw", False),
+            "supportsLatest": n.get("supportsLatest", False),
+        }
+        for n in data["sources"]["nodes"]
+        if n["id"] != "0"
+    ]
+
+
+@sources_bp.route("/list", methods=["GET"])
+def list_sources():
+    cached = cache_get("sources_list", "all", _TTL_LIST)
+    if cached is not None:
+        return jsonify(cached)
+    try:
+        sources = _fetch_sources()
         # NO cachear una lista vacía: Suwayomi responde por HTTP (health "online")
         # antes de terminar de cargar sus extensiones, así que un `list` disparado
         # justo tras arrancar (p.ej. el location.reload() al alternar biblioteca
@@ -203,6 +207,45 @@ def list_sources():
         return jsonify(sources)
     except Exception as e:
         return jsonify({"error": str(e), "offline": not _suwayomi_online()}), 503
+
+
+@sources_bp.route("/reload", methods=["POST"])
+def reload_sources():
+    """Recarga la lista de fuentes. Con `{"restart": true}` reinicia antes la JVM.
+
+    Motivo: una extensión que se atasca (reto de Cloudflare, timeout, extensión rota) deja el
+    listado y las búsquedas tocados, y las cachés de disco (5-10 min) fijan ese mal estado. Hasta
+    ahora la única salida era apagar y encender el servidor ENTERO. Dos niveles:
+      · suave  — tira las cachés de fuentes y vuelve a preguntar (arregla el estado pegado);
+      · duro   — además reinicia Suwayomi (arregla la JVM en sí), sin tocar la app.
+
+    Devuelve SIEMPRE si se reinició y cuántas fuentes hay: 0 fuentes con `restarted` es un
+    diagnóstico distinto de un fallo de red, y quien llama necesita distinguirlos.
+    """
+    body = request.get_json(silent=True) or {}
+    restart = bool(body.get("restart"))
+
+    for ns in ("sources_list", "sources_search_all", "sources_search", "sources_popular"):
+        cache_invalidate(ns)
+
+    if restart:
+        stop_suwayomi()
+        if not ensure_suwayomi(timeout=90):
+            return jsonify({"error": "Suwayomi no volvió a arrancar", "restarted": True,
+                            "online": False, "sources": 0}), 503
+
+    try:
+        sources = _fetch_sources()
+    except Exception as e:
+        return jsonify({"error": str(e), "restarted": restart,
+                        "online": _suwayomi_online(), "sources": 0}), 503
+
+    # A propósito NO se cachea el resultado: MEDIDO en vivo, una recarga suave justo después de
+    # arrancar devolvió 301 fuentes y el reinicio duro 558 — la JVM responde antes de terminar de
+    # cargar sus extensiones. Cachear ese listado parcial lo dejaría pegado 5 min, que es
+    # exactamente el problema del que esto es la salida. La caché la vuelve a llenar `/list`.
+    return jsonify({"sources": len(sources), "restarted": restart, "online": True,
+                    "list": sources})
 
 
 # ── Search ────────────────────────────────────────────────────────────────────
@@ -266,6 +309,14 @@ def search_all():
     return jsonify(groups)
 
 
+def _first_gql_error(data) -> str:
+    """Primer mensaje de un payload GraphQL con errores (para no perder la causa)."""
+    try:
+        return str(data["errors"][0].get("message") or "GraphQL error")
+    except Exception:
+        return "GraphQL error"
+
+
 _GQL_STREAM_TIMEOUT = 5  # per-source timeout for streaming search
 
 
@@ -320,7 +371,9 @@ def search_all_stream():
             resp.raise_for_status()
             data = resp.json()
             if "errors" in data:
-                return {"source": source, "results": []}
+                # "falló" y "no había" NO pueden ser el mismo valor: una fuente caída devolvía
+                # [] igual que una que simplemente no tiene ese título, y la UI se callaba.
+                return {"source": source, "results": [], "error": _first_gql_error(data)}
             mangas = [
                 {
                     "id": m["id"],
@@ -334,8 +387,8 @@ def search_all_stream():
                 for m in data["data"]["fetchSourceManga"]["mangas"]
             ]
             return {"source": source, "results": mangas}
-        except Exception:
-            return {"source": source, "results": []}
+        except Exception as e:
+            return {"source": source, "results": [], "error": str(e) or e.__class__.__name__}
 
     def generate():
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -356,7 +409,11 @@ def search_all_stream():
                         "results": result["results"],
                     }
                 else:
+                    # Sin resultados: se distingue el fallo (la fuente reventó o dio timeout) del
+                    # vacío legítimo, para que la vista pueda decir «3 de 15 no respondieron».
                     payload = {"type": "progress", "done": done, "total": total}
+                    if result.get("error"):
+                        payload["failed"] = {"source": result["source"], "error": result["error"]}
                 yield f"data: {_json.dumps(payload)}\n\n"
         yield f"data: {_json.dumps({'type': 'done', 'total': total})}\n\n"
 
@@ -649,7 +706,7 @@ def _persist_source_meta_id(old_id: int, new_id: int, title: str = "", new_url: 
                 if new_url:
                     rec["url"] = new_url
                 meta["recommended_source"] = rec
-            meta_path.write_text(_json.dumps(meta))
+            write_json_atomic(meta_path, meta)
             print(f"[sources] mangaId derivado {old_id} → {new_id} en {meta_path.parent.name}"
                   f" ({'pin' if hit_pin else 'origen'})", flush=True)
             return True
@@ -908,7 +965,7 @@ def enrich_library():
                 if meta.get("sourceName") != src["name"] or meta.get("sourceLang") != src["lang"]:
                     meta["sourceName"] = src["name"]
                     meta["sourceLang"] = src["lang"]
-                    meta_path.write_text(_json.dumps(meta))
+                    write_json_atomic(meta_path, meta)
                     enriched.append(meta_path.parent.name)
         except Exception:
             pass
@@ -965,6 +1022,6 @@ def save_to_library():
     elif existing.get("sourceLang"):
         meta["sourceLang"] = existing["sourceLang"]
 
-    meta_path.write_text(_json.dumps(meta))
+    write_json_atomic(meta_path, meta)
 
     return jsonify({"status": "ok", "title": title})

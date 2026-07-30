@@ -909,12 +909,12 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
 
       <!-- cabecera -->
       <header class="wp__head">
-        <button class="wp__ic" title="Volver" @click="close"><Icon name="chevron" :size="20" style="transform: rotate(90deg)" /></button>
+        <button class="wp__ic" data-tip="Volver" @click="close"><Icon name="chevron" :size="20" style="transform: rotate(90deg)" /></button>
         <div class="wp__titles">
           <h2>{{ title }}</h2>
           <p>{{ p.anime.title }}</p>
         </div>
-        <span v-if="p.sess?.transcode" class="wp__badge" title="El códec no es compatible con el navegador: transcodificando">TRANSCODE</span>
+        <span v-if="p.sess?.transcode" class="wp__badge" data-tip="El códec no es compatible con el navegador: transcodificando">TRANSCODE</span>
       </header>
 
       <!-- barra de controles -->
@@ -925,7 +925,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
           <div class="wp__tl-cur" :style="{ width: pct + '%' }" />
           <!-- bandas de intro/ending (AniSkip), siempre visibles sobre el progreso -->
           <div v-for="(m, i) in skipMarks" :key="'sm' + i" class="wp__tl-mark"
-               :style="{ left: m.left + '%', width: m.width + '%' }" :title="m.label" />
+               :style="{ left: m.left + '%', width: m.width + '%' }" :data-tip="m.label" />
           <div class="wp__tl-knob" :style="{ left: pct + '%' }" />
 
           <!-- preview flotante: miniatura del vídeo + tiempo (estilo Crunchyroll) -->
@@ -937,21 +937,21 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
         </div>
 
         <div class="wp__row">
-          <button class="wp__ic" @click="togglePlay" :title="playing ? 'Pausa' : 'Reproducir'">
+          <button class="wp__ic" @click="togglePlay" :data-tip="playing ? 'Pausa' : 'Reproducir'">
             <Icon :name="playing ? 'pause' : 'play'" :size="20" />
           </button>
-          <button class="wp__ic" title="-10 s" @click="skip(-10)"><span class="wp__sk">-10</span></button>
-          <button class="wp__ic" title="+10 s" @click="skip(10)"><span class="wp__sk">+10</span></button>
-          <button class="wp__skipop" title="Saltar opening (recuerda dónde empieza para la próxima)" @click="skipOpManual">
+          <button class="wp__ic" data-tip="-10 s" @click="skip(-10)"><span class="wp__sk">-10</span></button>
+          <button class="wp__ic" data-tip="+10 s" @click="skip(10)"><span class="wp__sk">+10</span></button>
+          <button class="wp__skipop" data-tip="Saltar opening (recuerda dónde empieza para la próxima)" @click="skipOpManual">
             <Icon name="spark" :size="13" /> Saltar OP
           </button>
 
           <div class="wp__vol">
-            <button class="wp__ic" @click="toggleMute" :title="muted ? 'Quitar silencio' : 'Silenciar'"><span class="wp__sk">{{ muted || volume === 0 ? '🔇' : '🔊' }}</span></button>
+            <button class="wp__ic" @click="toggleMute" :data-tip="muted ? 'Quitar silencio' : 'Silenciar'"><span class="wp__sk">{{ muted || volume === 0 ? '🔇' : '🔊' }}</span></button>
             <!-- barra 0–100%; por encima se aumenta virtualmente con la RUEDA (como MPV) -->
             <input type="range" min="0" max="1" step="0.02" :value="muted ? 0 : Math.min(1, volume)" @input="setVolume"
-                   :title="`Volumen ${Math.round((muted ? 0 : volume) * 100)}% — rueda del ratón para aumentar por encima de 100%`" />
-            <span v-if="!muted && volume > 1.02" class="wp__boost" title="Volumen aumentado (rueda del ratón), recordado para esta serie">{{ Math.round(volume * 100) }}%</span>
+                   :data-tip="`Volumen ${Math.round((muted ? 0 : volume) * 100)}% — rueda del ratón para aumentar por encima de 100%`" />
+            <span v-if="!muted && volume > 1.02" class="wp__boost" data-tip="Volumen aumentado (rueda del ratón), recordado para esta serie">{{ Math.round(volume * 100) }}%</span>
           </div>
 
           <span class="wp__time">{{ fmt(time) }} <em>/ {{ fmt(duration) }}</em></span>
@@ -988,7 +988,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
           </div>
           <div class="wp__menuwrap" v-if="a4kAvailable">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'a4k', 'is-glow': a4kActive }"
-                    title="Anime4K (mejora de imagen por GPU)"
+                    data-tip="Anime4K (mejora de imagen por GPU)"
                     @click="menuOpen = menuOpen === 'a4k' ? '' : 'a4k'">
               <Icon name="spark" :size="13" /> {{ a4kMode === 'off' ? 'Anime4K' : 'A4K·' + a4kMode }}
             </button>
@@ -1004,15 +1004,15 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
             </div>
           </div>
 
-          <button v-if="store.playerNext()" class="wp__ctl" title="Siguiente episodio" @click="goNext">
+          <button v-if="store.playerNext()" class="wp__ctl" data-tip="Siguiente episodio" @click="goNext">
             Siguiente <Icon name="skip-next" :size="15" />
           </button>
           <button v-if="panelEps.length > 1" class="wp__ctl" :class="{ 'is-on': epPanel }"
-                  title="Lista de episodios" @click="epPanel = !epPanel">
+                  data-tip="Lista de episodios" @click="epPanel = !epPanel">
             <Icon name="menu" :size="14" /> Episodios
           </button>
           <div class="wp__menuwrap">
-            <button class="wp__ic" :class="{ 'is-on': menuOpen === 'cast' }" title="Transmitir a otro monitor" @click="openScreenPicker">
+            <button class="wp__ic" :class="{ 'is-on': menuOpen === 'cast' }" data-tip="Transmitir a otro monitor" @click="openScreenPicker">
               <Icon name="screen" :size="18" />
             </button>
             <div v-if="menuOpen === 'cast'" class="wp__menu" @wheel.stop>
@@ -1022,7 +1022,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
               </button>
             </div>
           </div>
-          <button class="wp__ic" :title="isFs ? 'Salir de pantalla completa' : 'Pantalla completa'" @click="toggleFs">
+          <button class="wp__ic" :data-tip="isFs ? 'Salir de pantalla completa' : 'Pantalla completa'" @click="toggleFs">
             <Icon :name="isFs ? 'collapse' : 'expand'" :size="18" />
           </button>
         </div>
@@ -1033,7 +1033,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
         <aside v-if="epPanel" class="wp__eps" @mousemove.stop="poke" @wheel.stop>
           <header class="wp__eps-head">
             <h3>{{ p.anime.title }}</h3>
-            <button class="wp__ic" title="Cerrar" @click="epPanel = false"><Icon name="close" :size="16" /></button>
+            <button class="wp__ic" data-tip="Cerrar" @click="epPanel = false"><Icon name="close" :size="16" /></button>
           </header>
           <div class="wp__eps-list">
             <button v-for="e in panelEps" :key="e.num" class="wp__ep"

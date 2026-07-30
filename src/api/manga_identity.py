@@ -20,7 +20,7 @@ from pathlib import Path
 
 import requests as _http
 
-from api.runtime import manga_dir
+from api.runtime import manga_dir, write_json_atomic
 from api.mangadex import _canon, _all_titles, resolve_manga_by_title
 from api.observability import record_error
 
@@ -65,9 +65,7 @@ def _read_identity(title: str) -> dict:
 
 
 def _write_identity(title: str, data: dict):
-    p = _identity_path(title)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_json_atomic(_identity_path(title), data, indent=2, keep_backup=True)
 
 
 def _as_int(x):

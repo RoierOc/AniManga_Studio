@@ -62,6 +62,12 @@ hevc_test.mp4
 # URLs de modelos para fetch-models.sh (pueden ser privadas)
 scripts/model-urls.env
 
+# Artefactos de compilación de Rust (regenerables con cargo build)
+desktop/native/target/
+
+# Artefactos de compilación de Rust (regenerables con cargo build)
+desktop/native/target/
+
 # Local configuration and public repository metadata.
 /.*/
 !/.github/

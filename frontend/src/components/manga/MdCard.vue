@@ -45,7 +45,10 @@ const tier = computed(() => {
 .mc__img.is-loaded { opacity: 1; }
 .mc:hover .mc__img { transform: scale(1.07); }
 .mc__ph { position: absolute; inset: 0; display: grid; place-items: center; color: var(--ink-ghost); }
-.mc__scrim { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7,10,18,.3) 0%, transparent 30%, transparent 50%, rgba(5,7,13,.95) 100%); }
+/* Idem WorkCard: el título de 2 líneas empieza por encima del 50 %, donde el velo viejo era casi
+   transparente. */
+.mc__scrim { position: absolute; inset: 0; background: linear-gradient(180deg,
+  rgba(7,10,18,.32) 0%, transparent 26%, rgba(5,7,13,.16) 52%, rgba(5,7,13,.6) 70%, rgba(5,7,13,.95) 100%); }
 .mc__shine { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(112deg, transparent 35%, rgba(168,200,255,.14) 48%, transparent 60%); transform: translateX(-120%); }
 .mc:hover .mc__shine { animation: shine .8s var(--ease-silk) forwards; }
 @keyframes shine { to { transform: translateX(120%); } }

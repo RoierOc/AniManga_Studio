@@ -23,7 +23,7 @@ const offset = computed(() => C - C * (pct.value / 100))
     v-if="count || hasHistory"
     class="ai"
     :class="{ 'is-live': count, 'is-error': anyError }"
-    :title="count ? `${count} tarea(s) en proceso · ${pct}%` : 'Actividad reciente'"
+    :data-tip="count ? `${count} tarea(s) en proceso · ${pct}%` : 'Actividad reciente'"
     @click="ui.activityOpen = !ui.activityOpen"
   >
     <svg class="ai__ring" viewBox="0 0 24 24" width="34" height="34">

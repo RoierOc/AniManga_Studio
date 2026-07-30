@@ -17,6 +17,7 @@ from decimal import Decimal, InvalidOperation
 from concurrent.futures import ThreadPoolExecutor
 
 from api.runtime import (
+    write_json_atomic,
     UPSCALED_DIR,
     manga_dir,
     upscaled_dir,
@@ -46,9 +47,7 @@ def _load_upscale_status() -> dict:
 def _persist_upscale_status():
     try:
         _UPSCALE_STATUS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _UPSCALE_STATUS_FILE.write_text(
-            json.dumps(upscale_status, ensure_ascii=False), encoding='utf-8'
-        )
+        write_json_atomic(_UPSCALE_STATUS_FILE, upscale_status, durable=False)
     except Exception:
         pass
 

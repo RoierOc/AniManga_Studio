@@ -12,7 +12,7 @@ from pathlib import Path
 import os
 from urllib.parse import urlparse, quote
 
-from api.runtime import MANGA_DIR, normalize_chapter
+from api.runtime import MANGA_DIR, normalize_chapter, write_json_atomic
 
 auth_bp = Blueprint('mangadex', __name__)
 
@@ -650,10 +650,7 @@ def load_local_library():
 
 def save_local_library(lib):
     """Save local library to JSON"""
-    library_file = _library_file()
-    os.makedirs(os.path.dirname(library_file), exist_ok=True)
-    with open(library_file, "w") as f:
-        json.dump(lib, f, indent=2)
+    write_json_atomic(_library_file(), lib, indent=2, keep_backup=True)
 
 @auth_bp.route('/local_library')
 def get_local_library():

@@ -111,7 +111,7 @@ useModal(() => !!d.value, () => novels.closeDetail(), modalEl)
               </p>
 
               <!-- Progreso de la serie: el equivalente a la barra de cobertura 4K del manga. -->
-              <div v-if="readPct" class="modal__cov" :title="`Has leído ${currentIndex + 1} de ${chapters.length} capítulos`">
+              <div v-if="readPct" class="modal__cov" :data-tip="`Has leído ${currentIndex + 1} de ${chapters.length} capítulos`">
                 <div class="modal__covbar"><span class="modal__covseg" :style="{ width: readPct + '%' }" /></div>
                 <span class="modal__covn">{{ readPct }}%</span>
               </div>

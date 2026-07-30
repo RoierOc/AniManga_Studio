@@ -89,6 +89,7 @@ export const useAnimeStore = defineStore('anime', {
     // qBittorrent
     qbt: { connected: false, version: '', url: 'http://localhost:8080', username: '', password: '' },
     qbtTorrents: [],
+    qbtError: '',          // qBittorrent apagado o VPN caída ≠ «no hay descargas»
     qbtLoading: false,
 
     // history
@@ -98,6 +99,7 @@ export const useAnimeStore = defineStore('anime', {
     // seasonal
     seasonal: [],
     seasonalLoading: false,
+    seasonalError: '',     // '' = sin fallo. Un [] vacío NO puede significar «falló» (regla del repo)
     season: '',
     year: 0,
     seasonSort: 'score',         // score | popularity | trending
@@ -106,6 +108,7 @@ export const useAnimeStore = defineStore('anime', {
     // explore (AniList browse: popularidad / año / género / formato)
     explore: [],
     exploreLoading: false,
+    exploreError: '',
     exploreSort: 'score',        // score | popularity | trending
     exploreGenre: '',
     exploreYear: 0,              // 0 = cualquier año
@@ -796,15 +799,27 @@ export const useAnimeStore = defineStore('anime', {
       // Cargar con el inicio ya en la posición de reanudación (fiable: fijar 'start'
       // antes de loadfile, no un seek posterior que se ignoraría) + tier Anime4K.
       nativeSend('loadfile', { path: res.win_path, start: resume })
-      // Añadir los subtítulos externos (sidecar) como pistas mpv, en el MISMO orden en
-      // que el backend los listó tras los incrustados → el sid (índice+1) coincide.
-      // Unifica el gestor: en .m2ts/Blu-ray los subs traducidos van como sidecar y antes
-      // no aparecían como pista; ahora se comportan como cualquier pista incrustada.
-      for (const t of subTracks) {
-        if (t.external && t.win_path) nativeSend('subadd', { path: t.win_path })
-      }
       // Fijar la pista elegida (mpv no la autoselecciona con sub-auto=no + sub-add auto).
+      // Para las INCRUSTADAS vale ya: `sid` es una propiedad que sobrevive al cambio de archivo.
       if (defSid > 0) nativeSend('track', { sid: String(defSid) })
+      // Los sidecar (subs externos), en cambio, se añaden CUANDO el archivo nuevo ya está
+      // sonando, no aquí. `loadfile` es ASÍNCRONO: vuelve antes de que mpv haya cambiado de
+      // archivo, así que un `sub-add` inmediato se pega al archivo SALIENTE y muere con él.
+      // Abrir desde la ficha colaba de casualidad (crear el motor tarda ~1 s y el mensaje
+      // esperaba en la cola de la ventana); abrir desde el panel de capítulos o con «siguiente»
+      // reutiliza el motor y no colaba NUNCA. Por eso el síntoma era exclusivo de los subtítulos
+      // inyectados de series/películas: en anime van dentro del MKV, y aquí no se puede
+      // reescribir el contenedor (rompería el hash del torrent), así que van como sidecar.
+      // El orden de `subadd` es el mismo en que el backend los listó tras las incrustadas → el
+      // sid (índice+1) sigue coincidiendo con la lista del gestor.
+      const externals = subTracks.filter(t => t.external && t.win_path)
+      this._pendingSubs = externals.length
+        ? () => {
+          for (const t of externals) nativeSend('subadd', { path: t.win_path })
+          // Re-fijar: la pista elegida puede ser una de las que acaban de existir.
+          if (defSid > 0) nativeSend('track', { sid: String(defSid) })
+        }
+        : null
       nativeSend('shaders', { tier: this.nativePlayer.tier })
       // Permitir amplificar hasta 150% (mpv corta en volume-max, 100 por defecto).
       nativeSend('setprop', { name: 'volume-max', value: '150' })
@@ -812,9 +827,13 @@ export const useAnimeStore = defineStore('anime', {
       // Reponer estado que persiste en el motor reutilizado entre episodios.
       nativeSend('setprop', { name: 'speed', value: '1' })
       nativeSend('setprop', { name: 'sub-delay', value: '0' })
-      if (this.nativeSubScale !== 1) {
-        nativeSend('setprop', { name: 'sub-scale', value: String(this.nativeSubScale) })
-      }
+      /* Explícito, no por defecto: `sub-scale` sólo llega a los subtítulos ASS si
+       * `sub-ass-override` está en `scale`. Es el valor por defecto de mpv moderno, pero en
+       * versiones anteriores era otro — y entonces el mismo deslizador de "Tamaño" movía los
+       * .srt y no movía los .ass. Fijarlo hace que el control signifique lo mismo siempre.
+       * `scale` NO toca fuentes ni posiciones: los carteles siguen intactos. */
+      nativeSend('setprop', { name: 'sub-ass-override', value: 'scale' })
+      nativeSend('setprop', { name: 'sub-scale', value: String(this.nativeSubScale || 1) })
       // Estilo propio de subtítulos. Va tras loadfile (necesita el archivo cargado) y sin await:
       // tiene que leer los estilos del MKV, y no merece retrasar la imagen por ello.
       this._applyNativeSubStyle()
@@ -832,6 +851,9 @@ export const useAnimeStore = defineStore('anime', {
       onNativeMessage((d) => {
         if (!d || d.event !== 'time' || !this.nativePlayer) return
         this.nativePlayer.loading = false   // ya hay vídeo → quitar spinner
+        // Primer latido del archivo nuevo = mpv ya lo tiene cargado: AHORA sí se le pueden
+        // colgar los sidecar (ver el porqué en `playNative`). Se ejecuta una sola vez.
+        if (this._pendingSubs) { const addSubs = this._pendingSubs; this._pendingSubs = null; addSubs() }
         this.nativePlayer.pos = d.pos ?? this.nativePlayer.pos
         this.nativePlayer.duration = d.duration || this.nativePlayer.duration
         this.nativePlayer.paused = !!d.paused
@@ -951,6 +973,19 @@ export const useAnimeStore = defineStore('anime', {
         font: s.font || '', size: s.size || '', bold: s.bold || '',
         outline: s.outline || '', shadow: s.shadow || '',
       })
+      /* Los subtítulos de TEXTO PLANO (srt/vtt/mov_text) no tienen estilos ASS, así que el
+       * override por estilo no los toca y salían con la tipografía por defecto de mpv: en una
+       * biblioteca con series en ASS y series en .srt, "el mismo ajuste" se veía de dos maneras.
+       * mpv los pinta con sus propias opciones `sub-*`, y su unidad es "píxeles a una ventana de
+       * 720 de alto" — exactamente la misma convención que usa el backend para escalar el
+       * Fontsize del ASS (_SUB_REF_RES_Y = 720). Así que el MISMO número da el MISMO tamaño en
+       * los dos caminos. Se manda siempre: sobre una pista ASS estas opciones son inertes. */
+      nativeSend('setprop', { name: 'sub-font', value: s.font || 'sans-serif' })
+      nativeSend('setprop', { name: 'sub-font-size', value: String(s.size || 26) })
+      nativeSend('setprop', { name: 'sub-bold', value: (s.bold === '-1' || s.bold === '1') ? 'yes' : 'no' })
+      nativeSend('setprop', { name: 'sub-border-size', value: String(s.outline || 0) })
+      nativeSend('setprop', { name: 'sub-shadow-offset', value: String(s.shadow || 0) })
+
       let d
       try { d = await api.get(`/api/subtitle/styles?${p}`) } catch (_) { return }
       if (this.nativePlayer !== np) return          // cambió de episodio mientras se pedía
@@ -1035,6 +1070,9 @@ export const useAnimeStore = defineStore('anime', {
     },
     closeNative() {
       if (!this.nativePlayer) return
+      // Si se cierra antes del primer latido, los sidecar pendientes no deben colgarse del
+      // archivo que se abra DESPUÉS (serían los subs de otro episodio).
+      this._pendingSubs = null
       this._reportNativeProgress(false)
       // Parcheo optimista del progreso en la biblioteca local para que "Continuar
       // viendo"/el episodio reflejen la posición AL INSTANTE, sin esperar el ida y
@@ -1134,6 +1172,27 @@ export const useAnimeStore = defineStore('anime', {
         await api.del(`/api/anime/library/${anime.id}/episode/${ep.num}`, { body: { delete_files: true } })
         await this.loadLibrary(true)
       } catch (_) { useUiStore().toast('No se pudo borrar', 'error') }
+    },
+
+    /* Borra VARIOS episodios: N peticiones y UNA sola recarga (no una por episodio — la
+     * biblioteca son ~480 KB y recargarla 6 veces seguidas es medio mega por episodio para nada).
+     *
+     * Cuenta los fallos aparte y los dice: borrar 6 y que se borren 4 no puede leerse como éxito
+     * (regla del repo: "falló" y "no había" nunca son lo mismo). */
+    async deleteEpisodes(anime, eps) {
+      if (!eps?.length) return { deleted: 0, failed: 0 }
+      const ui = useUiStore()
+      let deleted = 0, failed = 0
+      for (const ep of eps) {
+        try {
+          await api.del(`/api/anime/library/${anime.id}/episode/${ep.num}`, { body: { delete_files: true } })
+          deleted++
+        } catch (_) { failed++ }
+      }
+      await this.loadLibrary(true)
+      if (failed) ui.toast(`${deleted} borrado(s) · ${failed} no se pudieron borrar`, 'warn')
+      else ui.toast(`${deleted} episodio(s) borrados`, 'ok')
+      return { deleted, failed }
     },
 
     async setStatus(anime, status) {
@@ -1310,8 +1369,9 @@ export const useAnimeStore = defineStore('anime', {
     },
     async loadQbt() {
       this.qbtLoading = true
+      this.qbtError = ''
       try { this.qbtTorrents = await api.get('/api/anime/qbt/list') || [] }
-      catch (_) { this.qbtTorrents = [] }
+      catch (e) { this.qbtTorrents = []; this.qbtError = e?.body || e?.message || 'qBittorrent no responde' }
       finally { this.qbtLoading = false }
     },
     async qbtAction(action, hash, deleteFiles = false) {
@@ -1331,6 +1391,7 @@ export const useAnimeStore = defineStore('anime', {
     /* ── Seasonal ───────────────────────────────────────────────────────── */
     async loadSeasonal() {
       this.seasonalLoading = true
+      this.seasonalError = ''
       try {
         const p = new URLSearchParams({ sort: this.seasonSort })
         if (this.season) p.set('season', this.season)
@@ -1339,7 +1400,7 @@ export const useAnimeStore = defineStore('anime', {
         this.seasonal = d.results || []
         if (!this.season) this.season = d.season || ''
         if (!this.year) this.year = d.year || 0
-      } catch (_) { this.seasonal = [] }
+      } catch (e) { this.seasonal = []; this.seasonalError = e?.body || e?.message || 'Error desconocido' }
       finally { this.seasonalLoading = false }
     },
     seasonNav(dir) {
@@ -1378,6 +1439,7 @@ export const useAnimeStore = defineStore('anime', {
     },
     async loadExplore(append = false) {
       this.exploreLoading = true
+      this.exploreError = ''
       try {
         if (!append) this.explorePage = 1
         const p = new URLSearchParams({ sort: this._exploreSortKey(), page: String(this.explorePage) })
@@ -1392,8 +1454,10 @@ export const useAnimeStore = defineStore('anime', {
         const rows = d.results || []
         this.explore = append ? [...this.explore, ...rows] : rows
         this.exploreHasNext = !!d.hasNextPage
-      } catch (_) { if (!append) this.explore = [] }
-      finally { this.exploreLoading = false }
+      } catch (e) {
+        if (!append) this.explore = []
+        this.exploreError = e?.body || e?.message || 'Error desconocido'
+      } finally { this.exploreLoading = false }
     },
     async loadExploreMore() {
       if (this.exploreLoading || !this.exploreHasNext) return
@@ -1672,7 +1736,10 @@ export const useAnimeStore = defineStore('anime', {
     /* ── Subtitles ──────────────────────────────────────────────────────── */
     subKey(anime, ep) { return `${anime.id}_${ep.ep_type === 'special' ? 'sp' : 'ep'}${ep.num}` },
 
-    async translateSubs(anime, ep) {
+    /* `opts.onPick(choice)` convierte el modal en un SELECTOR: en vez de lanzar la traducción al
+     * instante, devuelve la fuente elegida a quien lo abrió (lo usa el lote para dejar que elijas
+     * fuente episodio a episodio). Sin `onPick` se comporta como siempre. */
+    async translateSubs(anime, ep, opts = {}) {
       const ui = useUiStore()
       const key = this.subKey(anime, ep)
       this.subFetching = key
@@ -1692,15 +1759,21 @@ export const useAnimeStore = defineStore('anime', {
         const embedded = d.embedded_spanish || []
         if (spa.length || tracks.length || ext.length || embedded.length) {
           this.subTrackModal = { anime, ep, tracks, externalTracks: ext, spanishTracks: spa,
-                                 embeddedSpanish: embedded, missingKeys: d.sources_missing_key || [] }
+                                 embeddedSpanish: embedded, missingKeys: d.sources_missing_key || [],
+                                 sourcesReport: d.sources_report || [],
+                                 onPick: opts.onPick || null }
           // El español que YA viene dentro del archivo manda sobre lo que se pueda descargar:
           // suele ser el oficial del grupo y el player lo elige solo.
           if (embedded.length) ui.toast(`Este episodio ya trae ${embedded.length} pista(s) en español`, 'ok', 3500)
           else if (spa.length) ui.toast(`Ya hay ${spa.length} subtítulo(s) en español`, 'ok', 3000)
           return
         }
+        // "No hay subtítulos" y "las fuentes se cayeron" NO son lo mismo: con lo segundo el
+        // subtítulo puede existir y reintentar más tarde tiene sentido. Se dice cuál falló.
+        const rotas = (d.sources_report || []).filter(r => r.status === 'error').map(r => r.source)
         const hint = (d.sources_missing_key || []).length ? ` (sin API key: ${d.sources_missing_key.join(', ')})` : ''
-        ui.toast(`No se encontraron subtítulos${hint}`, 'warn', 7000)
+        if (rotas.length) ui.toast(`No se encontraron subtítulos, pero fallaron ${rotas.join(', ')} — puede que sí existan`, 'warn', 9000)
+        else ui.toast(`No se encontraron subtítulos${hint}`, 'warn', 7000)
       } catch (_) { ui.toast('Error obteniendo pistas de subtítulos', 'error') }
       finally { this.subFetching = null; ui.dismissToast(loadId) }
     },

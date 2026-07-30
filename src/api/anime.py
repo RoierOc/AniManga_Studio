@@ -80,9 +80,7 @@ def _lib_read() -> dict:
         return {}
 
 def _lib_write(data: dict):
-    p = _lib_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+    write_json_atomic(_lib_path(), data, indent=2, keep_backup=True)
 
 # ── Watch history ──────────────────────────────────────────────────────────────
 
@@ -120,9 +118,7 @@ def _history_append(anime_id: str, title: str, episode: int, cover: str = ''):
         'watched_at': now,
     })
     with swallow('anime', 'history_write', path=str(_history_path())):
-        _history_path().write_text(
-            json.dumps(history[:500], ensure_ascii=False, indent=2), encoding='utf-8'
-        )
+        write_json_atomic(_history_path(), history[:500], indent=2, keep_backup=True)
 
 # ── Subtitle helpers ───────────────────────────────────────────────────────────
 
@@ -275,7 +271,7 @@ def anime_synopsis(al_id):
 
 
 # ── Preview del hero (clip mudo estilo Netflix, 100% local) ──────────────────
-from api.runtime import DATA_ROOT as _DATA_ROOT
+from api.runtime import DATA_ROOT as _DATA_ROOT, write_json_atomic
 _PREVIEW_DIR = _DATA_ROOT / '_previews'
 _preview_lock = threading.Lock()
 
@@ -784,9 +780,7 @@ def _scanpaths_read() -> dict:
         return {'paths': [], 'mappings': {}}
 
 def _scanpaths_write(data: dict):
-    p = _scanpaths_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+    write_json_atomic(_scanpaths_path(), data, indent=2, keep_backup=True)
 
 
 def _anime_settings_path() -> _Path:
@@ -803,9 +797,7 @@ def _anime_settings_read() -> dict:
         return {}
 
 def _anime_settings_write(data: dict):
-    p = _anime_settings_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding='utf-8')
+    write_json_atomic(_anime_settings_path(), data, indent=2, keep_backup=True)
 
 
 def _list_anime_folders(root: str) -> list:
@@ -847,8 +839,7 @@ def _save_dur_cache():
     if not _dur_cache_dirty:
         return
     with swallow('anime', 'dur_cache_save', path=str(_DUR_CACHE_PATH)):
-        with open(_DUR_CACHE_PATH, 'w') as f:
-            json.dump({k: list(v) for k, v in _dur_cache.items()}, f)
+        write_json_atomic(_DUR_CACHE_PATH, {k: list(v) for k, v in _dur_cache.items()}, durable=False)
         _dur_cache_dirty = False
 
 
@@ -4313,8 +4304,7 @@ def _load_stacks_cache():
 
 def _save_stacks_cache():
     with swallow('anime', 'stacks_cache_save', path=str(_STACKS_CACHE_PATH)):
-        with open(_STACKS_CACHE_PATH, 'w') as f:
-            json.dump({str(k): v for k, v in _stacks_cache.items()}, f)
+        write_json_atomic(_STACKS_CACHE_PATH, {str(k): v for k, v in _stacks_cache.items()}, durable=False)
 
 
 _load_stacks_cache()
@@ -4347,8 +4337,7 @@ def _al_cache_set(section: str, key, value):
         except Exception:
             data = {}         # caché corrupta al escribir: se arranca de cero (auto-sana), esperado
         data.setdefault(section, {})[str(key)] = {'data': value, 'ts': int(time.time())}
-        with open(_AL_CACHE_PATH, 'w') as f:
-            json.dump(data, f)
+        write_json_atomic(_AL_CACHE_PATH, data, durable=False)
 
 
 _MAL_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'

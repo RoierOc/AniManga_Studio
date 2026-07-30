@@ -17,6 +17,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import Select from '@/components/ui/Select.vue'
 import ContentToolbar from '@/components/ui/ContentToolbar.vue'
+import DensityToggle from '@/components/ui/DensityToggle.vue'
 import MediaCard from '@/components/media/MediaCard.vue'
 import ContinueRail from '@/components/media/ContinueRail.vue'
 
@@ -140,8 +141,35 @@ async function demoConfirm(danger) {
     </section>
 
     <section class="kit__s">
+      <h2 class="kit__h">Densidad de la rejilla</h2>
+      <div class="kit__box">
+        <DensityToggle />
+        <p class="muted">
+          Es GLOBAL: escribe <code>--dens</code> en la raíz y las tres bibliotecas multiplican por
+          él su ancho base. Cámbialo aquí y mira abajo las tarjetas — se mueven en vivo.
+        </p>
+      </div>
+    </section>
+
+    <section class="kit__s">
+      <h2 class="kit__h">Tooltip (data-tip)</h2>
+      <div class="kit__box">
+        <div class="kit__row" style="display:flex">
+          <button class="btn" data-tip="Texto corto"><Icon name="play" :size="14" /></button>
+          <button class="btn" data-tip="Un tooltip largo de verdad, con una frase entera que explica por qué esto hace lo que hace y no cabe en una línea">Texto largo</button>
+          <button class="btn" disabled data-tip="Sobre un botón DESHABILITADO: el nativo de Chrome ni se entera">Deshabilitado</button>
+          <button class="btn" data-tip="Con el tabulador también sale — el `title` nativo no salía nunca">Prueba con Tab</button>
+        </div>
+        <p class="muted">
+          Sustituye a <code>title</code>. Sale a los 380 ms, o al instante si vienes de otro
+          (como en un menú). Los de sólo icono heredan <code>aria-label</code> automáticamente.
+        </p>
+      </div>
+    </section>
+
+    <section class="kit__s">
       <h2 class="kit__h">Tarjeta de contenido</h2>
-      <div class="kit__cards">
+      <div class="grid kit__cards">
         <figure v-for="c in CARDS" :key="c.caso">
           <MediaCard v-bind="c.props" />
           <figcaption>{{ c.caso }}</figcaption>
@@ -246,7 +274,7 @@ code { font-family: var(--font-mono); font-size: 0.9em; color: var(--ice); }
   color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,.9); }
 
 .kit__skels { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-3); }
-.kit__cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: var(--s-5); }
+.kit__cards { --card-min: 11rem; gap: var(--s-5); }
 .kit__cards figcaption { margin-top: var(--s-2); font-size: var(--fs-2xs); color: var(--ink-faint); text-align: center; }
 
 .kit__icons { display: grid; grid-template-columns: repeat(auto-fill, minmax(6rem, 1fr)); gap: var(--s-3); }

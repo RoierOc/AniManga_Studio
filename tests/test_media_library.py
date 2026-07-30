@@ -331,3 +331,44 @@ def test_si_falla_monitorizar_no_se_descarga(client, monkeypatch):
                     json={'kind': 'series', 'id': 5, 'guid': 'g', 'indexer_id': 1})
     assert r.status_code == 502
     assert bajado == []
+
+
+def test_resolve_por_tmdb_id_no_pregunta(client, monkeypatch):
+    """El «varias coincidencias, elige la correcta» salía de emparejar por TÍTULO: TMDB responde
+    en español y Sonarr indexa en inglés, así que cualquier obra no inglesa acababa en el
+    selector. Sonarr/Radarr aceptan `term=tmdb:<id>` y devuelven UNA obra: con el id que ya
+    trae Descubrir no hay nada que adivinar."""
+    import api.media as M
+    seen = {}
+
+    def fake_get(app, path, **kw):
+        seen['term'] = kw.get('term')
+        return [{'title': 'House of the Dragon', 'year': 2022, 'tvdbId': 371572, 'id': 0}]
+
+    monkeypatch.setattr(M, '_get', fake_get)
+    d = client.get('/api/media/resolve?kind=series&tmdb_id=94997'
+                   '&title=House of the Dragon').get_json()
+    assert seen['term'] == 'tmdb:94997'
+    assert d['match']['ext_id'] == 371572 and d['match']['already'] is False
+
+
+def test_discover_marca_lo_que_ya_tienes(client, monkeypatch):
+    """Sin esto, la única forma de saber si ya tenías una serie era pulsar «Añadir». Sonarr trae
+    `tmdbId` en cada serie, así que el cruce es por id exacto. Y si Sonarr no responde, el campo
+    NO viaja: decir "no la tienes" cuando no se pudo preguntar es la trampa de siempre
+    («falló» ≠ «no había»)."""
+    import api.media as M
+    monkeypatch.setattr(M, '_tmdb', lambda path, **kw: {'results': [
+        {'id': 94997, 'name': 'La casa del dragón', 'first_air_date': '2022-08-21'},
+        {'id': 1396, 'name': 'Breaking Bad', 'first_air_date': '2008-01-20'}]})
+
+    monkeypatch.setattr(M, '_get', lambda *a, **k: [{'tmdbId': 1396, 'title': 'Breaking Bad'}])
+    r = client.get('/api/media/discover?kind=series&list=trending').get_json()['results']
+    assert [x['already'] for x in r] == [False, True]
+
+    def boom(*a, **k):
+        raise RuntimeError('Sonarr caído')
+
+    monkeypatch.setattr(M, '_get', boom)
+    r2 = client.get('/api/media/discover?kind=series&list=trending').get_json()['results']
+    assert all('already' not in x for x in r2)

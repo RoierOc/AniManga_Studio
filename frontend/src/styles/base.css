@@ -101,6 +101,21 @@ ul, ol { list-style: none; }
   border-radius: var(--r-xs);
 }
 
+/* ── Tooltip propio (lib/tooltip.js) ──────────────────────────────────────
+   Sustituye al `title` nativo, que tarda ~1 s, se pinta con el chrome del SO y con el
+   teclado no sale. Una sola burbuja en <body>, colocada por JS con `transform`. */
+.tipbubble {
+  position: fixed; top: 0; left: 0; z-index: 400; pointer-events: none;
+  max-width: 20rem; padding: 0.375rem 0.5625rem;
+  border: 1px solid var(--line-strong); border-radius: var(--r-sm);
+  background: var(--surface-3); color: var(--ink);
+  box-shadow: 0 0.5rem 1.75rem rgba(0, 0, 0, .45);
+  font-size: var(--fs-xs); line-height: 1.35; text-align: center; white-space: pre-line;
+  opacity: 0; transition: opacity .12s var(--ease-silk);
+}
+.tipbubble.is-on { opacity: 1; }
+@media (prefers-reduced-motion: reduce) { .tipbubble { transition: none; } }
+
 /* ── Custom scrollbars — thin, blue, unobtrusive ──────────────────────── */
 * { scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
@@ -164,6 +179,24 @@ ul, ol { list-style: none; }
 /* la portada real (hermana siguiente) debe pintar ENCIMA del placeholder:
    al posicionarla, el orden DOM decide y tapa al .blurup al cargar */
 .blurup + img { position: relative; }
+
+/* ── `.grid`: LA rejilla de pósters de la app ─────────────────────────────
+   Estaba redeclarada en once vistas con la misma receta copiada y su propio `@media`, así que
+   cambiar el ancho de tarjeta (o añadir la densidad) costaba once ediciones y las bases habían
+   divergido sin motivo (11,25 / 11,875 / 14,0625 rem).
+   Ahora vive aquí una vez. Una vista que quiera otro ancho base sólo redefine la constante:
+       .grid { --card-min: 14.0625rem; }
+   `--dens` es el control de densidad del usuario (lib/density.js); multiplica, no sustituye, para
+   que cada vista conserve su proporción. */
+.grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(var(--card-min, 11.875rem) * var(--dens, 1)), 1fr));
+  gap: var(--s-6) var(--s-5);
+}
+@media (max-width: 540px) {
+  .grid { --card-min: 8.75rem; gap: var(--s-5) var(--s-3); }
+}
 
 /* ── Rejilla que se REORGANIZA, no que se reemplaza ───────────────────────
    Al cambiar de filtro o de orden, las tarjetas se deslizan a su nueva posición en vez de

@@ -60,12 +60,12 @@ function close() { windowControl('close') }
     </div>
 
     <div class="tb__ctrls">
-      <button class="tb__btn" title="Minimizar" @click="minimize">
+      <button class="tb__btn" data-tip="Minimizar" @click="minimize">
         <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
           <path d="M2 6 H10" />
         </svg>
       </button>
-      <button class="tb__btn" :title="maximized ? 'Restaurar' : 'Maximizar'" @click="toggleMax">
+      <button class="tb__btn" :data-tip="maximized ? 'Restaurar' : 'Maximizar'" @click="toggleMax">
         <svg v-if="!maximized" viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
           <rect x="2.2" y="2.2" width="7.6" height="7.6" rx="1" />
         </svg>
@@ -74,7 +74,7 @@ function close() { windowControl('close') }
           <path d="M4.4 3.6 V2.2 H10.6 V8.4 H9.2" />
         </svg>
       </button>
-      <button class="tb__btn tb__btn--close" title="Cerrar" @click="close">
+      <button class="tb__btn tb__btn--close" data-tip="Cerrar" @click="close">
         <svg viewBox="0 0 12 12" width="12" height="12" aria-hidden="true">
           <path d="M2.4 2.4 L9.6 9.6 M9.6 2.4 L2.4 9.6" />
         </svg>

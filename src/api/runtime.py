@@ -142,12 +142,87 @@ def build_task_id(title: str, chapter, task_type: str) -> str:
     return f"{sanitize_title_for_id(title)}_{task_type}_ch{chapter_part}"
 
 
+# ── Escritura de estado sin ventana de fichero a medias ───────────────────────
+# `Path.write_text` (y `open(p, "w")`) TRUNCAN el fichero antes de escribir: entre esa
+# truncada y el último byte, el fichero está VACÍO en disco. Si en esa ventana se cierra
+# WSL, se para el server, muere el proceso o se va la luz, no pierdes la última escritura:
+# pierdes el fichero ENTERO. Y ahí vive estado que no se puede volver a descargar — el
+# progreso de lectura, el historial, la identidad canónica, los ajustes.
+# No es teórico: ya apareció un `media_progress` corrupto (revisión de julio de 2026).
+#
+# `os.replace` es ATÓMICO sobre ext4 y sobre NTFS: o está el fichero viejo entero, o el
+# nuevo entero. Nunca medio. El temporal va en la MISMA carpeta a propósito (renombrar
+# entre sistemas de archivos no es atómico y `os.replace` degradaría a copiar).
+import json as _json
+import time as _time
+
+
+def write_json_atomic(path, obj, *, ensure_ascii=False, indent=None,
+                      durable=True, keep_backup=False) -> None:
+    """Escribe un JSON de forma que nunca quede a medias.
+
+    durable=False evita el fsync (~9 ms sobre ext4) para ficheros PRESCINDIBLES —
+    cachés y logs de uso, donde perder la última escritura tras un corte no cuesta nada;
+    la atomicidad se mantiene igual. Para estado del usuario, durable=True.
+    keep_backup=True conserva el último bueno en `<fichero>.bak` (ver read_json_safe).
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    # El nombre del temporal lleva PID **e id de hilo**: Waitress sirve con 8 hilos, así que dos
+    # peticiones a la vez compartían el mismo `.fichero.<pid>.tmp` — uno hacía `replace` y al otro
+    # le estallaba un FileNotFoundError (medido: 87 de 240 escrituras concurrentes, y 2 casos
+    # reales de `manga_progress.json` en el log). Atómico no era: era atómico entre PROCESOS.
+    tmp = p.with_name(f".{p.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(_json.dumps(obj, ensure_ascii=ensure_ascii, indent=indent))
+            if durable:
+                f.flush()
+                os.fsync(f.fileno())      # sin esto, `replace` puede publicar un fichero vacío
+        if keep_backup and p.exists():
+            try:
+                os.replace(p, p.with_name(p.name + ".bak"))
+            except OSError:
+                pass                       # el respaldo es un extra, nunca bloquea la escritura
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)                 # no dejar basura si falla a medio camino
+        except OSError:
+            pass
+        raise
+
+
+def read_json_safe(path, default=None, *, component: str = "state"):
+    """Lee un JSON escrito con write_json_atomic, cayendo al `.bak` si el bueno está roto.
+
+    Distingue "no había" de "falló" (regla del repo): fichero ausente devuelve el default en
+    silencio; fichero ilegible se REGISTRA antes de caer al respaldo o al default.
+    """
+    p = Path(path)
+    if not p.exists():
+        return default
+    try:
+        return _json.loads(p.read_text(encoding="utf-8"))
+    except Exception as e:
+        bak = p.with_name(p.name + ".bak")
+        try:
+            from api.observability import record_error
+            record_error(component, e, path=str(p), recovered=bak.exists())
+        except Exception:
+            pass
+        if bak.exists():
+            try:
+                return _json.loads(bak.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return default
+
+
 # ── Caché en DISCO (no RAM) ───────────────────────────────────────────────────
 # Para resultados caros de búsquedas online (ranking de versiones, portadas, etc.).
 # RAM plana: solo se lee/escribe un JSON por namespace; el archivo se acota por TTL y
 # por max_entries (se descartan las entradas más viejas), así el disco tampoco crece sin fin.
-import json as _json
-import time as _time
 
 _CACHE_DIR = MANGA_DIR / ".cache"
 _cache_lock = threading.Lock()
@@ -188,7 +263,7 @@ def cache_set(namespace: str, key: str, value, ttl: float = 0, max_entries: int 
             if len(data) > max_entries:
                 for k in sorted(data, key=lambda k: data[k].get("ts", 0))[:len(data) - max_entries]:
                     data.pop(k, None)
-            p.write_text(_json.dumps(data), encoding="utf-8")
+            write_json_atomic(p, data, durable=False)   # caché: perder la última escritura no cuesta nada
     except Exception:
         pass
 
@@ -214,8 +289,7 @@ def log_activity(kind: str, name: str = "") -> None:
             data.append({"t": int(_time.time()), "k": kind, "n": (name or "")[:120]})
             if len(data) > 4000:
                 data = data[-4000:]
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text(_json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            write_json_atomic(p, data, durable=False)
     except Exception:
         pass
 
@@ -238,6 +312,6 @@ def cache_invalidate(namespace: str, key: str = None):
                 return
             data = _json.loads(p.read_text(encoding="utf-8"))
             if data.pop(key, None) is not None:
-                p.write_text(_json.dumps(data), encoding="utf-8")
+                write_json_atomic(p, data, durable=False)
     except Exception:
         pass

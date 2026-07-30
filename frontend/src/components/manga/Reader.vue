@@ -49,6 +49,24 @@ function qaSubmit(reason) {
 }
 
 // ── chapter-end screen: al pasar de la última página aparece un cierre estilo streaming.
+/* Salto a CUALQUIER capítulo sin salir del lector (en MangaDex es un desplegable en la barra).
+ * Antes sólo se podía ir al vecino: para saltar tres capítulos había que cerrar, buscar la fila en
+ * el modal y volver a abrir — perdiendo la posición y el modo. La lista va descendente (como en la
+ * ficha), marca el actual y los leídos. */
+const chOpen = ref(false)
+const chListEl = ref(null)
+const chapterRows = computed(() => store.chapterListAsc
+  .map((row, i) => ({ row, i }))
+  .reverse())
+function pickChapter(i) { chOpen.value = false; store.goChapterAt(i) }
+// Al abrirla, la lista se coloca en el capítulo actual: con 300 capítulos, abrir arriba del todo
+// obliga a buscar dónde estás.
+watch(chOpen, async (on) => {
+  if (!on) return
+  await nextTick()
+  chListEl.value?.querySelector('.is-current')?.scrollIntoView({ block: 'center' })
+})
+
 const endOpen = ref(false)
 const webtoonEnd = ref(false)   // tarjeta de fin del webtoon: solo tras llegar al fondo del scroll
 const nextChapterNum = computed(() => store.chapterListAsc[store.chapterIndex + 1]?.chapter)
@@ -120,8 +138,19 @@ async function maybePrefetchNextChapter() {
   }
 }
 // New chapter/file → reset the cache-key set, then warm the neighbours.
-watch(() => store.pages, () => { preloaded = new Set(); endOpen.value = false; webtoonEnd.value = false; warmedNextFor = null; preloadNeighbors() })
-watch(() => store.page, () => { preloadNeighbors(); maybePrefetchNextChapter(); centerThumb() })
+watch(() => store.pages, () => { preloaded = new Set(); endOpen.value = false; webtoonEnd.value = false; warmedNextFor = null; gridOpen.value = false; preloadNeighbors() })
+/* El pase de página era un parpadeo de opacidad: el mismo gesto para avanzar que para retroceder,
+ * y ninguna pista de hacia dónde vas. Ahora la página ENTRA por el lado del que viene, que en RTL
+ * es el contrario — así la dirección de lectura se SIENTE, no solo se configura.
+ * Se anima `translate` (propiedad independiente), no `transform`: el zoom/paneo va en `transform`
+ * por estilo en línea y una animación sobre esa propiedad lo pisaría durante el pase. */
+const turnDir = ref(0)
+const turnClass = computed(() => {
+  const fromRight = (turnDir.value >= 0) !== isRTL.value
+  return fromRight ? 'rd__turn rd__turn--r' : 'rd__turn rd__turn--l'
+})
+
+watch(() => store.page, (n, o) => { turnDir.value = n === o ? 0 : (n > o ? 1 : -1); preloadNeighbors(); maybePrefetchNextChapter(); centerThumb() })
 
 // La tira de miniaturas no seguía a la lectura: pasabas de página y el recuadro activo se
 // quedaba fuera de la vista. `nearest` (no `center`) para no zarandear la tira cuando la
@@ -172,6 +201,9 @@ function onMove(e) {
     store.panY = Math.max(-my, Math.min(my, drag.py + dy))
   }
 }
+// Última navegación POR CLIC: el doble clic la deshace para poder ampliar donde pulsaste sin
+// que la primera pulsación te haya cambiado de página (ver onDblClick).
+let lastClickNav = { ts: 0, page: 0 }
 function onUp(e) {
   const active = drag.active
   const wasDrag = drag.active && drag.moved
@@ -180,20 +212,49 @@ function onUp(e) {
   if (!active || wasDrag || store.mode !== 'paged' || store.compareMode || store.zoom > 1.01) return
   const x = e.clientX / window.innerWidth
   const goNext = isRTL.value ? x < 0.5 : x > 0.5
+  lastClickNav = { ts: performance.now(), page: store.page }
   goNext ? tryNext() : goPrev()
+}
+
+/* Doble clic = ampliar/restablecer, anclado donde pulsaste (el gesto más automático sobre una
+ * viñeta, y el lector no lo tenía: el zoom era sólo rueda).
+ *
+ * El conflicto con el pase de página se resuelve DESHACIENDO: la primera pulsación ya pasó
+ * página, así que al llegar la segunda se vuelve atrás y se amplía. Es un fotograma de vaivén,
+ * pero no mete latencia en el pase de página — que es el gesto que haces mil veces por capítulo.
+ */
+const DBL_UNDO_MS = 400
+function onDblClick(e) {
+  if (store.mode !== 'paged' || store.compareMode) return
+  if (store.zoom > 1.01) { store.resetZoom(); return }
+  if (performance.now() - lastClickNav.ts < DBL_UNDO_MS) {
+    // Se restaura la página EXACTA de antes del clic, no "una atrás": en doble página el paso es
+    // de dos, y en la última el clic abre la tarjeta de fin sin mover nada.
+    store.setPage(lastClickNav.page)
+    endOpen.value = false
+    lastClickNav = { ts: 0, page: 0 }
+  }
+  const z = 2.2
+  store.zoom = z
+  // Lleva el punto pulsado al centro, con el mismo tope que el paneo por arrastre.
+  const mx = (z - 1) * window.innerWidth * 0.6
+  const my = (z - 1) * window.innerHeight * 0.6
+  store.panX = Math.max(-mx, Math.min(mx, (window.innerWidth / 2 - e.clientX) * (z - 1)))
+  store.panY = Math.max(-my, Math.min(my, (window.innerHeight / 2 - e.clientY) * (z - 1)))
 }
 // Leaving the area must NOT navigate — only cancel an in-progress drag.
 function endDrag() { drag.active = false }
 
-// Click handler on the page image itself — this is the element that receives mouse events.
-function pageClick(e) {
+/* Clic sobre la imagen: SÓLO cierra los paneles abiertos.
+ *
+ * 🐛 Antes navegaba también, y el `mouseup` del contenedor (`onUp`) ya lo hacía: un clic sobre la
+ * página disparaba los dos y pasaba DOS páginas. `@click.stop` no lo evitaba — detiene la
+ * propagación del click, no la del mouseup, que había ocurrido antes. La navegación por clic vive
+ * ahora en un solo sitio. */
+function pageClick() {
   if (setOpen.value) { setOpen.value = false; return }
   if (nightOpen.value) { nightOpen.value = false; return }
-  if (store.mode !== 'paged' || store.compareMode || store.zoom > 1.01) return
-  if (drag.moved) { drag.moved = false; return }
-  const x = e.clientX / window.innerWidth
-  const goNext = isRTL.value ? x < 0.5 : x > 0.5
-  goNext ? tryNext() : goPrev()
+  if (chOpen.value) { chOpen.value = false }
 }
 function onWheel(e) {
   if (store.mode === 'webtoon' && !(e.ctrlKey || e.metaKey)) return
@@ -211,6 +272,55 @@ function cmpMove(e) {
 }
 function cmpEnd() { cmpDrag = false; window.removeEventListener('mousemove', cmpMove); window.removeEventListener('mouseup', cmpEnd) }
 
+/* ── Tira: auto-scroll y progreso ─────────────────────────────────────────
+ * Leer un manhwa eran cuatrocientas rueditas de ratón. El auto-scroll avanza a px/s constantes
+ * (la velocidad se recuerda; el encendido NO — nadie quiere que un capítulo se mueva solo al
+ * abrirlo). Se apaga solo al llegar al fondo, al cambiar de capítulo o de modo, y al cerrar. */
+const wtEl = ref(null)
+const wtProgress = ref(0)
+const autoScroll = ref(false)
+let rafId = 0
+let lastTs = 0
+
+function autoTick(ts) {
+  if (!autoScroll.value) return
+  const c = wtEl.value
+  if (!c) { autoScroll.value = false; return }
+  const dt = lastTs ? Math.min(0.05, (ts - lastTs) / 1000) : 0   // cap: una pestaña en segundo plano no debe dar un salto
+  lastTs = ts
+  c.scrollTop += store.autoScrollSpeed * dt
+  if (c.scrollTop + c.clientHeight >= c.scrollHeight - 2) { stopAutoScroll(); return }
+  rafId = requestAnimationFrame(autoTick)
+}
+function startAutoScroll() {
+  if (store.mode !== 'webtoon' || autoScroll.value) return
+  autoScroll.value = true
+  lastTs = 0
+  rafId = requestAnimationFrame(autoTick)
+}
+function stopAutoScroll() {
+  autoScroll.value = false
+  lastTs = 0
+  if (rafId) { cancelAnimationFrame(rafId); rafId = 0 }
+}
+function toggleAutoScroll() { autoScroll.value ? stopAutoScroll() : startAutoScroll() }
+// Cambiar de capítulo, de modo o cerrar detiene el avance: si no, sigue corriendo sobre otra cosa.
+watch(() => [store.mode, store.reader?.chapter, open.value].join('|'), () => stopAutoScroll())
+
+// Arrastrar para desplazar la tira (como el ratón de una tableta). Antes sólo se podía con rueda.
+let wtDrag = null
+function wtDown(e) {
+  if (e.button !== 0) return
+  wtDrag = { y: e.clientY, top: wtEl.value?.scrollTop || 0, moved: false }
+}
+function wtMove(e) {
+  if (!wtDrag || !wtEl.value) return
+  const dy = e.clientY - wtDrag.y
+  if (Math.abs(dy) > 3) wtDrag.moved = true
+  if (wtDrag.moved) { wtEl.value.scrollTop = wtDrag.top - dy; stopAutoScroll() }
+}
+function wtUp() { wtDrag = null }
+
 // ── webtoon scroll tracking ──
 function onScroll(e) {
   const c = e.target
@@ -222,6 +332,8 @@ function onScroll(e) {
   // En webtoon la ÚLTIMA página (a menudo corta) puede no ser NUNCA la "central", así que
   // setPage(pages.length-1) no llega a dispararse y el capítulo no se marcaba leído — afectaba
   // sobre todo a manhwas leídos ONLINE (no descargados). Marcamos al llegar al FONDO del scroll.
+  const max = c.scrollHeight - c.clientHeight
+  wtProgress.value = max > 0 ? Math.min(100, (c.scrollTop / max) * 100) : 0
   const atBottom = c.scrollTop + c.clientHeight >= c.scrollHeight - 48
   if (isManga.value && atBottom) store.markRead(store.reader?.chapter)
   // La tarjeta de fin solo aparece al ALCANZAR el fondo de verdad (no al abrir, cuando las
@@ -244,16 +356,43 @@ function poke() {
 function toggleFullscreen() { ui.toggleFullscreen() }
 
 // ── keyboard ──
+/* Mosaico del capítulo (M). Para saltar dentro del capítulo sólo había la tira de miniaturas de
+ * 2,75rem de la barra inferior: con 40 páginas es un carrusel a ciegas. El mosaico enseña el
+ * capítulo ENTERO a la vez, con la página actual marcada y las ya leídas atenuadas. Las
+ * miniaturas son las mismas que ya sirve el backend (`pageUrl(p, 300)`), sin trabajo extra. */
+const gridOpen = ref(false)
+function openGrid() {
+  gridOpen.value = true
+  setOpen.value = false; nightOpen.value = false; chOpen.value = false
+  nextTick(() => gridEl.value?.querySelector('.is-current')?.scrollIntoView({ block: 'center' }))
+}
+const gridEl = ref(null)
+function pickPage(i) {
+  gridOpen.value = false
+  if (store.mode === 'webtoon') {
+    // En la tira la página no es un estado: es una posición del scroll.
+    nextTick(() => wtEl.value?.querySelectorAll('.rd__wimg')[i]?.scrollIntoView({ block: 'start' }))
+    return
+  }
+  endOpen.value = false
+  store.setPage(i)
+}
+
 function onKey(e) {
   if (!open.value) return
+  if (gridOpen.value && e.key !== 'Escape' && e.key !== 'm') return
   switch (e.key) {
-    case 'Escape': setOpen.value ? (setOpen.value = false) : nightOpen.value ? (nightOpen.value = false) : endOpen.value ? (endOpen.value = false) : store.closeReader(); break
+    case 'm': e.preventDefault(); gridOpen.value ? (gridOpen.value = false) : openGrid(); break
+    case 'Escape': gridOpen.value ? (gridOpen.value = false) : chOpen.value ? (chOpen.value = false) : setOpen.value ? (setOpen.value = false) : nightOpen.value ? (nightOpen.value = false) : endOpen.value ? (endOpen.value = false) : store.closeReader(); break
     case 'ArrowRight': e.preventDefault(); isRTL.value ? goPrev() : tryNext(); break
     case 'ArrowLeft': e.preventDefault(); isRTL.value ? tryNext() : goPrev(); break
     case ' ': e.preventDefault(); tryNext(); break
     case 'f': store.cycleFit(); break
     case 'w': store.setMode(store.mode === 'paged' ? 'webtoon' : 'paged'); break
     case 's': if (store.mode === 'paged') store.toggleSpread(); break
+    case 'o': if (store.spreadActive) store.toggleSpreadOffset(); break
+    case 'a': if (store.mode === 'webtoon') toggleAutoScroll(); break
+    case '?': ui.showShortcuts = true; break
     case 'd': if (isManga.value) store.toggleDir(); break
     case 'c': if (isManga.value) store.toggleCompare(); break
     case ']': if (isManga.value) store.goNextChapter(); break
@@ -261,7 +400,7 @@ function onKey(e) {
   }
 }
 onMounted(() => { window.addEventListener('keydown', onKey) })
-onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(barsTimer); cmpEnd() })
+onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(barsTimer); cmpEnd(); stopAutoScroll() })
 </script>
 
 <template>
@@ -273,19 +412,37 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
           <button class="rd__btn" @click="store.closeReader()"><Icon name="chevron" :size="18" :style="{ transform: 'rotate(180deg)' }" /></button>
           <div class="rd__meta">
             <span class="rd__title">{{ isManga ? store.current?.name : store.reader.title }}</span>
-            <span v-if="store.reader.chapter" class="rd__ch">{{ isManga ? 'Cap. ' : '' }}{{ store.reader.chapter }}</span>
+            <!-- El número de capítulo deja de ser una etiqueta muerta y pasa a ser el selector. -->
+            <div v-if="store.reader.chapter" class="rd__chwrap">
+              <button class="rd__ch" :class="{ 'is-on': chOpen }" :disabled="!isManga || chapterRows.length < 2"
+                      data-tip="Ir a otro capítulo" aria-haspopup="menu" :aria-expanded="chOpen"
+                      @click.stop="chOpen = !chOpen; setOpen = false; nightOpen = false">
+                {{ isManga ? 'Cap. ' : '' }}{{ store.reader.chapter }}
+                <Icon v-if="isManga && chapterRows.length > 1" name="chevron" :size="12"
+                      :style="{ transform: 'rotate(90deg)' }" />
+              </button>
+              <div v-if="chOpen" ref="chListEl" class="rd__chlist" @click.stop>
+                <button v-for="c in chapterRows" :key="c.i" class="rd__chrow"
+                        :class="{ 'is-current': c.i === store.chapterIndex, 'is-read': store.isChapterRead(c.row.chapter) }"
+                        @click="pickChapter(c.i)">
+                  <span class="rd__chnum">{{ c.row.chapter }}</span>
+                  <span class="rd__chname">{{ c.row.title || c.row.name || '' }}</span>
+                  <Icon v-if="store.isChapterRead(c.row.chapter)" name="check" :size="13" class="rd__chok" />
+                </button>
+              </div>
+            </div>
             <span v-if="isManga && store.reader.source !== 'compare'" class="rd__src" :class="{ 'is-4k': isUpscaled }">{{ isUpscaled ? '4K' : 'ORIG' }}</span>
           </div>
           <div class="rd__tools">
             <!-- Marcar leído (acción frecuente → directa) -->
-            <button v-if="isManga" class="rd__btn" :class="{ 'is-on': store.isChapterRead(store.reader.chapter) }" title="Marcar capítulo leído" @click="store.toggleChapterRead(store.reader.chapter)"><Icon name="check" :size="16" /></button>
+            <button v-if="isManga" class="rd__btn" :class="{ 'is-on': store.isChapterRead(store.reader.chapter) }" data-tip="Marcar capítulo leído" @click="store.toggleChapterRead(store.reader.chapter)"><Icon name="check" :size="16" /></button>
             <!-- Comparar original / 4K -->
-            <button v-if="store.canCompare" class="rd__btn" :class="{ 'is-on': store.compareMode }" title="Comparar original / 4K (C)" @click="store.toggleCompare()"><Icon name="grid" :size="15" /></button>
+            <button v-if="store.canCompare" class="rd__btn" :class="{ 'is-on': store.compareMode }" data-tip="Comparar original / 4K (C)" @click="store.toggleCompare()"><Icon name="grid" :size="15" /></button>
             <!-- QA (solo modo testing) -->
-            <button v-if="qaCanFlag" class="rd__btn rd__btn--qa" :class="{ 'is-on': qaOpen }" title="Marcar página mal traducida (QA)" @click="qaOpen = !qaOpen"><span class="rd__txt">⚑</span></button>
+            <button v-if="qaCanFlag" class="rd__btn rd__btn--qa" :class="{ 'is-on': qaOpen }" data-tip="Marcar página mal traducida (QA)" @click="qaOpen = !qaOpen"><span class="rd__txt">⚑</span></button>
             <!-- Ajustes de lectura: consolida ajuste/modo/dirección/doble-página/brillo/zoom con ETIQUETAS -->
             <div class="rd__setwrap">
-              <button class="rd__btn" :class="{ 'is-on': setOpen }" title="Ajustes de lectura" @click.stop="setOpen = !setOpen; nightOpen = false"><Icon name="settings" :size="16" /></button>
+              <button class="rd__btn" :class="{ 'is-on': setOpen }" data-tip="Ajustes de lectura" @click.stop="setOpen = !setOpen; nightOpen = false"><Icon name="settings" :size="16" /></button>
               <div v-if="setOpen" class="rd__set" @click.stop>
                 <!-- Modo -->
                 <div class="rd__set-group">
@@ -317,6 +474,45 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
                     <Icon name="book-open" :size="16" /> <span>Doble página</span>
                     <span class="rd__set-state">{{ store.spread ? 'Activada' : 'Desactivada' }}</span>
                   </button>
+                  <!-- El desfase sólo tiene sentido con la doble página encendida: casi todos los
+                       tomos abren con una portada SUELTA, y sin desfase el resto del capítulo
+                       queda con las dobles páginas partidas por la mitad. -->
+                  <button v-if="store.spread" class="rd__set-toggle" :class="{ 'is-on': store.spreadOffset }"
+                          @click="store.toggleSpreadOffset()">
+                    <Icon name="book" :size="15" /> <span>Portada suelta (desfase)</span>
+                    <span class="rd__set-state">{{ store.spreadOffset ? 'Activado' : 'Desactivado' }}</span>
+                  </button>
+                </template>
+                <!-- Opciones de tira (webtoon) -->
+                <template v-else>
+                  <div class="rd__set-group">
+                    <span class="rd__set-lbl">Ancho de la tira</span>
+                    <div class="rd__set-slider">
+                      <input type="range" min="25" max="100" step="1" :value="store.webtoonWidth"
+                             @input="store.setWebtoonWidth($event.target.value)" />
+                      <span class="rd__set-val">{{ store.webtoonWidth }}%</span>
+                    </div>
+                  </div>
+                  <div class="rd__set-group">
+                    <span class="rd__set-lbl">Hueco entre páginas</span>
+                    <div class="rd__set-slider">
+                      <input type="range" min="0" max="48" step="1" :value="store.webtoonGap"
+                             @input="store.setWebtoonGap($event.target.value)" />
+                      <span class="rd__set-val">{{ store.webtoonGap }}px</span>
+                    </div>
+                  </div>
+                  <div class="rd__set-group">
+                    <span class="rd__set-lbl">Velocidad del auto-scroll</span>
+                    <div class="rd__set-slider">
+                      <input type="range" min="10" max="400" step="5" :value="store.autoScrollSpeed"
+                             @input="store.setAutoScrollSpeed($event.target.value)" />
+                      <span class="rd__set-val">{{ store.autoScrollSpeed }}</span>
+                    </div>
+                  </div>
+                  <button class="rd__set-toggle" :class="{ 'is-on': autoScroll }" @click="toggleAutoScroll()">
+                    <Icon :name="autoScroll ? 'pause' : 'play'" :size="15" /> <span>Auto-scroll</span>
+                    <span class="rd__set-state"><kbd class="rd__kbd">A</kbd></span>
+                  </button>
                 </template>
                 <!-- Brillo + modo noche -->
                 <div class="rd__set-group">
@@ -336,10 +532,17 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
                   <Icon name="search" :size="15" /> <span>Restablecer zoom</span>
                   <span class="rd__set-state">{{ Math.round(store.zoom * 100) }}%</span>
                 </button>
+                <!-- El lector tiene 11 atajos y aquí no se mencionaban: función pagada que nadie usa. -->
+                <button class="rd__set-toggle" @click="setOpen = false; ui.showShortcuts = true">
+                  <Icon name="spark" :size="15" /> <span>Atajos de teclado</span>
+                  <span class="rd__set-state"><kbd class="rd__kbd">?</kbd></span>
+                </button>
               </div>
             </div>
+            <button v-if="store.pages.length > 1" class="rd__btn" :class="{ 'is-on': gridOpen }" data-tip="Mosaico de páginas (M)"
+                    @click="gridOpen ? (gridOpen = false) : openGrid()"><Icon name="grid" :size="16" /></button>
             <!-- Pantalla completa (acción frecuente → directa) -->
-            <button class="rd__btn" :class="{ 'is-on': ui.fullscreen }" :title="ui.fullscreen ? 'Salir de pantalla completa (F11)' : 'Pantalla completa (F11)'" @click="toggleFullscreen"><Icon :name="ui.fullscreen ? 'collapse' : 'expand'" :size="16" /></button>
+            <button class="rd__btn" :class="{ 'is-on': ui.fullscreen }" :data-tip="ui.fullscreen ? 'Salir de pantalla completa (F11)' : 'Pantalla completa (F11)'" @click="toggleFullscreen"><Icon :name="ui.fullscreen ? 'collapse' : 'expand'" :size="16" /></button>
           </div>
 
           <!-- QA: picker de motivo para la página actual -->
@@ -352,13 +555,24 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
           </div>
         </header>
 
-        <div v-if="store.readerLoading" class="rd__center"><Spinner :size="32" /></div>
+        <!-- El primer segundo. Antes era una pantalla NEGRA con una rueda: ninguna continuidad con
+             la tarjeta que acabas de pulsar y ninguna pista de qué viene. Ahora la portada (que ya
+             teníamos en memoria desde el clic, sin pedir nada) entra difuminada de fondo y el hueco
+             de la página tiene su FORMA — así el capítulo aparece donde ya estabas mirando. -->
+        <div v-if="store.readerLoading" class="rd__boot">
+          <img v-if="endCover" :src="endCover" class="rd__boot-art" alt="" aria-hidden="true" />
+          <div class="rd__boot-page" :class="{ 'is-strip': store.mode === 'webtoon' }">
+            <Spinner :size="26" />
+            <span class="rd__boot-txt">{{ isManga && store.reader?.chapter ? `Capítulo ${store.reader.chapter}` : 'Abriendo…' }}</span>
+          </div>
+        </div>
         <div v-else-if="!store.pages.length" class="rd__center rd__empty">Sin páginas.</div>
 
         <!-- Paged -->
         <div v-else-if="store.mode === 'paged'" class="rd__paged"
              :class="{ 'is-grab': store.zoom > 1.01, 'is-cmp': store.compareMode }"
-             @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="endDrag" @wheel="onWheel">
+             @mousedown="onDown" @mousemove="onMove" @mouseup="onUp" @mouseleave="endDrag"
+             @dblclick.prevent="onDblClick" @wheel="onWheel">
           <!-- chapter ghost zones -->
           <button v-if="isManga && store.canPrevChapter" class="rd__ghost rd__ghost--prev" @click.stop="store.goPrevChapter()"><span>‹ Cap. {{ store.chapterListAsc[store.chapterIndex - 1]?.chapter }}</span></button>
           <button v-if="isManga && store.canNextChapter" class="rd__ghost rd__ghost--next" @click.stop="store.goNextChapter()"><span>Cap. {{ store.chapterListAsc[store.chapterIndex + 1]?.chapter }} ›</span></button>
@@ -381,13 +595,13 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
           </div>
           <!-- two-page spread -->
           <div v-else-if="store.spreadActive && store.spreadPair.length === 2" :key="'sp' + store.page"
-               class="rd__spread rd__fade" :class="[`fit-${store.fit}`, { 'is-rtl': isRTL }]" :style="{ transform, filter: store.pageFilter }"
+               class="rd__spread" :class="[`fit-${store.fit}`, turnClass, { 'is-rtl': isRTL }]" :style="{ transform, filter: store.pageFilter }"
                @click.stop.prevent="pageClick">
             <img :src="pageUrl(store.pages[store.spreadPair[0]], reqWidth)" class="rd__simg" draggable="false" decoding="async" fetchpriority="high" :alt="`Página ${store.spreadPair[0] + 1}`" />
             <img :src="pageUrl(store.pages[store.spreadPair[1]], reqWidth)" class="rd__simg" draggable="false" decoding="async" fetchpriority="high" :alt="`Página ${store.spreadPair[1] + 1}`" />
           </div>
           <!-- single page -->
-          <img v-else :key="'pg' + store.page" :src="pageUrl(store.pages[store.page], reqWidth)" class="rd__img rd__fade" :class="`fit-${store.fit}`" :style="{ transform, filter: store.pageFilter }" draggable="false" decoding="async" fetchpriority="high" :alt="`Página ${store.page + 1}`"
+          <img v-else :key="'pg' + store.page" :src="pageUrl(store.pages[store.page], reqWidth)" class="rd__img" :class="[`fit-${store.fit}`, turnClass]" :style="{ transform, filter: store.pageFilter }" draggable="false" decoding="async" fetchpriority="high" :alt="`Página ${store.page + 1}`"
                @click.stop.prevent="pageClick" />
 
           <!-- Contador SIEMPRE visible (antes se ocultaba con las barras y "desaparecía" a los 1.6s).
@@ -396,11 +610,16 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
         </div>
 
         <!-- Webtoon -->
-        <div v-else class="rd__webtoon" @scroll="onScroll">
+        <div v-else ref="wtEl" class="rd__webtoon"
+             :style="{ gap: store.webtoonGap + 'px' }" @scroll="onScroll"
+             @mousedown="wtDown" @mousemove="wtMove" @mouseup="wtUp" @mouseleave="wtUp">
           <!-- Las primeras imágenes NO son lazy: cargan ya para que abrir el capítulo muestre la
                página de inmediato (antes, con todas lazy y sin altura, la tarjeta de fin quedaba
                arriba y parecía "capítulo completado" al abrir). -->
-          <img v-for="(p, i) in store.pages" :key="i" :src="pageUrl(p, reqWidth)" :loading="i < 3 ? 'eager' : 'lazy'" :fetchpriority="i === 0 ? 'high' : 'auto'" decoding="async" class="rd__wimg" :style="{ maxWidth: store.fit === 'width' ? '900px' : 'none', transform: `scale(${store.zoom})`, filter: store.pageFilter }" :alt="`Página ${i + 1}`" />
+          <img v-for="(p, i) in store.pages" :key="i" :src="pageUrl(p, reqWidth)" :loading="i < 3 ? 'eager' : 'lazy'" :fetchpriority="i === 0 ? 'high' : 'auto'" decoding="async" class="rd__wimg" :style="{ maxWidth: store.webtoonWidth + '%', transform: `scale(${store.zoom})`, filter: store.pageFilter }" :alt="`Página ${i + 1}`" />
+          <!-- Progreso del capítulo mientras scrolleas: en la tira el número de página sale de
+               qué imagen queda en el centro, y con capítulos de 30 trozos eso no dice cuánto
+               falta. La línea sí. Va pegada al borde y no se oculta con las barras. -->
           <!-- Tarjeta de fin: SOLO tras llegar al fondo (webtoonEnd), no al abrir. -->
           <div v-if="isManga && store.pages.length && webtoonEnd" class="rd__wend">
             <span class="rd__end-check"><Icon name="check" :size="20" /></span>
@@ -449,6 +668,17 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
           </div>
         </Transition>
 
+        <!-- Progreso + estado del auto-scroll (solo tira) -->
+        <div v-if="store.mode === 'webtoon' && store.pages.length" class="rd__wprog">
+          <span :style="{ width: wtProgress + '%' }" />
+        </div>
+        <button v-if="store.mode === 'webtoon' && store.pages.length" class="rd__auto"
+                :class="{ 'is-on': autoScroll }" :data-tip="`Auto-scroll (A) · ${store.autoScrollSpeed} px/s`"
+                @click="toggleAutoScroll">
+          <Icon :name="autoScroll ? 'pause' : 'play'" :size="14" />
+          <span v-if="autoScroll">{{ store.autoScrollSpeed }} px/s</span>
+        </button>
+
         <!-- Bottom bar (paged) -->
         <footer v-if="store.mode === 'paged' && store.pages.length" class="rd__bottom" :class="{ 'is-hidden': store.barsHidden }">
           <div class="rd__chnav">
@@ -464,6 +694,25 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
             </button>
           </div>
         </footer>
+
+        <!-- Mosaico: el capítulo entero de un vistazo. -->
+        <Transition name="rdgrid">
+          <div v-if="gridOpen" class="rd__grid" @click.self="gridOpen = false">
+            <header class="rd__grid-bar">
+              <span class="rd__grid-title">{{ store.reader.chapter ? `Capítulo ${store.reader.chapter}` : 'Páginas' }}</span>
+              <span class="rd__grid-count">{{ store.pages.length }} páginas</span>
+              <button class="rd__btn" data-tip="Cerrar (M)" @click="gridOpen = false"><Icon name="close" :size="16" /></button>
+            </header>
+            <div ref="gridEl" class="rd__grid-scroll">
+              <button v-for="(p, i) in store.pages" :key="i" class="rd__gcell"
+                      :class="{ 'is-current': i === store.page, 'is-read': i < store.page }"
+                      @click="pickPage(i)">
+                <img :src="pageUrl(p, 300)" loading="lazy" decoding="async" :alt="`Página ${i + 1}`" />
+                <span class="rd__gnum">{{ i + 1 }}</span>
+              </button>
+            </div>
+          </div>
+        </Transition>
       </div>
     </Transition>
   </Teleport>
@@ -477,6 +726,25 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
   background: radial-gradient(120% 90% at 50% 0%, var(--rd-tint, transparent) 0%, transparent 62%), #05070d;
   transition: background 1.2s var(--ease-silk); }
 
+/* ── Arranque del lector ──────────────────────────────────────────────── */
+.rd__boot { position: absolute; inset: 0; display: grid; place-items: center; overflow: hidden; }
+/* La portada NO se ve como portada: es luz de fondo. Muy difuminada y oscura para que el
+   esqueleto de la página siga siendo lo legible. */
+.rd__boot-art { position: absolute; inset: -10%; width: 120%; height: 120%; object-fit: cover;
+  filter: blur(48px) saturate(1.2) brightness(.42); opacity: .85; animation: bootArt 1.2s var(--ease-silk) both; }
+@keyframes bootArt { from { opacity: 0; transform: scale(1.08); } to { opacity: .85; transform: none; } }
+/* Forma de PÁGINA (2:3), no un rectángulo genérico: ocupa lo mismo que ocupará la página real,
+   así el contenido no salta al llegar. En tira, alto completo y más estrecho. */
+.rd__boot-page { position: relative; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: var(--s-3);
+  height: min(78vh, 52rem); aspect-ratio: 2 / 3; border-radius: var(--r-md);
+  border: 1px solid rgba(255,255,255,.07); background: rgba(255,255,255,.035);
+  animation: bootPage .5s var(--ease-silk) both; }
+.rd__boot-page.is-strip { aspect-ratio: 1 / 2.4; height: 88vh; }
+@keyframes bootPage { from { opacity: 0; transform: translateY(1rem) scale(.98); } to { opacity: 1; transform: none; } }
+.rd__boot-txt { font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: var(--tracking-caps); color: var(--ink-faint); }
+
 .rd__bar { position: absolute; top: 0; left: 0; right: 0; z-index: 6; display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-4); height: 3.25rem;
   background: linear-gradient(180deg, rgba(7,10,18,.95), rgba(7,10,18,.5)); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); transition: transform var(--t-base) var(--ease-silk); }
 .rd__bar.is-hidden { transform: translateY(-100%); }
@@ -486,7 +754,29 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__txt, .rd__zoom { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600; }
 .rd__meta { display: flex; align-items: center; gap: var(--s-3); flex: 1; min-width: 0; }
 .rd__title { font-weight: 600; font-size: var(--fs-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.rd__ch { color: var(--ink-faint); font-size: var(--fs-xs); white-space: nowrap; }
+/* El número de capítulo ES el selector: se comporta como un desplegable (hover/estado activo)
+   pero sin chrome, para no meter una caja más en una barra que debe desaparecer al leer. */
+.rd__chwrap { position: relative; }
+.rd__ch { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--ink-faint);
+  font-size: var(--fs-xs); white-space: nowrap; padding: 0.125rem 0.375rem; border-radius: var(--r-sm);
+  transition: all var(--t-fast); }
+.rd__ch:not(:disabled):hover, .rd__ch.is-on { color: var(--ink); background: rgba(255,255,255,.10); }
+.rd__ch:disabled { cursor: default; }
+.rd__chlist { position: absolute; top: calc(100% + 0.375rem); left: 0; z-index: 20;
+  width: 17rem; max-height: min(60vh, 26rem); overflow-y: auto; padding: var(--s-1);
+  border-radius: var(--r-md); border: 1px solid var(--line-strong);
+  background: rgba(10,14,24,.97); backdrop-filter: blur(14px); box-shadow: var(--shadow-lg); }
+.rd__chrow { display: flex; align-items: center; gap: var(--s-2); width: 100%;
+  padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); text-align: left;
+  font-size: var(--fs-xs); color: var(--ink-soft); transition: background var(--t-fast); }
+.rd__chrow:hover { background: rgba(255,255,255,.08); color: var(--ink); }
+.rd__chrow.is-read { color: var(--ink-faint); }
+.rd__chrow.is-current { background: var(--azure-haze); color: var(--azure-bright); font-weight: 600; }
+.rd__chnum { font-family: var(--font-mono); flex: none; min-width: 3rem; }
+.rd__chname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rd__chok { flex: none; color: var(--jade); }
+.rd__kbd { font-family: var(--font-mono); font-size: var(--fs-2xs); padding: 1px 0.375rem;
+  border-radius: var(--r-sm); border: 1px solid var(--line-strong); color: var(--ink-soft); }
 .rd__src { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.4375rem; border-radius: var(--r-pill); color: var(--ink-faint); background: var(--surface); }
 .rd__src.is-4k { color: var(--cyan); background: var(--cyan-glow); }
 .rd__tools { display: flex; gap: var(--s-1); }
@@ -589,6 +879,15 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 
 /* soft fade-in on page turn (preloaded image is already cached → no white flash) */
 .rd__fade { animation: pageFade .18s var(--ease-silk); }
+/* El pase: entra por su lado y frena como papel (curva con overshoot mínimo). `translate` no pisa
+   el `transform` en línea del zoom/paneo. */
+.rd__turn { animation: turnR .26s cubic-bezier(.16, .84, .28, 1); }
+.rd__turn--l { animation-name: turnL; }
+@keyframes turnR { from { opacity: 0; translate: 3.5% 0 } to { opacity: 1; translate: 0 0 } }
+@keyframes turnL { from { opacity: 0; translate: -3.5% 0 } to { opacity: 1; translate: 0 0 } }
+@media (prefers-reduced-motion: reduce) {
+  .rd__turn { animation: pageFade .18s var(--ease-silk); }
+}
 @keyframes pageFade { from { opacity: .4 } to { opacity: 1 } }
 
 .rd__ghost { position: absolute; top: 0; bottom: 0; width: 5rem; z-index: 4; display: flex; align-items: center; opacity: 0; transition: opacity var(--t-fast); border: none; background: linear-gradient(90deg, rgba(77,141,255,.18), transparent); }
@@ -627,7 +926,23 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 .rd__wcount span { color: var(--ink-ghost); }
 
 .rd__webtoon { flex: 1; overflow-y: auto; display: flex; flex-direction: column; align-items: center; padding-top: 3.25rem; }
-.rd__wimg { width: 100%; height: auto; display: block; }
+/* Progreso del capítulo: una línea de 3 px pegada al borde inferior. No se oculta con las barras
+   porque es lo único que dice cuánto falta en una tira de 30 imágenes. */
+.rd__wprog { position: absolute; left: 0; right: 0; bottom: 0; z-index: 7; height: 3px; background: rgba(255,255,255,.10); }
+.rd__wprog span { display: block; height: 100%; background: var(--azure-bright); box-shadow: var(--glow-azure);
+  transition: width .12s linear; }
+/* Botón de auto-scroll: fuera de la barra superior porque se usa MIENTRAS lees, con las barras
+   escondidas. Discreto hasta que está activo. */
+.rd__auto { position: absolute; right: var(--s-4); bottom: var(--s-4); z-index: 8;
+  display: inline-flex; align-items: center; gap: var(--s-2); padding: 0.375rem 0.625rem;
+  border-radius: var(--r-pill); font-size: var(--fs-2xs); font-family: var(--font-mono);
+  color: var(--ink-soft); background: rgba(10,14,24,.72); border: 1px solid var(--line);
+  backdrop-filter: blur(8px); opacity: .35; transition: all var(--t-fast); }
+.rd__auto:hover { opacity: 1; color: var(--ink); }
+.rd__auto.is-on { opacity: 1; color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
+/* El ancho lo pone el usuario (`max-width` en línea). El `min-width` evita que un porcentaje
+   pensado para un monitor grande deje la tira ilegible en una ventana estrecha. */
+.rd__wimg { width: 100%; min-width: min(100%, 22rem); height: auto; display: block; }
 
 .rd__bottom { position: absolute; bottom: 0; left: 0; right: 0; z-index: 6; padding: var(--s-3) var(--s-4); background: linear-gradient(0deg, rgba(7,10,18,.96), transparent); transition: transform var(--t-base) var(--ease-silk); }
 .rd__bottom.is-hidden { transform: translateY(100%); }
@@ -712,4 +1027,33 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 
 .reader-enter-active, .reader-leave-active { transition: opacity var(--t-base); }
 .reader-enter-from, .reader-leave-to { opacity: 0; }
+
+/* ── Mosaico de páginas ───────────────────────────────────────────────── */
+.rd__grid { position: absolute; inset: 0; z-index: 4; display: flex; flex-direction: column;
+  background: rgba(5, 7, 13, .93); backdrop-filter: blur(14px); }
+.rd__grid-bar { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-4) var(--s-6);
+  border-bottom: 1px solid rgba(255,255,255,.07); }
+.rd__grid-title { font-weight: 650; letter-spacing: -.01em; }
+.rd__grid-count { flex: 1; font-family: var(--font-mono); font-size: var(--fs-2xs);
+  letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); }
+.rd__grid-scroll { flex: 1; overflow-y: auto; padding: var(--s-6);
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(calc(8.5rem * var(--dens, 1)), 1fr));
+  gap: var(--s-5) var(--s-4); align-content: start; }
+.rd__gcell { position: relative; display: block; padding: 0; border: 2px solid transparent;
+  border-radius: var(--r-sm); overflow: hidden; background: rgba(255,255,255,.04); cursor: pointer;
+  aspect-ratio: 2 / 3; transition: transform var(--t-fast) var(--ease-silk), border-color var(--t-fast); }
+.rd__gcell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Leída ≠ no leída: la lectura tiene un frente y el mosaico lo enseña. */
+.rd__gcell.is-read img { opacity: .38; }
+.rd__gcell:hover { transform: translateY(-3px) scale(1.02); border-color: rgba(255,255,255,.28); }
+.rd__gcell.is-current { border-color: var(--azure); box-shadow: 0 0 0 4px color-mix(in srgb, var(--azure) 20%, transparent); }
+.rd__gnum { position: absolute; left: var(--s-2); bottom: var(--s-2); padding: .1rem .4rem;
+  border-radius: var(--r-xs); background: rgba(5,7,13,.78); font-family: var(--font-mono);
+  font-size: var(--fs-2xs); color: var(--text-2); }
+.rd__gcell.is-current .rd__gnum { background: var(--azure); color: #fff; }
+
+.rdgrid-enter-active, .rdgrid-leave-active { transition: opacity var(--t-fast) var(--ease-silk); }
+.rdgrid-enter-from, .rdgrid-leave-to { opacity: 0; }
+.rdgrid-enter-active .rd__grid-scroll { animation: gridIn .32s var(--ease-silk); }
+@keyframes gridIn { from { opacity: 0; transform: scale(.97) translateY(.75rem) } to { opacity: 1; transform: none } }
 </style>

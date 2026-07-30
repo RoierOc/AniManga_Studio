@@ -79,7 +79,7 @@ onBeforeUnmount(() => {
   <div ref="rootEl" class="stats" role="dialog" aria-label="Estadísticas">
     <header class="stats__head">
       <span class="stats__title"><Icon name="chart" :size="16" /> Estadísticas · {{ cine ? 'Cine' : 'アニメ' }}</span>
-      <button class="stats__x" title="Cerrar" @click="emit('close')"><Icon name="close" :size="15" /></button>
+      <button class="stats__x" data-tip="Cerrar" @click="emit('close')"><Icon name="close" :size="15" /></button>
     </header>
 
     <div v-if="loading" class="stats__state">Cargando…</div>
@@ -134,7 +134,7 @@ onBeforeUnmount(() => {
       <section v-if="chart" class="stats__block">
         <span class="stats__eyebrow">Actividad · 14 días</span>
         <div class="stats__chart">
-          <div v-for="c in chart" :key="c.iso" class="stats__col" :title="`${c.iso}: ${c.watched} vistos${chartHasUpscale ? ', ' + c.upscaled + ' escalados' : ''}`">
+          <div v-for="c in chart" :key="c.iso" class="stats__col" :data-tip="`${c.iso}: ${c.watched} vistos${chartHasUpscale ? ', ' + c.upscaled + ' escalados' : ''}`">
             <div class="stats__bars-stack">
               <div class="stats__bar stats__bar--up" :style="{ height: c.uPct + '%' }"></div>
               <div class="stats__bar stats__bar--watch" :style="{ height: c.wPct + '%' }"></div>

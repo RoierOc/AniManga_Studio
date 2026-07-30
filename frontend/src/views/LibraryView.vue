@@ -11,10 +11,12 @@ import { imgProxy, imgThumb } from '@/lib/img'
 import Spinner from '@/components/ui/Spinner.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import MangaRecRail from '@/components/manga/MangaRecRail.vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
 import Select from '@/components/ui/Select.vue'
 import ContentToolbar from '@/components/ui/ContentToolbar.vue'
+import DensityToggle from '@/components/ui/DensityToggle.vue'
 import ContinueRail from '@/components/media/ContinueRail.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import MediaHero from '@/components/media/MediaHero.vue'
@@ -35,9 +37,32 @@ function openMenu(e, m) {
     ],
   }
 }
+/* Herramientas de la biblioteca que NO son de uso diario: viven detrás de `⋯`, no en la barra.
+ * `toolsBusy` mantiene visible que algo corre aunque el menú esté cerrado — una tarea en marcha
+ * escondida en un desplegable es una tarea que el usuario cree que no lanzó. */
+const toolsBusy = computed(() => findingCovers.value || !!manga.offlineCovers?.running)
+function openTools(e) {
+  const r = e.currentTarget.getBoundingClientRect()
+  cm.value = {
+    open: true, x: r.left, y: r.bottom + 6,
+    items: [
+      { label: 'Historial de lectura', icon: 'clock', action: () => { showHistory.value = true } },
+      { label: 'Explorar novelas (SkyNovels)', icon: 'book', action: () => novels.openBrowse() },
+      { sep: true },
+      { label: findingCovers.value ? 'Buscando portadas…' : 'Buscar portadas faltantes',
+        icon: 'spark', disabled: findingCovers.value, action: findCovers },
+      { label: manga.offlineCovers?.running
+          ? `Descargando portadas ${manga.offlineCovers.done}/${manga.offlineCovers.total}`
+          : 'Descargar portadas para offline',
+        icon: 'download', disabled: !!manga.offlineCovers?.running,
+        action: () => manga.downloadCoversOffline() },
+    ],
+  }
+}
+
 const items = ref([])
 const loading = ref(true)
-const error = ref(false)
+const error = ref('')   // '' = sin fallo; si falla, guarda el MENSAJE (no un booleano)
 const search = ref('')
 const statusFilter = ref('all')
 // "Todo" muestra solo lo ACTIVO (igual que la biblioteca de anime): completadas y abandonadas
@@ -205,13 +230,15 @@ function openItem(m) {
 const findingCovers = ref(false)
 
 async function load() {
-  loading.value = true; error.value = false
+  loading.value = true; error.value = ''
   try {
     // El cruce disco+seguimiento vive en el backend (`library_overview.py`), junto al resto
     // de la lógica de identidad: aquí sólo se pinta lo que llega.
     items.value = (await api.get('/api/library/overview')) || []
   } catch (e) {
-    error.value = true
+    // El mensaje real viaja hasta la vista: `ErrorState` lo pinta en pequeño y convierte
+    // un "no va" en un informe de fallo útil. El toast se desvanece; esto se queda.
+    error.value = e?.body || e?.message || 'Error desconocido'
     ui.toast('No se pudo cargar la biblioteca', 'error')
   } finally {
     loading.value = false
@@ -240,8 +267,14 @@ watch(() => manga.libraryDirty, () => load())
   <div class="view">
     <div class="view__aura" :style="{ '--tint-c': heroTint }" />
 
-    <!-- Arte de tu propia colección, no una cabecera de texto sobre fondo plano. -->
-    <MediaHero v-if="heroItems.length" :items="heroItems" @tint="c => heroTint = c" />
+    <!-- Arte de tu propia colección, no una cabecera de texto sobre fondo plano.
+         A SANGRE, como Anime y Series: era el único hero que se pintaba como tarjeta redondeada, y
+         la esquina delataba el truco (el Ken Burns escala la imagen en su propia capa de
+         composición y Chrome no siempre le aplica el radio del padre → la imagen asomaba por la
+         esquina). Sin esquinas no hay nada de lo que asomar, y de paso los tres heroes se ven igual. -->
+    <div v-if="heroItems.length" class="lhero">
+      <MediaHero :items="heroItems" bleed @tint="c => heroTint = c" />
+    </div>
 
     <!-- Hero header -->
     <header class="lhead stagger">
@@ -249,61 +282,45 @@ watch(() => manga.libraryDirty, () => load())
         <p class="lhead__eyebrow"><span class="lhead__tick" /> TU COLECCIÓN LOCAL</p>
         <h1 v-if="!heroItems.length" class="lhead__title">Biblioteca</h1>
       </div>
-
-      <div class="lhead__stats" style="--i:1">
-        <div class="stat">
-          <span class="stat__num">{{ totals.series }}</span>
-          <span class="stat__label">series</span>
-        </div>
-        <div class="stat">
-          <span class="stat__num">{{ totals.chapters }}</span>
-          <span class="stat__label">capítulos</span>
-        </div>
-        <div class="stat stat--accent">
-          <span class="stat__num">{{ totals.upscaled }}</span>
-          <span class="stat__label">en 4K</span>
-        </div>
-      </div>
     </header>
+
+    <!-- Continuar leyendo — el MISMO riel que anime y series, en modo póster.
+         Va ANTES de los filtros, como en la biblioteca de anime: al abrir la sección lo que quieres
+         casi siempre es seguir donde lo dejaste; la barra de filtros sólo la usas cuando buscas algo
+         concreto. Estaba en cuarta posición, detrás de una barra que no ibas a tocar. -->
+    <ContinueRail v-if="!loading" :items="continueRail" poster title="Continuar leyendo"
+                  @play="({ raw }) => manga.resumeManga(raw)" />
 
     <!-- Controls -->
     <ContentToolbar :filters="libFilters" :filter="statusFilter" @update:filter="statusFilter = $event"
                     :search="search" @update:search="search = $event"
                     search-placeholder="Filtrar series…">
       <template #extra>
-        <button class="covbtn" @click="novels.openBrowse()" title="Explorar el catálogo de novelas en español (SkyNovels)">
-          <Icon name="book" :size="14" /> Novelas
-        </button>
-        <button class="covbtn" @click="showHistory = true" title="Historial de lectura">
-          <Icon name="clock" :size="14" /> Historial
-        </button>
-        <button class="covbtn" :disabled="findingCovers" @click="findCovers" title="Buscar portadas faltantes en MangaDex">
-          <Spinner v-if="findingCovers" :size="14" /><Icon v-else name="spark" :size="14" /> Portadas
-        </button>
-        <button class="covbtn" :disabled="manga.offlineCovers?.running" @click="manga.downloadCoversOffline()" title="Descargar todas las portadas para uso offline">
-          <Spinner v-if="manga.offlineCovers?.running" :size="14" /><Icon v-else name="download" :size="14" />
-          <span v-if="manga.offlineCovers?.running">{{ manga.offlineCovers.done }}/{{ manga.offlineCovers.total }}</span><span v-else>Offline</span>
-        </button>
+        <DensityToggle />
         <Select v-model="sort" aria-label="Ordenar la biblioteca"
                 :options="SORTS.map(s => ({ value: s.id, label: s.label }))" />
+        <!-- Lo que NO se usa a diario vive detrás de `⋯`. Antes cuatro botones compartían peso
+             visual con el filtro: "buscar portadas faltantes" se hace una vez cada meses y pesaba
+             igual que lo que tocas cada día. Si algo está corriendo, el botón lo señala (una tarea
+             en marcha no puede quedarse escondida en un menú). -->
+        <button class="covbtn covbtn--more" :class="{ 'is-busy': toolsBusy }" @click="openTools"
+                data-tip="Más herramientas" aria-label="Más herramientas de la biblioteca"
+                aria-haspopup="menu" :aria-expanded="cm.open">
+          <Spinner v-if="toolsBusy" :size="14" /><Icon v-else name="menu" :size="14" />
+        </button>
       </template>
     </ContentToolbar>
-
-    <!-- Continuar leyendo — el MISMO riel que anime y series, en modo póster. -->
-    <ContinueRail v-if="!loading" :items="continueRail" poster title="Continuar leyendo"
-                  @play="({ raw }) => manga.resumeManga(raw)" />
 
     <!-- Grid -->
     <div v-if="loading" class="grid">
       <Skeleton v-for="n in 12" :key="n" variant="poster" />
     </div>
 
-    <EmptyState v-else-if="error" icon="globe" title="El backend no responde."
-                hint="Comprueba que el servidor esté en marcha e inténtalo de nuevo.">
-      <template #action>
-        <button class="btn" @click="load"><Icon name="spark" :size="15" /> Reintentar</button>
-      </template>
-    </EmptyState>
+    <!-- El fallo va ANTES del vacío y con SU componente: usaba `EmptyState`, el mismo que dice
+         "tu biblioteca está vacía". El texto los distinguía, el componente no — y la biblioteca de
+         anime ya usaba `ErrorState` para lo mismo. -->
+    <ErrorState v-else-if="error" title="No se pudo cargar tu biblioteca." :detail="error"
+                @retry="load" />
 
     <!-- Un estado vacío debe enseñar la SALIDA, no sólo constatar el vacío. -->
     <EmptyState v-else-if="!filtered.length" icon="library"
@@ -324,6 +341,18 @@ watch(() => manga.libraryDirty, () => load())
                  @open="openItem(m)" @play="m.kind === 'novel' ? openItem(m) : manga.resumeManga(m)"
                  @contextmenu.prevent="openMenu($event, m)" />
     </TransitionGroup>
+
+    <!-- Las cifras de la colección, al PIE. Estaban justo bajo el hero, en el sitio de máxima
+         prominencia, y no responden a ninguna pregunta que te hagas al abrir la sección: no son
+         accionables y no cambian. Aquí siguen estando (dan gusto verlas) sin competir con lo que
+         sí vas a tocar. Se ocultan mientras carga y si no hay nada. -->
+    <p v-if="!loading && !error && items.length" class="ltotals">
+      <span><b>{{ totals.series }}</b> series</span>
+      <span class="ltotals__dot" />
+      <span><b>{{ totals.chapters }}</b> capítulos</span>
+      <span class="ltotals__dot" />
+      <span class="ltotals__4k"><b>{{ totals.upscaled }}</b> en 4K</span>
+    </p>
 
     <!-- Para ti: recomendaciones basadas en tu biblioteca (AniList) — al final del todo -->
     <MangaRecRail v-if="!loading && (manga.forYouLoading || manga.forYou.length)"
@@ -351,6 +380,10 @@ watch(() => manga.libraryDirty, () => load())
    apaisadas y otras normales porque la regla global `.blurup + img {position:relative}`
    dejaba la imagen principal en flujo y su aspecto influía en la caja. Escala con rem. */
 
+/* El hero rompe el padding de `.view` para llegar borde a borde, igual que `.alib__hero` en
+   anime. El margen inferior es corto a propósito: la imagen ya se disuelve en el fondo. */
+.lhero { margin: calc(-1 * var(--s-4)) calc(-1 * var(--s-6)) var(--s-1); }
+
 /* ── Hero ─────────────────────────────────────────────────────────────── */
 .lhead {
   display: flex; align-items: flex-end; justify-content: space-between;
@@ -366,11 +399,14 @@ watch(() => manga.libraryDirty, () => load())
 .lhead__tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
 .lhead__title { font-size: var(--fs-3xl); }
 
-.lhead__stats { display: flex; gap: var(--s-6); }
-.stat { display: flex; flex-direction: column; }
-.stat__num { font-family: var(--font-display); font-size: var(--fs-2xl); font-weight: 600; line-height: 1; }
-.stat__label { font-size: var(--fs-xs); color: var(--ink-faint); margin-top: 4px; text-transform: lowercase; }
-.stat--accent .stat__num { color: var(--cyan); }
+/* Totales de la colección, al pie: una línea discreta, no tres cifras en tamaño display.
+   Al perder el sitio prominente pierden también el peso tipográfico — si siguieran a --fs-2xl
+   competirían con la rejilla desde abajo, que es el mismo problema movido de sitio. */
+.ltotals { display: flex; align-items: center; justify-content: center; gap: var(--s-3);
+  margin: var(--s-6) auto var(--s-2); font-size: var(--fs-xs); color: var(--ink-faint); }
+.ltotals b { font-family: var(--font-mono); font-weight: 600; color: var(--ink-soft); }
+.ltotals__dot { width: 3px; height: 3px; border-radius: 50%; background: var(--line-strong); }
+.ltotals__4k b { color: var(--cyan); }
 
 /* ── Toolbar ──────────────────────────────────────────────────────────── */
 .toolbar {
@@ -405,13 +441,14 @@ watch(() => manga.libraryDirty, () => load())
 .covbtn { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-3); border-radius: var(--r-md); font-size: var(--fs-sm); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }
 .covbtn:hover:not(:disabled) { color: var(--azure-bright); border-color: var(--azure); }
 .covbtn:disabled { opacity: .6; }
+/* `⋯`: cuadrado, sin etiqueta — es un contenedor, no una acción, y no debe competir con el
+   filtro ni con el orden. Cuando hay algo corriendo dentro se tiñe de acento para que la tarea
+   no quede invisible por estar guardada. */
+.covbtn--more { padding: var(--s-2); min-width: 2.125rem; justify-content: center; }
+.covbtn--more.is-busy { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 
-/* ── Grid ─────────────────────────────────────────────────────────────── */
-.grid { position: relative;
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(14.0625rem, 1fr));
-  gap: var(--s-6) var(--s-5);
-}
+/* Ancho base propio; el resto de la rejilla (densidad, hueco, móvil) vive en base.css */
+.grid { --card-min: 14.0625rem; }
 /* ── Empty / error ────────────────────────────────────────────────────── */
 .empty {
   display: flex; flex-direction: column; align-items: center; gap: var(--s-3);
@@ -428,7 +465,6 @@ watch(() => manga.libraryDirty, () => load())
 
 @media (max-width: 540px) {
   .view { padding: var(--s-3) var(--s-4) var(--s-8); }
-  .grid { grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: var(--s-5) var(--s-3); }
   .lhead__stats { gap: var(--s-5); }
 }
 </style>

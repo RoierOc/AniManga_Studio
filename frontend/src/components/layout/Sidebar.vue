@@ -56,7 +56,7 @@ const isActive = (item) =>
         <span class="brand__name">AniManga</span>
         <span class="brand__sub">STUDIO</span>
       </div>
-      <button class="brand__collapse" @click="ui.toggleSidebar()" :title="ui.sidebarCollapsed ? 'Expandir' : 'Colapsar'">
+      <button class="brand__collapse" @click="ui.toggleSidebar()" :data-tip="ui.sidebarCollapsed ? 'Expandir' : 'Colapsar'">
         <Icon name="chevron" :size="16" :style="{ transform: ui.sidebarCollapsed ? 'none' : 'rotate(180deg)' }" />
       </button>
     </div>
@@ -75,7 +75,7 @@ const isActive = (item) =>
         <button
           v-for="item in g.items" :key="item.id + (item.sub || '')"
           class="nav__item" :class="{ 'is-active': isActive(item) }"
-          @click="select(item, g)" :title="item.label"
+          @click="select(item, g)" :data-tip="item.label"
         >
           <span class="nav__rail" />
           <Icon :name="item.icon" :size="19" class="nav__icon" />
@@ -86,13 +86,13 @@ const isActive = (item) =>
 
     <!-- Footer status -->
     <div class="sidebar__foot">
-      <div v-if="ui.hiddenModeActive" class="status-chip status-chip--hid" title="Estás en la biblioteca oculta. Vuelve a la principal desde Ajustes.">
+      <div v-if="ui.hiddenModeActive" class="status-chip status-chip--hid" data-tip="Estás en la biblioteca oculta. Vuelve a la principal desde Ajustes.">
         <span class="status-chip__dot" />
         <span class="status-chip__text">Biblioteca oculta</span>
       </div>
       <!-- Dice la VERDAD: antes se pintaba "Conectado" siempre, aunque el backend estuviera
            muerto, y era el único indicador de salud de la app. Ahora sigue al EventSource. -->
-      <div v-else class="status-chip" :class="`status-chip--${conn.tone}`" :title="conn.hint">
+      <div v-else class="status-chip" :class="`status-chip--${conn.tone}`" :data-tip="conn.hint">
         <span class="status-chip__dot" />
         <span class="status-chip__text">{{ conn.label }}</span>
       </div>

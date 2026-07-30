@@ -45,12 +45,6 @@ onBeforeUnmount(() => { document.removeEventListener('click', onDocClick); io?.d
 
 <template>
   <div class="disco">
-    <header class="disco__head">
-      <p class="eyebrow"><span class="tick" /> DESCUBRE SIN LÍMITES</p>
-      <h1>Explorar manga, manhwa y novelas</h1>
-      <p class="disco__sub">Lo más popular de todas las bases, en un solo lugar. Filtra por tipo y género, y abre cualquier obra para elegir la mejor versión.</p>
-    </header>
-
     <!-- Barra de filtros -->
     <div class="filters">
       <label class="fsearch">
@@ -148,12 +142,6 @@ onBeforeUnmount(() => { document.removeEventListener('click', onDocClick); io?.d
 
 <style scoped>
 .disco { padding: 0 var(--s-6) var(--s-8); max-width: var(--content-max); margin: 0 auto; }
-.disco__head { padding: var(--s-5) 0 var(--s-4); }
-.eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs);
-  letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
-.tick { width: 1.6rem; height: 1px; background: var(--azure); opacity: .7; }
-.disco__head h1 { font-family: var(--font-display); font-size: var(--fs-2xl); font-weight: 700; line-height: var(--lh-tight); }
-.disco__sub { color: var(--ink-soft); font-size: var(--fs-sm); margin-top: var(--s-2); max-width: 58ch; }
 
 /* ── Barra de filtros ── */
 .filters { position: sticky; top: 0; z-index: 8; padding: var(--s-3) 0 var(--s-4);

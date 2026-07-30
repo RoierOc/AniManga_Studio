@@ -7,6 +7,7 @@ import { ANIME_STATUS, animeFormatLabel, animeEpLabel, batchInfo, fmtCountdown, 
 import { imgProxy } from '@/lib/img'
 import { coverRGB, vivid } from '@/lib/coverColor'
 import { formatBytes } from '@/lib/format'
+import { useMultiSelect } from '@/lib/useMultiSelect'
 import EpisodeCard from '@/components/anime/EpisodeCard.vue'
 import EpisodeRow from '@/components/anime/EpisodeRow.vue'
 import Icon from '@/components/ui/Icon.vue'
@@ -15,6 +16,7 @@ import Spinner from '@/components/ui/Spinner.vue'
 import { useSubBatchStore } from '@/stores/subbatch'
 
 const store = useAnimeStore()
+const ui = useUiStore()
 const subbatch = useSubBatchStore()
 const anime = computed(() => store.detail)
 
@@ -86,6 +88,33 @@ const placeholders = computed(() => {
 })
 const mainEps = computed(() => realEps.value.length ? realEps.value : placeholders.value)
 const specials = computed(() => (anime.value?.episodes || []).filter(e => e.ep_type === 'special'))
+
+/* ── Selección por lote de episodios ────────────────────────────────────────────────────────
+ * Liberar espacio de 6 episodios ya vistos eran 6 gestos idénticos. El mecanismo (shift+clic y
+ * clic-arrastre) es el mismo que la lista de capítulos de manga, ahora compartido.
+ * El orden que se le pasa es el VISIBLE (principales y luego especiales) para que el rango de
+ * shift+clic siga lo que el usuario tiene delante. Sólo entra lo que está en disco: la única
+ * acción de lote borra archivos, y marcar algo que no se puede borrar sería mentir. */
+const selectableEps = computed(() =>
+  [...mainEps.value, ...specials.value].filter(e => e.in_local))
+const epSel = useMultiSelect(() => selectableEps.value.map(e => String(e.num)))
+const selectedEps = computed(() => selectableEps.value.filter(e => epSel.has(e.num)))
+const selectedBytes = computed(() => selectedEps.value.reduce((n, e) => n + (e.size || 0), 0))
+// Cambiar de serie no debe arrastrar la selección de la anterior.
+watch(() => anime.value?.id, () => epSel.clear())
+
+async function deleteSelectedEps() {
+  const eps = selectedEps.value
+  if (!eps.length) return
+  const ok = await ui.confirm({
+    title: `¿Borrar ${eps.length} episodio(s)?`,
+    body: `Se eliminan los archivos del disco${selectedBytes.value ? ` (${formatBytes(selectedBytes.value)})` : ''}.\nLa serie sigue en tu biblioteca; podrás volver a descargarlos.`,
+    confirmLabel: 'Borrar archivos', danger: true,
+  })
+  if (!ok) return
+  await store.deleteEpisodes(anime.value, eps)
+  epSel.clear()
+}
 
 const total = computed(() => anime.value?.total_episodes || 0)
 const done = computed(() => anime.value?.downloaded_count || 0)
@@ -185,12 +214,20 @@ const statusOpen = ref(false)
 const statusRef = ref(null)
 const curStatus = computed(() => ANIME_STATUS[anime.value?.status] || null)
 function pickStatus(k) { store.setStatus(anime.value, k); statusOpen.value = false }
-function onDocClick(e) { if (statusRef.value && !statusRef.value.contains(e.target)) statusOpen.value = false }
-function onDocKey(e) { if (e.key === 'Escape') statusOpen.value = false }
+// Mantenimiento (portada, enlazar, borrar, eliminar) tras «⋯»: eran 5 botones del mismo peso que
+// las acciones que sí usas a diario, con lo destructivo a un pixel de lo cosmético.
+const mgmtOpen = ref(false)
+const mgmtRef = ref(null)
+function mgmt(fn) { mgmtOpen.value = false; fn() }
+function onDocClick(e) {
+  if (statusRef.value && !statusRef.value.contains(e.target)) statusOpen.value = false
+  if (mgmtRef.value && !mgmtRef.value.contains(e.target)) mgmtOpen.value = false
+}
+function onDocKey(e) { if (e.key === 'Escape') { statusOpen.value = false; mgmtOpen.value = false } }
 onMounted(() => { document.addEventListener('click', onDocClick); document.addEventListener('keydown', onDocKey) })
 onBeforeUnmount(() => { document.removeEventListener('click', onDocClick); document.removeEventListener('keydown', onDocKey) })
 // Cerrar si se cambia de anime.
-watch(() => anime.value?.id, () => { statusOpen.value = false })
+watch(() => anime.value?.id, () => { statusOpen.value = false; mgmtOpen.value = false })
 
 const PICKER_TABS = [
   { key: 'cover', label: 'Portada' },
@@ -271,25 +308,48 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
             </div>
             <a v-if="anime.al_id" :href="`https://anilist.co/anime/${anime.al_id}`" target="_blank" rel="noopener" class="dhero__link">AniList</a>
             <a v-if="anime.mal_id" :href="`https://myanimelist.net/anime/${anime.mal_id}`" target="_blank" rel="noopener" class="dhero__link">MAL</a>
-            <a v-if="malUrl" :href="malUrl + '/userrec'" target="_blank" rel="noopener" class="dhero__link" title="Recomendaciones de la comunidad MAL">Comunidad</a>
+            <a v-if="malUrl" :href="malUrl + '/userrec'" target="_blank" rel="noopener" class="dhero__link" data-tip="Recomendaciones de la comunidad MAL">Comunidad</a>
           </div>
 
           <div class="dhero__mgmt">
             <!-- Preview (no en biblioteca): agregar + torrents -->
             <template v-if="isPreview">
-              <button v-if="!inLibrary" class="mbtn mbtn--accent" @click="store.addToLibrary(anime)" title="Añadir a Mi Anime">
+              <button v-if="!inLibrary" class="mbtn mbtn--accent" @click="store.addToLibrary(anime)" data-tip="Añadir a Mi Anime">
                 <Icon name="plus" :size="14" /> Agregar a Mi Anime
               </button>
               <button v-else class="mbtn mbtn--in" disabled><Icon name="check" :size="14" /> En Mi Anime</button>
-              <button v-if="anime.al_id" class="mbtn" @click="store.openTorrents(anime)" title="Buscar torrents">+ Torrents</button>
+              <button v-if="anime.al_id" class="mbtn" @click="store.openTorrents(anime)" data-tip="Buscar torrents">+ Torrents</button>
             </template>
-            <!-- Biblioteca: gestión completa -->
+            <!-- Biblioteca: reproducir manda; buscar torrents es lo segundo; el resto, bajo «⋯» -->
             <template v-else>
-              <button v-if="anime.al_id" class="mbtn mbtn--accent" @click="store.openTorrents(anime)" title="Buscar torrents">+ Torrents</button>
-              <button class="mbtn" @click="store.openCoverPicker(anime)" title="Cambiar portada o fondo">Cambiar portada</button>
-              <button class="mbtn" @click="store.openLinkTorrent()" title="Enlazar torrent de qBittorrent">Enlazar</button>
-              <button class="mbtn" @click="store.clearEpisodes(anime)" title="Borrar episodios para liberar espacio">Borrar eps<span v-if="diskSize" class="mbtn__sz">{{ formatBytes(diskSize) }}</span></button>
-              <button class="mbtn mbtn--danger" @click="store.removeFromLibrary(anime.id)" title="Eliminar serie">Eliminar</button>
+              <button v-if="resumeEp" class="mbtn mbtn--play" @click="store.play(anime, resumeEp)">
+                <Icon name="play" :size="16" />
+                {{ resumePct ? 'Continuar' : 'Reproducir' }} · Ep {{ resumeEp.num }}
+              </button>
+              <button v-if="anime.al_id" class="mbtn" :class="{ 'mbtn--accent': !resumeEp }"
+                      @click="store.openTorrents(anime)" data-tip="Buscar torrents">+ Torrents</button>
+              <div class="dmgmt" ref="mgmtRef">
+                <button class="mbtn mbtn--icon" :class="{ 'is-open': mgmtOpen }" data-tip="Mantenimiento"
+                        aria-haspopup="menu" :aria-expanded="mgmtOpen" aria-label="Mantenimiento"
+                        @click.stop="mgmtOpen = !mgmtOpen">⋯</button>
+                <Transition name="dstatus-pop">
+                  <ul v-if="mgmtOpen" class="dmgmt__menu" role="menu">
+                    <li role="menuitem" @click="mgmt(() => store.openCoverPicker(anime))">
+                      <Icon name="library" :size="14" /> Cambiar portada o fondo
+                    </li>
+                    <li role="menuitem" @click="mgmt(() => store.openLinkTorrent())">
+                      <Icon name="download" :size="14" /> Enlazar torrent de qBittorrent
+                    </li>
+                    <li role="menuitem" @click="mgmt(() => store.clearEpisodes(anime))">
+                      <Icon name="folder" :size="14" /> Borrar episodios
+                      <em v-if="diskSize">{{ formatBytes(diskSize) }}</em>
+                    </li>
+                    <li role="menuitem" class="is-danger" @click="mgmt(() => store.removeFromLibrary(anime.id))">
+                      <Icon name="close" :size="14" /> Eliminar de Mi Anime
+                    </li>
+                  </ul>
+                </Transition>
+              </div>
             </template>
           </div>
         </div>
@@ -341,18 +401,18 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 
     <div class="eptoolbar">
       <span class="eptoolbar__lbl">{{ mainEps.length }} episodios</span>
-      <button class="eptoolbar__batch" title="Buscar o traducir subtítulos en español de varios episodios"
+      <button class="eptoolbar__batch" data-tip="Buscar o traducir subtítulos en español de varios episodios"
               @click="openSubBatch">
         <Icon name="globe" :size="15" /> Subtítulos ES (lote)
       </button>
       <div class="epseg">
-        <button :class="{ 'is-on': epView === 'grid' }" title="Cuadrícula" @click="setEpView('grid')"><Icon name="library" :size="15" /></button>
-        <button :class="{ 'is-on': epView === 'list' }" title="Lista" @click="setEpView('list')"><Icon name="menu" :size="15" /></button>
+        <button :class="{ 'is-on': epView === 'grid' }" data-tip="Cuadrícula" @click="setEpView('grid')"><Icon name="library" :size="15" /></button>
+        <button :class="{ 'is-on': epView === 'list' }" data-tip="Lista" @click="setEpView('list')"><Icon name="menu" :size="15" /></button>
       </div>
     </div>
 
     <div v-if="epView === 'list'" class="eplist">
-      <EpisodeRow v-for="ep in mainEps" :key="ep.num" :anime="anime" :ep="ep" :batch="batch" :current="isCurrent(ep)" />
+      <EpisodeRow v-for="ep in mainEps" :key="ep.num" :anime="anime" :ep="ep" :batch="batch" :current="isCurrent(ep)" :sel="epSel" />
     </div>
     <div v-else class="epgrid">
       <EpisodeCard v-for="ep in mainEps" :key="ep.num" :anime="anime" :ep="ep" :batch="batch" />
@@ -361,12 +421,25 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
     <template v-if="specials.length">
       <div class="epgrid__sep"><Icon name="spark" :size="14" /> Especiales / Extras</div>
       <div v-if="epView === 'list'" class="eplist">
-        <EpisodeRow v-for="ep in specials" :key="'sp-' + ep.num" :anime="anime" :ep="ep" :batch="batch" />
+        <EpisodeRow v-for="ep in specials" :key="'sp-' + ep.num" :anime="anime" :ep="ep" :batch="batch" :sel="epSel" />
       </div>
       <div v-else class="epgrid">
         <EpisodeCard v-for="ep in specials" :key="'sp-' + ep.num" :anime="anime" :ep="ep" :batch="batch" />
       </div>
     </template>
+    <!-- Barra de lote: sólo existe mientras hay algo marcado. Flotante para que no empuje la
+         lista al aparecer y siga alcanzable con la lista desplazada. -->
+    <Transition name="epbatch">
+      <div v-if="epSel.count.value" class="epbatch">
+        <span class="epbatch__n">{{ epSel.count.value }} seleccionado(s)</span>
+        <span v-if="selectedBytes" class="epbatch__sz">{{ formatBytes(selectedBytes) }}</span>
+        <button class="epbatch__btn" @click="epSel.all()">Todos</button>
+        <button class="epbatch__btn epbatch__btn--danger" @click="deleteSelectedEps">
+          <Icon name="trash" :size="14" /> Borrar archivos
+        </button>
+        <button class="epbatch__btn epbatch__x" data-tip="Quitar la selección" @click="epSel.clear()"><Icon name="close" :size="14" /></button>
+      </div>
+    </Transition>
     </template><!-- /tab eps -->
 
     <!-- Pestaña Detalles: sinopsis + ficha + tags -->
@@ -616,9 +689,12 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 
 .dstatus-pop-enter-active, .dstatus-pop-leave-active { transition: opacity var(--t-fast), transform var(--t-fast) var(--ease-silk); transform-origin: bottom left; }
 .dstatus-pop-enter-from, .dstatus-pop-leave-to { opacity: 0; transform: translateY(4px) scale(.97); }
-.dhero__link { padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); background: rgba(255,255,255,.12);
-  border: 1px solid rgba(255,255,255,.16); backdrop-filter: blur(8px); color: var(--ink); font-size: var(--fs-sm); transition: all var(--t-fast); }
-.dhero__link:hover { color: #fff; border-color: var(--azure); background: rgba(255,255,255,.2); }
+/* AniList/MAL/Comunidad son ENLACES a otra web, no acciones de la app: con forma de botón competían
+   con «Reproducir». Ahora son texto subrayado al pasar, como cualquier enlace. */
+.dhero__link { padding: var(--s-1) 0; color: var(--ink-soft); font-size: var(--fs-sm);
+  border-bottom: 1px solid transparent; transition: color var(--t-fast), border-color var(--t-fast); }
+.dhero__link:hover { color: #fff; border-bottom-color: rgba(255,255,255,.45); }
+.dhero__row .dhero__link + .dhero__link { margin-left: var(--s-1); }
 
 /* Pestañas bajo el hero — subrayado estilo Crunchyroll */
 .dtabs { display: flex; gap: var(--s-5); margin: 0 0 var(--s-6); border-bottom: 1px solid var(--line); }
@@ -701,6 +777,26 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .mbtn--accent:hover { background: var(--azure-bright); color: #fff; }
 .mbtn--accent, .mbtn--in { display: inline-flex; align-items: center; gap: 0.3125rem; }
 .mbtn--in { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 40%, transparent); background: color-mix(in srgb, var(--jade) 12%, transparent); opacity: 1; }
+
+/* Reproducir es LA acción de esta pantalla: blanco sólido sobre el arte, como en cualquier app de
+   vídeo. El resto de la fila queda en cristal translúcido, un escalón por debajo. */
+.mbtn--play { display: inline-flex; align-items: center; gap: 0.4375rem; padding: 0.5rem 1.125rem;
+  font-size: var(--fs-sm); font-weight: 650; color: #0a0d15; background: #fff; border-color: transparent;
+  box-shadow: 0 6px 20px rgba(0,0,0,.35); }
+.mbtn--play:hover { color: #0a0d15; background: #fff; border-color: transparent; transform: translateY(-1px); }
+.mbtn--icon { font-size: var(--fs-md); line-height: 1; padding: 0.375rem 0.625rem; letter-spacing: .06em; }
+.mbtn--icon.is-open { background: rgba(255,255,255,.22); color: #fff; }
+
+.dmgmt { position: relative; }
+.dmgmt__menu { position: absolute; z-index: 20; bottom: calc(100% + var(--s-1)); left: 0; min-width: 17.5rem; white-space: nowrap;
+  list-style: none; margin: 0; padding: var(--s-1); border-radius: var(--r-md);
+  background: rgba(12,16,26,.97); border: 1px solid var(--line-2); backdrop-filter: blur(14px); box-shadow: var(--shadow-xl); }
+.dmgmt__menu li { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3);
+  border-radius: var(--r-sm); font-size: var(--fs-sm); color: var(--ink); cursor: pointer; transition: background var(--t-fast), color var(--t-fast); }
+.dmgmt__menu li:hover { background: rgba(255,255,255,.08); }
+.dmgmt__menu li.is-danger { color: var(--coral); }
+.dmgmt__menu li.is-danger:hover { background: color-mix(in srgb, var(--coral) 14%, transparent); }
+.dmgmt__menu em { margin-left: auto; font-style: normal; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--cyan); }
 
 .linkpanel { margin: 0 0 var(--s-6); padding: var(--s-4); border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--surface); }
 .linkpanel__head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; margin-bottom: var(--s-3); }
@@ -803,5 +899,31 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
   .epgrid { grid-template-columns: repeat(auto-fill, minmax(13.5rem, 1fr)); gap: var(--s-3); }
   .dresume__thumb { width: 8rem; }
   .dresume__btn { padding: var(--s-2) var(--s-3); }
+}
+
+/* ── Barra de selección por lote de episodios ─────────────────────────────── */
+.epbatch {
+  position: sticky; bottom: var(--s-4); z-index: 20;
+  display: flex; align-items: center; gap: var(--s-3);
+  margin: var(--s-4) auto 0; width: fit-content; max-width: 100%;
+  padding: var(--s-2) var(--s-3); border-radius: var(--r-pill);
+  background: var(--glass-strong); backdrop-filter: blur(16px);
+  border: 1px solid var(--line-2); box-shadow: var(--shadow-lg);
+}
+.epbatch__n { font-size: var(--fs-sm); font-weight: 600; color: var(--ink); white-space: nowrap; }
+.epbatch__sz { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
+.epbatch__btn {
+  display: inline-flex; align-items: center; gap: 0.375rem; white-space: nowrap;
+  padding: 0.375rem 0.75rem; border-radius: var(--r-pill);
+  font-size: var(--fs-xs); font-weight: 600; color: var(--ink-soft);
+  border: 1px solid var(--line); transition: all var(--t-fast);
+}
+.epbatch__btn:hover { color: var(--ink); border-color: var(--line-strong); background: var(--surface); }
+.epbatch__btn--danger:hover { color: #fff; background: var(--coral); border-color: transparent; }
+.epbatch__x { padding: 0.375rem; }
+.epbatch-enter-active, .epbatch-leave-active { transition: opacity var(--t-fast) var(--ease-silk), transform var(--t-fast) var(--ease-silk); }
+.epbatch-enter-from, .epbatch-leave-to { opacity: 0; transform: translateY(0.5rem); }
+@media (prefers-reduced-motion: reduce) {
+  .epbatch-enter-active, .epbatch-leave-active { transition: none; }
 }
 </style>

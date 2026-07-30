@@ -72,7 +72,13 @@ export const useMediaStore = defineStore('media', {
 
   getters: {
     // Un servicio caído se DICE; nunca se disfraza de biblioteca vacía.
-    offline: (s) => Object.entries(s.status).filter(([, v]) => v && !v.online).map(([k]) => k),
+    // Dos fuentes, porque son dos preguntas distintas: `status` es el ping (`system/status`) y
+    // `errors` es lo que falló al pedir la lista. Un Sonarr que contesta al ping pero revienta
+    // al listar sólo aparecía en `errors`… que no leía nadie: biblioteca vacía en silencio.
+    offline: (s) => [...new Set([
+      ...Object.entries(s.status).filter(([, v]) => v && !v.online).map(([k]) => k),
+      ...Object.keys(s.errors),
+    ])],
 
     all: (s) => [...s.series, ...s.movies],
     discoverHasMore: (s) => s.discoverPage < s.discoverTotalPages,
@@ -311,25 +317,39 @@ export const useMediaStore = defineStore('media', {
       const playlist = eps
         .filter(e => e.season === ep.season)
         .map(e => this._epForPlayer(item, e))
+      // El episodio ya normalizado trae el minuto VIVO; usar `ep.pos` de nuevo aquí lo tiraría.
+      const cur = this._epForPlayer(item, ep)
       anime.playNative(
         { id: null, title: item.title, cover: item.poster },
-        this._epForPlayer(item, ep),
-        ep.pos || 0,
+        cur,
+        cur.pos,
         {
-          progressKey: `series:${item.id}:${ep.id}`,
+          progressKey: cur.progressKey,
           playlist: playlist.length ? playlist : null,
           onProgress: p => this.notePlayback(p),
         },
       )
     },
 
+    /* Posición de reanudación REAL de una clave: lo que dejó el reproductor hace un momento
+     * manda sobre lo que trajo Sonarr. Sin esto, salir de un episodio y volver a entrar
+     * reanudaba en el minuto viejo: la lista de episodios se recarga cada mucho, así que el
+     * `pos` de la API sigue siendo el de la sesión anterior hasta un F5. Lo usan la ficha, el
+     * riel de "Seguir viendo" y el panel del reproductor — un solo sitio para los tres. */
+    livePos(key, fallback = 0) {
+      const p = this.progressByKey[key]
+      return p ? p.pos : (fallback || 0)
+    },
+
     _epForPlayer(item, e) {
+      const progressKey = `series:${item.id}:${e.id}`
       return {
         num: e.num, season: e.season, in_local: !!e.has_file, local_path: e.path,
         // `still` es una URL remota (TVDB vía Sonarr): pasa por el proxy o el WebView la bloquea.
-        title: e.title, thumb: e.still ? imgProxy(e.still) : '', pos: e.pos || 0,
+        title: e.title, thumb: e.still ? imgProxy(e.still) : '',
+        pos: this.livePos(progressKey, e.pos),
         label: `T${String(e.season).padStart(2, '0')}E${String(e.num).padStart(2, '0')}`,
-        progressKey: `series:${item.id}:${e.id}`,
+        progressKey,
       }
     },
 
@@ -345,9 +365,20 @@ export const useMediaStore = defineStore('media', {
         [key]: { pos: watched ? 0 : Math.floor(pos), duration, watched },
       }
       const cw = this.continueItems.find(c => `series:${c.series_id}:${c.episode_id}` === key)
-      if (cw) { cw.pos = watched ? 0 : Math.floor(pos); cw.duration = duration || cw.duration; cw.at = Math.floor(Date.now() / 1000) }
+      if (cw) {
+        cw.pos = watched ? 0 : Math.floor(pos); cw.duration = duration || cw.duration
+        cw.at = Math.floor(Date.now() / 1000)
+        // Reordena el riel al instante: "Seguir viendo" va por lo más reciente y esto ES lo
+        // más reciente. Sin reordenar, lo que acabas de ver seguía apareciendo el cuarto.
+        this.continueItems = [cw, ...this.continueItems.filter(c => c !== cw)]
+      } else if (this._railMiss !== key) {
+        // Episodio que aún no estaba en el riel (primera vez que lo ves): se pide la lista UNA
+        // vez, no en cada latido de 5 s, para que aparezca sin recargar la interfaz.
+        this._railMiss = key
+        this.loadContinue()
+      }
       // Al terminar un episodio, el siguiente lo decide el backend: ahí sí toca releer.
-      if (watched) this.loadContinue()
+      if (watched) { this._railMiss = null; this.loadContinue() }
     },
 
     async playContinue(cw) {
@@ -378,16 +409,27 @@ export const useMediaStore = defineStore('media', {
       )
     },
 
-    /* "Borrar eps" de anime: libera disco SIN perder la serie ni el progreso. */
+    /* "Borrar eps" de anime: libera disco SIN perder la serie ni el progreso.
+     * El backend borra el fichero Y quita el torrent — sin lo segundo el hardlink que siembra
+     * qBittorrent deja los bytes puestos y Sonarr re-importa el episodio (era el bug). */
     async freeSpace(item, { season = null } = {}) {
       const ui = useUiStore()
+      const isMovie = (item.kind || 'series') === 'movie'
       try {
-        const qs = season != null ? `?season=${season}` : ''
-        const d = await api.del(`/api/media/series/${item.id}/files${qs}`)
+        const url = isMovie
+          ? `/api/media/movie/${item.id}/file`
+          : `/api/media/series/${item.id}/files${season != null ? `?season=${season}` : ''}`
+        const d = await api.del(url)
         if (!d.deleted) { ui.toast('No había archivos que borrar', 'info'); return d }
         const msg = `✓ ${d.deleted} archivo(s) borrados · ${formatBytes(d.freed)} liberados`
-        // Que algunos fallen no puede pasar por un éxito: se dice cuántos y se avisa en ámbar.
-        ui.toast(d.failed ? `${msg} — ${d.failed} no se pudieron borrar` : msg, d.failed ? 'warn' : 'ok')
+        // Un fallo parcial NO puede pasar por un éxito. Y si el torrent sigue vivo el espacio
+        // no está realmente libre (los datos siguen sembrándose): se dice, no se calla.
+        const pegas = [
+          d.failed ? `${d.failed} no se pudieron borrar` : '',
+          d.torrents_failed ? `${d.torrents_failed} torrent(s) siguen sembrando` : '',
+          d.torrents_error ? 'no se pudo consultar el torrent: el espacio puede seguir ocupado' : '',
+        ].filter(Boolean)
+        ui.toast(pegas.length ? `${msg} — ${pegas.join('; ')}` : msg, pegas.length ? 'warn' : 'ok')
         await this.load(true)
         return d
       } catch (e) {
@@ -419,11 +461,13 @@ export const useMediaStore = defineStore('media', {
       const anime = useAnimeStore()
       try {
         const f = await api.get(`/api/media/movie/${item.id}/file`)
+        // Mismo criterio que en series: el minuto vivo manda sobre el que devuelve Radarr.
+        const progressKey = `movie:${item.id}`
         anime.playNative(
           { id: null, title: item.title, cover: item.poster },
           { num: 1, in_local: true, local_path: f.path, title: item.title },
-          f.pos || 0,
-          { progressKey: `movie:${item.id}`, onProgress: p => this.notePlayback(p) },
+          this.livePos(progressKey, f.pos),
+          { progressKey, onProgress: p => this.notePlayback(p) },
         )
       } catch (e) {
         // El backend distingue "aún no descargada" de "Radarr falló": se respeta.

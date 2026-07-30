@@ -66,7 +66,7 @@ onMounted(() => store.loadList())
     <div v-else class="pv">
       <div class="pv__top">
         <input v-model="st.title" type="text" placeholder="Título de la serie…" class="pv__title" />
-        <button class="pv__x" title="Cancelar" @click="reset"><Icon name="close" :size="16" /></button>
+        <button class="pv__x" data-tip="Cancelar" @click="reset"><Icon name="close" :size="16" /></button>
       </div>
 
       <div class="pv__meta">
@@ -91,7 +91,7 @@ onMounted(() => store.loadList())
         <span class="muted">Capítulos detectados — confirma o ajusta:</span>
         <div class="pv__renum">
           <input v-model="renumBase" type="number" step="1" placeholder="nº 1er cap" class="pv__numin pv__numin--sm" />
-          <button class="btn-xs" :disabled="!renumBase" @click="store.renumberFrom(renumBase)" title="Renumerar todos los capítulos desde este número">↻ Renumerar</button>
+          <button class="btn-xs" :disabled="!renumBase" @click="store.renumberFrom(renumBase)" data-tip="Renumerar todos los capítulos desde este número">↻ Renumerar</button>
           <button class="btn-xs" @click="showGrid = !showGrid">{{ showGrid ? 'Ocultar' : 'Ajustar' }} cortes</button>
         </div>
       </div>
@@ -105,7 +105,7 @@ onMounted(() => store.loadList())
             </label>
             <span class="muted">{{ c.count }} págs · pág {{ c.start + 1 }}–{{ c.start + c.count }}</span>
           </div>
-          <button v-if="i > 0" class="pv__merge" title="Unir con el capítulo anterior" @click="store.toggleCut(c.start)"><Icon name="close" :size="12" /></button>
+          <button v-if="i > 0" class="pv__merge" data-tip="Unir con el capítulo anterior" @click="store.toggleCut(c.start)"><Icon name="close" :size="12" /></button>
         </li>
       </ul>
 
@@ -116,7 +116,7 @@ onMounted(() => store.loadList())
           <button v-for="idx in st.count" :key="idx - 1" class="pv__cell"
                   :class="{ 'is-start': st.chapters.some(c => c.start === idx - 1), 'is-cover': st.cover === idx - 1 }"
                   @click="store.toggleCut(idx - 1)" @contextmenu.prevent="store.setCover(idx - 1)"
-                  :title="`Página ${idx} · clic: corte · clic derecho: portada`">
+                  :data-tip="`Página ${idx} · clic: corte · clic derecho: portada`">
             <img :src="store.thumbUrl(idx - 1)" class="pv__cellimg" loading="lazy" decoding="async" alt="" referrerpolicy="no-referrer" />
             <span v-if="st.chapters.some(c => c.start === idx - 1)" class="pv__cellbadge">✂</span>
             <span v-else-if="st.cover === idx - 1" class="pv__cellbadge pv__cellbadge--cov">★</span>
@@ -222,10 +222,10 @@ onMounted(() => store.loadList())
 
 /* ── Grid de importados ───────────────────────────────────────────────── */
 .sect { font-size: var(--fs-lg); margin: var(--s-7) 0 var(--s-4); }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(14.0625rem, 1fr)); gap: var(--s-6) var(--s-5); }
+/* Ancho base propio; el resto de la rejilla (densidad, hueco, móvil) vive en base.css */
+.grid { --card-min: 14.0625rem; }
 
 @media (max-width: 540px) {
   .view { padding: var(--s-3) var(--s-4) var(--s-8); }
-  .grid { grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr)); gap: var(--s-5) var(--s-3); }
 }
 </style>

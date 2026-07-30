@@ -6,6 +6,7 @@ import { useVersionsStore } from './versions'
 import { taskId, pageUrl, pageUrlOriginal, pageUrlUpscaled } from '@/lib/manga'
 
 let statusBound = false
+let _progressTimer = 0   // agrupa las subidas del progreso de lectura
 let previewTimer = null
 let upDoneSeen = new Set()   // upscale ids already refreshed-for (bounded, pruned each SSE tick)
 // Activity center bookkeeping (module-level so it survives store re-creation in HMR):
@@ -232,6 +233,19 @@ export const useMangaStore = defineStore('manga', {
     _nextPrefetch: { title: null, chapter: null, source: null, pages: null },
     onlineLoadingId: null,    // chapter id currently resolving pages for "Leer" (online), for button spinners
     mode: localStorage.getItem('reader-mode') || 'paged',   // paged | webtoon
+    // Desfase de la doble página. Casi todos los tomos empiezan con una portada SUELTA, así que
+    // emparejar 0-1, 2-3… deja el resto del capítulo con las dobles páginas partidas por la mitad.
+    // MangaDex lo llama "offset double page"; es un clic, no un ajuste que haya que entender.
+    spreadOffset: Number(localStorage.getItem('reader-spread-offset') || 0) ? 1 : 0,
+    // Ancho de la tira en modo webtoon, en % del ancho de la ventana. Estaba clavado en 900 px:
+    // en un monitor grande la tira se quedaba corta y en uno pequeño no cabía.
+    webtoonWidth: Number(localStorage.getItem('reader-webtoon-width') || 52),
+    // Hueco entre páginas de la tira. Iban PEGADAS: con un capítulo partido en 30 trozos no se
+    // distingue dónde acaba uno y empieza el otro.
+    webtoonGap: Number(localStorage.getItem('reader-webtoon-gap') ?? 8),
+    // Auto-scroll de la tira, en px/s. La velocidad se recuerda; el estado encendido/apagado NO
+    // (nadie quiere que un capítulo empiece a moverse solo al abrirlo).
+    autoScrollSpeed: Number(localStorage.getItem('reader-autoscroll') || 60),
     // Override manual de modo por serie (título → 'paged'|'webtoon'). Si existe, gana
     // sobre la auto-detección webtoon vs manga; si no, se detecta por aspect-ratio.
     readerModeOverride: JSON.parse(localStorage.getItem('reader-mode-series') || '{}'),
@@ -490,6 +504,9 @@ export const useMangaStore = defineStore('manga', {
     // The pair is rendered right-to-left when dir === 'rtl' (manga order).
     spreadPair() {
       if (!this.spreadActive) return [this.page]
+      // Con desfase, la página 0 va SOLA (como la portada de un tomo) y el emparejamiento
+      // arranca en la 1. Sin él, el par es siempre par-impar.
+      if (this.spreadOffset && this.page === 0) return [0]
       const hasNext = this.page + 1 < this.pages.length
       return hasNext ? [this.page, this.page + 1] : [this.page]
     },
@@ -570,6 +587,11 @@ export const useMangaStore = defineStore('manga', {
     init() {
       if (statusBound) return
       statusBound = true
+      // Reconcilia el progreso de lectura con su copia durable, y no dejes la última página
+      // leída sólo en memoria: al ocultar la pestaña o cerrar, se vacía lo pendiente.
+      this._hydrateProgress()
+      document.addEventListener('visibilitychange', () => { if (document.hidden) this._flushProgress() })
+      window.addEventListener('beforeunload', () => this._flushProgress())
       // Sync the eco toggle (default on) to the backend so MPV-friendly GPU
       // throttling applies from first load, not only after the user toggles it.
       api.post('/api/upscale/mode', { eco: this.eco }).catch(() => {})
@@ -1619,6 +1641,7 @@ export const useMangaStore = defineStore('manga', {
         delete e.lastChapter; delete e.lastPage; delete e.lastTotal; delete e.ts
       }
       this._persistProgress()
+      this._forgetRemote({ chapters: { [mangaId]: [String(chapter)] } })
     },
 
     // Delete a whole manga from the library: downloaded + upscaled files, and the
@@ -1636,7 +1659,10 @@ export const useMangaStore = defineStore('manga', {
       // Olvida el progreso de lectura (localStorage) para que NO siga en "Continuar leyendo"
       // ni deje reanudar un manga eliminado. Se hace ya (no en el timeout) porque el borrado
       // es lo que el usuario pidió; si deshace, no recupera la posición exacta (aceptable).
-      if (this.progress[title]) { delete this.progress[title]; this._persistProgress() }
+      if (this.progress[title]) {
+        delete this.progress[title]; this._persistProgress()
+        this._forgetRemote({ titles: [title] })
+      }
       if (!this.pendingDelete.includes(title)) this.pendingDelete = [...this.pendingDelete, title]
       this.libraryDirty++
       let undone = false
@@ -2375,7 +2401,9 @@ export const useMangaStore = defineStore('manga', {
       this._saveProgress()
       if (i >= this.pages.length - 1) this.markRead(this.reader?.chapter)
     },
-    nextPage() { const step = this.spreadActive ? 2 : 1; this.setPage(Math.min(this.page + step, this.pages.length - 1)) },
+    // El paso lo dicta el par REAL: con desfase, la primera página va sola y avanzar dos se
+    // saltaría la siguiente sin que nada lo dijera.
+    nextPage() { const step = this.spreadActive ? this.spreadPair.length : 1; this.setPage(Math.min(this.page + step, this.pages.length - 1)) },
     prevPage() { const step = this.spreadActive ? 2 : 1; this.setPage(Math.max(this.page - step, 0)) },
 
     setMode(m) {
@@ -2447,12 +2475,44 @@ export const useMangaStore = defineStore('manga', {
     cycleFit() { const M = ['width', 'height', 'original']; this.fit = M[(M.indexOf(this.fit) + 1) % 3]; localStorage.setItem('reader-fit', this.fit) },
     setFit(f) { if (['width', 'height', 'original'].includes(f)) { this.fit = f; localStorage.setItem('reader-fit', f) } },
     toggleDir() { this.dir = this.dir === 'rtl' ? 'ltr' : 'rtl'; localStorage.setItem('reader-dir', this.dir) },
-    // Spread on: snap to an even page so pairs stay aligned (0-1, 2-3, …).
+    // Spread on: snap to an aligned page so the pairs no se descuadran (0-1, 2-3, … o, con
+    // desfase, 0 sola y luego 1-2, 3-4, …).
     toggleSpread() {
       this.spread = !this.spread
       localStorage.setItem('reader-spread', this.spread ? '1' : '0')
-      if (this.spread && this.page % 2 === 1) this.page = this.page - 1
+      if (this.spread) this._alignSpread()
       this.resetZoom()
+    },
+    // Mueve la página actual al inicio de su par. Sin esto, al activar el desfase la página
+    // visible se queda a mitad de par y el resto del capítulo va desplazado una página.
+    _alignSpread() {
+      if (this.page === 0) return
+      const aligned = (this.page - this.spreadOffset) % 2 === 0
+      if (!aligned) this.page = Math.max(0, this.page - 1)
+    },
+    toggleSpreadOffset() {
+      this.spreadOffset = this.spreadOffset ? 0 : 1
+      localStorage.setItem('reader-spread-offset', String(this.spreadOffset))
+      this._alignSpread()
+    },
+    setWebtoonGap(px) {
+      this.webtoonGap = Math.max(0, Math.min(48, Math.round(Number(px) || 0)))
+      localStorage.setItem('reader-webtoon-gap', String(this.webtoonGap))
+    },
+    setAutoScrollSpeed(px) {
+      this.autoScrollSpeed = Math.max(10, Math.min(400, Math.round(Number(px) || 60)))
+      localStorage.setItem('reader-autoscroll', String(this.autoScrollSpeed))
+    },
+    setWebtoonWidth(pct) {
+      this.webtoonWidth = Math.max(25, Math.min(100, Math.round(Number(pct) || 52)))
+      localStorage.setItem('reader-webtoon-width', String(this.webtoonWidth))
+    },
+    // Saltar a CUALQUIER capítulo sin salir del lector (en MangaDex es un desplegable; aquí
+    // antes había que cerrar, buscar la fila y volver a abrir). El índice es sobre chapterListAsc.
+    async goChapterAt(i) {
+      const row = this.chapterListAsc[i]
+      if (!row || String(row.chapter) === String(this.reader?.chapter)) return
+      await this._readRow(row)
     },
 
     zoomBy(delta) {
@@ -2481,8 +2541,46 @@ export const useMangaStore = defineStore('manga', {
       else await this.read(row.chapter, this.upscaled[row.chapter] ? 'upscaled' : 'auto')
     },
 
-    /* reading progress (localStorage, per manga id) */
-    _persistProgress() { localStorage.setItem('manga-progress-v1', JSON.stringify(this.progress)) },
+    /* Progreso de lectura (qué capítulos has leído y por dónde vas en cada obra).
+     *
+     * El localStorage es la copia LOCAL: instantánea y funciona sin backend. Pero no es un
+     * sitio donde guardar datos — limpiar el almacenamiento del WebView, reinstalar o cambiar
+     * de máquina se llevaba por delante el mapa de leídos de TODA la biblioteca, y ni la copia
+     * semanal ni "Recuperar biblioteca" lo traían de vuelta (el historial son los últimos 500
+     * capítulos terminados: no reconstruye ni los leídos por obra ni la página).
+     * Ahora hay una copia DURABLE en el backend (`/api/reader/progress`), y las dos se
+     * reconcilian FUNDIENDO: unión de leídos, la posición más reciente gana. */
+    _persistProgress() {
+      localStorage.setItem('manga-progress-v1', JSON.stringify(this.progress))
+      this._pushProgress()
+    },
+    _pushProgress() {
+      clearTimeout(_progressTimer)
+      // Se agrupa: pasar página escribe progreso constantemente y no hace falta una petición
+      // por página. Se vacía también al ocultar la pestaña o cerrar (ver init).
+      _progressTimer = setTimeout(() => {
+        api.post('/api/reader/progress', this.progress).catch(() => {})
+      }, 2000)
+    },
+    _flushProgress() {
+      clearTimeout(_progressTimer)
+      api.post('/api/reader/progress', this.progress).catch(() => {})
+    },
+    /** Reconcilia con la copia durable al arrancar. Una sola petición: el backend funde lo que
+     *  le mandas con lo que tiene y devuelve el resultado, así que no hay dos algoritmos de
+     *  fusión que puedan divergir. Si el backend no responde, se sigue con lo local. */
+    async _hydrateProgress() {
+      try {
+        const merged = await api.post('/api/reader/progress', this.progress)
+        if (merged && typeof merged === 'object') {
+          this.progress = merged
+          localStorage.setItem('manga-progress-v1', JSON.stringify(merged))
+        }
+      } catch (_) { /* sin backend: la copia local sigue mandando */ }
+    },
+    /** Un borrado es una INTENCIÓN, no una ausencia: hay que declararlo o la fusión (que une
+     *  los leídos) lo resucitaría en la siguiente sincronización. */
+    _forgetRemote(body) { api.post('/api/reader/progress/forget', body).catch(() => {}) },
     // Devuelve la entrada de progreso SIEMPRE por el proxy reactivo de Pinia. Ojo:
     // `x = this.progress[k] || (this.progress[k] = {...})` devolvía el objeto CRUDO
     // recién asignado (no el proxy) la 1ª vez que se lee un manga nuevo → mutar
@@ -2529,9 +2627,12 @@ export const useMangaStore = defineStore('manga', {
       const k = this.current?.id; if (!k) return
       const e = this._progressEntry(k)
       e.read ||= {}
-      if (e.read[String(chapter)]) delete e.read[String(chapter)]; else e.read[String(chapter)] = true
+      const desmarcado = !!e.read[String(chapter)]
+      if (desmarcado) delete e.read[String(chapter)]; else e.read[String(chapter)] = true
       e.ts = Date.now()
       this._persistProgress()
+      // Desmarcar es una intención explícita: sin declararlo, la unión lo volvería a marcar.
+      if (desmarcado) this._forgetRemote({ chapters: { [k]: [String(chapter)] } })
     },
     // Marca como leídos TODOS los capítulos hasta `chapter` (inclusive) — atajo típico.
     markReadUpTo(chapter) {

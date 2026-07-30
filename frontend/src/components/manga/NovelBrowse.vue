@@ -90,7 +90,7 @@ async function read(n) { await store.addToLibrary(n, n.name); store.openReader({
                       </button>
                     </div>
                   </div>
-                  <p class="nc__name" :title="n.name">{{ n.name }}</p>
+                  <p class="nc__name" :data-tip="n.name">{{ n.name }}</p>
                   <p class="nc__meta">{{ n.chapters }} cap.<span v-if="n.status"> · {{ n.status === 'Active' ? 'En curso' : n.status }}</span></p>
                 </article>
               </div>

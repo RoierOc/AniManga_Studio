@@ -46,6 +46,8 @@ const broken = computed(() => data.value?.sources?.broken || [])
 const autoheal = computed(() => data.value?.sources?.autoheal || [])
 const unreachable = computed(() => data.value?.sources?.unreachable || [])
 const unresolved = computed(() => data.value?.identity?.unresolved || [])
+const services = computed(() => data.value?.services || [])
+const serviciosCaidos = computed(() => services.value.filter((s) => !s.online))
 const errorList = computed(() => Object.entries(data.value?.errors || {}))
 const problems = computed(() => data.value?.problems ?? null)
 const healthy = computed(() => data.value && problems.value === 0)
@@ -60,7 +62,7 @@ onMounted(check)
       <span v-if="data" class="hc__badge" :class="healthy ? 'is-ok' : 'is-warn'">
         {{ healthy ? 'Todo en orden' : `${problems} problema(s)` }}
       </span>
-      <button class="btn btn--xs hc__refresh" :disabled="loading" @click="check" title="Volver a comprobar">
+      <button class="btn btn--xs hc__refresh" :disabled="loading" @click="check" data-tip="Volver a comprobar">
         <Icon name="refresh" :size="14" /> {{ loading ? 'Comprobando…' : 'Comprobar' }}
       </button>
     </div>
@@ -69,6 +71,27 @@ onMounted(check)
     <p v-if="done" class="hc__done"><Icon name="check" :size="13" /> {{ done }}</p>
 
     <div v-if="data" class="hc__body">
+      <!-- Servicios locales. Va PRIMERO porque explica casi todo lo de abajo: con Sonarr caído
+           la biblioteca de series sale vacía, y sin Suwayomi no hay fuentes que verificar. -->
+      <div class="hc__row" :class="{ 'is-bad': serviciosCaidos.length }">
+        <div class="hc__ic"><Icon :name="serviciosCaidos.length ? 'close' : 'check'" :size="15" /></div>
+        <div class="hc__txt">
+          <strong>Servicios locales</strong>
+          <span v-if="serviciosCaidos.length">
+            {{ serviciosCaidos.length }} de {{ services.length }} no responden — lo que dependa de
+            ellos se verá vacío, no roto.
+          </span>
+          <span v-else class="hc__ok">Los {{ services.length }} responden.</span>
+          <ul class="hc__list hc__svc">
+            <li v-for="s in services" :key="s.name" :class="{ 'is-off': !s.online }">
+              <Icon :name="s.online ? 'check' : 'close'" :size="12" />
+              <b>{{ s.name }}</b> <em>:{{ s.port }} · {{ s.for }}</em>
+              <code v-if="!s.online && s.start">{{ s.start }}</code>
+            </li>
+          </ul>
+        </div>
+      </div>
+
       <!-- Fuentes rotas (no re-resolubles = problema real) -->
       <div class="hc__row" :class="{ 'is-bad': broken.length }">
         <div class="hc__ic"><Icon :name="broken.length ? 'close' : 'check'" :size="15" /></div>
@@ -161,4 +184,10 @@ onMounted(check)
 .hc__list li { list-style: disc; }
 .hc__list em { color: var(--ink-ghost); font-style: normal; }
 .hc__all { margin-top: var(--s-2); }
+/* Los servicios son una CUADRÍCULA, no viñetas: se leen de un vistazo y el que falta salta. */
+.hc__svc { padding-left: 0; gap: var(--s-1); }
+.hc__svc li { list-style: none; display: flex; align-items: center; gap: var(--s-2); }
+.hc__svc li.is-off { color: var(--danger); }
+.hc__svc code { font-size: var(--fs-2xs); padding: 0 var(--s-1); border-radius: var(--r-xs);
+  background: var(--surface); border: 1px solid var(--line); color: var(--ink-soft); }
 </style>

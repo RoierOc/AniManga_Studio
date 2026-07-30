@@ -6,12 +6,16 @@ const ui = useUiStore()
 const READER = [
   { k: ['←', '→'], d: 'Página anterior / siguiente' },
   { k: ['Espacio'], d: 'Siguiente página' },
-  { k: ['[', ']'], d: 'Capítulo anterior / siguiente' },
+  { k: ['[', ']'], d: 'Capítulo anterior / siguiente (o pulsa «Cap. N» para saltar a otro)' },
+  { k: ['m'], d: 'Mosaico: todo el capítulo de un vistazo' },
   { k: ['f'], d: 'Cambiar ajuste de imagen' },
   { k: ['w'], d: 'Modo paginado / webtoon' },
   { k: ['s'], d: 'Doble página' },
+  { k: ['o'], d: 'Desfase de la doble página (portada suelta)' },
   { k: ['d'], d: 'Dirección LTR / RTL' },
   { k: ['c'], d: 'Comparar original / 4K' },
+  { k: ['a'], d: 'Auto-scroll (modo tira)' },
+  { k: ['doble clic'], d: 'Ampliar donde pulsas / restablecer' },
   { k: ['rueda'], d: 'Zoom (arrastra para mover)' },
   { k: ['Esc'], d: 'Cerrar lector' },
 ]

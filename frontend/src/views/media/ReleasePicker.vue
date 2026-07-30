@@ -8,6 +8,7 @@ import { useUiStore } from '@/stores/ui'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 
 const props = defineProps({
   kind: { type: String, required: true },     // episode | season | movie
@@ -105,14 +106,15 @@ const age = (h) => (h < 24 ? `${Math.round(h)} h` : `${Math.round(h / 24)} d`)
       <Spinner v-if="loading" />
       <p v-if="loading" class="rp__slow">Preguntando a los indexers… puede tardar hasta un minuto.</p>
 
-      <EmptyState v-else-if="err" icon="alert" title="No se pudo buscar" :hint="err" />
+      <ErrorState v-else-if="err" title="No se pudo buscar."
+                  hint="Los indexers pueden estar caídos o sin VPN." :detail="err" @retry="load" />
       <EmptyState v-else-if="!shown.length" icon="search" title="Sin torrents"
                   :hint="onlyHealthy ? 'Prueba a quitar el filtro de seeders.' : 'Ningún indexer devolvió resultados.'" />
 
       <ul v-else class="rp__list">
         <li v-for="r in shown" :key="r.guid" :class="{ bad: r.rejected }">
           <div class="rp__main">
-            <p class="rp__title" :title="r.title">
+            <p class="rp__title" :data-tip="r.title">
               <span v-if="r.full_season" class="rp__pack">TEMPORADA</span>
               <span v-else-if="r.episodes > 1" class="rp__pack">{{ r.episodes }} EPS</span>
               {{ r.title }}

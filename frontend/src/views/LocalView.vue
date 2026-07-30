@@ -4,6 +4,7 @@ import { useCbzStore } from '@/stores/cbz'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
 const store = useCbzStore()
@@ -20,8 +21,14 @@ onMounted(() => { if (!store.loaded) store.load() })
     <div v-if="store.loading" class="grid">
       <Skeleton v-for="n in 8" :key="n" variant="poster" />
     </div>
-    <EmptyState v-else-if="store.error || !store.items.length" icon="folder"
-                :title="store.error || 'No hay archivos CBZ/CBR en tu carpeta de Mangas.'" />
+    <!-- `store.error || !items.length` metía el fallo y el vacío en el MISMO estado: si el
+         escaneo reventaba, la vista afirmaba que no tienes archivos. Son cosas distintas. -->
+    <ErrorState v-else-if="store.error" title="No se pudo leer la carpeta de Mangas."
+                hint="Comprueba que la ruta existe y es accesible." :detail="store.error"
+                @retry="store.load()" />
+    <EmptyState v-else-if="!store.items.length" icon="folder"
+                title="No hay archivos CBZ/CBR en tu carpeta de Mangas."
+                hint="Copia ahí tus .cbz o .cbr y vuelve a entrar." />
     <div v-else class="grid">
       <article v-for="m in store.items" :key="m.title" class="lc" tabindex="0" @click="store.open(m)" @keydown.enter="store.open(m)">
         <div class="lc__poster">
@@ -71,7 +78,8 @@ onMounted(() => { if (!store.loaded) store.load() })
 .loc__head { padding: var(--s-5) 0; }
 .eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
 .tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(11.25rem, 1fr)); gap: var(--s-5); }
+/* Ancho base propio; el resto de la rejilla (densidad, hueco, móvil) vive en base.css */
+.grid { --card-min: 11.25rem; gap: var(--s-5); }
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-8) 0; color: var(--ink-faint); text-align: center; }
 
 .lc { outline: none; cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }
@@ -108,5 +116,5 @@ onMounted(() => { if (!store.loaded) store.load() })
 .modal-enter-from, .modal-leave-to { opacity: 0; }
 .modal-enter-from .modal { transform: scale(.95) translateY(12px); }
 
-@media (max-width: 540px) { .loc { padding: 0 var(--s-4) var(--s-8); } .grid { grid-template-columns: repeat(auto-fill, minmax(8.75rem, 1fr)); } }
+@media (max-width: 540px) { .loc { padding: 0 var(--s-4) var(--s-8); } }
 </style>

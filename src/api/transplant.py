@@ -34,7 +34,7 @@ import numpy as np
 import cv2
 from api.resilient_http import http as http_requests  # retry + backoff + per-host rate limiting
 
-from api.runtime import (manga_dir, upscaled_dir, QA_DIR, DATA_ROOT, normalize_chapter, build_task_id,
+from api.runtime import (manga_dir, upscaled_dir, QA_DIR, DATA_ROOT, normalize_chapter, build_task_id, write_json_atomic,
                          push_sse_event, cache_get, cache_set)
 from api.sources import _gql, SUWAYOMI_URL, SUWAYOMI_BASE, ensure_suwayomi
 from api.download import _fetch_with_retry, _dl_semaphore, _chapter_file_prefix
@@ -155,9 +155,7 @@ def _read_meta(title: str) -> dict:
 
 
 def _write_meta(title: str, meta: dict):
-    p = _meta_path(title)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(_json.dumps(meta, ensure_ascii=False, indent=2))
+    write_json_atomic(_meta_path(title), meta, indent=2)
 
 
 def _norm_key(s: str) -> str:
@@ -463,9 +461,7 @@ def _read_source_meta(title: str) -> dict:
 
 
 def _write_source_meta(title: str, meta: dict):
-    p = _source_meta_path(title)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(_json.dumps(meta, ensure_ascii=False), encoding="utf-8")
+    write_json_atomic(_source_meta_path(title), meta)
 
 
 def _pending_volumes(title: str) -> list:
@@ -3105,12 +3101,11 @@ def qa_flag():
     case = {"case_id": case_id, "title": title, "chapter": normalize_chapter(chapter),
             "page": page, "reason": reason, "note": note, "stats": stats,
             "has_artifacts": (bundle / f"{stem}__en.png").exists(), "at": at}
-    _json.dump(case, open(case_dir / "case.json", "w"), ensure_ascii=False, indent=2)
+    write_json_atomic(case_dir / "case.json", case, indent=2, durable=False)
     with _qa_lock:
         flags = _qa_read_flags()
         flags.append(case)
-        QA_DIR.mkdir(parents=True, exist_ok=True)
-        _json.dump(flags, open(_QA_FLAGS, "w"), ensure_ascii=False, indent=2)
+        write_json_atomic(_QA_FLAGS, flags, indent=2, durable=False)
     return jsonify(case)
 
 

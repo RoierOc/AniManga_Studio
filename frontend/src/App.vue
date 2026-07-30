@@ -27,6 +27,7 @@ import SubBatchModal from '@/components/subtitle/SubBatchModal.vue'
 const PlayerOverlay = defineAsyncComponent(() => import('@/components/anime/PlayerOverlay.vue'))
 import NativePlayerOverlay from '@/components/anime/NativePlayerOverlay.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
+import Showcase from '@/components/media/Showcase.vue'
 
 // Views are code-split into their own chunks (loaded on demand) to shrink the initial
 // bundle — the Anime Studio especially pulls in a lot. LibraryView stays eager since it
@@ -203,6 +204,7 @@ watch(() => ui.currentView, () => { crash.value = null })
     <ShortcutsModal />
     <ConfirmDialog />
     <FileDropZone />
+    <Showcase />
     <Toaster />
   </div>
 </template>

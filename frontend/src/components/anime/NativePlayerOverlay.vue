@@ -4,7 +4,7 @@
 // con la MISMA estética/funcionalidad que PlayerOverlay.vue (clases wp__*). "Airspace":
 // mientras hay vídeo transparentamos la página y ocultamos el shell para ver el vídeo.
 // Los controles hablan con el motor por el store (nativeBridge → Rust → mpv).
-import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
+import { computed, nextTick, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { send as nativeSend } from '@/lib/nativeBridge'
 import Icon from '@/components/ui/Icon.vue'
@@ -82,7 +82,12 @@ watch(
   () => !!np.value,
   (open) => {
     document.documentElement.classList.toggle('native-video', open)
-    if (open) { poke(); menuOpen.value = ''; epPanel.value = false }
+    if (open) {
+      poke(); menuOpen.value = ''; epPanel.value = false
+      // El motor se REUTILIZA entre episodios: `sub-pos` sobrevive al cambio de archivo, así que
+      // hay que reponerlo al abrir o el subtítulo arranca donde lo dejó el episodio anterior.
+      nextTick(() => liftSubs(uiVisible.value))
+    }
   },
   { immediate: true },
 )
@@ -98,7 +103,23 @@ function poke() {
 
 // El cursor Win32 lo gestiona el host (en composición el WebView no controla el cursor
 // de la ventana). Avisar a Rust para ocultarlo cuando la UI se oculta y viceversa.
-watch(uiVisible, (v) => nativeSend('cursor', { hide: !v }))
+watch(uiVisible, (v) => { nativeSend('cursor', { hide: !v }); liftSubs(v) })
+
+/* Al sacar los controles, la barra tapaba justo la línea de subtítulo: mover el ratón para
+ * buscar un momento te dejaba sin leer. Ahora el subtítulo SUBE lo que ocupa la barra y baja al
+ * ocultarse.
+ *
+ * Se hace con `sub-pos` de mpv (100 = abajo del todo), que mueve el diálogo pero NO los carteles
+ * con `\pos` — el mismo criterio que el override por estilo: no tocar lo que el grupo casó con el
+ * arte. El desplazamiento se MIDE de la barra real, no es una constante: si cambia el diseño o el
+ * tamaño de la ventana, sigue cuadrando.
+ */
+const barEl = ref(null)
+function liftSubs(up) {
+  const h = up ? (barEl.value?.offsetHeight || 0) : 0
+  const pct = h ? Math.min(30, Math.round((h / (window.innerHeight || 1080)) * 100)) : 0
+  nativeSend('setprop', { name: 'sub-pos', value: String(100 - pct) })
+}
 
 function togglePlay() {
   if (!np.value || np.value.loading) return
@@ -279,7 +300,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
       <!-- cabecera -->
       <header class="wp__head">
-        <button class="wp__ic" title="Volver" @click="close">
+        <button class="wp__ic" data-tip="Volver" @click="close">
           <Icon name="chevron" :size="20" style="transform: rotate(90deg)" />
         </button>
         <div class="wp__titles">
@@ -289,7 +310,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       </header>
 
       <!-- barra de controles -->
-      <footer class="wp__bar" @click.stop>
+      <footer ref="barEl" class="wp__bar" @click.stop>
         <!-- timeline -->
         <div class="wp__timeline" @click="seekTo" @mousemove="onTlHover" @mouseleave="tlHover = -1">
           <div class="wp__tl-cur" :style="{ width: pct + '%' }" />
@@ -303,24 +324,24 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         </div>
 
         <div class="wp__row">
-          <button class="wp__ic" @click="togglePlay" :title="playing ? 'Pausa' : 'Reproducir'">
+          <button class="wp__ic" @click="togglePlay" :data-tip="playing ? 'Pausa' : 'Reproducir'">
             <Icon :name="playing ? 'pause' : 'play'" :size="20" />
           </button>
-          <button class="wp__ic" title="-10 s" @click="skip(-10)"><span class="wp__sk">-10</span></button>
-          <button class="wp__ic" title="+10 s" @click="skip(10)"><span class="wp__sk">+10</span></button>
-          <button class="wp__skipop" title="Saltar opening" @click="skipOp">
+          <button class="wp__ic" data-tip="-10 s" @click="skip(-10)"><span class="wp__sk">-10</span></button>
+          <button class="wp__ic" data-tip="+10 s" @click="skip(10)"><span class="wp__sk">+10</span></button>
+          <button class="wp__skipop" data-tip="Saltar opening" @click="skipOp">
             <Icon name="spark" :size="13" /> Saltar OP
           </button>
 
           <div class="wp__vol">
-            <button class="wp__ic" @click="toggleMute" :title="muted ? 'Quitar silencio' : 'Silenciar'">
+            <button class="wp__ic" @click="toggleMute" :data-tip="muted ? 'Quitar silencio' : 'Silenciar'">
               <span class="wp__sk">{{ muted ? '🔇' : '🔊' }}</span>
             </button>
             <!-- La barra llega a 100 (como mpv); la rueda del ratón la supera hasta 150,
                  que se refleja solo en el badge, no en el relleno de la barra. -->
             <input type="range" min="0" max="100" step="1" :value="Math.min(100, store.nativeVol)" @input="onVol"
-                   :title="`Volumen ${store.nativeVol}% — rueda del ratón para superar el 100% (hasta 150%)`" />
-            <span v-if="store.nativeVol > 100" class="wp__boost" title="Volumen aumentado por encima del 100% (rueda del ratón)">{{ store.nativeVol }}%</span>
+                   :data-tip="`Volumen ${store.nativeVol}% — rueda del ratón para superar el 100% (hasta 150%)`" />
+            <span v-if="store.nativeVol > 100" class="wp__boost" data-tip="Volumen aumentado por encima del 100% (rueda del ratón)">{{ store.nativeVol }}%</span>
           </div>
 
           <span class="wp__time">{{ fmt(pos) }} <em>/ {{ fmt(duration) }}</em></span>
@@ -363,18 +384,18 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           <!-- Shaders (Anime4K en anime, genéricos en imagen real) -->
           <div class="wp__menuwrap">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'a4k', 'is-glow': np.tier !== 'off' }"
-                    :title="`${scaleName} (mejora de imagen por GPU)`"
+                    :data-tip="`${scaleName} (mejora de imagen por GPU)`"
                     @click="menuOpen = menuOpen === 'a4k' ? '' : 'a4k'">
               <Icon name="spark" :size="13" /> {{ scaleLabel }}
             </button>
             <div v-if="menuOpen === 'a4k'" class="wp__menu" @wheel.stop>
-              <div class="wp__subsize" @click.stop title="Ajusta los medios tonos (gamma) para igualar tu mpv. Doble clic = neutro.">
+              <div class="wp__subsize" @click.stop data-tip="Ajusta los medios tonos (gamma) para igualar tu mpv. Doble clic = neutro.">
                 <span>Gamma</span>
                 <button :disabled="np.bright <= 0.5" aria-label="Menos gamma" @click="bumpBright(-0.05)">−</button>
                 <b :class="{ 'is-zero': np.bright === 1 }" @dblclick="setBright(1)">{{ Math.round(np.bright * 100) }}%</b>
                 <button :disabled="np.bright >= 3" aria-label="Más gamma" @click="bumpBright(0.05)">+</button>
               </div>
-              <div class="wp__subsize" @click.stop title="Saturación: devuelve el punch que el gamma quita. Doble clic = neutro.">
+              <div class="wp__subsize" @click.stop data-tip="Saturación: devuelve el punch que el gamma quita. Doble clic = neutro.">
                 <span>Saturación</span>
                 <button :disabled="np.sat <= 0.5" aria-label="Menos saturación" @click="bumpSat(-0.05)">−</button>
                 <b :class="{ 'is-zero': np.sat === 1 }" @dblclick="setSat(1)">{{ Math.round((np.sat ?? 1) * 100) }}%</b>
@@ -395,15 +416,15 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
             </div>
           </div>
 
-          <button v-if="nextEp" class="wp__ctl" title="Siguiente episodio" @click="goNext">
+          <button v-if="nextEp" class="wp__ctl" data-tip="Siguiente episodio" @click="goNext">
             Siguiente <Icon name="skip-next" :size="15" />
           </button>
           <button v-if="panelEps.length > 1" class="wp__ctl" :class="{ 'is-on': epPanel }"
-                  title="Lista de episodios" @click="epPanel = !epPanel">
+                  data-tip="Lista de episodios" @click="epPanel = !epPanel">
             <Icon name="menu" :size="14" /> Episodios
           </button>
           <button class="wp__ic" :class="{ 'is-on': np.fullscreen }"
-                  :title="np.fullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'" @click="toggleFs">
+                  :data-tip="np.fullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'" @click="toggleFs">
             <Icon :name="np.fullscreen ? 'collapse' : 'expand'" :size="18" />
           </button>
         </div>
@@ -426,7 +447,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
               <span class="wp__cue-cta">Reproducir</span>
             </span>
           </button>
-          <button class="wp__cue-close" title="Descartar" @click.stop="dismissCue"><Icon name="close" :size="14" /></button>
+          <button class="wp__cue-close" data-tip="Descartar" @click.stop="dismissCue"><Icon name="close" :size="14" /></button>
         </div>
       </Transition>
 
@@ -435,7 +456,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         <aside v-if="epPanel" class="wp__eps" @click.stop @mousemove.stop="poke" @wheel.stop>
           <header class="wp__eps-head">
             <h3>{{ np.anime?.title }}</h3>
-            <button class="wp__ic" title="Cerrar" @click="epPanel = false"><Icon name="close" :size="16" /></button>
+            <button class="wp__ic" data-tip="Cerrar" @click="epPanel = false"><Icon name="close" :size="16" /></button>
           </header>
           <div class="wp__eps-list">
             <button v-for="e in panelEps" :key="e.num" class="wp__ep"

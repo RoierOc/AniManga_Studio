@@ -11,7 +11,8 @@ import json
 from api.resilient_http import http as _http  # retry + backoff + per-host rate limiting
 import threading
 
-from api.runtime import manga_dir, upscaled_dir, get_library_mode, normalize_chapter, cache_get, cache_set
+from api.runtime import (manga_dir, upscaled_dir, get_library_mode, normalize_chapter,
+                         cache_get, cache_set, write_json_atomic)
 from api.index_db import cached_measure, prune
 
 
@@ -69,7 +70,7 @@ def _load_cover_cache() -> dict:
 
 def _save_cover_cache(cache: dict):
     try:
-        _cover_cache_file().write_text(json.dumps(cache, ensure_ascii=False), encoding='utf-8')
+        write_json_atomic(_cover_cache_file(), cache, durable=False)
     except Exception:
         pass
 

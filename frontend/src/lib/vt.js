@@ -35,5 +35,9 @@ export function vtGo(mutate) {
     run()
     return
   }
-  document.startViewTransition(run)
+  // Si otra navegación interrumpe la transición, `.finished`/`.ready` se rechazan con AbortError:
+  // sin este catch sale como error no manejado en consola (y no significa nada).
+  const t = document.startViewTransition(run)
+  t.ready?.catch(() => {})
+  t.finished?.catch(() => {})
 }
