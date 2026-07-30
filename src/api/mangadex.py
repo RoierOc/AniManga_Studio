@@ -238,7 +238,7 @@ def get_library():
                 if rel.get("type") == "cover_art":
                     filename = rel.get("attributes", {}).get("fileName")
                     if filename:
-                        cover_url = f"https://uploads.mangadex.org/covers/{m['id']}/{filename}.256.jpg"
+                        cover_url = f"https://uploads.mangadex.org/covers/{m['id']}/{filename}.512.jpg"
                     break
             
             library.append({
@@ -279,7 +279,7 @@ def _parse_manga_list(data_items: list) -> list:
             if rel.get("type") == "cover_art":
                 fn = rel.get("attributes", {}).get("fileName")
                 if fn:
-                    cover_url = f"https://uploads.mangadex.org/covers/{m['id']}/{fn}.256.jpg"
+                    cover_url = f"https://uploads.mangadex.org/covers/{m['id']}/{fn}.512.jpg"
                 break
         links = attrs.get("links") or {}
         results.append({
@@ -319,6 +319,36 @@ def get_tags():
         return jsonify([])
 
 
+# La app es para un lector en ESPAÑOL y aquí se cogía `en` primero, teniendo MangaDex la
+# sinopsis traducida en la mayoría de obras. El orden es: latino, español, inglés, lo que haya.
+_DESC_LANGS = ('es-la', 'es', 'en')
+
+
+def pick_description(desc_map: dict) -> str:
+    if not desc_map:
+        return ''
+    for lang in _DESC_LANGS:
+        if desc_map.get(lang):
+            return desc_map[lang]
+    return next(iter(desc_map.values()), '')
+
+
+def description_es(manga_id: str) -> str:
+    """Sinopsis en ESPAÑOL de una obra por su UUID de MangaDex, o '' si no la hay.
+
+    Deliberadamente NO cae al inglés: quien llama ya tiene la de AniList en inglés, y suele
+    estar mejor escrita. Esto sólo aporta cuando de verdad existe traducción."""
+    try:
+        r = _SESSION.get(f'https://api.mangadex.org/manga/{manga_id}', timeout=10)
+        r.raise_for_status()
+        attrs = (r.json().get('data') or {}).get('attributes') or {}
+        d = attrs.get('description') or {}
+        return d.get('es-la') or d.get('es') or ''
+    except Exception as e:
+        record_error('mangadex', e, op='description_es', manga_id=manga_id)
+        return ''
+
+
 @auth_bp.route('/manga/<manga_id>')
 def manga_detail(manga_id):
     """Full metadata for a single manga (synopsis, author, tags)."""
@@ -334,7 +364,7 @@ def manga_detail(manga_id):
         attrs = data.get("attributes", {})
 
         desc_map = attrs.get("description") or {}
-        description = desc_map.get("en") or next(iter(desc_map.values()), "") if desc_map else ""
+        description = pick_description(desc_map)
 
         cover_url = author = artist = None
         for rel in data.get("relationships", []):

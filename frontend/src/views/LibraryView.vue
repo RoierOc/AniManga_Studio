@@ -19,7 +19,6 @@ import ContentToolbar from '@/components/ui/ContentToolbar.vue'
 import DensityToggle from '@/components/ui/DensityToggle.vue'
 import ContinueRail from '@/components/media/ContinueRail.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
-import MediaHero from '@/components/media/MediaHero.vue'
 
 const ui = useUiStore()
 const manga = useMangaStore()
@@ -120,7 +119,7 @@ const continueItems = computed(() => {
     .slice(0, 8)
 })
 
-// Forma genérica del riel compartido. (El scroll con la rueda ya lo trae `ContinueRail`.)
+// Forma genérica del riel compartido.
 const continueRail = computed(() => continueItems.value.map(m => ({
   id: m.id,
   raw: m,
@@ -131,62 +130,11 @@ const continueRail = computed(() => continueItems.value.map(m => ({
   progress: m._resume.pct || 0,
 })))
 
-// ── Destacados del hero ───────────────────────────────────────────────────
-// La cabecera era texto sobre fondo plano mientras Anime y Series tenían arte. Reutiliza
-// `MediaHero` (no una cabecera nueva) alimentándolo con lo que ya está en memoria.
-// El arte ancho es el `bannerImage` de AniList (MEDIDO: 67 % de la biblioteca lo tiene; TMDB no
-// serviría, no indexa manga). Sin banner, `MediaHero` cae a `artFallback` y difumina la portada
-// para llenar el marco — exactamente lo que hace una película sin fanart.
-const heroTint = ref('rgb(77, 141, 255)')
-const banners = ref({})
-async function loadBanners(titles) {
-  if (!titles.length) return
-  try { banners.value = { ...banners.value, ...(await api.post('/api/anilist/manga/banners', { titles })) } }
-  catch (_) { /* sin banner se ve la portada difuminada: no hay nada que avisar */ }
-}
-const heroItems = computed(() => {
-  const upd = (m) => manga.updatesByTitle[m.name]?.new_count || 0
-  const pool = [
-    ...continueItems.value,                                                   // lo que estás leyendo
-    ...items.value.filter(m => upd(m) > 0),                                   // con capítulos nuevos
-    ...[...items.value].sort((a, b) => (b.chapter_count || 0) - (a.chapter_count || 0)),
-  ]
-  const seen = new Set()
-  const out = []
-  for (const m of pool) {
-    if (!m.cover || seen.has(m.id)) continue
-    seen.add(m.id)
-    const n = upd(m)
-    const read = manga.readCountOf(m.id)
-    out.push({
-      id: m.id,
-      art: banners.value[m.name] || null,
-      artFallback: m.cover,
-      overline: m._resume ? 'SIGUES LEYENDO' : n ? 'CAPÍTULOS NUEVOS' : 'EN TU BIBLIOTECA',
-      title: m.name,
-      meta: [
-        `${m.chapter_count || 0} capítulos`,
-        ...(read ? [`${read} leídos`] : []),
-        ...(m.upscaled ? [`${m.upscaled} en 4K`] : []),
-      ],
-      tags: n ? [`${n} sin descargar`] : [],
-      progress: m._resume?.pct || (m.chapter_count ? Math.round(read / m.chapter_count * 100) : 0),
-      actions: [
-        { label: m._resume ? `Continuar · Cap. ${m._resume.lastChapter}` : 'Leer', icon: 'play',
-          primary: true, run: () => (m.kind === 'novel' ? openItem(m) : manga.resumeManga(m)) },
-        { label: 'Ver ficha', icon: 'library', run: () => openItem(m) },
-      ],
-    })
-    if (out.length === 5) break
-  }
-  return out
-})
-
-// Los banners se piden por los títulos que el hero ha ELEGIDO, no por la biblioteca entera: 5
-// en vez de 28. La clave es la lista de títulos, que no cambia al llegar los banners → sin bucle.
-watch(() => heroItems.value.map(h => h.title).join('|'), (k) => {
-  if (k) loadBanners(heroItems.value.map(h => h.title))
-}, { immediate: true })
+/* Aquí vivía un `MediaHero` con el arte de tu propia colección. Retirado por decisión del
+   usuario: el 33 % de la biblioteca no tiene `bannerImage` en AniList, así que caía a la PORTADA
+   difuminada — y una portada tope 1000 px estirada a un marco de 1341 px de ancho se ve mal por
+   definición, no por un bug que se pueda arreglar. El endpoint `/api/anilist/manga/banners` que
+   lo alimentaba se ha borrado con él. */
 
 const filtered = computed(() => {
   let list = items.value
@@ -265,22 +213,10 @@ watch(() => manga.libraryDirty, () => load())
 
 <template>
   <div class="view">
-    <div class="view__aura" :style="{ '--tint-c': heroTint }" />
-
-    <!-- Arte de tu propia colección, no una cabecera de texto sobre fondo plano.
-         A SANGRE, como Anime y Series: era el único hero que se pintaba como tarjeta redondeada, y
-         la esquina delataba el truco (el Ken Burns escala la imagen en su propia capa de
-         composición y Chrome no siempre le aplica el radio del padre → la imagen asomaba por la
-         esquina). Sin esquinas no hay nada de lo que asomar, y de paso los tres heroes se ven igual. -->
-    <div v-if="heroItems.length" class="lhero">
-      <MediaHero :items="heroItems" bleed @tint="c => heroTint = c" />
-    </div>
-
-    <!-- Hero header -->
     <header class="lhead stagger">
       <div class="lhead__head" style="--i:0">
         <p class="lhead__eyebrow"><span class="lhead__tick" /> TU COLECCIÓN LOCAL</p>
-        <h1 v-if="!heroItems.length" class="lhead__title">Biblioteca</h1>
+        <h1 class="lhead__title">Biblioteca</h1>
       </div>
     </header>
 
@@ -367,22 +303,12 @@ watch(() => manga.libraryDirty, () => load())
 
 <style scoped>
 .view { position: relative; padding: var(--s-4) var(--s-6) var(--s-8); max-width: var(--content-max); margin: 0 auto; }
-/* Aura del color dominante del hero, como en Anime y Series. Decorativa: nunca bajo texto. */
-.view__aura {
-  position: absolute; inset: 0 0 auto 0; height: 60vh; pointer-events: none; z-index: 0;
-  background: radial-gradient(80% 60% at 20% 0%, color-mix(in srgb, var(--tint-c) 20%, transparent) 0%, transparent 70%);
-  transition: background 1.2s var(--ease-silk);
-}
-.view > :not(.view__aura) { position: relative; z-index: 1; }
 
 /* Caja de portada de tamaño FIJO (8.5×12.75rem = 2:3) con las imágenes en position
    absolute: así la imagen NUNCA dicta el tamaño de la tarjeta. Antes algunas salían
    apaisadas y otras normales porque la regla global `.blurup + img {position:relative}`
    dejaba la imagen principal en flujo y su aspecto influía en la caja. Escala con rem. */
 
-/* El hero rompe el padding de `.view` para llegar borde a borde, igual que `.alib__hero` en
-   anime. El margen inferior es corto a propósito: la imagen ya se disuelve en el fondo. */
-.lhero { margin: calc(-1 * var(--s-4)) calc(-1 * var(--s-6)) var(--s-1); }
 
 /* ── Hero ─────────────────────────────────────────────────────────────── */
 .lhead {

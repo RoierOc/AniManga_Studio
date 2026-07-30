@@ -21,14 +21,19 @@ export function formatEta(secs) {
   return Math.floor(secs / 3600) + 'h ' + Math.floor((secs % 3600) / 60) + 'm'
 }
 
+/* qBittorrent v5 renombró `paused*` a `stopped*` y aquí sólo estaban los nombres de la v4, así
+   que el 95 % de la cola pintaba el estado CRUDO en inglés (`stoppedUP`). Y `stalledUP` no es
+   «pausado»: es sembrando sin nadie al otro lado. */
 const QBT_STATE = {
-  downloading: 'Descargando', uploading: 'Subiendo',
-  stalledDL: 'Sin seeds', stalledUP: 'Pausado',
-  pausedDL: 'Pausado', pausedUP: 'Completado/Pausado',
-  checkingDL: 'Verificando', checkingUP: 'Verificando',
+  downloading: 'Descargando', forcedDL: 'Descargando',
+  uploading: 'Sembrando', forcedUP: 'Sembrando', stalledUP: 'Sembrando',
+  stalledDL: 'Sin seeds',
+  pausedDL: 'Pausado', stoppedDL: 'Pausado',
+  pausedUP: 'Terminado', stoppedUP: 'Terminado',
+  checkingDL: 'Verificando', checkingUP: 'Verificando', checkingResumeData: 'Verificando',
   queuedDL: 'En cola', queuedUP: 'En cola',
+  moving: 'Moviendo', metaDL: 'Buscando metadatos',
   error: 'Error', missingFiles: 'Archivos faltantes',
-  forcedDL: 'Descargando', forcedUP: 'Subiendo',
 }
 export const qbtStateLabel = (s) => QBT_STATE[s] || s
 
@@ -40,4 +45,19 @@ export function relativeTime(ts) {
   if (diff < 86400) return `hace ${Math.floor(diff / 3600)} h`
   if (diff < 604800) return `hace ${Math.floor(diff / 86400)} d`
   return new Date(ts * 1000).toLocaleDateString('es')
+}
+
+/* Estados de serie/película tal cual los devuelven Sonarr, Radarr y TMDB. Se colaban CRUDOS en
+   la UI: barrido de las 9 vistas → sólo en Cine, pero ahí «ended» x4, «continuing» y «announced»,
+   y encima duplicando lo que la línea ya decía en español («Completa · 2008 · ended»). */
+const MEDIA_STATE = {
+  continuing: 'En emisión', ended: 'Terminada', upcoming: 'Próximamente', deleted: 'Eliminada',
+  announced: 'Anunciada', incinemas: 'En cines', released: 'Estrenada',
+  'returning series': 'En emisión', canceled: 'Cancelada', cancelled: 'Cancelada',
+  'in production': 'En producción', 'post production': 'En posproducción', planned: 'Planeada',
+  pilot: 'Piloto',
+}
+export const mediaStatusLabel = (s) => {
+  const k = String(s || '').trim().toLowerCase()
+  return k ? (MEDIA_STATE[k] || s) : ''
 }

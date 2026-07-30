@@ -387,7 +387,13 @@ def search_covers():
                         filename = rel.get('attributes', {}).get('fileName')
                         if filename:
                             # Use uploads.mangadex.org for direct access
-                            cover_url = f"https://uploads.mangadex.org/covers/{manga_id}/{filename}.256.jpg"
+                            # Original, NO la variante .256: esto se guarda como `cover.jpg` y es la portada
+                            # definitiva de la obra. Se bajaban 256 px y el disco acabó con
+                            # portadas de 175-256 px de ancho (mediana 371) que salen borrosas en
+                            # cuanto la tarjeta pasa de ese tamaño. `_normalize_cover_bytes` ya la
+                            # acota a MAX_COVER_DIM=1000 y la recodifica, así que el original no
+                            # se guarda entero: se paga una vez al descargar, no en cada pintado.
+                            cover_url = f"https://uploads.mangadex.org/covers/{manga_id}/{filename}"
                         break
                 
                 # Fallback to cover endpoint
@@ -401,7 +407,13 @@ def search_covers():
                     if cover_items:
                         filename = cover_items[0].get('attributes', {}).get('fileName')
                         if filename:
-                            cover_url = f"https://uploads.mangadex.org/covers/{manga_id}/{filename}.256.jpg"
+                            # Original, NO la variante .256: esto se guarda como `cover.jpg` y es la portada
+                            # definitiva de la obra. Se bajaban 256 px y el disco acabó con
+                            # portadas de 175-256 px de ancho (mediana 371) que salen borrosas en
+                            # cuanto la tarjeta pasa de ese tamaño. `_normalize_cover_bytes` ya la
+                            # acota a MAX_COVER_DIM=1000 y la recodifica, así que el original no
+                            # se guarda entero: se paga una vez al descargar, no en cada pintado.
+                            cover_url = f"https://uploads.mangadex.org/covers/{manga_id}/{filename}"
                 
                 if cover_url:
                     results[folder.name] = cover_url

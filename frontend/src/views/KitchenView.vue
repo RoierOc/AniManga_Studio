@@ -20,6 +20,7 @@ import ContentToolbar from '@/components/ui/ContentToolbar.vue'
 import DensityToggle from '@/components/ui/DensityToggle.vue'
 import MediaCard from '@/components/media/MediaCard.vue'
 import ContinueRail from '@/components/media/ContinueRail.vue'
+import CounterpartRow from '@/components/media/CounterpartRow.vue'
 
 const ui = useUiStore()
 
@@ -175,6 +176,17 @@ async function demoConfirm(danger) {
           <figcaption>{{ c.caso }}</figcaption>
         </figure>
       </div>
+    </section>
+
+    <section class="kit__s">
+      <h2 class="kit__h">Puente manga ⇄ anime</h2>
+      <!-- Casos límite reales: una obra con VARIAS temporadas donde unas las tienes y otras no
+           (Medalist), y una obra que no tiene contraparte — ahí la fila entera NO se pinta, ni
+           título ni hueco. Con AniList caído sale el ErrorState, nunca un «no tiene anime». -->
+      <div class="kit__box"><CounterpartRow :al-id="118371" from="manga" /></div>
+      <div class="kit__box"><CounterpartRow :al-id="16498" from="anime" /></div>
+      <p class="muted">Sin al_id o sin contraparte la sección no existe; `in_library` ausente
+        (no se pudo leer la otra biblioteca) no pinta ni «La tienes» ni «Buscar».</p>
     </section>
 
     <section class="kit__s">

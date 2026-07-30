@@ -11,7 +11,7 @@ import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import { useAnimeStore } from '@/stores/anime'
-import { formatBytes } from '@/lib/format'
+import { formatBytes, mediaStatusLabel } from '@/lib/format'
 import { imgProxy } from '@/lib/img'
 
 const SUB_KEY = 'media-sub'
@@ -145,11 +145,17 @@ export const useMediaStore = defineStore('media', {
         artFallback: x.poster,
         overline: started.has(x.id) ? 'SIGUE VIENDO' : (x.kind === 'movie' ? 'PELÍCULA' : 'EN TU BIBLIOTECA'),
         title: x.title,
-        meta: [
-          x.have < x.total ? `${x.have} de ${x.total} episodios` : (x.kind === 'movie' ? 'Película' : 'Completa'),
-          x.year ? String(x.year) : '',
-          x.status || '',
-        ].filter(Boolean),
+        // Ojo al duplicado: cuando la serie está completa, «Completa» y el estado (`ended` →
+        // «Terminada») dicen lo mismo. Se queda uno.
+        meta: (() => {
+          const completa = x.have >= x.total
+          const est = mediaStatusLabel(x.status)
+          return [
+            completa ? (x.kind === 'movie' ? 'Película' : '') : `${x.have} de ${x.total} episodios`,
+            x.year ? String(x.year) : '',
+            est,
+          ].filter(Boolean)
+        })(),
       }))
     },
   },

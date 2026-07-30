@@ -198,6 +198,15 @@ ul, ol { list-style: none; }
   .grid { --card-min: 8.75rem; gap: var(--s-5) var(--s-3); }
 }
 
+/* ── Segmentado (elegir UNA opción de pocas) ──────────────────────────────
+   Estaba copiado byte a byte en Seasonal y AnimeExplore, y el tercer uso (el umbral de % del
+   explorador de tags) habría sido la tercera copia. Mismo caso que `.grid`: la pieza es del
+   sistema, no de la vista. Se usa con <button class="is-active"> en la opción elegida. */
+.segm { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
+.segm button { padding: 0.375rem 0.75rem; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--ink-faint); transition: all var(--t-fast); cursor: pointer; }
+.segm button:hover { color: var(--ink); }
+.segm button.is-active { background: var(--surface-3); color: var(--ink); }
+
 /* ── Rejilla que se REORGANIZA, no que se reemplaza ───────────────────────
    Al cambiar de filtro o de orden, las tarjetas se deslizan a su nueva posición en vez de
    aparecer de golpe. Se usa con <TransitionGroup name="grid" tag="div" class="grid">.

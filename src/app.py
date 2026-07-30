@@ -112,6 +112,8 @@ app.register_blueprint(discovery_bp, url_prefix='/api/discovery')
 app.register_blueprint(md_updates_bp, url_prefix='/api/md_updates')
 from api.library_health import health_bp
 app.register_blueprint(health_bp, url_prefix='/api/health')
+from api.bridge import bridge_bp
+app.register_blueprint(bridge_bp, url_prefix='/api/bridge')
 from api.novels import novels_bp
 app.register_blueprint(novels_bp, url_prefix='/api/novels')
 from api.stream import stream_bp

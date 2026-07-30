@@ -1,7 +1,6 @@
 <script setup>
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
-import { relativeTime } from '@/lib/format'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -13,7 +12,54 @@ function open(item) {
   const a = store.library.find(x => x.id === item.anime_id)
   if (a) store.openDetail(a)
 }
+
+/* El historial eran 500 filas planas: el título de la serie repetido una y otra vez (tres
+   «Monster» seguidos), y dos formatos de fecha MEZCLADOS en la misma lista («hace 1 d» junto a
+   «21/7/2026»), porque `relativeTime` cambia de forma a los 7 días. Se arregla en dos pasos:
+     · la FECHA sube a un encabezado de día, así la fila sólo lleva la hora;
+     · los episodios seguidos de la misma serie se funden en UNA fila («Episodios 3-5»).
+   Nada se pierde: la sesión de anoche se lee de un vistazo en vez de ocupar seis filas. */
+const _dia = (ts) => { const d = new Date(ts * 1000); d.setHours(0, 0, 0, 0); return d.getTime() }
+
+function etiquetaDia(ts) {
+  const hoy = _dia(Date.now() / 1000)
+  const dias = Math.round((hoy - _dia(ts)) / 86400000)
+  if (dias <= 0) return 'Hoy'
+  if (dias === 1) return 'Ayer'
+  if (dias < 7) return new Date(ts * 1000).toLocaleDateString('es', { weekday: 'long' })
+  const d = new Date(ts * 1000)
+  const mismoAnio = d.getFullYear() === new Date().getFullYear()
+  return d.toLocaleDateString('es', { day: 'numeric', month: 'long', ...(mismoAnio ? {} : { year: 'numeric' }) })
+}
+const hora = (ts) => new Date(ts * 1000).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })
+
+const dias = computed(() => {
+  const out = []
+  let dia = null, grupo = null
+  for (const h of store.history) {
+    const d = _dia(h.watched_at)
+    if (!dia || dia.clave !== d) { dia = { clave: d, etiqueta: etiquetaDia(h.watched_at), filas: [] }; out.push(dia); grupo = null }
+    // Episodios CONSECUTIVOS de la misma serie = una sola fila. El historial llega ordenado de
+    // más reciente a más antiguo, así que los `eps` se guardan al revés y se leen invertidos.
+    if (grupo && grupo.anime_id === h.anime_id) { grupo.eps.push(h.episode); grupo.desde = h.watched_at; continue }
+    grupo = { ...h, eps: [h.episode], desde: h.watched_at }
+    dia.filas.push(grupo)
+  }
+  return out
+})
+
+function episodios(g) {
+  if (g.eps.length === 1) return `Episodio ${g.eps[0]}`
+  const a = g.eps[g.eps.length - 1], b = g.eps[0]
+  // Sólo se dice «3-5» si de verdad es un tramo seguido; si hay saltos, se enumeran.
+  const seguido = g.eps.length === Math.abs(b - a) + 1
+  return seguido ? `Episodios ${Math.min(a, b)}-${Math.max(a, b)}` : `Episodios ${[...g.eps].reverse().join(', ')}`
+}
+function rango(g) {
+  return g.desde === g.watched_at ? hora(g.watched_at) : `${hora(g.desde)} – ${hora(g.watched_at)}`
+}
 </script>
+
 
 <template>
   <div class="hist">
@@ -35,18 +81,24 @@ function open(item) {
     </div>
     <EmptyState v-else-if="!store.history.length" icon="heart" title="Aún no has visto nada." />
 
-    <div v-else class="hist__list">
-      <button v-for="(h, i) in store.history" :key="i" class="hrow" @click="open(h)">
-        <div class="hrow__cover">
-          <img v-if="h.cover" :src="imgProxy(h.cover, 60)" :alt="h.title" loading="lazy" decoding="async" />
-          <span class="hrow__ep">{{ String(h.episode).padStart(2, '0') }}</span>
+    <div v-else class="hist__days">
+      <section v-for="d in dias" :key="d.clave" class="hday">
+        <h2 class="hday__lbl">{{ d.etiqueta }}</h2>
+        <div class="hist__list">
+          <button v-for="(g, i) in d.filas" :key="i" class="hrow" @click="open(g)">
+            <div class="hrow__cover">
+              <img v-if="g.cover" :src="imgProxy(g.cover, 96)" :alt="g.title" loading="lazy" decoding="async" />
+              <Icon v-else name="film" :size="14" />
+            </div>
+            <div class="hrow__meta">
+              <div class="hrow__title">{{ g.title }}</div>
+              <div class="hrow__sub">{{ episodios(g) }}</div>
+            </div>
+            <span class="hrow__time">{{ rango(g) }}</span>
+            <Icon name="play" :size="16" class="hrow__play" />
+          </button>
         </div>
-        <div class="hrow__meta">
-          <div class="hrow__title">{{ h.title }}</div>
-          <div class="hrow__sub">Episodio {{ h.episode }} · {{ relativeTime(h.watched_at) }}</div>
-        </div>
-        <Icon name="play" :size="16" class="hrow__play" />
-      </button>
+      </section>
     </div>
   </div>
 </template>
@@ -67,13 +119,24 @@ function open(item) {
 .skel--t { height: 0.9rem; width: 45%; margin-bottom: 0.375rem; }
 .skel--s { height: 0.7rem; width: 28%; }
 
+.hist__days { display: flex; flex-direction: column; gap: var(--s-5); }
+/* La fecha sube al encabezado del día: la fila ya sólo lleva la hora, y así no conviven
+   «hace 1 d» y «21/7/2026» en la misma lista. */
+.hday__lbl {
+  font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps);
+  text-transform: uppercase; color: var(--ink-faint); margin-bottom: var(--s-2);
+}
 .hist__list { display: flex; flex-direction: column; gap: var(--s-2); }
+.hrow__time { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); flex-shrink: 0; }
 .hrow { display: flex; align-items: center; gap: var(--s-4); padding: var(--s-2) var(--s-3); border-radius: var(--r-md); border: 1px solid var(--line); background: var(--surface); text-align: left; transition: all var(--t-fast); }
 .hrow:hover { border-color: var(--line-strong); background: var(--surface-2); }
 .hrow:hover .hrow__play { color: var(--azure-bright); transform: scale(1.15); }
-.hrow__cover { position: relative; width: 4rem; height: 2.5rem; flex-shrink: 0; border-radius: var(--r-sm); overflow: hidden; background: var(--surface-3); }
+/* La caja era apaisada (64x40) y dentro va un PÓSTER 2:3: `object-fit: cover` recortaba una
+   tira de la cara. Ahora la caja tiene la forma del contenido. */
+.hrow__cover { position: relative; width: 2.25rem; aspect-ratio: 2 / 3; flex-shrink: 0;
+  border-radius: var(--r-sm); overflow: hidden; background: var(--surface-3);
+  display: grid; place-items: center; color: var(--ink-ghost); }
 .hrow__cover img { width: 100%; height: 100%; object-fit: cover; }
-.hrow__ep { position: absolute; left: 4px; bottom: 2px; font-family: var(--font-display); font-weight: 700; font-size: var(--fs-xs); color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,.9); }
 .hrow__meta { flex: 1; min-width: 0; }
 .hrow__title { font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .hrow__sub { font-size: var(--fs-xs); color: var(--ink-faint); margin-top: 2px; }

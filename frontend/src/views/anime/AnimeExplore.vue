@@ -97,10 +97,6 @@ onMounted(() => {
 .tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
 
 .expl__controls { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
-.segm { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
-.segm button { padding: 0.375rem 0.75rem; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--ink-faint); transition: all var(--t-fast); }
-.segm button:hover { color: var(--ink); }
-.segm button.is-active { background: var(--surface-3); color: var(--ink); }
 
 .genres { display: flex; gap: var(--s-2); flex-wrap: wrap; margin-bottom: var(--s-5); }
 .gchip { padding: 0.3125rem 0.75rem; border-radius: var(--r-pill); font-size: var(--fs-xs); color: var(--ink-soft); border: 1px solid var(--line); transition: all var(--t-fast); }

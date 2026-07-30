@@ -1,14 +1,15 @@
 <script setup>
 import { computed, onMounted } from 'vue'
 import { useMangadexStore } from '@/stores/mangadex'
+import { useDiscoveryStore } from '@/stores/discovery'
 import MdCard from '@/components/manga/MdCard.vue'
-import MdDetailModal from '@/components/manga/MdDetailModal.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
 const store = useMangadexStore()
+const disco = useDiscoveryStore()
 
 const TABS = [
   { id: 'followed', label: 'Popular' },
@@ -42,6 +43,8 @@ function goFollowed() {
 
 onMounted(() => {
   store.checkAuth()
+  // Los títulos de tu biblioteca alimentan la chapa «La tienes» de cada tarjeta.
+  if (!disco.libraryTitles.length) disco.loadLibrary()
   store.loadTags()
   if (!store.popular.length) store.loadPopular('followed', 1)
 })
@@ -145,7 +148,6 @@ onMounted(() => {
       </template>
     </template>
 
-    <MdDetailModal />
   </div>
 </template>
 

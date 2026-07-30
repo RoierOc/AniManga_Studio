@@ -16,9 +16,18 @@ const SORTS = [
   { id: 'popularity', label: 'Popularidad' },
   { id: 'trending', label: 'Tendencia' },
 ]
-const years = computed(() => {
+/* UN solo desplegable, no temporada + año por separado.
+   Eran cuatro controles para elegir lo mismo (‹, ›, «Verano», «2026»), y encima los dos
+   desplegables permitían componer huecos absurdos — se podía dejar «Invierno 2027» a medio
+   camino y disparar una carga por cada mitad. La lista cronológica es lo que la gente piensa:
+   una temporada es un punto en el tiempo, no dos campos. Las flechas se quedan porque el salto
+   de ±1 es el 90 % de los casos y con la lista costaría dos clics. */
+const SEASONS = ['WINTER', 'SPRING', 'SUMMER', 'FALL']
+const periods = computed(() => {
   const cur = new Date().getFullYear(); const arr = []
-  for (let y = cur + 1; y >= 1990; y--) arr.push(y)
+  for (let y = cur + 1; y >= 1990; y--) {
+    for (const s of [...SEASONS].reverse()) arr.push({ value: `${s}|${y}`, label: `${SEASON_ES[s]} ${y}` })
+  }
   return arr
 })
 const label = computed(() => store.season && store.year ? `${SEASON_ES[store.season] || store.season} ${store.year}` : 'Temporada actual')
@@ -31,6 +40,11 @@ const filtered = computed(() =>
 )
 
 function setSort(id) { store.seasonSort = id; store.loadSeasonal() }
+function setPeriod(v) {
+  const [s, y] = String(v).split('|')
+  store.season = s; store.year = Number(y)
+  store.loadSeasonal()          // una sola carga: antes eran dos, una por desplegable
+}
 
 onMounted(() => { if (!store.seasonal.length) store.loadSeasonal() })
 </script>
@@ -48,12 +62,8 @@ onMounted(() => { if (!store.seasonal.length) store.loadSeasonal() })
       </div>
 
       <div class="season__controls">
-        <Select :model-value="store.season" aria-label="Temporada"
-                :options="Object.entries(SEASON_ES).map(([k, es]) => ({ value: k, label: es }))"
-                @change="store.season = $event; store.loadSeasonal()" />
-        <Select :model-value="store.year" aria-label="Año"
-                :options="years.map(y => ({ value: y, label: String(y) }))"
-                @change="store.year = Number($event); store.loadSeasonal()" />
+        <Select :model-value="`${store.season}|${store.year}`" aria-label="Temporada"
+                :options="periods" @change="setPeriod($event)" />
         <div class="segm">
           <button v-for="s in SORTS" :key="s.id" :class="{ 'is-active': store.seasonSort === s.id }" @click="setSort(s.id)">{{ s.label }}</button>
         </div>
@@ -90,10 +100,6 @@ onMounted(() => { if (!store.seasonal.length) store.loadSeasonal() })
 .navbtn:hover { color: var(--ink); border-color: var(--azure); background: var(--azure-haze); }
 
 .season__controls { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
-.segm { display: flex; gap: 2px; padding: 3px; border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); }
-.segm button { padding: 0.375rem 0.75rem; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 500; color: var(--ink-faint); transition: all var(--t-fast); }
-.segm button:hover { color: var(--ink); }
-.segm button.is-active { background: var(--surface-3); color: var(--ink); }
 
 .genres { display: flex; gap: 0.25rem; flex-wrap: wrap; margin-bottom: var(--s-5); }
 /* 19 filtros con contorno = 19 objetos compitiendo con el contenido. En reposo son texto; el

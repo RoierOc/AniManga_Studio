@@ -90,9 +90,13 @@ const airedToday = computed(() => {
   return out.sort((x, y) => y.at - x.at)   // más reciente primero
 })
 
+/* `[]` = el locale del SISTEMA. Toda la app está escrita en español a mano, así que dejar que la
+   configuración de Windows decida el idioma de las fechas hacía que aquí saliera «Thursday,
+   July 30» y «11:28 AM» al lado de un «EMITIDO HOY» en español — y en 12 h, mientras el Historial
+   va en 24 h. El idioma de la app no puede depender del SO: se fija, como en el resto. */
 const todayLabel = computed(() =>
-  new Date(nowTick.value).toLocaleDateString([], { weekday: 'long', day: 'numeric', month: 'long' }))
-const timeLabel = (at) => new Date(at * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  new Date(nowTick.value).toLocaleDateString('es', { weekday: 'long', day: 'numeric', month: 'long' }))
+const timeLabel = (at) => new Date(at * 1000).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })
 function countdownLabel(at) {
   const c = fmtCountdown(at, nowTick.value / 1000)
   if (!c) return 'ahora'
@@ -187,7 +191,10 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
   font-weight: 700; letter-spacing: var(--tracking-caps); color: var(--azure-bright); padding: 3px 0.625rem;
   border-radius: var(--r-pill); background: var(--azure-haze); border: 1px solid var(--azure-glow); }
 .today__dot { width: 0.4375rem; height: 0.4375rem; border-radius: 50%; background: var(--azure-bright); box-shadow: 0 0 6px var(--azure-glow); animation: pulse-live 2s var(--ease-drift) infinite; }
-.today__date { font-family: var(--font-display); font-size: var(--fs-lg); text-transform: capitalize; }
+/* `capitalize` pone en mayúscula CADA palabra: en inglés colaba («Thursday, July 30»), pero en
+   español da «Jueves, 30 De Julio». Sólo la primera letra, con `::first-letter`. */
+.today__date { font-family: var(--font-display); font-size: var(--fs-lg); }
+.today__date::first-letter { text-transform: uppercase; }
 .today__n { font-size: var(--fs-xs); color: var(--ink-faint); }
 .today__row { display: flex; gap: var(--s-3); overflow-x: auto; padding-bottom: var(--s-2); }
 .tcard { flex-shrink: 0; width: 19rem; display: flex; gap: var(--s-3); text-align: left; padding: var(--s-3);

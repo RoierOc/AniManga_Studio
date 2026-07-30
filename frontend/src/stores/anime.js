@@ -58,6 +58,8 @@ export const useAnimeStore = defineStore('anime', {
     // browse overlays
     stackBrowse: null, stackBrowseMeta: null, stackBrowseAnime: [], stackBrowseState: 'idle',
     tagBrowse: null, tagBrowseAnime: [], tagBrowseState: 'idle',
+    tagBrowseSource: null,     // al_id desde el que se abrió (para no listarse a sí mismo)
+    tagBrowseRank: 0,          // % mínimo del tag; 0 = sin umbral
     // hover preview
     preview: null,             // anime object
     previewPos: { x: 0, y: 0 },
@@ -575,14 +577,23 @@ export const useAnimeStore = defineStore('anime', {
     },
     closeStackBrowse() { this.stackBrowse = null; this.stackBrowseState = 'idle' },
 
-    async browseByTag(tagName, alId = null) {
-      this.tagBrowse = tagName; this.tagBrowseAnime = []; this.tagBrowseState = 'loading'
+    /* Buscar por tag CON umbral de relevancia. Un tag como «Magic» lo llevan cientos de series
+       con un 60 % — a ese nivel el filtro no filtra. AniList publica el % por obra
+       (`minimumTagRank`), así que se puede pedir «lo que va DE magia», no «lo que la menciona».
+       El umbral se recuerda entre aperturas: quien busca al 90 % suele querer seguir al 90 %. */
+    async browseByTag(tagName, alId = null, minRank = null) {
+      if (minRank !== null) this.tagBrowseRank = minRank
+      this.tagBrowse = tagName; this.tagBrowseSource = alId
+      this.tagBrowseAnime = []; this.tagBrowseState = 'loading'
       try {
-        const qs = new URLSearchParams({ tag: tagName }); if (alId) qs.set('al_id', alId)
+        const qs = new URLSearchParams({ tag: tagName })
+        if (alId) qs.set('al_id', alId)
+        if (this.tagBrowseRank) qs.set('min_rank', this.tagBrowseRank)
         this.tagBrowseAnime = await api.get(`/api/anime/browse_tag?${qs}`) || []
         this.tagBrowseState = 'done'
       } catch (_) { this.tagBrowseState = 'error' }
     },
+    setTagRank(r) { this.browseByTag(this.tagBrowse, this.tagBrowseSource, r) },
     closeTagBrowse() { this.tagBrowse = null; this.tagBrowseState = 'idle' },
 
     /* ── Management ─────────────────────────────────────────────────────── */

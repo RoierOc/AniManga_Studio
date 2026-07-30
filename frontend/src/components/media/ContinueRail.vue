@@ -14,9 +14,11 @@ const props = defineProps({
      una portada a 16:9 la recorta por la mitad. `poster` cambia la forma y el ancho de la tarjeta,
      y con eso el mismo riel sirve para las dos secciones. */
   poster: { type: Boolean, default: false },
-  /* Rueda del ratón → scroll horizontal. En la shell nativa la rueda sólo mueve la página en
-     vertical, así que sin esto no hay forma de recorrer el riel de lado. */
-  wheelScroll: { type: Boolean, default: true },
+  /* Rueda del ratón → scroll horizontal. APAGADO por defecto: secuestraba la rueda al pasar por
+     encima del riel, así que bajar por la página con el ratón te empujaba de lado sin querer.
+     El riel se recorre igual con su barra (`overflow-x: auto`, y la barra se ve: 10 px estilados
+     en base.css) y con el gesto horizontal del trackpad, que nunca pasó por aquí. */
+  wheelScroll: { type: Boolean, default: false },
 })
 const emit = defineEmits(['play', 'menu'])
 

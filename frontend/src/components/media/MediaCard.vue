@@ -11,6 +11,7 @@
  */
 import { computed, ref } from 'vue'
 import { imgProxy, imgThumb } from '@/lib/img'
+import { useBoxWidth } from '@/lib/useBoxWidth'
 import { coverRGB, vivid } from '@/lib/coverColor'
 import { vtTag } from '@/lib/vt'
 import Icon from '@/components/ui/Icon.vue'
@@ -55,19 +56,26 @@ function openCard(ev) {
 const glow = ref('')
 async function ensureGlow() {
   if (glow.value || !props.cover) return
-  const rgb = await coverRGB(imgProxy(props.cover))
+  // Del micro-thumb de 28 px, no de la portada entera: `coverRGB` reduce a 10×10 para
+  // promediar, así que bajar 91 KB para eso era tirar 90. Y es la MISMA url que ya usa el
+  // blur-up → sale de la caché del navegador, sin una sola petición extra.
+  const rgb = await coverRGB(imgThumb(props.cover))
   if (rgb) { const v = vivid(rgb); glow.value = `${v.r}, ${v.g}, ${v.b}` }
 }
 
 const thumb = computed(() => imgThumb(props.cover))
+
+// Ancho de la portada MEDIDO, no adivinado — ver `useBoxWidth`.
+const [poster, boxW] = useBoxWidth()
+const coverUrl = computed(() => imgProxy(props.cover, boxW.value))
 </script>
 
 <template>
   <article class="mcard" :class="{ 'has-glow': glow }" :style="glow ? { '--cardglow': glow } : {}"
            tabindex="0" @click="openCard" @keydown.enter="openCard" @mouseenter="ensureGlow" @focus="ensureGlow">
-    <div class="mcard__poster">
+    <div class="mcard__poster" ref="poster">
       <img v-if="thumb" :src="thumb" class="blurup" aria-hidden="true" alt="" />
-      <img v-if="cover" :src="imgProxy(cover, 300)" :alt="title" loading="lazy" decoding="async" class="mcard__img"
+      <img v-if="cover" :src="coverUrl" :alt="title" loading="lazy" decoding="async" class="mcard__img"
            @load="$event.target.classList.add('is-loaded')" />
       <div v-else class="mcard__ph">{{ (title || '?')[0].toUpperCase() }}</div>
       <div class="mcard__scrim" />

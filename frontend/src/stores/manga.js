@@ -177,6 +177,10 @@ export const useMangaStore = defineStore('manga', {
 
     // Recomendados (AniList): por el manga abierto + "Para ti" (de la biblioteca).
     recs: [], recsLoading: false, recsFor: '',
+    /* Ficha de la obra (sinopsis, autor, géneros…). `/api/library` sólo devuelve CONTADORES,
+       así que un manga descargado no contaba nada de sí mismo mientras uno de Descubrir sí.
+       `null` = aún no pedida · `{error}` = falló (que no es lo mismo que «no hay ficha»). */
+    workInfo: null, workInfoFor: null,
     forYou: [], forYouLoading: false, forYouLoaded: false,
 
     // Traducción por trasplante (pestaña "Traducir" del modal), scoped al manga actual
@@ -1537,6 +1541,18 @@ export const useMangaStore = defineStore('manga', {
     // ── Recomendados (AniList) ─────────────────────────────────────────────────
     // Por el manga que estás viendo. Se resuelve el al_id por título en el backend
     // (cacheado 24h). Idempotente por título para no re-pedir al reabrir el mismo.
+    // Ficha AniList del manga abierto. Cacheada 24 h en el backend; aquí sólo se evita repetir
+    // la petición del mismo id. Sin al_id no hay a quién preguntar: se queda muda, sin error.
+    async loadWorkInfo(alId, mdId = null) {
+      if (!alId) { this.workInfo = null; this.workInfoFor = null; return }
+      const key = `${alId}|${mdId || ''}`
+      if (this.workInfoFor === key) return
+      this.workInfoFor = key
+      this.workInfo = null
+      try { this.workInfo = await api.get(`/api/anilist/manga/${alId}${mdId ? `?md=${mdId}` : ''}`) }
+      catch (e) { this.workInfo = { error: e?.body?.error || e?.message || 'No se pudo cargar la ficha' } }
+    },
+
     async loadRecs(title) {
       const t = (title || '').trim()
       if (!t) { this.recs = []; return }

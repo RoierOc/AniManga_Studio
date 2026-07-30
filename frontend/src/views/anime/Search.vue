@@ -1,22 +1,15 @@
 <script setup>
-import { computed, onMounted } from 'vue'
+import { onMounted } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
-import { animeFormatLabel } from '@/lib/anime'
 import TorrentPanel from '@/components/anime/TorrentPanel.vue'
-import AnimeRail from '@/components/anime/AnimeRail.vue'
+import DiscoverCard from '@/components/anime/DiscoverCard.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 
 const store = useAnimeStore()
-onMounted(() => {
-  store.checkQbt()
-  if (!store.seasonal.length) store.loadSeasonal()   // descubrimiento para el estado inicial
-})
-
-// Populares de la temporada → envueltos para AnimeRail (poster). Clic = buscar torrents.
-const popularItems = computed(() => store.seasonalPopular.map(a => ({ anime: a })))
+onMounted(() => store.checkQbt())
 </script>
 
 <template>
@@ -41,30 +34,20 @@ const popularItems = computed(() => store.seasonalPopular.map(a => ({ anime: a }
     <!-- Si la búsqueda REVENTÓ no podemos caer al estado inicial como si no hubiera resultados. -->
     <ErrorState v-else-if="store.searchError" title="No se pudo buscar."
                 :detail="store.searchError" @retry="store.searchAnime()" />
-    <!-- Estado inicial (sin búsqueda): descubre populares de la temporada -->
-    <div v-else-if="!store.searchResults.length" class="discover">
-      <AnimeRail v-if="popularItems.length" title="Populares de la temporada" variant="poster"
-                 :items="popularItems" @select="it => store.openTorrents(it.anime)" />
-      <div v-else class="hint">
-        <Icon name="film" :size="34" />
-        <p>Busca un anime para ver torrents disponibles y enviarlos a qBittorrent.</p>
-      </div>
+    <!-- Estado inicial: NADA. Aquí hubo rieles de «populares» y «mejor valorados», pero salían
+         del mismo `seasonalPopular` reordenado — o sea, las mismas 20 series dos veces — y el
+         usuario no los usaba. Una vista de búsqueda que no ha buscado nada no tiene por qué
+         inventarse contenido: la caja es la interfaz. Temporada y Explorar ya son las vistas de
+         descubrimiento, y están en la misma barra. -->
+    <div v-else-if="!store.searchResults.length" class="hint">
+      <Icon name="film" :size="34" />
+      <p>Busca un anime para ver torrents disponibles y enviarlos a qBittorrent.</p>
     </div>
+    <!-- Antes esto era una tarjeta propia (`.rc`) que apuntaba el <img> DIRECTO al CDN de
+         AniList y no decía si ya tenías la serie. `DiscoverCard` ya hace las tres cosas bien
+         y su clic ES «buscar torrents». -->
     <div v-else class="grid">
-      <article v-for="a in store.searchResults" :key="a.al_id || a.title" class="rc" tabindex="0"
-               @click="store.openTorrents(a)" @keydown.enter="store.openTorrents(a)">
-        <div class="rc__poster">
-          <img v-if="a.cover" :src="a.cover" :alt="a.title" loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" class="rc__img" />
-          <div class="rc__scrim" />
-          <span class="rc__fmt">{{ animeFormatLabel(a.format) }}</span>
-          <span v-if="a.score" class="rc__score"><Icon name="spark" :size="10" /> {{ a.score }}</span>
-          <div class="rc__hover"><span class="rc__btn"><Icon name="download" :size="16" /> Torrents</span></div>
-          <div class="rc__overlay">
-            <h3 class="rc__title">{{ a.title }}</h3>
-            <span class="rc__sub">{{ a.episodes ? a.episodes + ' ep.' : '? ep.' }}<template v-if="a.season_label"> · {{ a.season_label }}</template></span>
-          </div>
-        </div>
-      </article>
+      <DiscoverCard v-for="a in store.searchResults" :key="a.al_id || a.title" :anime="a" />
     </div>
   </div>
 </template>
@@ -85,22 +68,6 @@ const popularItems = computed(() => store.seasonalPopular.map(a => ({ anime: a }
 /* Ancho base propio; el resto de la rejilla (densidad, hueco, móvil) vive en base.css */
 .grid { --card-min: 11.875rem; gap: var(--s-5); }
 
-.rc { outline: none; transition: transform var(--t-base) var(--ease-snap); }
-.rc:hover, .rc:focus-visible { transform: translateY(-6px); }
-.rc__poster { position: relative; aspect-ratio: 2/3; border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); cursor: pointer; transition: box-shadow var(--t-base), border-color var(--t-base); }
-.rc:hover .rc__poster { border-color: var(--azure-glow); box-shadow: var(--shadow-lg), 0 0 0 1px var(--azure-glow); }
-.rc__img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-slow), transform var(--t-cine) var(--ease-silk); }
-.rc__img.is-loaded { opacity: 1; }
-.rc:hover .rc__img { transform: scale(1.07); }
-.rc__scrim { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7,10,18,.3) 0%, transparent 28%, transparent 50%, rgba(5,7,13,.95) 100%); }
-.rc__fmt { position: absolute; top: var(--s-2); left: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600; padding: 2px 0.4375rem; border-radius: var(--r-xs); background: rgba(7,10,18,.6); backdrop-filter: blur(6px); }
-.rc__score { position: absolute; top: var(--s-2); right: var(--s-2); display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.4375rem; border-radius: var(--r-pill); color: var(--gold); background: rgba(7,10,18,.6); backdrop-filter: blur(6px); }
-.rc__hover { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; transition: opacity var(--t-base); }
-.rc:hover .rc__hover, .rc:focus-visible .rc__hover { opacity: 1; }
-.rc__btn { display: inline-flex; align-items: center; gap: 0.375rem; padding: var(--s-2) var(--s-4); border-radius: var(--r-pill); background: var(--azure); color: #fff; font-size: var(--fs-xs); font-weight: 600; box-shadow: var(--glow-azure); }
-.rc__overlay { position: absolute; left: 0; right: 0; bottom: 0; padding: var(--s-3); }
-.rc__title { font-size: var(--fs-sm); font-weight: 600; color: #fff; line-height: var(--lh-snug); text-shadow: 0 1px 6px rgba(0,0,0,.65); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-.rc__sub { font-size: var(--fs-2xs); color: var(--ink-soft); text-shadow: 0 1px 4px rgba(0,0,0,.6); }
 
 @media (max-width: 640px) { .search { padding: 0 var(--s-4) var(--s-8); } .grid { --card-min: 8.75rem; } }
 </style>

@@ -30,7 +30,8 @@ let clockTimer = null
 // Con algo abierto encima la quietud no significa nada: estás leyendo o viendo.
 const eligible = computed(() => ui.fullscreen && !manga.reader && !anime.player && !anime.nativePlayer)
 
-const hhmm = computed(() => now.value.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }))
+// 'es', no el locale del SO: si no, el reloj sale en 12 h americano. Ver Schedule.vue.
+const hhmm = computed(() => now.value.toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' }))
 
 /* El arte sale de lo que ya sirve la app; se pide UNA vez, la primera que salta la vitrina.
  * `art` es sólo arte ANCHO (el hero difumina el póster vertical él solo, no hay que estirarlo). */

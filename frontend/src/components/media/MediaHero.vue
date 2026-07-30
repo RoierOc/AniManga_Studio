@@ -30,8 +30,20 @@ const c = computed(() => props.items[active.value] || null)
 // lista de portadas verticales (anime encadena cover_xl → cover). De ahí sale `isWide`: sólo la
 // capa 0 se muestra sin difuminar, así que una portada vertical nunca se estira a lo ancho.
 const bgIdx = ref(0)
+
+/* Las capas NO se piden igual:
+ *  · la 0 es arte ancho y se ve NÍTIDO a pantalla completa → sin `w`, tamaño original. Se probó
+ *    pedirla al peldaño más alto del proxy (900) y fue un error visible: la caja mide 1341 px CSS
+ *    (más en HiDPI), así que 900 se amplía en el navegador y las portadas salen blandas. El hero
+ *    es la imagen más grande y más mirada de la app; aquí los bytes no mandan.
+ *  · las demás son portadas verticales que `is-cover` pinta con `blur(28px)` y escala 1,18 →
+ *    pedirlas a resolución original era bajar 91 KB para desenfocarlas. 480 se ve idéntico.
+ * `artUrl` es UNA función para que la precarga pida exactamente la misma url que luego se pinta:
+ * sin eso, precargar calentaba una entrada de caché que el render no usaba nunca. */
+const BLUR_W = 480
+function artUrl(u, tier) { return tier === 0 ? imgProxy(u) : imgProxy(u, BLUR_W) }
 const tiers = computed(() => [c.value?.art, ...[].concat(c.value?.artFallback || [])]
-  .filter(Boolean).map(imgProxy))
+  .filter(Boolean).map(artUrl))
 const bgUrl = computed(() => tiers.value[bgIdx.value] || '')
 const isWide = computed(() => bgIdx.value === 0 && !!c.value?.art)
 function onBgError() { if (bgIdx.value < tiers.value.length - 1) bgIdx.value++ }
@@ -84,8 +96,10 @@ function preload(i) {
   const n = props.items.length
   if (!n) return
   const it = props.items[((i % n) + n) % n]
-  const art = it?.art || [].concat(it?.artFallback || [])[0]
-  for (const u of [art, it?.logo]) if (u) { const im = new Image(); im.src = imgProxy(u) }
+  const capas = [it?.art, ...[].concat(it?.artFallback || [])].filter(Boolean)
+  const urls = capas.length ? [artUrl(capas[0], capas[0] === it?.art ? 0 : 1)] : []
+  if (it?.logo) urls.push(it.logo)   // el render lo pinta crudo: precargar otra url no sirve de nada
+  for (const u of urls) { const im = new Image(); im.src = u }
 }
 watch([() => props.items, active], () => {
   if (active.value >= props.items.length) active.value = 0
@@ -166,7 +180,14 @@ onUnmounted(() => clearInterval(timer))
 </template>
 
 <style scoped>
-.hero { position: relative; margin: 0 0 var(--s-7); height: clamp(31.25rem, 58vw, 42.5rem);
+/* El alto va atado al ANCHO (58vw) para que el arte conserve su proporción, pero con tope en
+   ALTO de ventana: sin él, una pantalla ancha y baja (portátil 1080p, ultrawide) daba un hero de
+   856 px sobre 950 de viewport — el 90 % de la pantalla — y la primera obra de la biblioteca
+   empezaba en y=1540, o sea 600 px de scroll para ver un solo título. Con el tope, la primera
+   fila asoma por abajo e invita a bajar, que es lo que hace que una portada se sienta portada y
+   no pantalla de bienvenida. */
+.hero { position: relative; margin: 0 0 var(--s-7);
+  height: min(clamp(31.25rem, 58vw, 42.5rem), 72vh);
   border-radius: var(--r-xl); overflow: hidden; background: var(--surface); }
 /* El fundido cruzado necesita que la diapositiva SALIENTE siga ocupando su sitio mientras se va. */
 .hero-bg-leave-active { position: absolute; inset: 0; }
@@ -180,13 +201,33 @@ onUnmounted(() => clearInterval(timer))
   background-size: cover, 140px 140px;
   mix-blend-mode: overlay; opacity: .5; }
 
-/* A sangre: la IMAGEN se desvanece por arriba y abajo (máscara alfa) en vez de oscurecerse con
-   una capa encima → se disuelve en el fondo de página sin costura. */
-.hero.is-bleed { border-radius: 0; margin: 0; background: transparent; height: clamp(35rem, 68vw, 51.25rem); }
-.hero.is-bleed .hero__img {
+/* A sangre: la IMAGEN se desvanece por arriba y por abajo (máscara alfa) en vez de oscurecerse
+   con una capa encima → se disuelve en el fondo de página sin costura.
+
+El desvanecido de ARRIBA es una curva, no una rampa recta, y ocupa el 20 % en vez del 8 %.
+   Antes subía de alfa 0 a 1 en 59 px de 741: tan corto y tan recto que no se leía como un
+   difuminado sino como una FRANJA sucia cruzando el banner. Los cuatro puntos de abajo muestrean
+   una `smoothstep` (0 · .16 · .5 · .84 · 1), así que el medio no llega de golpe y no queda un
+   borde definido en ningún sitio. Probado a 18/26/34 % sobre el mismo fotograma antes de fijar 20.
+   Y la máscara va en LAS TRES capas, no sólo en la imagen. El velo lateral y el grano son
+   hermanos suyos, no hijos, así que cortaban en seco en el borde de la caja: medido, un escalón de
+   +21 de luminancia en UNA fila arriba y de -9 abajo. Como el velo oscurece el lado izquierdo,
+   allí el escalón quedaba tapado y a la derecha no — por eso el corte parecía «ir de izquierda a
+   derecha».
+   Ponerla en el padre `.hero__bg` NO vale: `.hero__kb` tiene capa de composición propia
+   (`will-change` + `animation`) y se escapa de la máscara del padre, igual que se escapa del
+   `border-radius` (ver la nota de `.hero__bg`). Medido: con la máscara en el padre el escalón se
+   arreglaba abajo pero arriba seguía, ahora en el lado izquierdo. Una regla, tres selectores. */
+.hero.is-bleed { border-radius: 0; margin: 0; background: transparent;
+  height: min(clamp(35rem, 68vw, 51.25rem), 78vh); }
+.hero.is-bleed .hero__img,
+.hero.is-bleed .hero__shade,
+.hero.is-bleed .hero__grain {
   overflow: hidden;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 8%, #000 70%, transparent 100%);
-          mask-image: linear-gradient(to bottom, transparent 0%, #000 8%, #000 70%, transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,.16) 5%, rgba(0,0,0,.5) 10%,
+      rgba(0,0,0,.84) 15%, #000 20%, #000 70%, transparent 100%);
+          mask-image: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,.16) 5%, rgba(0,0,0,.5) 10%,
+      rgba(0,0,0,.84) 15%, #000 20%, #000 70%, transparent 100%);
 }
 .hero.is-bleed .hero__shade { background: linear-gradient(90deg, rgba(7,10,18,.82) 0%, rgba(7,10,18,.34) 34%, transparent 64%); }
 .hero.is-bleed .hero__inner { max-width: none; margin: 0; padding: var(--s-6) var(--alib-pad, var(--s-6)) var(--s-8); }

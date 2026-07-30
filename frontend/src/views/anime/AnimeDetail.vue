@@ -1,17 +1,20 @@
 <script setup>
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { useUiStore } from '@/stores/ui'
 import { api } from '@/lib/api'
 import { ANIME_STATUS, animeFormatLabel, animeEpLabel, batchInfo, fmtCountdown, nextUnwatchedEp } from '@/lib/anime'
-import { imgProxy } from '@/lib/img'
+import { imgProxy, imgThumb } from '@/lib/img'
 import { coverRGB, vivid } from '@/lib/coverColor'
 import { formatBytes } from '@/lib/format'
 import { useMultiSelect } from '@/lib/useMultiSelect'
+import CounterpartRow from '@/components/media/CounterpartRow.vue'
 import EpisodeCard from '@/components/anime/EpisodeCard.vue'
 import EpisodeRow from '@/components/anime/EpisodeRow.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 
 import { useSubBatchStore } from '@/stores/subbatch'
 
@@ -19,6 +22,24 @@ const store = useAnimeStore()
 const ui = useUiStore()
 const subbatch = useSubBatchStore()
 const anime = computed(() => store.detail)
+
+/* Cruza al otro lado de la app: del anime a su manga.
+   · Si YA lo tienes, abre su ficha de la biblioteca — la que tiene los capítulos y el lector.
+   · Si no, abre la ficha de MangaDex encima, con su botón de añadir, SIN sacarte de aquí. Antes
+     esto llamaba a `ui.goto('library')` y no pasaba nada visible: `goto` limpia el manga abierto
+     dentro de su propia View Transition, así que borraba justo lo que se acababa de abrir. */
+async function abrirManga(c) {
+  if (c.in_library) {
+    const { useMangaStore } = await import('@/stores/manga')
+    ui.goto('library')
+    // Tras el cambio de vista, no dentro: `goto` hace `current = null` en su callback.
+    await nextTick()
+    useMangaStore().openFromWork({ title: c.title, cover: c.cover, ids: { anilist: c.al_id } })
+    return
+  }
+  const { useMangadexStore } = await import('@/stores/mangadex')
+  useMangadexStore().openByTitle(c.title, c.titles || [])
+}
 
 // Abre el modal de traducción por LOTES con los episodios que tienen archivo resoluble.
 function openSubBatch() {
@@ -40,7 +61,10 @@ const posterGlow = ref({})
 watch(() => store.detail?.cover, async (cover) => {
   posterGlow.value = {}
   if (!cover) return
-  const rgb = await coverRGB(imgProxy(cover))
+  // Del micro-thumb de 28 px, no de la portada entera: `coverRGB` reduce a 10×10 para
+  // promediar, así que bajar 91 KB para eso era tirar 90. Y es la MISMA url que ya usa el
+  // blur-up → sale de la caché del navegador, sin una sola petición extra.
+  const rgb = await coverRGB(imgThumb(cover))
   if (rgb) { const v = vivid(rgb); posterGlow.value = { '--pglow': `0 10px 44px rgba(${v.r}, ${v.g}, ${v.b}, .5)` } }
 }, { immediate: true })
 // Preview = anime no-biblioteca (temporada/recomendación/estrenos). Solo "Agregar" + Torrents.
@@ -154,6 +178,9 @@ const countdown = computed(() => {
 const alId = computed(() => anime.value?.al_id)
 const recs = computed(() => store.recs[alId.value] || [])
 const tags = computed(() => store.tags[alId.value] || [])
+// Umbrales del explorador de tags. Saltos de 10 desde 70: por debajo el tag deja de discriminar
+// (AniList ya descarta lo que baja de 60) y por encima de 90 apenas quedan obras.
+const TAG_RANKS = [0, 70, 80, 90]
 const stacks = computed(() => store.stacks[alId.value] || [])
 const franchise = computed(() => store.franchise[alId.value] || [])
 const malUrl = computed(() => store.malUrls[alId.value])
@@ -485,8 +512,12 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
       </section>
     </template>
 
-    <!-- Pestaña Relacionados: orden de franquicia + recomendaciones + listas MAL -->
+    <!-- Pestaña Relacionados: la obra original + orden de franquicia + recomendaciones + listas MAL -->
     <template v-else>
+      <!-- Va PRIMERO: al terminar una temporada la pregunta es «¿por dónde sigo?», y la respuesta
+           suele estar en el manga, no en otra serie parecida. Ver src/api/bridge.py. -->
+      <CounterpartRow :al-id="alId" from="anime" @open="abrirManga" />
+
       <section v-if="franchise.length > 1" class="disc" style="margin-top: 0">
         <h3 class="disc__title">Orden de la franquicia <small class="disc__sub">por estreno</small></h3>
         <ol class="fran">
@@ -558,11 +589,26 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
       <div v-if="store.tagBrowse" class="ov" @click.self="store.closeTagBrowse()">
         <div class="bmodal">
           <button class="bmodal__x" @click="store.closeTagBrowse()"><Icon name="close" :size="18" /></button>
-          <header class="bmodal__head"><h2>{{ store.tagBrowse }} <span class="muted">en AniList</span></h2></header>
+          <header class="bmodal__head">
+            <h2>{{ store.tagBrowse }} <span class="muted">en AniList</span></h2>
+            <!-- El umbral es lo que hace útil esta pantalla: «Magic» al 60 % son cientos de
+                 series que sólo lo mencionan; al 90 % son las que VAN de eso. -->
+            <div class="segm bmodal__rank">
+              <button v-for="r in TAG_RANKS" :key="r" :class="{ 'is-active': store.tagBrowseRank === r }"
+                      @click="store.setTagRank(r)">{{ r ? `${r}%+` : 'Cualquiera' }}</button>
+            </div>
+          </header>
           <div v-if="store.tagBrowseState === 'loading'" class="center"><Spinner /></div>
+          <ErrorState v-else-if="store.tagBrowseState === 'error'" title="No se pudo consultar AniList."
+                      @retry="store.setTagRank(store.tagBrowseRank)" />
+          <EmptyState v-else-if="!store.tagBrowseAnime.length" icon="search"
+                      :title="store.tagBrowseRank
+                        ? `Ninguna serie llega al ${store.tagBrowseRank}% de «${store.tagBrowse}»`
+                        : `Sin resultados para «${store.tagBrowse}»`"
+                      :hint="store.tagBrowseRank ? 'Baja el umbral para ver las que sólo lo tocan de refilón.' : ''" />
           <div v-else class="bgrid">
             <article v-for="a in store.tagBrowseAnime" :key="a.al_id" class="rec" @click="store.openRec(a); store.closeTagBrowse()">
-              <div class="rec__poster"><img v-if="a.cover" :src="imgProxy(a.cover)" :alt="a.title" loading="lazy" decoding="async" /><div class="rec__scrim" /><span v-if="a.score" class="rec__score">★ {{ (a.score/10).toFixed(1) }}</span><div class="rec__ov"><span class="rec__t">{{ a.title }}</span></div></div>
+              <div class="rec__poster"><img v-if="a.cover" :src="imgProxy(a.cover)" :alt="a.title" loading="lazy" decoding="async" /><div class="rec__scrim" /><span v-if="a.score" class="rec__score">★ {{ (a.score/10).toFixed(1) }}</span><span v-if="a.tag_rank" class="rec__rank">{{ a.tag_rank }}%</span><div class="rec__ov"><span class="rec__t">{{ a.title }}</span></div></div>
             </article>
           </div>
         </div>
@@ -617,12 +663,17 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 
 /* Hero header — Crunchyroll-style wide HD art + logo, same recipe as HeroBanner.vue.
    A sangre (rompe el padding del contenedor), sin caja redondeada, más baja, y la IMAGEN se
-   disuelve en el fondo por arriba y abajo (máscara de alfa), como el hero de Mi Anime. */
+   disuelve en el fondo por arriba y abajo (máscara de alfa), como el hero de Mi Anime. La rampa
+   de arriba es una curva del 20 % y no una recta del 8 %. La máscara va en `.dhero__bg`, que aquí
+   ya CONTIENE al velo — importa: enmascarar sólo la imagen deja que el velo corte en seco en el
+   borde de la caja (medido: escalón de +21 de luminancia en una fila). Ver MediaHero.vue. */
 .dhero { position: relative; margin: 0 calc(-1 * var(--s-6)) var(--s-4); height: clamp(28.75rem, 50vw, 37.5rem);
   border-radius: 0; overflow: hidden; background: transparent; }
 .dhero__bg { position: absolute; inset: 0;
-  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 8%, #000 66%, transparent 100%);
-          mask-image: linear-gradient(to bottom, transparent 0%, #000 8%, #000 66%, transparent 100%); }
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,.16) 5%, rgba(0,0,0,.5) 10%,
+      rgba(0,0,0,.84) 15%, #000 20%, #000 66%, transparent 100%);
+          mask-image: linear-gradient(to bottom, rgba(0,0,0,0) 0%, rgba(0,0,0,.16) 5%, rgba(0,0,0,.5) 10%,
+      rgba(0,0,0,.84) 15%, #000 20%, #000 66%, transparent 100%); }
 .dhero__img { position: absolute; inset: 0; background-size: cover; background-position: center 18%; }
 /* No wide banner cached yet → fall back to the (vertical) cover, blurred to fill the frame. */
 .dhero.is-cover .dhero__img { filter: blur(28px) saturate(1.15) brightness(.85); transform: scale(1.18); }
@@ -926,4 +977,12 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 @media (prefers-reduced-motion: reduce) {
   .epbatch-enter-active, .epbatch-leave-active { transition: none; }
 }
+.bmodal__head { display: flex; align-items: center; justify-content: space-between;
+  gap: var(--s-4); flex-wrap: wrap; }
+.bmodal__rank { flex: none; }
+/* El % del tag va ARRIBA IZQUIERDA, enfrente de la nota: son las dos cifras que se comparan al
+   barrer la rejilla, y encontradas se leen de un vistazo. */
+.rec__rank { position: absolute; top: var(--s-2); left: var(--s-2); z-index: 2;
+  padding: 2px var(--s-2); border-radius: var(--r-pill); font-size: var(--fs-2xs); font-weight: 700;
+  color: var(--ink); background: rgba(8,11,20,.72); backdrop-filter: blur(6px); }
 </style>

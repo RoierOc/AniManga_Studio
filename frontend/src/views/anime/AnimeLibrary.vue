@@ -210,6 +210,12 @@ function openMenu(e, a) {
    @property permite que el color tween suavemente al rotar el carrusel (si no hay soporte,
    cambia al instante). Muy sutil para no competir con la lectura. */
 .alib__aura {
+  /* El aura es un degradado radial anclado ARRIBA, así que su primera fila es la más intensa y
+     el borde superior del contenedor la corta en seco: medido, +20 de luminancia en una fila —
+     una línea horizontal justo donde empieza el hero, más marcada en el lado donde el radial está
+     centrado. Se le da su propia rampa vertical para que entre desde cero. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 16%);
+          mask-image: linear-gradient(to bottom, transparent 0%, #000 16%);
   position: absolute; z-index: 0; top: 0; left: 50%; transform: translateX(-50%);
   width: 100%; height: 34rem; pointer-events: none;
   background: radial-gradient(75% 60% at 50% 0%, color-mix(in srgb, var(--tint-c) 15%, transparent), transparent 72%);

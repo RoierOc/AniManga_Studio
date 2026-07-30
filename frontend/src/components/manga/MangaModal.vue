@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch, onUnmounted } from 'vue'
+import { computed, nextTick, ref, watch, onUnmounted } from 'vue'
 import { useMangaStore } from '@/stores/manga'
 import { formatChapter, MANGA_STATUS, pageUrl } from '@/lib/manga'
 import { formatBytes } from '@/lib/format'
@@ -14,12 +14,26 @@ import { useVersionsStore } from '@/stores/versions'
 import { useDiscoveryStore } from '@/stores/discovery'
 import VersionsCoverageGrid from '@/components/manga/VersionsCoverageGrid.vue'
 import MangaRecRail from '@/components/manga/MangaRecRail.vue'
+import CounterpartRow from '@/components/media/CounterpartRow.vue'
 import Select from '@/components/ui/Select.vue'
 import { useModal } from '@/lib/useModal'
 import { useMultiSelect } from '@/lib/useMultiSelect'
 
 const store = useMangaStore()
 const ui = useUiStore()
+
+/* Cruza al otro lado de la app: del manga a su anime. `openRec` del store de anime ya decide
+   entre abrir la ficha (si la tienes) o llevarte a los torrents (si no), así que aquí no hay
+   ninguna regla nueva que mantener sincronizada. */
+async function abrirAnime(c) {
+  const { useAnimeStore } = await import('@/stores/anime')
+  store.close()
+  ui.goto('anime')
+  // Después del cambio de vista, nunca antes: `goto` hace `detailId = null` dentro de su propia
+  // View Transition, así que abrir la ficha primero equivale a no abrir nada.
+  await nextTick()
+  useAnimeStore().openRec({ al_id: c.al_id, title: c.title, cover: c.cover })
+}
 const vg = useVersionsStore()
 const disco = useDiscoveryStore()
 
@@ -41,6 +55,17 @@ function addToLib() { if (libWork.value) disco.addToLibrary(libWork.value) }
 // buttons still reopen/close via the snapshot model.
 function closeModal() { store.close(); ui.replaceNav() }
 const m = computed(() => store.current)
+
+/* Ficha de la obra: la cabecera tenía un hueco de ~400x230 px a la derecha del título mientras
+   la ficha del ANIME cuenta sinopsis, autor, géneros y año. Aquí se rellena con lo mismo.
+   Nunca inventa: sin `al_id` (6 de 28 obras) simplemente no aparece nada. */
+const info = computed(() => (store.workInfo && !store.workInfo.error) ? store.workInfo : null)
+const infoLinea = computed(() => {
+  const i = info.value
+  if (!i) return ''
+  return [i.kind, i.years, i.status, i.authors?.join(' · ')].filter(Boolean).join('  ·  ')
+})
+const sinopsisAbierta = ref(false)
 // ¿Hay algún modelo a color (APISR)? Habilita los botones de escalado a color.
 const hasColorModel = computed(() => Object.values(store.modelsColor).includes(true))
 const colorModelKeys = computed(() => Object.keys(store.modelsColor).filter(k => store.modelsColor[k]))
@@ -91,6 +116,7 @@ watch(() => store.current?.id, async (id) => {
   if (canAddToLib.value && !disco.libraryTitles.length) disco.loadLibrary()
   // Recomendados por esta serie (AniList, resuelto por título en el backend).
   store.loadRecs(store.current?.name || id)
+  store.loadWorkInfo(store.current?.al_id, store.mdId || store.current?.trackedId)
   try { seriesSize.value = await api.get(`/api/storage/series?title=${encodeURIComponent(id)}`) } catch (_) {}
 }, { immediate: true })
 
@@ -537,6 +563,20 @@ useModal(() => !!m.value, closeModal, modalEl)
                 <span class="modal__prog-fill" :style="{ width: readPct + '%' }" />
               </div>
 
+              <!-- La obra: qué es, de quién y de qué va. Sale de AniList vía `al_id`; si la obra
+                   no lo tiene, no se pinta nada (no hay dato que inventar). -->
+              <div v-if="info" class="work">
+                <p v-if="infoLinea" class="work__line">
+                  <span v-if="info.score" class="work__score">★ {{ (info.score / 10).toFixed(1) }}</span>{{ infoLinea }}
+                </p>
+                <p v-if="info.synopsis" class="work__syn" :class="{ 'is-open': sinopsisAbierta }"
+                   @click="sinopsisAbierta = !sinopsisAbierta"
+                   :data-tip="sinopsisAbierta ? 'Contraer' : 'Leer la sinopsis completa'">{{ info.synopsis }}</p>
+                <div v-if="info.genres?.length" class="work__tags">
+                  <span v-for="g in info.genres.slice(0, 5)" :key="g" class="work__tag">{{ g }}</span>
+                </div>
+              </div>
+
               <!-- Acción PRIMARIA, sola y grande. Antes «Continuar» vivía dentro del cuerpo
                    scrolleable, debajo de las pestañas: con la lista desplazada, lo que haces el
                    90% de las veces no estaba ni en pantalla. -->
@@ -681,6 +721,9 @@ useModal(() => !!m.value, closeModal, modalEl)
 
             <!-- RECOMENDADOS -->
             <div v-else-if="tab === 'recs'" class="recs">
+              <!-- Antes que «parecidos»: si esta obra tiene anime, eso interesa más que otra
+                   serie del mismo género — y encima puede que ya la tengas. Ver src/api/bridge.py. -->
+              <CounterpartRow :al-id="store.current?.al_id" from="manga" @open="abrirAnime" />
               <MangaRecRail v-if="store.recsLoading || store.recs.length"
                             :items="store.recs" :loading="store.recsLoading"
                             layout="grid" title="Similares a este"
@@ -1489,6 +1532,24 @@ useModal(() => !!m.value, closeModal, modalEl)
 .modal__title { font-size: var(--fs-2xl); line-height: var(--lh-tight); }
 
 /* Metadatos en UNA línea, todos del mismo peso bajo (son referencia, no acción). */
+/* Ficha de la obra en la cabecera. La sinopsis va recortada a 2 líneas y se despliega al
+   pulsarla: informa de un vistazo sin empujar el botón «Continuar» fuera de pantalla, que es
+   lo que se hace el 90 % de las veces. */
+.work { margin: var(--s-3) 0 var(--s-1); display: flex; flex-direction: column; gap: var(--s-2); }
+.work__line { font-size: var(--fs-xs); color: var(--ink-faint); display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.work__score { color: var(--gold); font-weight: 700; font-family: var(--font-mono); }
+.work__syn {
+  font-size: var(--fs-sm); line-height: 1.55; color: var(--ink-soft); cursor: pointer;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+  transition: color var(--t-fast);
+}
+.work__syn.is-open { -webkit-line-clamp: unset; max-height: 11rem; overflow-y: auto; }
+.work__syn:hover { color: var(--ink); }
+.work__tags { display: flex; flex-wrap: wrap; gap: 0.25rem; }
+.work__tag {
+  font-size: var(--fs-2xs); color: var(--ink-faint); padding: 0.1875rem 0.5rem;
+  border-radius: var(--r-pill); background: var(--surface-2);
+}
 .modal__meta { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-2);
   margin-top: var(--s-2); color: var(--ink-faint); font-size: var(--fs-sm); }
 .modal__dot { width: 3px; height: 3px; border-radius: 50%; background: var(--ink-ghost); flex-shrink: 0; }

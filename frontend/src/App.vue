@@ -1,7 +1,8 @@
 <script setup>
-import { computed, defineAsyncComponent, onErrorCaptured, ref, watch, onMounted, onUnmounted } from 'vue'
+import { computed, onErrorCaptured, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useUiStore, VIEWS } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
+import { lazyView, esFalloDeChunk } from '@/lib/lazyView'
 import { useAnimeStore } from '@/stores/anime'
 import Icon from '@/components/ui/Icon.vue'
 import Sidebar from '@/components/layout/Sidebar.vue'
@@ -17,6 +18,7 @@ import ActivityDrawer from '@/components/ui/ActivityDrawer.vue'
 import ShortcutsModal from '@/components/ui/ShortcutsModal.vue'
 import CommandPalette from '@/components/ui/CommandPalette.vue'
 import MangaModal from '@/components/manga/MangaModal.vue'
+import MdDetailModal from '@/components/manga/MdDetailModal.vue'
 import Reader from '@/components/manga/Reader.vue'
 import NovelReader from '@/components/manga/NovelReader.vue'
 import NovelModal from '@/components/manga/NovelModal.vue'
@@ -24,7 +26,7 @@ import NovelBrowse from '@/components/manga/NovelBrowse.vue'
 import SubBatchModal from '@/components/subtitle/SubBatchModal.vue'
 // Player WEB (legado): lazy — arrastra hls.js + jassub (+wasm), y en la app nativa no se usa
 // nunca. Eager metía ~medio MB en el chunk de entrada de cada arranque.
-const PlayerOverlay = defineAsyncComponent(() => import('@/components/anime/PlayerOverlay.vue'))
+const PlayerOverlay = lazyView(() => import('@/components/anime/PlayerOverlay.vue'))
 import NativePlayerOverlay from '@/components/anime/NativePlayerOverlay.vue'
 import PlaceholderView from '@/views/PlaceholderView.vue'
 import Showcase from '@/components/media/Showcase.vue'
@@ -36,14 +38,14 @@ import Showcase from '@/components/media/Showcase.vue'
 // aterrizaje → eager; contiene LibraryView. Explorar (MangaDex/Fuentes) y el resto
 // van lazy.
 import LibraryHub from '@/views/LibraryHub.vue'
-const ExploreView  = defineAsyncComponent(() => import('@/views/ExploreView.vue'))
-const DiscoverView = defineAsyncComponent(() => import('@/views/manga/Discover.vue'))
-const WorkshopView = defineAsyncComponent(() => import('@/views/WorkshopView.vue'))
-const ActivityView = defineAsyncComponent(() => import('@/views/ActivityView.vue'))
-const MediaView    = defineAsyncComponent(() => import('@/views/media/MediaStudio.vue'))
-const AnimeStudio  = defineAsyncComponent(() => import('@/views/anime/AnimeStudio.vue'))
-const SettingsView = defineAsyncComponent(() => import('@/views/SettingsView.vue'))
-const KitchenView  = defineAsyncComponent(() => import('@/views/KitchenView.vue'))
+const ExploreView  = lazyView(() => import('@/views/ExploreView.vue'))
+const DiscoverView = lazyView(() => import('@/views/manga/Discover.vue'))
+const WorkshopView = lazyView(() => import('@/views/WorkshopView.vue'))
+const ActivityView = lazyView(() => import('@/views/ActivityView.vue'))
+const MediaView    = lazyView(() => import('@/views/media/MediaStudio.vue'))
+const AnimeStudio  = lazyView(() => import('@/views/anime/AnimeStudio.vue'))
+const SettingsView = lazyView(() => import('@/views/SettingsView.vue'))
+const KitchenView  = lazyView(() => import('@/views/KitchenView.vue'))
 
 const ui = useUiStore()
 const manga = useMangaStore()
@@ -138,6 +140,9 @@ const activeComponent = computed(() => VIEW_COMPONENTS[ui.currentView] || null)
 // a blank white screen. "Reintentar" remounts the view; "Recargar" does a hard reload.
 const crash = ref(null)
 const crashKey = ref(0)
+// Un chunk que no llegó NO se arregla remontando (el navegador memoriza el módulo fallido):
+// ofrecer «Reintentar» ahí es prometer algo imposible. Ver `lib/lazyView.js`.
+const chunkRoto = computed(() => esFalloDeChunk(crash.value?.message))
 onErrorCaptured((err, _inst, info) => {
   console.error('[boundary]', info, err)
   crash.value = { message: String(err?.message || err), info }
@@ -168,12 +173,15 @@ watch(() => ui.currentView, () => { crash.value = null })
         <div v-if="crash" class="crash">
           <div class="crash__glyph"><Icon name="spark" :size="38" /></div>
           <h2>Algo salió mal en esta vista</h2>
-          <p class="crash__msg">{{ crash.message }}</p>
+          <p class="crash__msg">{{ chunkRoto ? 'No se pudo descargar esta parte de la app.' : crash.message }}</p>
           <div class="crash__actions">
-            <button class="crash__btn crash__btn--accent" @click="retry"><Icon name="spark" :size="14" /> Reintentar</button>
-            <button class="crash__btn" @click="reload">Recargar la app</button>
+            <button v-if="!chunkRoto" class="crash__btn crash__btn--accent" @click="retry"><Icon name="spark" :size="14" /> Reintentar</button>
+            <button class="crash__btn" :class="{ 'crash__btn--accent': chunkRoto }" @click="reload">Recargar la app</button>
           </div>
-          <p class="crash__hint">O elige otra sección en la barra lateral.</p>
+          <p class="crash__hint">
+            {{ chunkRoto ? 'Suele pasar si la app se actualizó con esta pestaña abierta; al recargar se arregla.'
+                         : 'O elige otra sección en la barra lateral.' }}
+          </p>
         </div>
         <!-- Con View Transitions el swap entre secciones lo anima el navegador
              (crossfade + morph de elementos compartidos como el póster); la
@@ -191,6 +199,10 @@ watch(() => ui.currentView, () => { crash.value = null })
     </div>
 
     <MangaModal />
+    <!-- La ficha de MangaDex (con «Añadir a la biblioteca») vivía DENTRO de Explorar, así que sólo
+         se podía añadir una obra estando allí. Ahora es global: el puente manga⇄anime la abre
+         desde la ficha de un anime sin sacarte de donde estás. -->
+    <MdDetailModal />
     <Reader />
     <NovelModal />
     <NovelBrowse />

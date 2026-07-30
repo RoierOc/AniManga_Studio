@@ -36,7 +36,7 @@ def search_manga():
                 filename = rel.get('attributes', {}).get('fileName')
                 if filename:
                     # Use/uploads.mangadex.org for direct access
-                    cover_url = f"https://uploads.mangadex.org/covers/{manga_id}/{filename}.256.jpg"
+                    cover_url = f"https://uploads.mangadex.org/covers/{manga_id}/{filename}.512.jpg"
                     break
         
         results.append({

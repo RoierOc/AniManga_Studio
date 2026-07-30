@@ -108,3 +108,65 @@ export function fmtAgo(airedAt, nowSec) {
   const m = Math.floor((diff % 3600) / 60)
   return { d, h, m, diff }
 }
+
+/* ── Nombre de release → algo legible ────────────────────────────────────────
+ * La lista de Descargas pintaba el nombre CRUDO del torrent
+ * («[ToonsHub] Chuhai Lips Canned Flavor of Married Women S01E03 1080p UNCENSORED OV WEB-DL
+ * AAC2.0 H.264 (Hitozuma no Kuchibiru…)»), que es la única parte de la app que parecía un
+ * cliente de torrents en vez de esta app. Esto saca serie / temporada / episodio / calidad;
+ * el crudo sigue accesible en el tooltip, que es donde importa cuando algo se importó mal.
+ */
+const _REL_NOISE = /\b(1080p|720p|480p|2160p|4k|x264|x265|hevc|avc|10bits?|8bits?|aac\d?(\.\d)?|flac|opus|ddp?\d?(\.\d)?|web-?dl|web-?rip|bd-?rip|bd|bluray|hdtv|dual-?audio|multi-?audio|eng-?subs?|uncensored|censored|repack|batch|complete|remux|hi10p?)\b/gi
+
+export function parseRelease(name = '') {
+  const raw = String(name).replace(/\.(mkv|mp4|avi)$/i, '')
+  let s = raw.replace(/^\[[^\]]*\]\s*/, '')            // grupo de release al principio
+
+  // Episodio: SxxExx, o « - 05 » (SubsPlease y compañía). El rango « 01-12 » es una tanda.
+  const se = s.match(/\bS(\d{1,2})E(\d{1,4})\b/i)
+  const dash = !se && s.match(/\s-\s(\d{1,4})(?:v\d)?(?=\s|$|\[|\()/)
+  const range = !se && !dash && s.match(/\s-?\s?\(?(\d{1,4})\s?[-~]\s?(\d{1,4})\)?(?=\s|$|\[|\()/)
+
+  const sm = s.match(/\((?:season|temporada)\s*(\d{1,2})\)/i) || s.match(/\b(?:season\s*(\d{1,2})|S(\d{2}))\b/i)
+  let season = se ? Number(se[1]) : sm ? Number(sm[1] ?? sm[2]) : null
+  const episode = se ? Number(se[2]) : dash ? Number(dash[1]) : null
+  // Una temporada nombrada SIN episodio es una tanda: «(Season 1) [BD 1080p]» son los 11 a la vez.
+  const batch = !episode && (!!range || season != null || /\bbatch\b|\bcomplete\b/i.test(s))
+
+  // El título es lo que hay ANTES del marcador de episodio/temporada.
+  const cut = se?.index ?? dash?.index ?? range?.index ?? sm?.index ?? -1
+  let title = cut >= 0 ? s.slice(0, cut) : s.replace(/\((?:season|temporada)\s*\d{1,2}\).*$/i, '')
+  title = title
+    .replace(/\[[^\]]*\]/g, '')
+    .replace(/\([^)]*\)/g, '')      // «(2024)», «(Terror in Resonance)», «(Uncensored)»
+    .replace(_REL_NOISE, '')
+    .replace(/[._]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s*[|/].*$/, '')
+    .replace(/[\s\-–—:]+$/, '')
+    .trim()
+
+  const q = raw.match(/\b(2160p|1080p|720p|480p)\b/i)
+  return { title: title || raw, season, episode, batch, quality: q ? q[1].toLowerCase() : '', raw }
+}
+
+const _norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim()
+
+/* Empareja un release con una serie de TU biblioteca, para poder pintar su póster.
+ * Coincidencia por inclusión normalizada — sobra para nombres de carpeta reales y no
+ * inventa nada: si no casa, la fila sale sin póster (que es la verdad). */
+export function matchLibrary(relTitle, library = []) {
+  const n = _norm(relTitle)
+  if (n.length < 3) return null
+  let best = null
+  for (const a of library) {
+    for (const t of [a.title, a.title_romaji]) {
+      const c = _norm(t)
+      if (!c || c.length < 3) continue
+      if (n.includes(c) || c.includes(n)) {
+        if (!best || c.length > best.len) best = { anime: a, len: c.length }
+      }
+    }
+  }
+  return best?.anime || null
+}

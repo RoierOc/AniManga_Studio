@@ -5,7 +5,9 @@ No API key required. Rate limit: ~90 req/min.
 """
 
 from flask import Blueprint, jsonify, request
+import re
 import time
+from html import unescape as _unescape
 
 from api.resilient_http import http as _http  # retry + Retry-After + rate limiting
 
@@ -17,6 +19,15 @@ _genres_ts: float = 0.0
 _top_cache: dict = {}
 _TOP_TTL = 300   # 5 min
 _GENRES_TTL = 3600
+
+
+# Los tres tamaños de AniList son ficheros distintos, no recortes: `medium` 100x150, `large`
+# 230x325 y `extraLarge` 460x650. Pedíamos `large` en todo Descubrir/Temporada, y MEDIDO en una
+# rejilla a 1600px: 230 px de fuente pintados a 298 px CSS — ampliados ya en dpr 1, y el doble de
+# mal en HiDPI. Es el mismo fallo que guardar el `.256.jpg` de MangaDex como portada definitiva.
+def _cover(node: dict) -> str:
+    ci = (node or {}).get('coverImage') or {}
+    return ci.get('extraLarge') or ci.get('large') or ci.get('medium') or ''
 
 
 def _ql(query: str, variables: dict | None = None):
@@ -87,7 +98,7 @@ def top_manga():
           id idMal
           title { romaji english native }
           meanScore popularity genres
-          coverImage { large }
+          coverImage { extraLarge large medium }
           status chapters
         }
       }
@@ -115,7 +126,7 @@ def top_manga():
             'score':        item.get('meanScore'),
             'popularity':   item.get('popularity'),
             'genres':       (item.get('genres') or [])[:4],
-            'cover':        (item.get('coverImage') or {}).get('large'),
+            'cover':        _cover(item),
             'status':       item.get('status'),
             'chapters':     item.get('chapters'),
         })
@@ -174,7 +185,7 @@ def top_anime():
           id idMal
           title { romaji english native }
           meanScore popularity genres episodes format status seasonYear season
-          coverImage { large }
+          coverImage { extraLarge large medium }
           bannerImage
         }
       }
@@ -204,7 +215,7 @@ def top_anime():
             'score':        item.get('meanScore'),
             'popularity':   item.get('popularity'),
             'genres':       (item.get('genres') or [])[:4],
-            'cover':        (item.get('coverImage') or {}).get('large'),
+            'cover':        _cover(item),
             'banner':       item.get('bannerImage'),
             'status':       item.get('status'),
             'episodes':     item.get('episodes'),
@@ -271,7 +282,7 @@ def search_manga():
         media(search: $s, type: MANGA, sort: SEARCH_MATCH) {
           id idMal
           title { romaji english native }
-          coverImage { medium large }
+          coverImage { extraLarge large medium }
           format status startDate { year }
         }
       }
@@ -289,7 +300,7 @@ def search_manga():
             'title': t.get('english') or t.get('romaji') or t.get('native') or '',
             'title_romaji': t.get('romaji') or '',
             'title_native': t.get('native') or '',
-            'cover': (m.get('coverImage') or {}).get('large') or (m.get('coverImage') or {}).get('medium'),
+            'cover': _cover(m),
             'format': m.get('format'),
             'status': m.get('status'),
             'year': (m.get('startDate') or {}).get('year'),
@@ -317,7 +328,7 @@ query ($id: Int) {
         mediaRecommendation {
           id idMal
           title { romaji english native }
-          coverImage { large medium }
+          coverImage { extraLarge large medium }
           averageScore genres format chapters status countryOfOrigin
         }
       }
@@ -358,9 +369,8 @@ def cover_by_al_id(al_id):
     if hit is not None:
         return hit or None
     try:
-        d = _ql('query($id:Int){Media(id:$id,type:MANGA){coverImage{large medium}}}', {'id': int(al_id)})
-        ci = ((d or {}).get('Media') or {}).get('coverImage') or {}
-        url = ci.get('large') or ci.get('medium') or ''
+        d = _ql('query($id:Int){Media(id:$id,type:MANGA){coverImage { extraLarge large medium }}}', {'id': int(al_id)})
+        url = _cover((d or {}).get('Media') or {})
     except Exception:
         url = ''
     _cache_set('al_cover', key, url, ttl=_REC_TTL, max_entries=800)
@@ -388,6 +398,97 @@ def chapters_by_al_id(al_id):
     return ch, st
 
 
+_STATUS_ES = {
+    'RELEASING': 'En curso', 'FINISHED': 'Terminado', 'NOT_YET_RELEASED': 'Sin publicar',
+    'CANCELLED': 'Cancelado', 'HIATUS': 'En pausa',
+}
+_FORMAT_ES = {'MANGA': 'Manga', 'NOVEL': 'Novela ligera', 'ONE_SHOT': 'One-shot'}
+_COUNTRY_ES = {'JP': 'Manga', 'KR': 'Manhwa', 'CN': 'Manhua', 'TW': 'Manhua'}
+
+
+def _strip_html(txt: str) -> str:
+    """AniList devuelve la sinopsis con <br>, <i> y entidades. Sin cv2 ni bs4: es un campo de
+    texto, no un documento."""
+    t = re.sub(r'<br\s*/?>', '\n', txt or '', flags=re.I)
+    t = re.sub(r'<[^>]+>', '', t)
+    t = _unescape(t)
+    return re.sub(r'\n{3,}', '\n\n', t).strip()
+
+
+@anilist_bp.route('/manga/<int:al_id>')
+def manga_info(al_id):
+    """Ficha de la obra para un manga de TU biblioteca.
+
+    `/api/library` sólo devuelve contadores (capítulos, páginas, 4K): la ficha de un manga
+    DESCARGADO no tenía sinopsis, ni autor, ni géneros, ni año — mientras que uno que NO tienes
+    sí los tenía (`WorkInfoModal` de Descubrir). El `al_id` ya viaja en `/api/library/overview`
+    (22 de 28 obras), así que sólo faltaba a quién preguntarle. Cache 24 h.
+    """
+    # `md` (UUID de MangaDex) es opcional y sólo sirve para una cosa: la sinopsis en ESPAÑOL.
+    # AniList sólo la tiene en inglés; MangaDex la trae traducida en la mayoría de obras, y esta
+    # app la lee un hispanohablante. Entra en la clave de caché para no mezclar ambas versiones.
+    md_id = (request.args.get('md') or '').strip()
+    key = f'{al_id}|{md_id}' if md_id else str(al_id)
+    hit = _cache_get('al_manga_info', key, _REC_TTL)
+    if hit is not None:
+        return jsonify(hit)
+
+    q = """
+    query ($id: Int) {
+      Media(id: $id, type: MANGA) {
+        description(asHtml: false)
+        genres meanScore averageScore chapters volumes status format countryOfOrigin
+        startDate { year } endDate { year }
+        staff(perPage: 4, sort: RELEVANCE) { edges { role node { name { full } } } }
+        siteUrl
+      }
+    }
+    """
+    d = _ql(q, {'id': int(al_id)})
+    m = (d or {}).get('Media') or {}
+    if '_error' in d or not m:
+        # «Falló» y «no hay ficha» no son lo mismo: el 502 deja que la UI lo diga y reintente.
+        return jsonify({'error': d.get('_error') or 'AniList no devolvió la obra'}), 502
+
+    # Autores: AniList mete dibujante, asistentes y hasta el editor. Nos quedamos con quien
+    # firma la obra, y sin repetir a quien hace las dos cosas (lo habitual en manga).
+    autores, vistos = [], set()
+    for e in ((m.get('staff') or {}).get('edges') or []):
+        rol = (e.get('role') or '')
+        if not re.search(r'story|art', rol, re.I):
+            continue
+        nombre = (((e.get('node') or {}).get('name') or {}).get('full') or '').strip()
+        if nombre and nombre.lower() not in vistos:
+            vistos.add(nombre.lower())
+            autores.append(nombre)
+
+    sinopsis = ''
+    if md_id:
+        from api.mangadex import description_es
+        sinopsis = _strip_html(description_es(md_id))
+    if not sinopsis:
+        sinopsis = _strip_html(m.get('description') or '')
+
+    y0 = (m.get('startDate') or {}).get('year')
+    y1 = (m.get('endDate') or {}).get('year')
+    info = {
+        'al_id':     al_id,
+        'synopsis':  sinopsis,
+        'genres':    m.get('genres') or [],
+        'score':     m.get('meanScore') or m.get('averageScore') or None,
+        'chapters':  m.get('chapters'),
+        'volumes':   m.get('volumes'),
+        'status':    _STATUS_ES.get(m.get('status') or '', ''),
+        'kind':      _COUNTRY_ES.get(m.get('countryOfOrigin') or '')
+                     or _FORMAT_ES.get(m.get('format') or '', ''),
+        'years':     f'{y0}–{y1}' if y0 and y1 and y1 != y0 else (str(y0) if y0 else ''),
+        'authors':   autores[:2],
+        'url':       m.get('siteUrl') or '',
+    }
+    _cache_set('al_manga_info', key, info, ttl=_REC_TTL, max_entries=600)
+    return jsonify(info)
+
+
 def _rec_row(node: dict) -> dict | None:
     m = node.get('mediaRecommendation')
     if not m:
@@ -398,7 +499,7 @@ def _rec_row(node: dict) -> dict | None:
         'mal_id':       m.get('idMal'),
         'title':        t.get('english') or t.get('romaji') or t.get('native') or '',
         'title_romaji': t.get('romaji') or '',
-        'cover':        (m.get('coverImage') or {}).get('large') or (m.get('coverImage') or {}).get('medium', ''),
+        'cover':        _cover(m),
         'score':        m.get('averageScore') or 0,
         'genres':       (m.get('genres') or [])[:3],
         'format':       m.get('format', ''),
@@ -493,14 +594,6 @@ def variants_route():
     al_id = request.args.get('al_id', '').strip()
     media_type = request.args.get('type', 'MANGA')
     return jsonify(title_variants(title or None, int(al_id) if al_id.isdigit() else None, media_type))
-
-
-@anilist_bp.route('/manga/banners', methods=['POST'])
-def manga_banners():
-    """Arte horizontal para el hero de Biblioteca. Ver `manga_banners.py` (lote + caché 7 d)."""
-    from api.manga_banners import banners_for
-    titles = (request.get_json(silent=True) or {}).get('titles') or []
-    return jsonify(banners_for(titles))
 
 
 @anilist_bp.route('/genres')

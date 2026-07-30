@@ -14,6 +14,29 @@ def _key(title: str) -> str:
     return (title or '').lower().strip()
 
 
+def _identity_al_id(folder: str):
+    """al_id de `<carpeta>/.identity.json`, o None.
+
+    Una lectura por carpeta y sólo de un fichero minúsculo, sobre el disco de la biblioteca; el
+    coste está en el mismo orden que el `listdir` que ya hace el barrido. Ausente = esa obra aún
+    no se ha resuelto contra AniList (vacío legítimo, no se registra); ILEGIBLE sí se registra,
+    que es la diferencia que este repo cobra cara.
+    """
+    if not folder:
+        return None
+    from pathlib import Path
+    from api.runtime import manga_dir
+    p = Path(manga_dir()) / folder / '.identity.json'
+    if not p.exists():
+        return None
+    try:
+        import json
+        return json.loads(p.read_text(encoding='utf-8')).get('al_id') or None
+    except Exception as e:
+        record_error('library_overview', e, op='identity_al_id', folder=folder)
+        return None
+
+
 def build_overview(folders: list, tracked: list) -> list:
     """Cruza las carpetas del disco con las obras seguidas (`local_library.json`).
 
@@ -57,6 +80,11 @@ def build_overview(folders: list, tracked: list) -> list:
             'mdId': t.get('id') if (t and kind == 'mangadex') else None,
             'trackedId': (t or {}).get('id'),
             'status': (t or {}).get('status') or '',
+            # El al_id (AniList) sale de la entrada seguida si la hay y, si no, de la identidad
+            # canónica que ya vive en la carpeta (`.identity.json`). Sin esto, una obra DESCARGADA
+            # llegaba a la ficha sin al_id — y todo lo que cuelga de él (puente manga⇄anime,
+            # frescura de versiones) quedaba mudo justo en las obras que más usas.
+            'al_id': (t or {}).get('al_id') or _identity_al_id(m.get('name')),
         })
 
     for t in (tracked or []):

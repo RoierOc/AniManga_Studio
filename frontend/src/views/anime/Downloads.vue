@@ -1,8 +1,11 @@
 <script setup>
-import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { useUiStore } from '@/stores/ui'
 import { formatBytes, formatSpeed, formatEta, qbtStateLabel } from '@/lib/format'
+import { parseRelease, matchLibrary } from '@/lib/anime'
+import { imgProxy } from '@/lib/img'
+import ContentToolbar from '@/components/ui/ContentToolbar.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -25,6 +28,9 @@ watch(() => store.dlSettings.download_path, (v) => { pathInput.value = v || '' }
 
 onMounted(async () => {
   store.loadDlSettings()
+  // Los pósters salen de cruzar el release con TU biblioteca, y esta vista se puede abrir sin
+  // haber pasado por «Mi Anime» — sin esto, la mayoría de filas quedaban sin portada.
+  if (!store.library.length) store.loadLibrary(true)
   await store.checkQbt()
   await store.loadQbt()
   poll = setInterval(() => store.loadQbt(), 5000)
@@ -34,6 +40,51 @@ onUnmounted(() => { if (poll) clearInterval(poll) })
 const isDone = (t) => t.progress >= 100
 // qBittorrent reports paused as 'pausedDL/UP' (v4) or 'stoppedDL/UP' (v5).
 const isPaused = (t) => /^(paused|stopped)/.test(t.state || '')
+
+/* La vista mostraba los 87 torrents de golpe y MEDIDO ninguno estaba descargando (83 detenidos
+   sembrando + 4 en cola de subida): la pantalla cuyo trabajo es «qué se está bajando ahora» era
+   una lista de cosas terminadas. Por defecto se ven las activas; lo terminado sigue a un clic. */
+const FILTROS = [
+  { id: 'activas',   label: 'Descargando' },
+  { id: 'sembrando', label: 'Sembrando' },
+  { id: 'todas',     label: 'Todas' },
+]
+const filtro = ref('activas')
+const busca = ref('')
+
+// Un torrent + lo que se puede saber de él: serie, episodio y el póster de tu biblioteca.
+const filas = computed(() => store.qbtTorrents.map(t => {
+  const r = parseRelease(t.name)
+  const anime = matchLibrary(r.title, store.library)
+  return { t, r, anime, cover: anime?.cover || '' }
+}))
+
+const cuenta = computed(() => ({
+  activas:   filas.value.filter(f => !isDone(f.t)).length,
+  sembrando: filas.value.filter(f => isDone(f.t)).length,
+  todas:     filas.value.length,
+}))
+const filtros = computed(() => FILTROS.map(f => ({ ...f, n: cuenta.value[f.id] })))
+
+const visibles = computed(() => {
+  const q = busca.value.trim().toLowerCase()
+  return filas.value.filter(f => {
+    if (filtro.value === 'activas' && isDone(f.t)) return false
+    if (filtro.value === 'sembrando' && !isDone(f.t)) return false
+    return !q || f.r.title.toLowerCase().includes(q) || f.t.name.toLowerCase().includes(q)
+  })
+})
+
+// «T1 · Ep 3 · 1080p», sin las partes que no se saben (y sin el `·` huérfano de cada una).
+function detalle(r) {
+  return [
+    r.season != null ? `T${r.season}` : '',
+    r.batch ? 'Temporada completa' : (r.episode != null ? `Ep ${r.episode}` : ''),
+    r.quality,
+  ].filter(Boolean).join(' · ')
+}
+
+const ajustes = ref(false)
 </script>
 
 <template>
@@ -62,8 +113,9 @@ const isPaused = (t) => /^(paused|stopped)/.test(t.state || '')
     </div>
 
     <template v-else>
-      <!-- Download location -->
-      <section class="loc">
+      <!-- Ajustes de carpeta: es configuración, no contenido. Ocupaba el sitio de honor cada vez
+           que entrabas a mirar una descarga; ahora se despliega cuando la buscas. -->
+      <section v-if="ajustes" class="loc">
         <div class="loc__head">
           <Icon name="folder" :size="16" />
           <div>
@@ -82,6 +134,14 @@ const isPaused = (t) => /^(paused|stopped)/.test(t.state || '')
         </p>
       </section>
 
+      <ContentToolbar v-if="store.qbtTorrents.length" :filters="filtros" v-model:filter="filtro"
+                      v-model:search="busca" search-placeholder="Buscar en la cola…">
+        <template #extra>
+          <button class="ti" :class="{ 'is-on': ajustes }" data-tip="Carpeta de descargas"
+                  @click="ajustes = !ajustes"><Icon name="folder" :size="14" /></button>
+        </template>
+      </ContentToolbar>
+
       <div v-if="store.qbtLoading && !store.qbtTorrents.length" class="center"><Spinner /></div>
       <!-- qBittorrent apagado (o la VPN caída) NO es «no hay descargas»: son estados distintos y
            el segundo te haría creer que tus torrents desaparecieron. -->
@@ -90,15 +150,30 @@ const isPaused = (t) => /^(paused|stopped)/.test(t.state || '')
                   :detail="store.qbtError" @retry="store.loadQbt()" />
       <EmptyState v-else-if="!store.qbtTorrents.length" icon="download" title="No hay descargas activas."
                   hint="Lo que descargues desde Buscar Anime aparecerá aquí." />
+      <!-- «Nada bajando ahora» NO es «no tienes torrents»: con 87 sembrando, decir lo segundo
+           te haría pensar que se han perdido. -->
+      <EmptyState v-else-if="!visibles.length && filtro === 'activas'" icon="download"
+                  title="No hay nada descargando ahora."
+                  :hint="`Tienes ${cuenta.sembrando} torrents terminados sembrando.`">
+        <template #action><button @click="filtro = 'sembrando'">Ver los terminados</button></template>
+      </EmptyState>
+      <EmptyState v-else-if="!visibles.length" icon="search" title="Nada coincide con la búsqueda." />
 
       <div v-else class="dl__list">
-        <div v-for="t in store.qbtTorrents" :key="t.hash" class="trow" :class="{ 'trow--done': isDone(t) }">
+        <div v-for="{ t, r, cover } in visibles" :key="t.hash" class="trow" :class="{ 'trow--done': isDone(t) }">
+          <!-- Sin blur-up: la caja mide 44 px, así que el micro-thumb de 28 px no es un
+               placeholder, es prácticamente la imagen final. Una petición por fila, no dos. -->
+          <div class="trow__poster">
+            <img v-if="cover" :src="imgProxy(cover, 96)" :alt="r.title" loading="lazy" decoding="async" />
+            <Icon v-else name="download" :size="16" />
+          </div>
           <div class="trow__main">
-            <div class="trow__name">{{ t.name }}</div>
+            <div class="trow__name" :data-tip="t.name">{{ r.title }}</div>
+            <div v-if="detalle(r)" class="trow__meta">{{ detalle(r) }}</div>
             <div class="trow__bar"><span :style="{ width: Math.min(100, t.progress) + '%' }" /></div>
             <div class="trow__stats">
               <span class="trow__state" :class="{ 'is-dl': !isDone(t) }">{{ qbtStateLabel(t.state) }}</span>
-              <span>{{ Math.round(t.progress) }}%</span>
+              <span v-if="!isDone(t)">{{ Math.round(t.progress) }}%</span>
               <span class="muted">{{ formatBytes(t.size) }}</span>
               <span v-if="!isDone(t)" class="trow__speed">↓ {{ formatSpeed(t.dlspeed) }}</span>
               <span v-if="!isDone(t)" class="muted">{{ formatEta(t.eta) }}</span>
@@ -170,8 +245,15 @@ const isPaused = (t) => /^(paused|stopped)/.test(t.state || '')
 .trow { display: flex; align-items: center; gap: var(--s-4); padding: var(--s-3) var(--s-4); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); transition: border-color var(--t-fast); }
 .trow:hover { border-color: var(--line-strong); }
 .trow--done { opacity: .72; }
+.trow__poster {
+  position: relative; flex-shrink: 0; width: 2.75rem; aspect-ratio: 2 / 3; overflow: hidden;
+  border-radius: var(--r-sm); background: var(--surface-2);
+  display: grid; place-items: center; color: var(--ink-ghost);
+}
+.trow__poster img { width: 100%; height: 100%; object-fit: cover; }
 .trow__main { flex: 1; min-width: 0; }
-.trow__name { font-size: var(--fs-sm); font-weight: 500; margin-bottom: 0.375rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.trow__meta { font-size: var(--fs-xs); color: var(--ink-faint); margin-bottom: 0.375rem; }
+.trow__name { font-size: var(--fs-sm); font-weight: 600; margin-bottom: 0.125rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trow__bar { height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
 .trow__bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--azure)); transition: width var(--t-base) var(--ease-silk); }
 .trow--done .trow__bar span { background: var(--jade); }

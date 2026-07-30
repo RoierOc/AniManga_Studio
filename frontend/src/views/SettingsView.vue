@@ -29,6 +29,10 @@ const TABS = [
   { id: 'novelas', label: 'Novelas', icon: 'book' },
   { id: 'almacenamiento', label: 'Almacenamiento', icon: 'folder' },
   { id: 'copia', label: 'Copia y sync', icon: 'refresh' },
+  /* La Cocina del diseño y el modo QA son andamiaje de desarrollo y vivían en «General», que es
+     la pestaña que se abre por defecto: dos de las tres tarjetas que veías al entrar en Ajustes
+     eran herramientas internas, y ocupaban más sitio que el único ajuste de verdad (el 4K). */
+  { id: 'interno', label: 'Interno', icon: 'palette' },
 ]
 const tab = ref(localStorage.getItem('set-tab') || 'general')
 watch(tab, (v) => { try { localStorage.setItem('set-tab', v) } catch {} })
@@ -275,30 +279,6 @@ async function onImportFile(e) {
     </section>
 
     
-
-<!-- Modo QA de traducción (testing) -->
-    <section class="card">
-      <div class="card__title"><Icon name="palette" :size="16" /> Cocina del diseño <span class="tag">interno</span></div>
-      <p class="hint">Todos los componentes del sistema en todos sus estados (vacío, cargando, error,
-        título kilométrico). Sirve para pulir los casos límite aquí en vez de descubrirlos en tu biblioteca.</p>
-      <button class="btn" @click="ui.goto('kitchen')"><Icon name="grid" :size="14" /> Abrir la cocina</button>
-    </section>
-
-    <section class="card">
-      <div class="card__title"><Icon name="spark" :size="16" /> Modo QA de traducción <span class="tag">testing</span></div>
-      <label class="fld fld--chk">
-        <span>Activar modo QA <em>· conserva artefactos de debug al traducir y habilita el botón ⚑ en el lector para marcar páginas mal traducidas</em></span>
-        <input type="checkbox" :checked="manga.qaMode" @change="manga.toggleQa()" />
-      </label>
-      <div class="sep" />
-      <div class="qa-foot">
-        <span class="hint">{{ qaInfo.flags }} página(s) marcada(s) · {{ formatBytes(qaInfo.bytes) }} en disco</span>
-        <button class="btn btn--danger" :disabled="!qaInfo.bytes && !qaInfo.flags" @click="clearQa">
-          <Icon name="close" :size="14" /> Borrar datos QA
-        </button>
-      </div>
-      <p class="hint">Los casos se guardan en <code>data/_translation_qa/</code> (salida + arte EN + ES emparejada + overlay + diagnóstico) para afinar el algoritmo. Apagar el modo no borra lo ya guardado.</p>
-    </section>
 
 <!-- Biblioteca oculta (oculta salvo modo activo o revelada por gesto) -->
     <section v-if="hidCardShown" class="card" :class="{ 'card--hid': ui.hiddenModeActive }">
@@ -679,6 +659,30 @@ async function onImportFile(e) {
     </section>
 
     
+        </div>
+        <div v-show="tab === 'interno'" class="set__cat">
+      <section class="card">
+        <div class="card__title"><Icon name="palette" :size="16" /> Cocina del diseño <span class="tag">interno</span></div>
+        <p class="hint">Todos los componentes del sistema en todos sus estados (vacío, cargando, error,
+          título kilométrico). Sirve para pulir los casos límite aquí en vez de descubrirlos en tu biblioteca.</p>
+        <button class="btn" @click="ui.goto('kitchen')"><Icon name="grid" :size="14" /> Abrir la cocina</button>
+      </section>
+
+      <section class="card">
+        <div class="card__title"><Icon name="spark" :size="16" /> Modo QA de traducción <span class="tag">testing</span></div>
+        <label class="fld fld--chk">
+          <span>Activar modo QA <em>· conserva artefactos de debug al traducir y habilita el botón ⚑ en el lector para marcar páginas mal traducidas</em></span>
+          <input type="checkbox" :checked="manga.qaMode" @change="manga.toggleQa()" />
+        </label>
+        <div class="sep" />
+        <div class="qa-foot">
+          <span class="hint">{{ qaInfo.flags }} página(s) marcada(s) · {{ formatBytes(qaInfo.bytes) }} en disco</span>
+          <button class="btn btn--danger" :disabled="!qaInfo.bytes && !qaInfo.flags" @click="clearQa">
+            <Icon name="close" :size="14" /> Borrar datos QA
+          </button>
+        </div>
+        <p class="hint">Los casos se guardan en <code>data/_translation_qa/</code> (salida + arte EN + ES emparejada + overlay + diagnóstico) para afinar el algoritmo. Apagar el modo no borra lo ya guardado.</p>
+      </section>
         </div>
       </div>
     </div>

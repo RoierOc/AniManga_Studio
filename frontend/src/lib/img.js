@@ -32,11 +32,18 @@ export function imgProxy(url, w = 0) {
   return `/api/img?u=${encodeURIComponent(url)}${q ? `&w=${q}` : ''}`
 }
 
+/* La MISMA escalera que `_LADDER` de `imgproxy.py`. Tiene que estar aquí también: el backend
+ * sube al peldaño siguiente de todos modos, así que `w=160` y `w=300` devolvían el MISMO fichero
+ * (medido: 50 862 bytes los dos, peldaño 320) bajo DOS urls distintas → dos descargas y dos
+ * decodificaciones del mismo píxel. Redondeando en el cliente, una. */
+const LADDER = [28, 48, 96, 320, 480, 512, 640, 900]
+
 /* Ancho en píxeles FÍSICOS: en una pantalla HiDPI una caja de 250 px CSS necesita 500 px reales
  * o la portada se ve blanda. Se topa en 2 para no pedir 3× en pantallas exóticas. */
 function dpx(cssWidth) {
   const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1)
-  return Math.round(cssWidth * dpr)
+  const real = Math.round(cssWidth * dpr)
+  return LADDER.find(w => real <= w) || LADDER[LADDER.length - 1]
 }
 
 /* Blur-up placeholder: ~28px thumb (~1 KB) served from the proxy's disk cache,

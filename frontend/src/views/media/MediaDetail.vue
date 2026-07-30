@@ -11,7 +11,7 @@
    `progressKey` (dónde se guarda la posición). */
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '@/lib/api'
-import { formatBytes } from '@/lib/format'
+import { formatBytes, mediaStatusLabel } from '@/lib/format'
 import { useMediaStore } from '@/stores/media'
 import { useUiStore } from '@/stores/ui'
 import { useSubBatchStore } from '@/stores/subbatch'
@@ -313,7 +313,7 @@ function epWatched(ep) { const l = live(ep); return l ? l.watched : !!ep.watched
         <dl class="info__grid">
           <div v-if="item.genres?.length"><dt>Géneros</dt><dd>{{ item.genres.join(' · ') }}</dd></div>
           <div v-if="item.network"><dt>Cadena</dt><dd>{{ item.network }}</dd></div>
-          <div v-if="item.status"><dt>Estado</dt><dd>{{ item.status }}</dd></div>
+          <div v-if="item.status"><dt>Estado</dt><dd>{{ mediaStatusLabel(item.status) }}</dd></div>
           <div v-if="item.runtime"><dt>Duración</dt><dd>{{ item.runtime }} min por episodio</dd></div>
           <div v-if="item.seasons"><dt>Temporadas</dt><dd>{{ item.seasons }}</dd></div>
           <div v-if="item.size"><dt>En disco</dt><dd>{{ formatBytes(item.size) }}</dd></div>

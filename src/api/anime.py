@@ -28,6 +28,7 @@ from api.platform import is_wsl as _is_wsl, is_macos as _is_macos
 from api.config_store import get_secret, set_secrets  # runtime-editable API keys (Ajustes)
 from api import sub_lang  # clasificación robusta de subtítulos ES/LAT (código + título)
 from api.observability import record_error, swallow  # hace VISIBLE el fallo silencioso
+from api.anilist import _cover as _al_cover  # AniList: extraLarge (460x650) antes que large (230x325)
 
 anime_bp = Blueprint('anime', __name__)
 
@@ -238,7 +239,7 @@ def _anilist_enrich(al_id):
     q = '''query($id:Int){Media(id:$id,type:ANIME){
         episodes format status season seasonYear
         title{romaji english}
-        coverImage{extraLarge large}
+        coverImage{ extraLarge large medium }
         bannerImage genres
         description(asHtml:false)
     }}'''
@@ -1764,7 +1765,7 @@ def search_anime():
           id idMal
           title { romaji english native }
           meanScore episodes status season seasonYear format
-          coverImage { large medium }
+          coverImage{ extraLarge large medium }
           bannerImage
           genres
           nextAiringEpisode { episode }
@@ -1797,7 +1798,7 @@ def search_anime():
             'score':        it.get('meanScore'),
             'episodes':     it.get('episodes'),
             'status':       it.get('status'),
-            'cover':        (it.get('coverImage') or {}).get('large') or (it.get('coverImage') or {}).get('medium'),
+            'cover':        _al_cover(it),
             'banner':       it.get('bannerImage') or '',
             'genres':       (it.get('genres') or [])[:4],
             'next_episode': nae.get('episode'),
@@ -1982,8 +1983,13 @@ def qbt_list():
         } for t in torrents]
         result.sort(key=lambda x: x['added_on'], reverse=True)
         return jsonify(result)
-    except Exception:
-        return jsonify([])
+    except Exception as e:
+        # «Falló» y «no había» NUNCA pueden ser el mismo valor: devolver [] con un 200 hacía que
+        # qBittorrent apagado (o la VPN caída) se pintase como «no hay descargas» y parecieran
+        # perdidos los 87 torrents. El front ya sabe distinguirlo (`qbtError`); sólo faltaba
+        # que el backend se lo dijera.
+        record_error('anime', e, op='qbt_list')
+        return jsonify({'error': str(e) or 'qBittorrent no responde'}), 502
 
 
 @anime_bp.route('/qbt/action', methods=['POST'])
@@ -2330,7 +2336,7 @@ def anime_library_add():
     if not total_eps and al_id:
         try:
             _q = '''query($id:Int){Media(id:$id,type:ANIME){episodes format
-                title{english romaji} coverImage{large}}}'''
+                title{english romaji} coverImage{ extraLarge large medium }}}'''
             r = _rhttp.post(_ANILIST, json={'query': _q, 'variables': {'id': int(al_id)}}, timeout=8)
             m = (r.json().get('data') or {}).get('Media') or {}
             if m.get('episodes'):
@@ -2848,7 +2854,7 @@ def anime_scan_suggest():
     try:
         search_name = _clean_folder_name(folder_name)
         q = '''query($s:String){Page(perPage:5){media(search:$s,type:ANIME,sort:SEARCH_MATCH){
-            id title{romaji english}coverImage{large}}}}'''
+            id title{romaji english}coverImage{ extraLarge large medium }}}}'''
 
         def _search(name):
             r = _rhttp.post(_ANILIST, json={'query': q, 'variables': {'s': name}}, timeout=8)
@@ -2891,7 +2897,7 @@ def anime_scan_suggest():
         return jsonify({
             'id': best['id'],
             'title': t.get('english') or t.get('romaji', ''),
-            'cover': (best.get('coverImage') or {}).get('large', ''),
+            'cover': _al_cover(best),
         })
     except Exception:
         pass
@@ -2977,7 +2983,7 @@ def anime_scan_match():
         q = '''query($id:Int){Media(id:$id,type:ANIME){
             episodes format status
             title{romaji english native}
-            coverImage{large}
+            coverImage{ extraLarge large medium }
         }}'''
         r = _rhttp.post(_ANILIST, json={'query': q, 'variables': {'id': int(anilist_id)}}, timeout=8)
         al_media = (r.json().get('data') or {}).get('Media') or {}
@@ -2987,7 +2993,7 @@ def anime_scan_match():
                 'title':         t.get('english') or t.get('romaji') or title,
                 'title_romaji':  t.get('romaji') or '',
                 'title_native':  t.get('native') or '',
-                'cover':         (al_media.get('coverImage') or {}).get('large') or cover,
+                'cover':         _al_cover(al_media) or cover,
                 'total_episodes': al_media.get('episodes'),
                 'format':        al_media.get('format') or '',
                 'status':        al_media.get('status') or '',
@@ -3427,7 +3433,7 @@ def _fetch_seasonal(season, year, sort_by, gql_sort):
           id idMal
           title { romaji english native }
           meanScore popularity episodes status season seasonYear format
-          coverImage { large medium }
+          coverImage{ extraLarge large medium }
           bannerImage
           genres
           nextAiringEpisode { episode airingAt }
@@ -3457,7 +3463,7 @@ def _fetch_seasonal(season, year, sort_by, gql_sort):
             'popularity':   it.get('popularity'),
             'episodes':     it.get('episodes'),
             'status':       it.get('status'),
-            'cover':        (it.get('coverImage') or {}).get('large') or (it.get('coverImage') or {}).get('medium'),
+            'cover':        _al_cover(it),
             'banner':       it.get('bannerImage') or '',
             'genres':       (it.get('genres') or [])[:4],
             'next_episode': nae.get('episode'),
@@ -3998,7 +4004,7 @@ query ($id: Int) {
         mediaRecommendation {
           id
           title { romaji english }
-          coverImage { large medium }
+          coverImage{ extraLarge large medium }
           averageScore
           genres
           format
@@ -4039,7 +4045,7 @@ def anime_recommendations(al_id):
                 'al_id':        m['id'],
                 'title':        m['title'].get('english') or m['title'].get('romaji', ''),
                 'title_romaji': m['title'].get('romaji', ''),
-                'cover':        (m.get('coverImage') or {}).get('large') or (m.get('coverImage') or {}).get('medium', ''),
+                'cover':        _al_cover(m),
                 'score':        m.get('averageScore') or 0,
                 'genres':       (m.get('genres') or [])[:3],
                 'format':       m.get('format', ''),
@@ -4064,7 +4070,7 @@ _FRANCHISE_Q = '''query($id:Int){Media(id:$id,type:ANIME){
   id format status episodes seasonYear
   startDate{year month day}
   title{romaji english}
-  coverImage{large medium}
+  coverImage{ extraLarge large medium }
   relations{edges{relationType node{id type}}}
 }}'''
 
@@ -4113,8 +4119,7 @@ def anime_franchise(al_id):
             'al_id': m['id'],
             'title': (m['title'].get('english') or m['title'].get('romaji') or ''),
             'title_romaji': m['title'].get('romaji', ''),
-            'cover': (m.get('coverImage') or {}).get('large')
-                     or (m.get('coverImage') or {}).get('medium', ''),
+            'cover': _al_cover(m),
             'format': m.get('format', ''),
             'episodes': m.get('episodes') or 0,
             'status': m.get('status', ''),
@@ -4140,13 +4145,17 @@ query ($id: Int) {
 }
 """
 
+# `minimumTagRank` es un filtro REAL de AniList y es lo que convierte esta pantalla en algo útil:
+# un tag como "Magic" lo llevan cientos de series con un 60 % de relevancia, que es como no
+# filtrar. Con 90 % pides las que van DE eso — medido: a rank 0 salen Re:ZERO (88 %) y Jujutsu
+# (85 %); a rank 90 desaparecen y entra Witch Hat Atelier (98 %).
 _TAG_BROWSE_QUERY = """
-query ($tag: String) {
+query ($tag: String, $rank: Int) {
   Page(page: 1, perPage: 30) {
-    media(type: ANIME, tag: $tag, sort: SCORE_DESC, isAdult: false) {
+    media(type: ANIME, tag: $tag, minimumTagRank: $rank, sort: SCORE_DESC, isAdult: false) {
       id idMal
       title { romaji english }
-      coverImage { large medium }
+      coverImage{ extraLarge large medium }
       averageScore genres format episodes status
       tags { name rank }
     }
@@ -4232,6 +4241,9 @@ def anime_tags(al_id):
 def browse_by_tag():
     tag  = request.args.get('tag', '').strip()
     al_id = request.args.get('al_id', type=int)
+    # 0 = sin filtro. Se acota a [0, 100] porque AniList devuelve un error de esquema fuera de
+    # rango y eso llegaría a la UI como "no hay resultados", que es la mentira de siempre.
+    min_rank = max(0, min(100, request.args.get('min_rank', type=int) or 0))
     if not tag:
         return jsonify([])
     try:
@@ -4251,7 +4263,7 @@ def browse_by_tag():
 
         resp = _http.post(
             _ANILIST,
-            json={'query': _TAG_BROWSE_QUERY, 'variables': {'tag': tag}},
+            json={'query': _TAG_BROWSE_QUERY, 'variables': {'tag': tag, 'rank': min_rank}},
             timeout=10,
         )
         items = (resp.json().get('data', {}).get('Page', {}).get('media') or [])
@@ -4261,21 +4273,30 @@ def browse_by_tag():
                 continue  # skip the source anime itself
             item_tags = {t['name'] for t in (m.get('tags') or [])}
             shared = len(source_tags & item_tags) if source_tags else 0
+            # El % del tag PEDIDO viaja con cada resultado: sin él, filtrar por 90 % es un salto
+            # de fe — se ve la lista pero no por qué está cada obra en ella.
+            tag_rank = next((t['rank'] for t in (m.get('tags') or []) if t['name'] == tag), None)
             result.append({
                 'al_id':        m['id'],
                 'mal_id':       m.get('idMal'),
                 'title':        m['title'].get('english') or m['title'].get('romaji', ''),
                 'title_romaji': m['title'].get('romaji', ''),
-                'cover':        (m.get('coverImage') or {}).get('large') or (m.get('coverImage') or {}).get('medium', ''),
+                'cover':        _al_cover(m),
                 'score':        m.get('averageScore') or 0,
                 'genres':       (m.get('genres') or [])[:3],
                 'format':       m.get('format', ''),
                 'episodes':     m.get('episodes') or 0,
                 'status':       m.get('status', ''),
                 'shared':       shared,
+                'tag_rank':     tag_rank,
             })
-        # Most tag-overlap first, then by score
-        result.sort(key=lambda x: (-x['shared'], -x['score']))
+        # Filtrando por relevancia manda el % del tag: pediste «90 % Magic», así que lo primero
+        # que quieres ver es lo más Magic. Sin filtro sigue mandando el parecido con la obra de
+        # origen, que es de donde vienes.
+        if min_rank:
+            result.sort(key=lambda x: (-(x['tag_rank'] or 0), -x['score']))
+        else:
+            result.sort(key=lambda x: (-x['shared'], -x['score']))
         for item in result:
             if item['cover']:
                 threading.Thread(target=_warm_img, args=(item['cover'],), daemon=True).start()
@@ -4372,7 +4393,7 @@ def anime_resolve_al_id():
     mal_id = request.args.get('mal_id', type=int)
     if not mal_id:
         return jsonify({'error': 'mal_id required'}), 400
-    _q = 'query($mid:Int){Media(idMal:$mid,type:ANIME){id idMal title{english romaji} coverImage{large} episodes format}}'
+    _q = 'query($mid:Int){Media(idMal:$mid,type:ANIME){id idMal title{english romaji} coverImage{ extraLarge large medium } episodes format}}'
     try:
         resp = _rhttp.post(_ANILIST, json={'query': _q, 'variables': {'mid': mal_id}}, timeout=8)
         m = (resp.json().get('data') or {}).get('Media') or {}

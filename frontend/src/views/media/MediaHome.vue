@@ -1,4 +1,5 @@
 <script setup>
+import { mediaStatusLabel } from '@/lib/format'
 /* Home de Series y Películas — espejo de `views/anime/AnimeLibrary.vue`:
    aura + hero a sangre + riel "Seguir viendo" + toolbar + rejilla de tarjetas. */
 import { computed, onMounted, ref } from 'vue'
@@ -64,7 +65,7 @@ function cardFor(it) {
     // Solo se marca lo que falta: una serie completa no necesita insignia.
     status: it.have < it.total ? { label: `Faltan ${it.total - it.have}`, color: 'var(--cyan)' } : null,
     count: it.kind === 'series' ? { done: it.have, total: it.total } : null,
-    tags: [it.year ? String(it.year) : '', it.status].filter(Boolean),
+    tags: [it.year ? String(it.year) : '', mediaStatusLabel(it.status)].filter(Boolean),
   }
 }
 
@@ -180,6 +181,12 @@ function play(it) {
    que la vista se encogiera al ancho del contenido y la rejilla colapsara (gotcha del repo). */
 .mlib { display: block; position: relative; --alib-pad: var(--s-6); }
 .mlib__aura {
+  /* El aura es un degradado radial anclado ARRIBA, así que su primera fila es la más intensa y
+     el borde superior del contenedor la corta en seco: medido, +20 de luminancia en una fila —
+     una línea horizontal justo donde empieza el hero, más marcada en el lado donde el radial está
+     centrado. Se le da su propia rampa vertical para que entre desde cero. */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, #000 16%);
+          mask-image: linear-gradient(to bottom, transparent 0%, #000 16%);
   position: absolute; inset: 0 0 auto 0; height: 60vh; pointer-events: none; z-index: 0;
   background: radial-gradient(80% 60% at 20% 0%, color-mix(in srgb, var(--tint-c) 22%, transparent) 0%, transparent 70%);
   transition: background 1.2s var(--ease-silk);

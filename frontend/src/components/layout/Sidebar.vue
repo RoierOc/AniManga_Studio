@@ -72,10 +72,14 @@ const isActive = (item) =>
     <nav class="nav">
       <div v-for="g in groups" :key="g.group" class="nav__group">
         <span class="nav__label">{{ g.group }}</span>
+        <!-- `data-tip` sólo plegado: con el sidebar abierto la burbuja repetía la etiqueta que
+             está ahí al lado Y tapaba el ítem de debajo. Un tooltip que no añade nada es ruido
+             que además esconde el siguiente destino. -->
         <button
           v-for="item in g.items" :key="item.id + (item.sub || '')"
           class="nav__item" :class="{ 'is-active': isActive(item) }"
-          @click="select(item, g)" :data-tip="item.label"
+          @click="select(item, g)"
+          :data-tip="ui.sidebarCollapsed ? item.label : null"
         >
           <span class="nav__rail" />
           <Icon :name="item.icon" :size="19" class="nav__icon" />

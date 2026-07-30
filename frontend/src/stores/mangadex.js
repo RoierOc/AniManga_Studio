@@ -137,6 +137,31 @@ export const useMangadexStore = defineStore('mangadex', {
       finally { if (rid === this._reqId) this.loading = false }
     },
 
+    /* Abre la ficha de MangaDex de una obra de la que sólo se sabe el título — el caso del
+       puente manga⇄anime: «este anime sale de tal manga, tráemelo».
+
+       Busca y abre el MEJOR resultado directamente en vez de dejarte una rejilla: cuando vienes
+       de una ficha ya sabes qué obra quieres, y una lista de 30 para elegir una es el peaje que
+       ya quitamos en Descubrir de series. Si nada casa lo bastante, se deja la búsqueda hecha
+       en Explorar y se avisa: eso es «no lo encontré», no un modal en blanco. */
+    async openByTitle(title, alt = []) {
+      const t = (title || '').trim()
+      if (!t) return false
+      this.query = t
+      await this.search()
+      const norm = (x) => (x || '').toLowerCase().replace(/[^a-z0-9]/g, '')
+      const buscados = [t, ...alt].filter(Boolean).map(norm)
+      const exacto = this.results.find(m => buscados.includes(norm(m.title)))
+      const elegido = exacto || (this.results.length === 1 ? this.results[0] : null)
+      if (elegido) { await this.openDetail(elegido); return true }
+      // Sin coincidencia clara: la decisión es del usuario, así que se le enseña la búsqueda.
+      useUiStore().goto('explore')
+      useUiStore().toast(this.results.length
+        ? `«${t}»: elige cuál es en los resultados`
+        : `«${t}» no está en MangaDex`, this.results.length ? 'info' : 'error')
+      return false
+    },
+
     /* Buscar mientras se escribe; Enter dispara ya, sin esperar al debounce. */
     onQueryInput() {
       clearTimeout(this._qTimer)

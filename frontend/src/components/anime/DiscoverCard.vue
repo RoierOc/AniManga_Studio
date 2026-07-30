@@ -1,12 +1,18 @@
 <script setup>
 import { computed } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
-import { imgThumb } from '@/lib/img'
+import { imgProxy, imgThumb } from '@/lib/img'
+import { useBoxWidth } from '@/lib/useBoxWidth'
 import Icon from '@/components/ui/Icon.vue'
 
 const props = defineProps({ anime: { type: Object, required: true } })
 const store = useAnimeStore()
 const thumb = computed(() => imgThumb(props.anime.cover))
+/* La portada iba DIRECTA al CDN de AniList: sin caché en disco, sin escalera de tamaños.
+   MEDIDO en Temporada: 78 peticiones y 1,75 MB a internet en cada visita, con la imagen de 230 px
+   pintada a 298 px CSS. Por el proxy sale de disco y al peldaño que mide la caja. */
+const [cov, boxW] = useBoxWidth(230)
+const coverUrl = computed(() => imgProxy(props.anime.cover, boxW.value))
 const inLib = computed(() => store.isInLibrary(props.anime))
 const scoreTier = computed(() => {
   const s = props.anime.score
@@ -19,9 +25,9 @@ const scoreTier = computed(() => {
 
 <template>
   <article class="sc" tabindex="0" @click="store.openTorrents(anime)" @keydown.enter="store.openTorrents(anime)">
-    <div class="sc__cover">
+    <div class="sc__cover" ref="cov">
       <img v-if="thumb" :src="thumb" class="blurup" aria-hidden="true" alt="" />
-      <img v-if="anime.cover" :src="anime.cover" :alt="anime.title" loading="lazy" decoding="async"
+      <img v-if="anime.cover" :src="coverUrl" :alt="anime.title" loading="lazy" decoding="async"
            @load="$event.target.classList.add('is-loaded')" class="sc__img" />
       <div v-else class="sc__ph"><Icon name="film" :size="30" /></div>
       <span class="sc__shine" />
@@ -39,8 +45,11 @@ const scoreTier = computed(() => {
     <div class="sc__info">
       <div class="sc__title">{{ anime.title }}</div>
       <div class="sc__meta">
+        <!-- El separador va con el dato ANTERIOR, nunca cosido al que le sigue: si AniList no
+             da `episodes` (pasa con obras recién anunciadas), un `· EP 6` deja el punto colgando
+             al principio de la línea. -->
         <span v-if="anime.episodes" class="sc__eps">{{ anime.episodes }} ep</span>
-        <span v-if="anime.next_episode" class="sc__next">· EP {{ anime.next_episode }}</span>
+        <span v-if="anime.next_episode" class="sc__next"><template v-if="anime.episodes">· </template>EP {{ anime.next_episode }}</span>
       </div>
       <div v-if="anime.genres?.length" class="sc__genres">
         <span v-for="(g, i) in anime.genres.slice(0, 3)" :key="g" class="sc__gtag">{{ i ? ' · ' : '' }}{{ g }}</span>

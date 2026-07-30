@@ -4,7 +4,8 @@
  * biblioteca sin abrir la ficha. */
 import { computed } from 'vue'
 import { useDiscoveryStore } from '@/stores/discovery'
-import { imgProxy } from '@/lib/img'
+import { imgProxy, imgThumb } from '@/lib/img'
+import { useBoxWidth } from '@/lib/useBoxWidth'
 import Icon from '@/components/ui/Icon.vue'
 
 const props = defineProps({ work: { type: Object, required: true } })
@@ -12,9 +13,13 @@ const emit = defineEmits(['select'])
 const disco = useDiscoveryStore()
 
 const TYPE_LABEL = { manga: 'Manga', manhwa: 'Manhwa', manhua: 'Manhua', novel: 'Novela', other: 'Otro' }
-// Sin `&w=`: ese parámetro del proxy es SOLO para el micro-thumb del blur-up (clampa a 64px).
-// La portada ya viene dimensionada del CDN de MangaBaka (~700px), nítida.
-const cover = computed(() => imgProxy(props.work.cover || '', 260))
+/* Blur-up: era la ÚNICA tarjeta de la app sin él. La imagen pasaba de `opacity: 0` a nítida, y
+   MEDIDO a cronómetro la rejilla de Descubrir tarda 5,5 s en llenar sus 48 portadas: hasta
+   entonces se veían cajas negras con el título flotando encima. Los 28 px del micro-thumb pesan
+   lo que un icono y dan el degradado gris→nítido que ya hacen `MdCard` y `MediaCard`. */
+const thumb = computed(() => imgThumb(props.work.cover || ''))
+const [poster, boxW] = useBoxWidth(260)
+const cover = computed(() => imgProxy(props.work.cover || '', boxW.value))
 const added = computed(() => disco.inLibrary(props.work))
 
 function quickAdd() { disco.addToLibrary(props.work) }
@@ -22,7 +27,8 @@ function quickAdd() { disco.addToLibrary(props.work) }
 
 <template>
   <article class="wc" tabindex="0" @click="emit('select', work)" @keydown.enter="emit('select', work)">
-    <div class="wc__poster">
+    <div class="wc__poster" ref="poster">
+      <img v-if="thumb" :src="thumb" class="blurup" aria-hidden="true" alt="" />
       <img v-if="work.cover" :src="cover" :alt="work.title" loading="lazy" decoding="async"
            @load="$event.target.classList.add('is-loaded')" class="wc__img" />
       <div v-else class="wc__ph"><Icon name="library" :size="24" /></div>
