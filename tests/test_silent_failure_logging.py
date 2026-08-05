@@ -61,18 +61,22 @@ def test_lib_read_valid_file_roundtrips_without_logging(tmp_path, monkeypatch):
 # ── _history_read ─────────────────────────────────────────────────────────────
 def test_history_read_missing_is_empty_not_an_error(tmp_path, monkeypatch):
     import api.anime as A
-    monkeypatch.setattr(A, "_history_path", lambda: tmp_path / "watch_history.json")
+    from api import history_store
+    monkeypatch.setattr(history_store, "manga_dir", lambda: tmp_path)
     assert A._history_read() == []
-    assert obs.error_counts().get("anime") is None
+    assert obs.error_counts().get("history") is None
 
 
 def test_history_read_corrupt_returns_empty_but_logs(tmp_path, monkeypatch):
+    # El historial ya no vive dentro de anime.py: lo gobierna `api/history_store.py`, que
+    # archiva por meses en vez de truncar a 500. La costura a pinchar es su `manga_dir`, y el
+    # componente que cuenta es 'history'. Lo que se comprueba no cambia: corrupto ≠ vacío.
     import api.anime as A
-    p = tmp_path / "watch_history.json"
-    p.write_text("no-json", encoding="utf-8")
-    monkeypatch.setattr(A, "_history_path", lambda: p)
+    from api import history_store
+    (tmp_path / "watch_history.json").write_text("no-json", encoding="utf-8")
+    monkeypatch.setattr(history_store, "manga_dir", lambda: tmp_path)
     assert A._history_read() == []
-    assert obs.error_counts().get("anime") == 1
+    assert obs.error_counts().get("history") == 1
 
 
 # ── config de usuario (rutas de escaneo / ajustes): corrupta ≠ sin configurar ──
@@ -145,19 +149,23 @@ def _unwritable(tmp_path):
 
 def test_history_append_write_failure_is_logged_not_raised(tmp_path, monkeypatch):
     import api.anime as A
-    bad = _unwritable(tmp_path)
-    monkeypatch.setattr(A, "_history_path", lambda: bad)
+    from api import history_store
+    # Carpeta de biblioteca que es en realidad un FICHERO → cualquier escritura dentro lanza.
+    blocker = tmp_path / "soy_un_fichero"
+    blocker.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(history_store, "manga_dir", lambda: blocker)
     # No debe propagar aunque la escritura falle:
     A._history_append("a1", "Serie", 3, cover="")
-    assert obs.error_counts().get("anime") == 1
+    assert obs.error_counts().get("history") == 1
 
 
 def test_history_append_write_success_logs_nothing(tmp_path, monkeypatch):
     import api.anime as A
-    monkeypatch.setattr(A, "_history_path", lambda: tmp_path / "watch_history.json")
+    from api import history_store
+    monkeypatch.setattr(history_store, "manga_dir", lambda: tmp_path)
     A._history_append("a1", "Serie", 3, cover="")
     assert (tmp_path / "watch_history.json").exists()
-    assert obs.error_counts().get("anime") is None
+    assert obs.error_counts().get("history") is None
 
 
 def test_dur_cache_save_failure_is_logged_not_raised(tmp_path, monkeypatch):

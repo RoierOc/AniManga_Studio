@@ -23,6 +23,9 @@ const props = defineProps({
   block: { type: Boolean, default: false },
   disabled: { type: Boolean, default: false },
   ariaLabel: { type: String, default: '' },
+  // Icono a la izquierda del botón. Sin él, dos desplegables seguidos («Leído reciente» y
+  // «Todas las etiquetas») se leen igual y no se sabe cuál hace qué.
+  icon: { type: String, default: '' },
 })
 const emit = defineEmits(['update:modelValue', 'change'])
 
@@ -123,6 +126,7 @@ onBeforeUnmount(() => {
             :disabled="disabled" :aria-label="ariaLabel || placeholder"
             aria-haspopup="listbox" :aria-expanded="open"
             @click="toggle" @keydown="onKey">
+      <Icon v-if="icon" :name="icon" :size="14" class="usel__ico" />
       <span v-if="selected?.color" class="usel__dot" :style="{ background: selected.color, color: selected.color }" />
       <span class="usel__lbl" :style="selected?.color ? { color: selected.color } : {}">
         {{ selected?.label ?? placeholder }}
@@ -166,6 +170,8 @@ onBeforeUnmount(() => {
 .usel__btn:disabled { opacity: .5; cursor: default; }
 .usel__lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .usel.is-block .usel__lbl { flex: 1; text-align: left; }
+.usel__ico { flex-shrink: 0; color: var(--ink-faint); }
+.usel__btn.is-open .usel__ico { color: var(--azure-bright); }
 .usel__chev { flex-shrink: 0; color: var(--ink-faint); transition: transform var(--t-fast); }
 .usel__dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; flex-shrink: 0; box-shadow: 0 0 8px currentColor; }
 </style>

@@ -47,6 +47,29 @@ export function relativeTime(ts) {
   return new Date(ts * 1000).toLocaleDateString('es')
 }
 
+/* Encabezado de día para listas cronológicas («Hoy», «Ayer», «jueves», «12 de agosto»).
+   Vivía dentro de `views/anime/History.vue`; sube aquí porque el Historial y los Estrenos de Cine
+   necesitan EXACTAMENTE el mismo criterio, y dos copias derivan (ya pasó con los formatos de fecha
+   mezclados en la misma lista). El locale va fijo a 'es': el idioma de la app no lo decide el SO. */
+const _dia = (ts) => { const d = new Date(ts * 1000); d.setHours(0, 0, 0, 0); return d.getTime() }
+
+export function dayLabel(ts, { future = false } = {}) {
+  const dias = Math.round((_dia(ts) - _dia(Date.now() / 1000)) / 86400000)
+  if (dias === 0) return 'Hoy'
+  if (dias === 1) return 'Mañana'
+  if (dias === -1) return 'Ayer'
+  const d = new Date(ts * 1000)
+  // Dentro de la semana el nombre del día basta y se lee más rápido; más allá, la fecha.
+  if (future ? (dias > 0 && dias < 7) : (dias < 0 && dias > -7)) {
+    return d.toLocaleDateString('es', { weekday: 'long' })
+  }
+  const mismoAnio = d.getFullYear() === new Date().getFullYear()
+  return d.toLocaleDateString('es', { day: 'numeric', month: 'long', ...(mismoAnio ? {} : { year: 'numeric' }) })
+}
+
+export const hourLabel = (ts) =>
+  new Date(ts * 1000).toLocaleTimeString('es', { hour: '2-digit', minute: '2-digit' })
+
 /* Estados de serie/película tal cual los devuelven Sonarr, Radarr y TMDB. Se colaban CRUDOS en
    la UI: barrido de las 9 vistas → sólo en Cine, pero ahí «ended» x4, «continuing» y «announced»,
    y encima duplicando lo que la línea ya decía en español («Completa · 2008 · ended»). */

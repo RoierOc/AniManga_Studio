@@ -46,6 +46,9 @@ body {
 /* En modo ventana, el lector reserva el alto de la barra para no quedar por debajo de ella
    (su propia barra de herramientas arranca justo bajo la de título). En fullscreen cubre todo. */
 .native-shell:not(.native-fs) .rd { top: var(--titlebar-h); }
+/* Igual para el cajón de Actividad: va teleportado a <body> (fuera del padding-top), y la barra
+   de título (z-index 305) le tapaba la cabecera «N en proceso · Ver todo». */
+.native-shell:not(.native-fs) .adr__panel { top: var(--titlebar-h); }
 
 /* ── Atmosphere: cosmos glow + analog noise grain ─────────────────────────
    Two fixed layers behind everything. The glow gives the "deep space with a

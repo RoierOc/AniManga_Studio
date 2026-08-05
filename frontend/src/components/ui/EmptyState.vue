@@ -7,11 +7,15 @@ defineProps({
   icon: { type: String, default: 'library' },
   title: { type: String, required: true },
   hint: { type: String, default: '' },
+  // `full` para los estados vacíos que son TODA la página. Sin esto el mensaje se quedaba en el
+  // tercio superior con ~700 px muertos debajo a 2560×1400. No se sube el mínimo por defecto
+  // porque el mismo componente se usa dentro de modales y paneles estrechos, donde 40vh ya sobra.
+  full: { type: Boolean, default: false },
 })
 </script>
 
 <template>
-  <div class="empty-state">
+  <div class="empty-state" :class="{ 'is-full': full }">
     <span class="empty-state__brand jp" aria-hidden="true">青</span>
     <div class="empty-state__glyph"><Icon :name="icon" :size="30" /></div>
     <p class="empty-state__title">{{ title }}</p>
@@ -27,6 +31,7 @@ defineProps({
   gap: var(--s-3); padding: var(--s-9) var(--s-4); text-align: center;
   min-height: 40vh;
 }
+.empty-state.is-full { min-height: min(62vh, 34rem); }
 /* Filigrana de marca 青: decorativa, muy tenue, detrás del contenido. Da identidad
    a cada estado vacío sin competir con el texto. */
 .empty-state__brand {

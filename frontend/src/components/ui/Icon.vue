@@ -23,7 +23,13 @@ export const PATHS = {
   chart:   '<path d="M4 20V4"/><path d="M4 20h16"/><rect x="7" y="13" width="3" height="4" rx="0.5"/><rect x="12" y="9" width="3" height="8" rx="0.5"/><rect x="17" y="5" width="3" height="12" rx="0.5"/>',
   close:   '<path d="m6 6 12 12M18 6 6 18"/>',
   check:   '<path d="m5 12 4.5 4.5L19 7"/>',
-  settings:'<circle cx="12" cy="12" r="3"/><path d="M12 2.5v3M12 18.5v3M4.2 7l2.6 1.5M17.2 15.5l2.6 1.5M4.2 17l2.6-1.5M17.2 8.5l2.6-1.5"/>',
+  /* Rueda DENTADA de verdad. Antes era <circle r=3> con seis rayos alrededor: eso es un sol, y
+     prácticamente el mismo dibujo que `sun` y que `spark` — el botón de Ajustes de la barra
+     superior no se leía como Ajustes. */
+  settings:'<circle cx="12" cy="12" r="3.2"/><path d="M12 2.2a1.6 1.6 0 0 1 1.6 1.6v.5c0 .5.3 1 .8 1.2l.5.2c.5.2 1 .1 1.4-.2l.4-.4a1.6 1.6 0 0 1 2.3 0l.3.3a1.6 1.6 0 0 1 0 2.3l-.4.4c-.3.4-.4.9-.2 1.4l.2.5c.2.5.7.8 1.2.8h.5a1.6 1.6 0 0 1 1.6 1.6v.4a1.6 1.6 0 0 1-1.6 1.6h-.5c-.5 0-1 .3-1.2.8l-.2.5c-.2.5-.1 1 .2 1.4l.4.4a1.6 1.6 0 0 1 0 2.3l-.3.3a1.6 1.6 0 0 1-2.3 0l-.4-.4c-.4-.3-.9-.4-1.4-.2l-.5.2c-.5.2-.8.7-.8 1.2v.5a1.6 1.6 0 0 1-1.6 1.6h-.4a1.6 1.6 0 0 1-1.6-1.6v-.5c0-.5-.3-1-.8-1.2l-.5-.2c-.5-.2-1-.1-1.4.2l-.4.4a1.6 1.6 0 0 1-2.3 0l-.3-.3a1.6 1.6 0 0 1 0-2.3l.4-.4c.3-.4.4-.9.2-1.4l-.2-.5c-.2-.5-.7-.8-1.2-.8h-.5A1.6 1.6 0 0 1 2.2 12.2v-.4a1.6 1.6 0 0 1 1.6-1.6h.5c.5 0 1-.3 1.2-.8l.2-.5c.2-.5.1-1-.2-1.4l-.4-.4a1.6 1.6 0 0 1 0-2.3l.3-.3a1.6 1.6 0 0 1 2.3 0l.4.4c.4.3.9.4 1.4.2l.5-.2c.5-.2.8-.7.8-1.2v-.5A1.6 1.6 0 0 1 11.8 2.2Z"/>',
+  /* Estrella de verdad para la NOTA: se pintaba de dos formas distintas según el componente,
+     `spark` (que es un destello) en unos y el carácter «★» a pelo en otros. */
+  star:    '<path d="m12 3.6 2.55 5.17 5.7.83-4.12 4.02.97 5.68L12 16.62l-5.1 2.68.97-5.68L3.75 9.6l5.7-.83Z"/>',
   pause:   '<path d="M9 5v14M15 5v14"/>',
   external:'<path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M19 13v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h5"/>',
   clock:   '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
@@ -42,6 +48,7 @@ export const PATHS = {
   sun:     '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   // Libro cerrado → modo PAGINADO (una página tras otra).
   book:    '<path d="M5 4a1 1 0 0 1 1-1h13v18H6a1 1 0 0 1-1-1V4Z"/><path d="M9 3v18"/>',
+  home:    '<path d="M3 9.5 12 3l9 6.5V20a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/>',
   // Tira vertical continua → modo WEBTOON (scroll).
   scroll:  '<rect x="7" y="2.5" width="10" height="19" rx="1.5"/><path d="M9.5 7h5M9.5 11h5M9.5 15h5"/>',
   // Libro abierto → doble página.
