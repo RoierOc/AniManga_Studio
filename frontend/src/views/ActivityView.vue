@@ -5,11 +5,14 @@ import { useMangaStore } from '@/stores/manga'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { relativeTime } from '@/lib/format'
+import { etaTarea as eta } from '@/lib/eta'
+import { useSubBatchStore } from '@/stores/subbatch'
 
 // Full Activity center: the roomy counterpart to the TopBar drawer. Same store getters
 // (processingGroups / historyGroups) → perfectly in sync with the drawer and the modal.
 const ui = useUiStore()
 const store = useMangaStore()
+const subbatch = useSubBatchStore()
 
 const KIND = {
   download:  { icon: 'download', color: 'var(--azure)',  label: 'Descarga' },
@@ -69,8 +72,10 @@ function openManga(g) {
         <article v-for="g in activeGroups" :key="g.mangaId" class="card">
           <header class="card__head" @click="openManga(g)">
             <span class="card__cover">
-              <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" decoding="async" />
-              <span v-else class="card__mono">{{ monogram(g.title) }}</span>
+              <span class="card__mono">{{ monogram(g.title) }}</span>
+              <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" decoding="async"
+                   @error="$event.target.classList.add('is-fail')"
+                   @load="$event.target.classList.remove('is-fail')" />
             </span>
             <span class="card__title">{{ g.title }}</span>
             <span class="card__pct" :class="{ 'is-err': g.anyError }">{{ g.pct }}%</span>
@@ -78,16 +83,29 @@ function openManga(g) {
           <div v-for="t in g.tasks" :key="t.id" class="row">
             <span class="row__kind" :style="{ color: kind(t.kind).color }"><Icon :name="kind(t.kind).icon" :size="13" /></span>
             <span class="row__klabel">{{ kind(t.kind).label }}</span>
-            <span class="row__label">{{ t.label }}</span>
+            <span class="row__text">
+              <!-- Un lote de subtítulos tiene su propia vista detallada (episodio a episodio) y
+                   antes no había forma de volver a ella: cerrar el modal la dejaba inaccesible
+                   durante los ~40 min que dura. -->
+              <button v-if="t.batchId" class="row__label row__label--link"
+                      data-tip="Ver el lote episodio a episodio"
+                      @click="subbatch.reopen(t.batchId, t.title)">{{ t.label }}</button>
+              <span v-else class="row__label">{{ t.label }}</span>
+              <!-- El backend YA cuenta en qué paso va («Cargando el modelo en VRAM…»,
+                   «240/350 líneas…», «Añadiendo track español al MKV…»). Ese texto viajaba en
+                   cada tarea y no se pintaba en ninguna parte: sólo se veía un número mudo. -->
+              <span v-if="t.msg && t.msg !== t.label" class="row__msg">{{ t.msg }}</span>
+            </span>
             <div class="row__bar" :class="{ 'is-err': t.status === 'error' }">
               <span :style="{ width: t.pct + '%', background: kind(t.kind).color }" />
             </div>
             <span class="row__pct">{{ t.status === 'error' ? '—' : t.pct + '%' }}</span>
+            <span class="row__eta">{{ eta(t) }}</span>
             <button class="row__act" data-tip="Cancelar" @click="store.cancelAnyTask(t)"><Icon name="close" :size="13" /></button>
           </div>
         </article>
       </div>
-      <EmptyState v-else icon="check" title="No hay nada en proceso"
+      <EmptyState v-else full icon="check" title="No hay nada en proceso"
         hint="Descargas, traducciones, escalados 4K y tomos aparecerán aquí en tiempo real." />
     </template>
 
@@ -97,8 +115,10 @@ function openManga(g) {
         <article v-for="g in historyGroups" :key="g.mangaId" class="card">
           <header class="card__head" @click="openManga(g)">
             <span class="card__cover">
-              <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" decoding="async" />
-              <span v-else class="card__mono">{{ monogram(g.title) }}</span>
+              <span class="card__mono">{{ monogram(g.title) }}</span>
+              <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" decoding="async"
+                   @error="$event.target.classList.add('is-fail')"
+                   @load="$event.target.classList.remove('is-fail')" />
             </span>
             <span class="card__title">{{ g.title }}</span>
           </header>
@@ -113,7 +133,7 @@ function openManga(g) {
           </div>
         </article>
       </div>
-      <EmptyState v-else icon="clock" title="Historial vacío"
+      <EmptyState v-else full icon="clock" title="Historial vacío"
         hint="Aquí quedará lo que termine en esta sesión." />
     </template>
   </div>
@@ -137,7 +157,11 @@ function openManga(g) {
 .card { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); padding: var(--s-4); }
 .card__head { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-3); cursor: pointer; }
 .card__cover { width: 2.125rem; height: 2.125rem; border-radius: var(--r-sm); overflow: hidden; flex-shrink: 0; background: var(--surface-3); display: grid; place-items: center; }
+/* Inicial DEBAJO de la portada, no `v-else`: así un 404 de /thumb (manga sin carpeta local)
+   descubre la inicial en vez de dejar el icono de imagen rota. */
+.card__cover > * { grid-area: 1 / 1; }
 .card__cover img { width: 100%; height: 100%; object-fit: cover; }
+.card__cover img.is-fail { display: none; }
 .card__mono { font-size: var(--fs-sm); font-weight: 700; color: var(--ink-faint); }
 .card__title { flex: 1; font-size: var(--fs-md); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card__head:hover .card__title { color: var(--azure-bright); }
@@ -148,12 +172,18 @@ function openManga(g) {
 .row + .row { border-top: 1px solid var(--line); }
 .row__kind { flex-shrink: 0; display: grid; place-items: center; }
 .row__klabel { font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600; color: var(--ink-faint); width: 4.5rem; flex-shrink: 0; }
-.row__label { flex: 1; min-width: 0; font-size: var(--fs-sm); color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row__text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.row__label { min-width: 0; font-size: var(--fs-sm); color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* El paso concreto, en segundo plano: informa sin competir con la etiqueta. */
+.row__label--link { text-align: left; color: var(--azure-bright); }
+.row__label--link:hover { text-decoration: underline; }
+.row__msg { font-size: var(--fs-2xs); color: var(--ink-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row__bar { width: 8rem; height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; flex-shrink: 0; }
 .row__bar span { display: block; height: 100%; transition: width var(--t-base) var(--ease-silk); }
 .row__bar.is-err span { background: var(--coral) !important; width: 100% !important; }
 .row__pct { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); width: 2.5rem; text-align: right; flex-shrink: 0; }
 .row__ts { font-size: var(--fs-2xs); color: var(--ink-ghost); flex-shrink: 0; }
+.row__eta { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-ghost); width: 4.5rem; text-align: right; flex-shrink: 0; }
 .row__act { width: 1.625rem; height: 1.625rem; display: grid; place-items: center; border-radius: var(--r-xs); color: var(--ink-faint); border: 1px solid var(--line); flex-shrink: 0; transition: all var(--t-fast); }
 .row__act:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
 .row__act--dl:hover { color: var(--azure-bright); border-color: color-mix(in srgb, var(--azure) 45%, transparent); }

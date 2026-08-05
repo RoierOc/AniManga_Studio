@@ -10,12 +10,15 @@ import TopBar from '@/components/layout/TopBar.vue'
 import TitleBar from '@/components/layout/TitleBar.vue'
 import { isNative, onMessage } from '@/lib/nativeBridge'
 import { useDocTitle } from '@/lib/docTitle'
+import { useTaskbarProgress } from '@/lib/taskbar'
 import { supportsVT } from '@/lib/vt'
 import Toaster from '@/components/ui/Toaster.vue'
 import ConfirmDialog from '@/components/ui/ConfirmDialog.vue'
+import TagPicker from '@/components/ui/TagPicker.vue'
 import FileDropZone from '@/components/ui/FileDropZone.vue'
 import ActivityDrawer from '@/components/ui/ActivityDrawer.vue'
 import ShortcutsModal from '@/components/ui/ShortcutsModal.vue'
+import Retrospective from '@/views/home/Retrospective.vue'
 import CommandPalette from '@/components/ui/CommandPalette.vue'
 import MangaModal from '@/components/manga/MangaModal.vue'
 import MdDetailModal from '@/components/manga/MdDetailModal.vue'
@@ -34,9 +37,12 @@ import Showcase from '@/components/media/Showcase.vue'
 // Views are code-split into their own chunks (loaded on demand) to shrink the initial
 // bundle — the Anime Studio especially pulls in a lot. LibraryView stays eager since it
 // is the most common landing view.
-// LibraryHub (Biblioteca: pestañas Descargados/Locales + Importar) es la vista de
-// aterrizaje → eager; contiene LibraryView. Explorar (MangaDex/Fuentes) y el resto
-// van lazy.
+// HomeView (Portada) es AHORA la vista de aterrizaje → eager. Nunca lazy: un chunk diferido en
+// la primera vista es un parpadeo en blanco en cada arranque, y además la deja expuesta al fallo
+// de chunk muerto que documenta `lib/lazyView.js`.
+// LibraryHub (Biblioteca: pestañas Descargados/Locales + Importar) sigue eager: contiene
+// LibraryView y es la segunda más visitada. Explorar (MangaDex/Fuentes) y el resto van lazy.
+import HomeView from '@/views/home/HomeView.vue'
 import LibraryHub from '@/views/LibraryHub.vue'
 const ExploreView  = lazyView(() => import('@/views/ExploreView.vue'))
 const DiscoverView = lazyView(() => import('@/views/manga/Discover.vue'))
@@ -54,6 +60,10 @@ const manga = useMangaStore()
 // llama la app. Ver lib/docTitle.js.
 const { title: docTitle } = useDocTitle()
 watch(docTitle, (t) => { document.title = t }, { immediate: true })
+
+// Progreso de descargas/escalado DENTRO del icono de la barra de tareas. Fuera de la shell
+// nativa no hace nada. Ver lib/taskbar.js.
+useTaskbarProgress(manga)
 
 // Dentro de la shell nativa (WebView2 sin marco) pintamos nuestra propia barra de
 // título. La clase en <html> activa el hueco superior (--titlebar-h) global.
@@ -102,8 +112,17 @@ function onGlobalKey(e) {
 // Botones laterales del ratón → historial (atrás/adelante). En la shell nativa el
 // evento llega por IPC desde Rust; en navegador los botones ya navegan de serie.
 let _offNav = null
+let _lastNav = 0
 function onNavigate(d) {
   if (!d || d.event !== 'navigate') return
+  /* Una sola pulsación puede llegar DOS veces: Windows sintetiza el WM_APPCOMMAND a partir del
+     WM_XBUTTONUP, así que un ratón que emite XBUTTON dispara los dos caminos del shell. Se
+     arregla en Rust (que ya se traga el UP), pero esta guarda cubre además a los drivers que
+     mandan las dos cosas por su cuenta — y funciona sin recompilar. 250 ms: por debajo de lo que
+     tarda nadie en pulsar atrás dos veces a propósito. */
+  const t = Date.now()
+  if (t - _lastNav < 250) return
+  _lastNav = t
   if (d.dir === 'back') window.history.back()
   else if (d.dir === 'forward') window.history.forward()
 }
@@ -133,7 +152,7 @@ onUnmounted(() => {
 // defensive fallback and should never render in normal use.
 const meta = computed(() => VIEWS.flatMap(g => g.items).find(i => i.id === ui.currentView))
 
-const VIEW_COMPONENTS = { library: LibraryHub, discover: DiscoverView, explore: ExploreView, workshop: WorkshopView, activity: ActivityView, anime: AnimeStudio, media: MediaView, settings: SettingsView, kitchen: KitchenView }
+const VIEW_COMPONENTS = { home: HomeView, library: LibraryHub, discover: DiscoverView, explore: ExploreView, workshop: WorkshopView, activity: ActivityView, anime: AnimeStudio, media: MediaView, settings: SettingsView, kitchen: KitchenView }
 const activeComponent = computed(() => VIEW_COMPONENTS[ui.currentView] || null)
 
 // Error boundary: a render error in any view/modal shows a recoverable panel instead of
@@ -171,11 +190,11 @@ watch(() => ui.currentView, () => { crash.value = null })
       <TopBar />
       <main class="shell__content">
         <div v-if="crash" class="crash">
-          <div class="crash__glyph"><Icon name="spark" :size="38" /></div>
+          <div class="crash__glyph"><Icon name="alert" :size="38" /></div>
           <h2>Algo salió mal en esta vista</h2>
           <p class="crash__msg">{{ chunkRoto ? 'No se pudo descargar esta parte de la app.' : crash.message }}</p>
           <div class="crash__actions">
-            <button v-if="!chunkRoto" class="crash__btn crash__btn--accent" @click="retry"><Icon name="spark" :size="14" /> Reintentar</button>
+            <button v-if="!chunkRoto" class="crash__btn crash__btn--accent" @click="retry"><Icon name="refresh" :size="14" /> Reintentar</button>
             <button class="crash__btn" :class="{ 'crash__btn--accent': chunkRoto }" @click="reload">Recargar la app</button>
           </div>
           <p class="crash__hint">
@@ -214,7 +233,9 @@ watch(() => ui.currentView, () => { crash.value = null })
     <ActivityDrawer />
     <CommandPalette />
     <ShortcutsModal />
+    <Retrospective v-if="ui.showRetro" @close="ui.showRetro = false" />
     <ConfirmDialog />
+    <TagPicker />
     <FileDropZone />
     <Showcase />
     <Toaster />

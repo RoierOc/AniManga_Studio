@@ -4,6 +4,7 @@ import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
 import Icon from './Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import { etaTarea as eta } from '@/lib/eta'
 
 // Slide-over "glance" panel: everything processing right now, grouped by manga. Reads the
 // same store getters as the in-modal progress and the full Activity view → all in lockstep.
@@ -51,8 +52,10 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
               <article v-for="g in groups" :key="g.mangaId" class="grp">
                 <div class="grp__head">
                   <span class="grp__cover">
-                    <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" decoding="async" />
-                    <span v-else class="grp__mono">{{ monogram(g.title) }}</span>
+                    <span class="grp__mono">{{ monogram(g.title) }}</span>
+                    <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" decoding="async"
+                         @error="$event.target.classList.add('is-fail')"
+                         @load="$event.target.classList.remove('is-fail')" />
                   </span>
                   <span class="grp__title">{{ g.title }}</span>
                   <span class="grp__pct" :class="{ 'is-err': g.anyError }">{{ g.pct }}%</span>
@@ -66,10 +69,14 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
                     <div class="row__top">
                       <span class="row__label">{{ t.label }}</span>
                       <span class="row__pct">{{ t.status === 'error' ? '—' : t.pct + '%' }}</span>
+                      <span v-if="eta(t)" class="row__eta">{{ eta(t) }}</span>
                     </div>
                     <div class="row__bar" :class="{ 'is-err': t.status === 'error' }">
                       <span :style="{ width: t.pct + '%', background: kind(t.kind).color }" />
                     </div>
+                    <!-- El paso concreto que el backend ya reporta; sin esto el cajón sólo daba
+                         un porcentaje mudo. -->
+                    <div v-if="t.msg && t.msg !== t.label" class="row__msg">{{ t.msg }}</div>
                   </div>
                   <button class="row__act" data-tip="Cancelar" @click="store.cancelAnyTask(t)">
                     <Icon name="close" :size="13" />
@@ -118,7 +125,11 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 .grp { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); padding: var(--s-3); }
 .grp__head { display: flex; align-items: center; gap: var(--s-2); margin-bottom: var(--s-2); }
 .grp__cover { width: 1.625rem; height: 1.625rem; border-radius: var(--r-xs); overflow: hidden; flex-shrink: 0; background: var(--surface-3); display: grid; place-items: center; }
+/* Inicial DEBAJO de la portada, no `v-else`: un 404 de /thumb la descubre en vez de dejar
+   el icono de imagen rota. */
+.grp__cover > * { grid-area: 1 / 1; }
 .grp__cover img { width: 100%; height: 100%; object-fit: cover; }
+.grp__cover img.is-fail { display: none; }
 .grp__mono { font-size: var(--fs-xs); font-weight: 700; color: var(--ink-faint); }
 .grp__title { flex: 1; font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .grp__pct { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); }
@@ -130,6 +141,8 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 .row__top { display: flex; justify-content: space-between; gap: var(--s-2); }
 .row__label { font-size: var(--fs-xs); color: var(--ink-soft); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row__pct { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); flex-shrink: 0; }
+.row__eta { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-ghost); flex-shrink: 0; }
+.row__msg { font-size: var(--fs-2xs); color: var(--ink-faint); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row__bar { height: 3px; margin-top: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
 .row__bar span { display: block; height: 100%; transition: width var(--t-base) var(--ease-silk); }
 .row__bar.is-err span { background: var(--coral) !important; width: 100% !important; }

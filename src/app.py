@@ -83,10 +83,12 @@ from api.subtitle import subtitle_bp
 from api.subtitle_batch import subbatch_bp, load_batches
 from api.imgproxy import imgproxy_bp
 from api.backup import backup_bp
+from api.tags import tags_bp
 from api.transplant import transplant_bp
 from api.import_cbz import import_bp
 from api.discovery import discovery_bp
 from api.md_updates import md_updates_bp
+from api.roots import roots_bp
 
 app.register_blueprint(library_bp, url_prefix='/api/library')
 app.register_blueprint(search_bp, url_prefix='/api/search')
@@ -106,10 +108,12 @@ app.register_blueprint(subtitle_bp, url_prefix='/api/subtitle')
 app.register_blueprint(subbatch_bp, url_prefix='/api/subtitle/batch')
 app.register_blueprint(imgproxy_bp, url_prefix='/api/img')
 app.register_blueprint(backup_bp, url_prefix='/api/backup')
+app.register_blueprint(tags_bp, url_prefix='/api/tags')
 app.register_blueprint(transplant_bp, url_prefix='/api/transplant')
 app.register_blueprint(import_bp, url_prefix='/api/import')
 app.register_blueprint(discovery_bp, url_prefix='/api/discovery')
 app.register_blueprint(md_updates_bp, url_prefix='/api/md_updates')
+app.register_blueprint(roots_bp, url_prefix='/api/roots')
 from api.library_health import health_bp
 app.register_blueprint(health_bp, url_prefix='/api/health')
 from api.bridge import bridge_bp
@@ -128,6 +132,20 @@ start_auto_sync()   # copia semanal del perfil al repo privado (no hace nada sin
 load_batches()      # lotes de subtítulos de antes del reinicio (los vivos se declaran rotos)
 from api.media import media_bp
 app.register_blueprint(media_bp, url_prefix='/api/media')
+# Agenda, cola e historial de Cine. Módulo aparte (media.py ya pasa de 1100 líneas) y mismo
+# prefijo: para quien consume la API son parte de Series y Películas, no otra sección.
+from api.media_agenda import media_agenda_bp
+app.register_blueprint(media_agenda_bp, url_prefix='/api/media')
+# Arte de alta resolución (TMDB) para Cine: Sonarr sirve TVDB a 680x1000 y sin logo.
+from api.media_art import media_art_bp
+app.register_blueprint(media_art_bp, url_prefix='/api/media')
+# «Para ti»: recomendaciones agregadas sobre tu biblioteca. Módulo propio (anime.py ya pasa de
+# 4400 líneas) y perezoso en su import de anime para no cerrar un ciclo entre los dos.
+from api.for_you import for_you_bp
+app.register_blueprint(for_you_bp, url_prefix='/api/for_you')
+# Retrospectiva («tu mes» / «tu año»): agrega el historial archivado por `history_store`.
+from api.retrospective import retro_bp
+app.register_blueprint(retro_bp, url_prefix='/api/retrospective')
 
 
 # Suwayomi es on-demand (ver sources.py: ensure_suwayomi + reaper de inactividad).
@@ -316,54 +334,57 @@ def _serve_page_file(directory, name):
     except Exception:
         return send_from_directory(str(directory), name, max_age=_PAGE_MAX_AGE)
 
+# La URL de una página es `<obra>/<archivo>` y NO lleva disco a propósito: si lo llevara,
+# mover una obra de disco invalidaría todo enlace guardado (progreso, marcadores, caché del
+# navegador). Resolver contra TODAS las raíces es lo que hace que una obra repartida entre
+# C: y D: se lea como una sola. Ver api/roots.py.
+def _find_page(filename: str, prefer_upscaled: bool):
+    from api.roots import find_file, roots as _roots
+    p = find_file(filename, prefer_upscaled=prefer_upscaled)
+    if p:
+        return p
+    # La extensión pedida puede no ser la del disco (el escalado sale .jpg; el original puede
+    # ser .png/.webp) — se prueban alternativas antes de rendirse.
+    base = Path(filename)
+    for ext in ('.jpg', '.png', '.webp', '.jpeg'):
+        if base.suffix.lower() == ext:
+            continue
+        p = find_file(str(base.with_suffix(ext)), prefer_upscaled=prefer_upscaled)
+        if p:
+            return p
+    return None
+
+
+def _find_page_in(filename: str, key: str):
+    """Igual, pero forzando originales o escalados (modo comparar)."""
+    from api.roots import roots as _roots
+    base = Path(filename)
+    for ext in ('',) + ('.jpg', '.png', '.webp', '.jpeg'):
+        cand = base if not ext else base.with_suffix(ext)
+        for r in _roots():
+            p = Path(r[key]) / cand
+            if p.exists():
+                return p
+    return None
+
+
 @app.route('/uploads/original/<path:filename>')
 def serve_upload_original(filename):
-    """Always serve from the active library's original root (compare mode → unscaled page)."""
-    path = Path(manga_dir()) / filename
-    if path.exists():
-        return _serve_page_file(path.parent, path.name)
-    # Upscaled pages are always .jpg; originals may be .png or .webp — try alternatives
-    for ext in ('.png', '.webp', '.jpg', '.jpeg'):
-        alt = path.with_suffix(ext)
-        if alt != path and alt.exists():
-            return _serve_page_file(alt.parent, alt.name)
-    return 'Not found', 404
+    """Siempre el original sin escalar (modo comparar), venga del disco que venga."""
+    p = _find_page_in(filename, 'manga')
+    return _serve_page_file(p.parent, p.name) if p else ('Not found', 404)
 
 @app.route('/uploads/upscaled/<path:filename>')
 def serve_upload_upscaled(filename):
-    """Always serve from the active library's upscaled root (compare mode → upscaled page)."""
-    path = Path(upscaled_dir()) / filename
-    if path.exists():
-        return _serve_page_file(path.parent, path.name)
-    # The requested extension may differ from the file on disk (upscaled output is
-    # usually .jpg, but originals/pages can be .png/.webp) — try alternatives so the
-    # compare slider always resolves the right upscaled page.
-    for ext in ('.jpg', '.png', '.webp', '.jpeg'):
-        alt = path.with_suffix(ext)
-        if alt != path and alt.exists():
-            return _serve_page_file(alt.parent, alt.name)
-    return 'Not found', 404
+    """Siempre la versión escalada (modo comparar), venga del disco que venga."""
+    p = _find_page_in(filename, 'upscaled')
+    return _serve_page_file(p.parent, p.name) if p else ('Not found', 404)
 
 @app.route('/uploads/<path:filename>')
 def serve_upload(filename):
-    # Prefer upscaled version when available; fall back to original
-    for d in [upscaled_dir(), manga_dir()]:
-        path = Path(d) / filename
-        if path.exists():
-            return _serve_page_file(path.parent, path.name)
-
-    parts = filename.split('/')
-    if len(parts) >= 2:
-        subfolder = parts[0]
-        filename_only = '/'.join(parts[1:])
-        for d in [upscaled_dir(), manga_dir()]:
-            search_path = Path(d) / subfolder
-            if search_path.is_dir():
-                full_path = search_path / filename_only
-                if full_path.exists():
-                    return _serve_page_file(search_path, filename_only)
-
-    return 'Not found', 404
+    # Escalada si existe; si no, el original.
+    p = _find_page(filename, prefer_upscaled=True)
+    return _serve_page_file(p.parent, p.name) if p else ('Not found', 404)
 
 if __name__ == '__main__':
     print("🚀 Manga Upscaler Pro - http://localhost:5101")

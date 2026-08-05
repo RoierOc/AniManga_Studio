@@ -9,6 +9,7 @@
  * Regla al añadir un componente al sistema: añádelo TAMBIÉN aquí, con su caso límite.
  */
 import { ref } from 'vue'
+import { useTagsStore } from '@/stores/tags'
 import { useUiStore } from '@/stores/ui'
 import Icon, { ICON_NAMES } from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -53,6 +54,24 @@ const RAIL = [
   { id: 2, thumb: '', title: LONG, subtitle: 'Capítulo 7 · 12%', badge: 'CAP 7', progress: 12 },
   { id: 3, thumb: '', title: 'Sin progreso', subtitle: 'Episodio 1', badge: 'EP 1', progress: 0 },
 ]
+
+/* Riel «lo dejaste a medias»: el subtítulo lleva el TIEMPO (es lo que te hace reconocer la obra)
+   y el recordatorio son las últimas páginas leídas. Aquí sin arte: interesa comprobar que la
+   tarjeta aguanta sin miniatura y con un título kilométrico. */
+const RAIL_MEDIAS = [
+  { id: 1, thumb: '', title: 'Ikoku Nikki', subtitle: 'Cap. 34 · pág. 17 de 34 · hace 22 días',
+    badge: 'Manga', tone: 'manga', progress: 47, recap: ['', '', ''] },
+  { id: 2, thumb: '', title: LONG, subtitle: 'Episodio 6 · hace 2 meses',
+    badge: 'Anime', tone: 'anime', progress: 26, recap: [] },
+]
+
+// Etiquetas: el caso límite que importa es la obra CON etiquetas ya puestas y sugerencias
+// disponibles (el estado vacío es el fácil). El título largo comprueba que no rompe la cabecera.
+const tags = useTagsStore()
+function demoTags(vacio) {
+  tags.anime = { ...tags.anime, __demo_a: ['releer', 'para el finde'], __demo_b: ['sin prisa'] }
+  tags.openPicker('anime', vacio ? '__demo_vacio' : '__demo_a', vacio ? LONG : 'Ao no Hako')
+}
 
 async function demoConfirm(danger) {
   const ok = await ui.confirm({
@@ -123,6 +142,8 @@ async function demoConfirm(danger) {
         <Select v-model="sel2" :options="[{ value: '', label: 'Vacío' }]" aria-label="Una opción" />
         <Select v-model="sel2" :options="MANY" placeholder="40 opciones (scroll)" aria-label="Muchas" />
         <Select :options="STATUS_OPTS" model-value="leyendo" disabled aria-label="Deshabilitado" />
+        <!-- Con icono: dos desplegables seguidos sin él se leen igual y no se sabe cuál hace qué. -->
+        <Select v-model="sel2" icon="spark" :options="MANY" aria-label="Con icono" />
       </div>
       <div class="kit__box"><Select block v-model="sel1" :options="STATUS_OPTS" aria-label="Ancho completo" /></div>
     </section>
@@ -138,6 +159,14 @@ async function demoConfirm(danger) {
           :sort="tbSort" @update:sort="tbSort = $event"
           :search="tbSearch" @update:search="tbSearch = $event" />
         <p class="muted">«Completado» está oculto porque su contador es 0 — reaparece al seleccionarlo.</p>
+      </div>
+    </section>
+
+    <section class="kit__s">
+      <h2 class="kit__h">Etiquetas (TagPicker)</h2>
+      <div class="kit__row">
+        <button class="kbtn" @click="demoTags(false)">Con etiquetas y sugerencias</button>
+        <button class="kbtn" @click="demoTags(true)">Vacía · título kilométrico</button>
       </div>
     </section>
 
@@ -192,6 +221,16 @@ async function demoConfirm(danger) {
     <section class="kit__s">
       <h2 class="kit__h">Riel</h2>
       <div class="kit__box"><ContinueRail :items="RAIL" title="Seguir viendo" /></div>
+      <!-- Los añadidos de la Portada en rieles: subtítulo, enlace lateral (aparece al hover),
+           modo apagado y el recordatorio de páginas. Aquí se ven con títulos kilométricos. -->
+      <div class="kit__box">
+        <ContinueRail :items="RAIL" title="Con contexto y enlace" poster
+                      hint="6 sin terminar" :action="{ label: 'Ver todo', fn: () => {} }" />
+      </div>
+      <div class="kit__box">
+        <ContinueRail :items="RAIL_MEDIAS" title="Apagado, con recordatorio" poster dim
+                      hint="sin tocar desde hace más de tres semanas" />
+      </div>
       <p class="muted">Con la lista vacía el riel no se pinta (no deja un hueco ni un título huérfano).</p>
     </section>
 

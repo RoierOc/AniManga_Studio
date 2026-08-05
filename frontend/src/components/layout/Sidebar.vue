@@ -29,7 +29,10 @@ const SUBBED = {
     get: () => anime.sub,
   },
   media: {
-    set: (sub) => { media.closeDetail(); media.setSub(sub) },
+    // Se escribe la pestaña a pelo, sin `setSub`: ese empuja entrada de historial y el `ui.goto`
+    // de abajo empuja otra, así que UN clic en el sidebar dejaba DOS entradas idénticas y el
+    // botón de atrás parecía no hacer nada. El `goto` ya recoge la pestaña en su snapshot.
+    set: (sub) => { media.closeDetail(); ui.tabs.media = sub },
     get: () => media.sub,
   },
 }
@@ -48,14 +51,18 @@ const isActive = (item) =>
   <aside class="sidebar" :class="{ 'is-collapsed': ui.sidebarCollapsed, 'is-mobile-open': ui.sidebarMobileOpen }">
     <!-- Brand -->
     <div class="brand">
-      <div class="brand__mark">
-        <span class="brand__kanji jp">青</span>
-        <span class="brand__pulse" />
-      </div>
-      <div class="brand__text">
-        <span class="brand__name">AniManga</span>
-        <span class="brand__sub">STUDIO</span>
-      </div>
+      <!-- La marca es el atajo al Inicio, como el logotipo de cualquier sitio. No abre un menú ni
+           despliega nada: un clic, la puerta de la app. -->
+      <button class="brand__home" data-tip="Ir al inicio" aria-label="Ir al inicio" @click="ui.goto('home')">
+        <span class="brand__mark">
+          <span class="brand__kanji jp">青</span>
+          <span class="brand__pulse" />
+        </span>
+        <span class="brand__text">
+          <span class="brand__name">AniManga</span>
+          <span class="brand__sub">STUDIO</span>
+        </span>
+      </button>
       <button class="brand__collapse" @click="ui.toggleSidebar()" :data-tip="ui.sidebarCollapsed ? 'Expandir' : 'Colapsar'">
         <Icon name="chevron" :size="16" :style="{ transform: ui.sidebarCollapsed ? 'none' : 'rotate(180deg)' }" />
       </button>
@@ -71,7 +78,9 @@ const isActive = (item) =>
     <!-- Nav -->
     <nav class="nav">
       <div v-for="g in groups" :key="g.group" class="nav__group">
-        <span class="nav__label">{{ g.group }}</span>
+        <!-- Inicio no lleva epígrafe (`group: ''`): es la puerta de la app, no una sección.
+             Sin el `v-if` quedaba una franja de aire vacía encima de ella. -->
+        <span v-if="g.group" class="nav__label">{{ g.group }}</span>
         <!-- `data-tip` sólo plegado: con el sidebar abierto la burbuja repetía la etiqueta que
              está ahí al lado Y tapaba el ítem de debajo. Un tooltip que no añade nada es ruido
              que además esconde el siguiente destino. -->
@@ -124,6 +133,16 @@ const isActive = (item) =>
   padding: var(--s-5) var(--s-4);
   height: var(--topbar-h);
 }
+/* El botón sólo aporta el gesto: no pinta caja propia para que la marca se vea igual que antes.
+   El realce al pasar por encima es del kanji, que es lo que se lee como logotipo. */
+.brand__home {
+  display: flex; align-items: center; gap: var(--s-3); min-width: 0;
+  text-align: left; border-radius: var(--r-sm);
+  transition: transform var(--t-fast) var(--ease-snap);
+}
+.brand__home:hover .brand__mark { box-shadow: 0 0 0 1px var(--azure-glow), var(--glow-azure); }
+.brand__home:active { transform: scale(.97); }
+.is-collapsed .brand__home { gap: 0; }
 .brand__mark {
   position: relative;
   width: 2.375rem; height: 2.375rem; flex-shrink: 0;

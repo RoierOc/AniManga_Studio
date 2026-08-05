@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useUiStore, VIEWS } from '@/stores/ui'
 import { useAnimeStore } from '@/stores/anime'
+import { useMediaStore } from '@/stores/media'
 import Icon from '@/components/ui/Icon.vue'
 import ActivityIndicator from '@/components/ui/ActivityIndicator.vue'
 import StatsPanel from '@/components/layout/StatsPanel.vue'
@@ -9,13 +10,26 @@ import StatsPanel from '@/components/layout/StatsPanel.vue'
 const ui = useUiStore()
 const anime = useAnimeStore()
 const statsOpen = ref(false)
+/* Sub-pestañas que NO tienen entrada en la barra lateral (se llega a ellas desde la sub-navegación
+   de la sección). Sin esto, estar en Estrenos y que la barra dijera «Mi Anime» era lo normal: el
+   `find` por `sub` no encontraba nada y caía al primer ítem de la sección. */
+const SUELTAS = {
+  anime: { schedule: { label: 'Estrenos', icon: 'clock' }, history: { label: 'Historial', icon: 'heart' } },
+}
+// De qué store sale la sub-vista de cada sección. Antes esto era un `if` que sólo contemplaba
+// anime, así que en Cine la barra decía «Mi Biblioteca» estuvieras donde estuvieras — CONTRADICIENDO
+// a la barra lateral, que sí marcaba la correcta. Mismo mapa que usa el Sidebar.
+const SUB_DE = { anime: () => anime.sub, media: () => useMediaStore().sub }
+
 const current = computed(() => {
   if (ui.currentView === 'settings') return { label: 'Ajustes', icon: 'settings' }
   if (ui.currentView === 'workshop') return { label: 'Importar', icon: 'upload' }   // se abre desde Biblioteca
   if (ui.currentView === 'kitchen') return { label: 'Cocina del diseño', icon: 'palette' }   // desde Ajustes
   const items = VIEWS.flatMap(g => g.items)
-  if (ui.currentView === 'anime') return items.find(i => i.id === 'anime' && i.sub === anime.sub) || items.find(i => i.id === 'anime')
-  return items.find(i => i.id === ui.currentView)
+  const v = ui.currentView
+  const sub = SUB_DE[v]?.()
+  if (sub) return items.find(i => i.id === v && i.sub === sub) || SUELTAS[v]?.[sub] || items.find(i => i.id === v)
+  return items.find(i => i.id === v)
 })
 </script>
 

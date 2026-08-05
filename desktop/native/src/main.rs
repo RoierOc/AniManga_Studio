@@ -66,7 +66,11 @@ use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromWindow, ScreenToClient, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
-use windows::Win32::System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED};
+use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED};
+use windows::Win32::UI::Shell::{
+    ITaskbarList3, TaskbarList, TBPF_ERROR, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL,
+    TBPF_PAUSED,
+};
 use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, GetSystemMetricsForDpi, SetProcessDpiAwarenessContext,
@@ -96,6 +100,12 @@ struct App {
 }
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
+    /* Barra de tareas de Windows: la barrita de progreso DENTRO del icono. Es lo que deja ver
+       cómo va un escalado a 4K o una descarga sin tener que traer la ventana al frente — algo
+       que una web no puede hacer y una app de escritorio sí.
+       Se crea perezosamente: si el shell de Windows no la ofrece (sesión rara, Explorer caído),
+       se registra una vez y se sigue sin ella; nunca es un error que deba parar nada. */
+    static TASKBAR: RefCell<Option<ITaskbarList3>> = const { RefCell::new(None) };
     static OWNED: RefCell<bool> = const { RefCell::new(false) };
     // Contador de frames para throttlear el reporte de tiempo a JS.
     static FRAME: RefCell<u32> = const { RefCell::new(0) };
@@ -847,6 +857,49 @@ fn with_existing_player(f: impl FnOnce(&Player)) {
     });
 }
 
+/* Progreso en el icono de la barra de tareas.
+ *
+ * `state`: none | normal | indeterminate | error | paused. `value`: 0-100 (sólo con `normal`).
+ * COM ya está inicializado en STA por `CoInitializeEx` al arrancar, que es lo que pide
+ * ITaskbarList3; por eso esto se llama SIEMPRE desde el hilo de la ventana.
+ */
+fn set_taskbar(hwnd: HWND, state: &str, value: f64) {
+    TASKBAR.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            unsafe {
+                match CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_ALL) {
+                    Ok(tb) => {
+                        // HrInit debe llamarse una vez antes de cualquier otro método.
+                        if tb.HrInit().is_ok() {
+                            *slot = Some(tb);
+                        } else {
+                            ipc_log("[taskbar] HrInit falló; se sigue sin barra de progreso");
+                        }
+                    }
+                    // No disponible ≠ error de la app: se anota una vez y se continúa.
+                    Err(e) => ipc_log(&format!("[taskbar] no disponible: {e:?}")),
+                }
+            }
+        }
+        let Some(tb) = slot.as_ref() else { return };
+        let flag = match state {
+            "normal" => TBPF_NORMAL,
+            "indeterminate" => TBPF_INDETERMINATE,
+            "error" => TBPF_ERROR,
+            "paused" => TBPF_PAUSED,
+            _ => TBPF_NOPROGRESS,
+        };
+        unsafe {
+            let _ = tb.SetProgressState(hwnd, flag);
+            if flag == TBPF_NORMAL {
+                let v = value.clamp(0.0, 100.0) as u64;
+                let _ = tb.SetProgressValue(hwnd, v, 100);
+            }
+        }
+    });
+}
+
 fn handle_ipc(webview: &ICoreWebView2, msg: &str) {
     ipc_log(&format!("→ {msg}"));
     let cmd = json_str(msg, "cmd").unwrap_or_default();
@@ -870,6 +923,16 @@ fn handle_ipc(webview: &ICoreWebView2, msg: &str) {
                 let path = path.replace("\\\\", "\\");
                 let start = json_num(msg, "start").unwrap_or(0.0);
                 with_player(move |p| p.load(&path, start));
+            }
+        }
+        "taskbar" => {
+            let state = json_str(msg, "state").unwrap_or_else(|| "none".into());
+            let value = json_num(msg, "value").unwrap_or(0.0);
+            // Igual que en "fullscreen": sacar el hwnd y SOLTAR el borrow antes de llamar, que
+            // los métodos del shell pueden bombear mensajes y volver a entrar en APP.
+            let hwnd = APP.with(|a| a.borrow().as_ref().map(|app| app.hwnd));
+            if let Some(hwnd) = hwnd {
+                set_taskbar(hwnd, &state, value);
             }
         }
         "stop" => with_existing_player(|p| p.stop()),
@@ -1132,8 +1195,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 if let Some(json) = json {
                     nav_to_js(json);
                 }
-                LRESULT(1) // TRUE = manejado (evita el WM_APPCOMMAND por defecto)
+                LRESULT(1) // TRUE = manejado
             }
+            // ⚠️ Windows sintetiza el WM_APPCOMMAND desde el **UP**, no desde el DOWN. Dejar que
+            // el UP llegue a DefWindowProc hacía que UNA pulsación del botón lateral emitiera DOS
+            // navegaciones: la de arriba (XBUTTON) y otra por el brazo de WM_APPCOMMAND. Con el
+            // historial a medias eso no se notaba; ahora que cada paso deja entrada, un solo clic
+            // te saltaba DOS pantallas. Se traga el UP y ya no hay APPCOMMAND que sintetizar.
+            WM_XBUTTONUP => LRESULT(1),
             WM_APPCOMMAND => {
                 // Muchos ratones (Logitech, Razel, y los que pasan por su software) NO emiten
                 // XBUTTON: su driver traduce los botones laterales a un APPCOMMAND de navegador.

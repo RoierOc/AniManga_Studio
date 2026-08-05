@@ -12,7 +12,10 @@ mkdir -p "$DIR/config" "$DIR/logs"
 SERVICES="Prowlarr:9696 Sonarr:8989 Radarr:7878"
 
 up() { # ¿hay algo escuchando ya en ese puerto?
-  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null && { exec 3<&-; return 0; } || return 1
+  # `timeout 2` obligatorio: en WSL2 un SYN al loopback contra un puerto CERRADO se descarta
+  # (no hay RST) y `/dev/tcp` espera los 6 reintentos del kernel — MEDIDO 2m14s. Sin esto el
+  # bucle de espera de abajo no tardaba 60 s sino 60×135 s ≈ 2,2 h con el servicio caído.
+  timeout 2 bash -c "(exec 3<>/dev/tcp/127.0.0.1/$1)" 2>/dev/null
 }
 
 for svc in $SERVICES; do

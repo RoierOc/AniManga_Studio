@@ -82,6 +82,15 @@ onBeforeUnmount(() => {
       <button class="stats__x" data-tip="Cerrar" @click="emit('close')"><Icon name="close" :size="15" /></button>
     </header>
 
+    <!-- Este panel es un libro de contabilidad (mide el disco tanto como a ti). La retrospectiva
+         es lo contrario: pocas cifras, grandes, con tu arte. Desde aquí porque es donde alguien
+         viene cuando le pica la curiosidad por sus números. -->
+    <button class="stats__retro" @click="ui.showRetro = true; emit('close')">
+      <Icon name="spark" :size="15" />
+      <span><b>Tu resumen</b>Episodios, horas, rachas y lo que más viste</span>
+      <Icon name="chevron" :size="14" />
+    </button>
+
     <div v-if="loading" class="stats__state">Cargando…</div>
     <div v-else-if="error" class="stats__state">No se pudieron cargar las estadísticas.</div>
 
@@ -196,6 +205,16 @@ onBeforeUnmount(() => {
   animation: stats-in .16s ease;
 }
 @keyframes stats-in { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
+
+.stats__retro {
+  display: flex; align-items: center; gap: var(--s-3); width: 100%; text-align: left;
+  padding: var(--s-3) var(--s-4); border-bottom: 1px solid var(--line);
+  color: var(--azure-bright); transition: background var(--t-fast);
+}
+.stats__retro:hover { background: var(--azure-haze); }
+.stats__retro span { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.stats__retro b { font-size: var(--fs-sm); }
+.stats__retro span span, .stats__retro span :last-child { font-size: var(--fs-2xs); color: var(--ink-faint); }
 
 .stats__head {
   display: flex; align-items: center; justify-content: space-between;

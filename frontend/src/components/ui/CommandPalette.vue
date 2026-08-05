@@ -15,6 +15,8 @@ import { useUiStore, VIEWS } from '@/stores/ui'
 import { useAnimeStore } from '@/stores/anime'
 import { useMediaStore } from '@/stores/media'
 import { useMangaStore } from '@/stores/manga'
+import { useNovelsStore } from '@/stores/novels'
+import { useHomeStore } from '@/stores/home'
 import { imgProxy } from '@/lib/img'
 import { useModal } from '@/lib/useModal'
 import Icon from './Icon.vue'
@@ -23,6 +25,7 @@ const ui = useUiStore()
 const anime = useAnimeStore()
 const media = useMediaStore()
 const manga = useMangaStore()
+const novels = useNovelsStore()
 
 const open = ref(false)
 const q = ref('')
@@ -47,15 +50,17 @@ const commands = computed(() => {
     for (const it of g.items) {
       out.push({
         kind: 'cmd', id: `${it.id}:${it.sub || ''}`, icon: it.icon,
-        title: it.label, hint: `Ir a · ${g.group}`,
-        run: () => { if (it.sub) _setSub(it.id, it.sub); ui.pushNav(it.id) },
+        // Inicio no tiene grupo (es la puerta de la app), y sin esto su pista decía «Ir a · ».
+        title: it.label, hint: g.group ? `Ir a · ${g.group}` : 'Ir al inicio',
+        run: () => { if (it.sub) _setSub(it.id, it.sub); ui.goto(it.id) },
       })
     }
   }
   out.push(
-    { kind: 'cmd', id: 'settings', icon: 'settings', title: 'Ajustes', hint: 'Ir a', run: () => ui.pushNav('settings') },
-    { kind: 'cmd', id: 'workshop', icon: 'upload', title: 'Importar CBZ/CBR', hint: 'Taller', run: () => ui.pushNav('workshop') },
-    { kind: 'cmd', id: 'kitchen', icon: 'palette', title: 'Cocina del diseño', hint: 'Sistema de diseño', run: () => ui.pushNav('kitchen') },
+    { kind: 'cmd', id: 'settings', icon: 'settings', title: 'Ajustes', hint: 'Ir a', run: () => ui.goto('settings') },
+    { kind: 'cmd', id: 'workshop', icon: 'upload', title: 'Importar CBZ/CBR', hint: 'Taller', run: () => ui.goto('workshop') },
+    { kind: 'cmd', id: 'kitchen', icon: 'palette', title: 'Cocina del diseño', hint: 'Sistema de diseño', run: () => ui.goto('kitchen') },
+    { kind: 'cmd', id: 'retro', icon: 'spark', title: 'Tu resumen', hint: 'Episodios, horas y rachas', run: () => { ui.showRetro = true } },
     { kind: 'cmd', id: 'shortcuts', icon: 'spark', title: 'Atajos de teclado', hint: 'Ayuda', run: () => { ui.showShortcuts = true } },
   )
   return out
@@ -67,27 +72,66 @@ function _setSub(view, sub) {
   else if (view === 'media') media.setSub(sub)
 }
 
-// ── Contenido ────────────────────────────────────────────────────────────
+/* ── Contenido ────────────────────────────────────────────────────────────
+ *
+ * La paleta era un ÍNDICE: todas las filas navegaban («abrir la ficha de X») y no indexaba ni
+ * novelas ni lo que tenías empezado. Ahora es un MANDO: si algo está a medias, Enter lo REANUDA,
+ * que es lo que se venía a hacer. La pista de la derecha dice siempre qué va a pasar, para que
+ * Enter nunca sorprenda.
+ */
+const home = useHomeStore()
+
+// Lo empezado, por clave, para saber si una fila puede reanudarse y por dónde iba.
+const enCurso = computed(() => {
+  const m = new Map()
+  for (const it of home.continueAll) m.set(it.key, it)
+  return m
+})
+
 const content = computed(() => {
   const out = []
+
+  /* Primero lo empezado, en su propia forma: son las filas que MÁS se van a pulsar y las
+     únicas que reanudan. Van con su etiqueta de dominio porque aquí se mezclan los cinco. */
+  for (const it of home.continueAll) {
+    out.push({
+      kind: 'resume', id: `rs:${it.key}`, title: it.title, cover: it.poster || it.art,
+      hint: `Continuar · ${it.label}`,
+      icon: 'play',
+      run: () => home.resume(it),
+    })
+  }
+
   for (const m of mangaLib.value) {
+    const curso = enCurso.value.get(`manga:${m.name}`)
     out.push({
       kind: 'manga', id: `mg:${m.id}`, title: m.name, cover: m.cover,
-      hint: `Manga · ${m.chapter_count || 0} capítulos`,
-      run: () => manga.open(m),
+      hint: curso ? `Manga · continuar ${curso.label}` : `Manga · ${m.chapter_count || 0} capítulos`,
+      run: () => (curso ? home.resume(curso) : manga.open(m)),
     })
   }
   for (const a of anime.library) {
+    const curso = enCurso.value.get(`anime:${a.id}`)
     out.push({
       kind: 'anime', id: `an:${a.id}`, title: a.title, cover: a.cover,
-      hint: 'Anime', run: () => { ui.pushNav('anime'); anime.openDetail(a) },
+      hint: curso ? `Anime · continuar ${curso.label}` : 'Anime · abrir ficha',
+      run: () => (curso ? home.resume(curso) : (ui.goto('anime'), anime.openDetail(a))),
     })
   }
   for (const it of media.all) {
     out.push({
       kind: 'media', id: `md:${it.kind}:${it.id}`, title: it.title, cover: it.poster,
       hint: it.kind === 'movie' ? 'Película' : 'Serie',
-      run: () => { ui.pushNav('media'); media.openDetail(it) },
+      run: () => { ui.goto('media'); media.openDetail(it) },
+    })
+  }
+  // Novelas: NO estaban indexadas, así que la única forma de llegar a una era navegar a mano.
+  for (const n of (novels.library || [])) {
+    const curso = enCurso.value.get(`novela:${n.id}`)
+    out.push({
+      kind: 'novel', id: `nv:${n.id}`, title: n.title, cover: n.cover,
+      hint: curso ? `Novela · continuar ${curso.label}` : 'Novela · abrir ficha',
+      run: () => (curso ? home.resume(curso) : novels.openDetail(n)),
     })
   }
   return out
@@ -105,7 +149,13 @@ function score(title, needle) {
 
 const results = computed(() => {
   const needle = q.value.trim().toLowerCase()
-  if (!needle) return commands.value.slice(0, 8)
+  /* Sin escribir nada, lo primero son las cosas a medias, no la lista de secciones: abrir la
+     paleta y pulsar Enter reanuda lo último que estabas viendo o leyendo. Ése es el gesto que
+     convierte la paleta en un mando y no en un índice. */
+  if (!needle) {
+    const reanudar = content.value.filter(r => r.kind === 'resume').slice(0, 5)
+    return [...reanudar, ...commands.value.slice(0, 8)]
+  }
   const hits = []
   for (const r of [...content.value, ...commands.value]) {
     const s = score(r.title, needle)
@@ -130,6 +180,10 @@ async function show() {
   q.value = ''
   sel.value = 0
   ensureLib()
+  // Sin esto, `home.continueAll` no puede pintar manga (el filtro de biblioteca oculta está en
+  // `null` hasta que se sabe qué raíz está activa). Es la misma petición que `ensureLib`, pero
+  // el store necesita su propio Set; barato y cacheado en el store tras la primera vez.
+  if (!home._mangaVisible) home._cargarMangaVisible()
   await nextTick()
   inputEl.value?.focus()
 }
@@ -166,7 +220,7 @@ useModal(() => open.value, close, boxEl)
           <div class="cp__search">
             <Icon name="search" :size="17" class="cp__icon" />
             <input ref="inputEl" v-model="q" class="cp__input" type="text" spellcheck="false"
-                   placeholder="Buscar manga, anime, series… o una sección" @keydown="onBoxKey" />
+                   placeholder="Continuar, buscar manga, anime, novelas, series… o una sección" @keydown="onBoxKey" />
             <kbd class="cp__kbd">esc</kbd>
           </div>
 
@@ -186,7 +240,7 @@ useModal(() => open.value, close, boxEl)
 
           <footer class="cp__foot">
             <span><kbd>↑</kbd><kbd>↓</kbd> moverse</span>
-            <span><kbd>↵</kbd> abrir</span>
+            <span><kbd>↵</kbd> {{ results[sel]?.hint?.startsWith('Continuar') || results[sel]?.hint?.includes('continuar') ? 'continuar' : 'abrir' }}</span>
             <span><kbd>ctrl</kbd><kbd>K</kbd> abrir/cerrar</span>
           </footer>
         </div>

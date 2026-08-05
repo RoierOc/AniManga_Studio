@@ -55,3 +55,54 @@ describe('estado del historial · structured clone', () => {
     expect(plainState(circular)).toEqual({})
   })
 })
+
+/* Segunda tanda: el historial existía pero le faltaban PÁGINAS.
+ *
+ * Un sitio que cambia lo que ves y NO deja entrada rompe el botón de atrás dos veces: no puedes
+ * deshacer ese paso, y el siguiente "atrás" te saca un escalón de más — que es exactamente el
+ * síntoma reportado ("me manda a vistas que no tienen nada que ver"). Y al revés: empujar una
+ * entrada cuyo snapshot NO recuerda lo que abriste crea un duplicado invisible, así que "atrás"
+ * parece no hacer nada y el segundo salta dos.
+ *
+ * Este test fija la lista de lo que tiene que viajar. Es una lista, no una abstracción: la app no
+ * tiene router, el estado ES la URL, y lo único que falla es olvidarse de un campo.
+ */
+describe('snapshot del historial · qué páginas registra', () => {
+  const CAMPOS = ['view', 'sub', 'animeDetail', 'preview', 'manga', 'reader', 'mediaDetail',
+                  'novel', 'novelReader', 'tabs', 'mode']
+
+  it('lleva todas las pantallas que el usuario percibe como una página', async () => {
+    const { setActivePinia, createPinia } = await import('pinia')
+    setActivePinia(createPinia())
+    const { useUiStore } = await import('./ui')
+    const snap = useUiStore().snapshot()
+    for (const k of CAMPOS) expect(Object.keys(snap)).toContain(k)
+  })
+
+  it('sobrevive a structuredClone con todo relleno (es lo que hace pushState)', () => {
+    const snap = {
+      view: 'library', sub: 'seasonal', animeDetail: 12,
+      preview: { al_id: 1, title: 'X' }, manga: { id: 'a', source_meta: { url: 'u' } },
+      reader: { title: 'a', chapter: '3', source: 'auto', kind: 'manga' },
+      mediaDetail: { id: 7, kind: 'series', title: 'R' },
+      novel: { novelId: 'n', title: 'N' }, novelReader: { novelId: 'n', chapterIndex: 2 },
+      tabs: { lib: 'local', exp: 'sources', set: 'salud', media: 'discover' }, mode: 'anime',
+    }
+    expect(() => structuredClone(plainState(snap))).not.toThrow()
+    expect(plainState(snap).tabs.lib).toBe('local')
+  })
+
+  it('setTab registra el cambio de pestaña, y no hace nada si ya estabas en ella', async () => {
+    const { setActivePinia, createPinia } = await import('pinia')
+    setActivePinia(createPinia())
+    const { useUiStore } = await import('./ui')
+    const ui = useUiStore()
+    let empujes = 0
+    ui.pushNav = () => { empujes++ }
+    ui.setTab('lib', 'local')
+    expect(ui.tabs.lib).toBe('local')
+    expect(empujes).toBe(1)
+    ui.setTab('lib', 'local')          // misma pestaña → ni entrada duplicada ni ruido
+    expect(empujes).toBe(1)
+  })
+})

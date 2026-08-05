@@ -17,9 +17,27 @@ fi
 # Si el puerto 4567 ya responde, Suwayomi está arriba: no arrancar un segundo
 # proceso (bloquearía la BD H2). El check de puerto es la fuente de verdad; el
 # PID file puede quedar obsoleto entre reinicios de WSL.
-if (exec 3<>/dev/tcp/127.0.0.1/4567) 2>/dev/null; then
-  echo "Suwayomi ya está escuchando en :4567 — no se relanza."
-  exit 0
+#
+# ⚠️ El `timeout 2` NO es cosmético. En WSL2 un SYN al loopback contra un puerto CERRADO
+# se DESCARTA en vez de contestar RST, así que `/dev/tcp` (que no tiene timeout propio)
+# agota los 6 reintentos del kernel: MEDIDO 2m14s contra 127.0.0.1:4568 cerrado. Sin él,
+# este script tardaba 133 s en llegar a lanzar java justo cuando Suwayomi estaba caída —
+# el arranque bajo demanda de sources.py se rendía a los 45 s tres veces seguidas y el
+# usuario veía «Suwayomi no está iniciando».
+if timeout 2 bash -c '(exec 3<>/dev/tcp/127.0.0.1/4567)' 2>/dev/null; then
+  # ...pero "hay ALGO en el puerto" no es "está la NUESTRA". MEDIDO el 2026-08-02: un
+  # suwayomi.service de systemd (resto de una instalación vieja) ganaba el puerto al
+  # arrancar WSL apuntando a OTRO rootDir — 181 extensiones en vez de 431. La app veía
+  # el puerto ocupado, no relanzaba, y Fuentes se quedaba en 301 fuentes en vez de 558
+  # sin un solo error: base de datos equivocada, no fallo. Si el java del puerto no usa
+  # NUESTRO rootDir, se para y se relanza el bueno.
+  if pgrep -af 'Suwayomi-Server\.jar' | grep -qF "rootDir=$DATA_DIR"; then
+    echo "Suwayomi ya está escuchando en :4567 — no se relanza."
+    exit 0
+  fi
+  echo "AVISO: :4567 lo ocupa otra Suwayomi (rootDir distinto de $DATA_DIR) — se sustituye." >&2
+  bash "$SCRIPT_DIR/stop.sh" >/dev/null 2>&1
+  timeout 15 bash -c 'while timeout 1 bash -c "(exec 3<>/dev/tcp/127.0.0.1/4567)" 2>/dev/null; do sleep 1; done'
 fi
 
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then

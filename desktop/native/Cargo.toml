@@ -36,6 +36,7 @@ features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_HiDpi",
+    "Win32_UI_Shell",            # ITaskbarList3: progreso dentro del icono de la barra de tareas
     "Win32_Devices_Display",
 ]
 
