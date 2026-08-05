@@ -183,6 +183,9 @@ def _norm_series(s: dict) -> dict:
         # Id externo (TVDB): el `id` de arriba es el de Sonarr y NO sirve para volver
         # a dar de alta la serie. Lo necesita el "Deshacer" de quitar-de-biblioteca.
         "ext_id": s.get("tvdbId") or None,
+        # Sonarr guarda ADEMÁS el id de TMDB. Es el que abre la puerta a la saga y a las
+        # recomendaciones de la ficha, que hablan TMDB y no TVDB.
+        "tmdb_id": s.get("tmdbId") or None,
         "seasons": st.get("seasonCount") or 0,
         # Para la pestaña "Detalles", el equivalente de lo que AnimeDetail saca de AniList.
         "genres": s.get("genres") or [],
@@ -211,6 +214,7 @@ def _norm_movie(m: dict) -> dict:
         "monitored": bool(m.get("monitored")),
         "path": m.get("path") or "",
         "ext_id": m.get("tmdbId") or None,   # ídem, para Radarr
+        "tmdb_id": m.get("tmdbId") or None,  # en película coinciden; la ficha no tiene que saberlo
 
         "genres": m.get("genres") or [],
         "studio": m.get("studio") or "",
@@ -284,6 +288,37 @@ def _watched(position: float, duration: float) -> bool:
     return (duration - position) < 120 or (position / duration) >= 0.9
 
 
+def _history_append(key: str, d: dict, duration: float) -> None:
+    """Apunta el visionado en el historial COMPARTIDO (`history_store`, tipo 'watch').
+
+    Cine no escribía aquí, y por eso la Retrospectiva («tu mes» / «tu año») hacía como si series y
+    películas no existieran: sólo `anime.py` alimentaba ese fichero. El almacén ya es genérico —
+    lleva meses archivando por meses— así que heredarlo es escribir en él, no cambiarlo.
+
+    El id lleva prefijo `media:` para no chocar NUNCA con un id de AniList, y agrupa por OBRA
+    (`media:series:5`), que es como cuenta la retrospectiva: episodios sueltos por serie.
+    """
+    from api import history_store
+
+    partes = key.split(":")
+    if len(partes) == 3 and partes[0] == "series":
+        obra, episodio = f"media:series:{partes[1]}", int(d.get("episode") or 0)
+    elif len(partes) == 2 and partes[0] == "movie":
+        # Una película es UNA cosa vista, no un episodio: `1` la hace contable sin inventar nada.
+        obra, episodio = f"media:movie:{partes[1]}", 1
+    else:
+        return
+    history_store.append("watch", {
+        "anime_id": obra,
+        "title": (d.get("title") or "").strip(),
+        "episode": episodio,
+        "cover": d.get("cover") or "",
+        # La duración REAL la sabe el reproductor y nadie más: sin ella la retrospectiva tendría
+        # que estimar cada película a 24 min, que es la duración típica de un episodio de anime.
+        "duration": int(duration) or 0,
+    }, dedup_keys=("anime_id", "episode"))
+
+
 @media_bp.route("/progress", methods=["POST"])
 def media_progress():
     """Guarda posición/visto desde el reproductor nativo. Mismo contrato que el de anime."""
@@ -296,12 +331,21 @@ def media_progress():
     done = bool(d.get("ended")) or _watched(position, duration)
     with _prog_lock:
         prog = _prog_read()
+        ya_estaba = bool((prog.get(key) or {}).get("watched"))
         # Al terminar se guarda pos 0: reanudar en el segundo final sería inútil.
         # `at` (epoch) es lo que permite ordenar "Seguir viendo" por lo más reciente. Los
         # registros viejos no lo tienen: se leen como 0 y quedan al final, sin romper nada.
         prog[key] = {"pos": 0 if done else int(position), "watched": done,
                      "duration": int(duration), "at": int(_time.time())}
         _prog_write(prog)
+    # Sólo en la TRANSICIÓN a visto. El reproductor manda progreso cada pocos segundos: sin esta
+    # guarda, el último minuto de un episodio escribiría una entrada por latido. (`history_store`
+    # deduplica, pero apoyarse en eso sería confiar en el colchón en vez de en la condición.)
+    if done and not ya_estaba:
+        try:
+            _history_append(key, d, duration)
+        except Exception as e:
+            record_error("media", e, op="history_append", key=key)
     return jsonify({"ok": True, "watched": done})
 
 
@@ -433,10 +477,18 @@ def media_continue():
     # Solo se consultan las series que aparecen en el progreso, no la biblioteca entera:
     # una llamada a Sonarr por serie EMPEZADA, no por serie existente.
     seen = {}
+    pelis = {}
     for key, p in prog.items():
         parts = key.split(":")
         if len(parts) == 3 and parts[0] == "series":
             seen.setdefault(int(parts[1]), {})[int(parts[2])] = p
+        elif len(parts) == 2 and parts[0] == "movie" and p.get("pos") and not p.get("watched"):
+            # Una PELÍCULA a medias también es «seguir viendo». Faltaba entera: el progreso se
+            # guardaba (`movie:<id>`) pero nadie lo leía, así que pausar Dune en el minuto 40 y
+            # volver mañana era empezar de cero — y en la Portada tampoco aparecía, porque su
+            # riel de Cine sale de aquí. Sin `pos` no hay nada que reanudar, y una terminada no
+            # se ofrece: eso es el historial, no lo que estás viendo.
+            pelis[int(parts[1])] = p
 
     try:
         series = {s["id"]: _norm_series(s) for s in _get("sonarr", "series")}
@@ -472,7 +524,31 @@ def media_continue():
             "pos": p.get("pos", 0), "duration": p.get("duration", 0),
             "has_file": bool(pick.get("hasFile")),
             "at": max((x.get("at", 0) for x in eps_prog.values()), default=0),
+            "kind": "series",
         })
+
+    # Películas a medias. Una sola llamada a Radarr y sólo si hay alguna empezada.
+    if pelis:
+        try:
+            movies = {m["id"]: (m, _norm_movie(m)) for m in _get("radarr", "movie")}
+        except Exception as e:
+            record_error("media", e, op="continue_movies")
+            movies = {}
+        for mid, p in pelis.items():
+            par = movies.get(mid)
+            if not par or not par[0].get("hasFile"):
+                continue   # sin fichero no se puede reanudar: ofrecerlo sería un botón que falla
+            meta = par[1]
+            items.append({
+                "movie_id": mid, "series_id": None, "episode_id": None,
+                "title": meta["title"], "poster": meta["poster"], "banner": meta["banner"],
+                "season": None, "num": None, "episode_title": "",
+                "still": meta["banner"] or meta["poster"],
+                "pos": p.get("pos", 0), "duration": p.get("duration", 0),
+                "has_file": True,
+                "at": p.get("at", 0),
+                "kind": "movie",
+            })
 
     items.sort(key=lambda x: x["at"], reverse=True)
     return jsonify({"items": items[:12]})
@@ -731,6 +807,66 @@ def media_genres():
     # de /discover ya aparta el anime real.
     out = [{"id": g["id"], "name": g["name"]} for g in raw.get("genres", [])]
     _genres_cache[kind] = out
+    return jsonify(out)
+
+
+def _tmdb_card(r: dict, kind: str, tengo) -> dict:
+    """Una obra de TMDB en la forma que ya consume `MediaCard`. `tengo` puede ser `None`
+    (no se pudo preguntar a Sonarr): entonces `already` va a `None`, que la UI lee como
+    «no lo sé» en vez de afirmar que no la tienes."""
+    poster = r.get("poster_path")
+    return {
+        "tmdb_id": r.get("id"),
+        "kind": kind,
+        "title": r.get("title") or r.get("name") or "",
+        "title_original": r.get("original_title") or r.get("original_name") or "",
+        "poster": f"https://image.tmdb.org/t/p/original{poster}" if poster else "",
+        "year": (r.get("release_date") or r.get("first_air_date") or "")[:4] or None,
+        "score": round(r.get("vote_average") or 0, 1) or None,
+        "already": None if tengo is None else (r.get("id") in tengo),
+    }
+
+
+@media_bp.route("/related")
+def media_related():
+    """La saga y el «si te gustó esto» de una ficha — lo que en anime da el orden de franquicia.
+
+    Dos bloques distintos y por eso separados: la **saga** es una lista CERRADA y ordenada por
+    estreno (las tres de Dune), y las **recomendaciones** son abiertas. TMDB sólo tiene colecciones
+    de películas; una serie devuelve `collection: null` y eso no es un fallo.
+    """
+    kind = request.args.get("kind") or "movie"
+    tmdb_id = request.args.get("tmdb_id", type=int)
+    if kind not in KINDS or not tmdb_id:
+        return jsonify({"error": "kind y tmdb_id requeridos"}), 400
+    t = "tv" if kind == "series" else "movie"
+    tengo = _library_tmdb_ids(kind)
+    out = {"collection": None, "recommendations": [], "errors": {}}
+
+    if kind == "movie":
+        try:
+            det = _tmdb(f"movie/{tmdb_id}")
+            col = det.get("belongs_to_collection")
+            if col and col.get("id"):
+                partes = _tmdb(f"collection/{col['id']}").get("parts") or []
+                # Por fecha de estreno: una saga se ve en orden, no como la ordene TMDB. Las que
+                # aún no tienen fecha van al final, que es donde están (aún no han salido).
+                partes.sort(key=lambda p: p.get("release_date") or "9999")
+                out["collection"] = {
+                    "name": col.get("name") or "",
+                    "items": [_tmdb_card(p, "movie", tengo) for p in partes],
+                }
+        except Exception as e:
+            record_error("media", e, op="related_collection", tmdb_id=tmdb_id)
+            out["errors"]["collection"] = str(e)[:200]
+
+    try:
+        recs = _tmdb(f"{t}/{tmdb_id}/recommendations").get("results") or []
+        out["recommendations"] = [_tmdb_card(r, kind, tengo) for r in recs if r.get("poster_path")][:18]
+    except Exception as e:
+        record_error("media", e, op="related_recs", tmdb_id=tmdb_id)
+        out["errors"]["recommendations"] = str(e)[:200]
+
     return jsonify(out)
 
 

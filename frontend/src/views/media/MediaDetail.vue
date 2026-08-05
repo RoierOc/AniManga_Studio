@@ -20,8 +20,10 @@ import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import ReleasePicker from './ReleasePicker.vue'
+import MediaCard from '@/components/media/MediaCard.vue'
 import { imgProxy } from '@/lib/img'
 import { coverRGB, vivid } from '@/lib/coverColor'
+import { generos } from '@/lib/etiquetas'
 
 const props = defineProps({ item: { type: Object, required: true } })
 defineEmits(['back'])
@@ -51,6 +53,38 @@ const posterFailed = ref(false)
 const artFailed = ref(false)
 
 const isMovie = computed(() => props.item.kind === 'movie')
+
+// «Vista» sale del progreso EN VIVO si existe (acabas de marcarla) y si no, del historial ya
+// cargado: la ficha no puede contradecir a la rejilla que tienes detrás.
+const pelicVista = computed(() => {
+  const vivo = store.progressByKey[`movie:${props.item.id}`]
+  if (vivo) return !!vivo.watched
+  return store.watchState[`movie:${props.item.id}`] === 'seen'
+})
+
+/* Saga y recomendaciones — lo que en la ficha de anime hace el orden de franquicia.
+   Se piden aparte de los episodios y en cuanto se abre la ficha: son TMDB (~375 ms medidos) y no
+   deben retrasar la lista de episodios, que es a lo que has venido. */
+const related = ref({ collection: null, recommendations: [] })
+const relatedLoading = ref(false)
+watch(() => props.item.tmdb_id, async (id) => {
+  related.value = { collection: null, recommendations: [] }
+  if (!id) return          // sin id de TMDB no hay nada que pedir: no es un fallo, es que Sonarr
+  relatedLoading.value = true      // no lo tiene emparejado
+  try {
+    related.value = await api.get(`/api/media/related?kind=${props.item.kind}&tmdb_id=${id}`)
+  } catch { /* la ficha vive sin esto: no se anuncia un fallo por un bloque accesorio */ }
+  finally { relatedLoading.value = false }
+}, { immediate: true })
+
+// La obra que estás mirando también sale en su propia saga: se marca en vez de esconderla, que es
+// lo que deja ver DÓNDE encaja («la segunda de tres»).
+const esEsta = (p) => p.tmdb_id === props.item.tmdb_id
+
+async function añadir(p) {
+  if (p.already || esEsta(p)) return
+  if (await store.addFromTmdb(p, p.kind)) p.already = true
+}
 
 /* Resplandor del póster en su color dominante — decorativo y sólo detrás del póster,
    nunca sobre texto ni controles (ver [[project_cover_ambient]]). */
@@ -218,6 +252,13 @@ function epWatched(ep) { const l = live(ep); return l ? l.watched : !!ep.watched
               {{ resumeEp.pos > 0 ? 'Continuar' : 'Ver' }} {{ epLabel(resumeEp) }}
             </button>
 
+            <!-- En una película el gesto vive aquí, porque no hay lista de episodios donde ponerlo. -->
+            <button v-if="isMovie && item.have" class="mbtn" :class="{ 'is-on': pelicVista }"
+                    @click="store.setWatched(`movie:${item.id}`, !pelicVista, item.runtime * 60,
+                            { title: item.title, cover: item.poster })">
+              <Icon name="check" :size="14" /> {{ pelicVista ? 'Vista' : 'Marcar vista' }}
+            </button>
+
             <button class="mbtn" @click="isMovie ? pickMovie() : pickSeason()">
               <Icon name="download" :size="14" />
               {{ isMovie ? 'Elegir torrent' : 'Descargar temporada' }}
@@ -295,6 +336,14 @@ function epWatched(ep) { const l = live(ep); return l ? l.watched : !!ep.watched
             </div>
 
             <div class="ep__acts">
+              <!-- Marcar a mano: lo que ves fuera de la app, o el episodio que dejaste al 95 %,
+                   no tienen otra forma de quedar bien registrados. Mismo gesto que en Mi Anime. -->
+              <button class="ep__icon" :class="{ 'is-on': epWatched(ep) }"
+                      :data-tip="epWatched(ep) ? 'Marcar como NO visto' : 'Marcar como visto'"
+                      @click="store.setWatched(`series:${item.id}:${ep.id}`, !epWatched(ep), ep.duration,
+                                               { title: item.title, cover: item.poster, episode: ep.num })">
+                <Icon name="check" :size="13" />
+              </button>
               <button v-if="ep.has_file" class="ep__icon" data-tip="Buscar subtítulos en español"
                       @click="store.openSubs(item, ep)">
                 <Icon name="globe" :size="13" />
@@ -311,7 +360,7 @@ function epWatched(ep) { const l = live(ep); return l ? l.watched : !!ep.watched
       <div v-else class="info">
         <p v-if="item.overview" class="info__ov">{{ item.overview }}</p>
         <dl class="info__grid">
-          <div v-if="item.genres?.length"><dt>Géneros</dt><dd>{{ item.genres.join(' · ') }}</dd></div>
+          <div v-if="item.genres?.length"><dt>Géneros</dt><dd>{{ generos(item.genres).join(' · ') }}</dd></div>
           <div v-if="item.network"><dt>Cadena</dt><dd>{{ item.network }}</dd></div>
           <div v-if="item.status"><dt>Estado</dt><dd>{{ mediaStatusLabel(item.status) }}</dd></div>
           <div v-if="item.runtime"><dt>Duración</dt><dd>{{ item.runtime }} min por episodio</dd></div>
@@ -321,6 +370,46 @@ function epWatched(ep) { const l = live(ep); return l ? l.watched : !!ep.watched
         </dl>
       </div>
     </template>
+
+    <!-- Fuera del `v-if="!isMovie"` a propósito: la saga es justo lo que una PELÍCULA necesita
+         («las tres de Dune, en orden»), y ahí dentro no la vería nunca. -->
+    <section v-if="related.collection?.items?.length" class="rel">
+      <header class="rel__head">
+        <h3 class="rel__title">{{ related.collection.name }}</h3>
+        <span class="rel__hint">en orden de estreno</span>
+      </header>
+      <div class="rel__row">
+        <MediaCard v-for="p in related.collection.items" :key="p.tmdb_id"
+                   :class="{ 'is-current': esEsta(p) }"
+                   :cover="p.poster" :title="p.title" kind-label="PELÍCULA"
+                   :flag="esEsta(p) ? { tone: 'live', label: 'ESTÁS AQUÍ' }
+                          : p.already ? { tone: 'soft', icon: 'check', label: 'LA TIENES' } : null"
+                   :tags="[p.year ? String(p.year) : ''].filter(Boolean)"
+                   :play-label="esEsta(p) ? '' : (p.already ? 'Ya la tienes' : 'Añadir')"
+                   :play-icon="p.already ? 'check' : 'plus'" :play-done="!!p.already"
+                   :play-busy="store.adding === p.tmdb_id" alt-label=""
+                   @open="añadir(p)" @play="añadir(p)" />
+      </div>
+    </section>
+
+    <section v-if="related.recommendations.length" class="rel">
+      <header class="rel__head">
+        <h3 class="rel__title">Si te gustó esto</h3>
+        <span class="rel__hint">según TMDB</span>
+      </header>
+      <div class="rel__row">
+        <MediaCard v-for="p in related.recommendations" :key="p.tmdb_id"
+                   :cover="p.poster" :title="p.title"
+                   :kind-label="p.kind === 'movie' ? 'PELÍCULA' : 'SERIE'"
+                   :status="p.score ? { label: `★ ${p.score}`, color: 'var(--cyan)' } : null"
+                   :flag="p.already ? { tone: 'soft', icon: 'check', label: 'LA TIENES' } : null"
+                   :tags="[p.year ? String(p.year) : ''].filter(Boolean)"
+                   :play-label="p.already ? 'Ya la tienes' : 'Añadir'"
+                   :play-icon="p.already ? 'check' : 'plus'" :play-done="!!p.already"
+                   :play-busy="store.adding === p.tmdb_id" alt-label=""
+                   @open="añadir(p)" @play="añadir(p)" />
+      </div>
+    </section>
 
     <ReleasePicker v-if="picker" v-bind="picker" @close="picker = null" @grabbed="load" />
   </div>
@@ -347,8 +436,11 @@ function epWatched(ep) { const l = live(ep); return l ? l.watched : !!ep.watched
 
 .dhero__inner { position: relative; z-index: 1; display: flex; gap: var(--s-6);
   padding: var(--s-5) var(--s-6) var(--s-6); align-items: flex-end; }
+/* Destino del vuelo del póster desde la tarjeta (View Transition). Era el TERCER y último sitio
+   donde faltaba: `MediaCard` ya marcaba el origen con `vtTag`, igual que en anime y manga. */
 .dhero__poster { width: 12rem; flex: none; aspect-ratio: 2/3; object-fit: cover;
-  border-radius: var(--r-md); box-shadow: var(--pglow, 0 10px 34px rgba(0,0,0,.55)); }
+  border-radius: var(--r-md); box-shadow: var(--pglow, 0 10px 34px rgba(0,0,0,.55));
+  view-transition-name: detail-poster; }
 .dhero__col { min-width: 0; flex: 1; }
 .dhero__fmt { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: .12em;
   color: var(--azure-bright); }
@@ -434,6 +526,21 @@ function epWatched(ep) { const l = live(ep); return l ? l.watched : !!ep.watched
   background: var(--surface-2); border: 1px solid var(--line); color: var(--ink-faint);
   cursor: pointer; transition: all var(--t-fast); }
 .ep__icon:hover { color: var(--azure-bright); border-color: var(--azure); }
+/* Marcado como visto: el botón ES el estado, así que se queda encendido en vez de cambiar de
+   icono. En jade, el mismo color con el que la fila ya marca lo terminado. */
+.ep__icon.is-on { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 50%, transparent); }
+.mbtn.is-on { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 50%, transparent); }
+
+/* ── Saga y recomendaciones ────────────────────────────────────────────── */
+.rel { padding: 0 var(--s-6) var(--s-7); }
+.rel__head { display: flex; align-items: baseline; gap: var(--s-3); margin-bottom: var(--s-4); }
+.rel__title { font-family: var(--font-display); font-size: var(--fs-lg); }
+.rel__hint { font-size: var(--fs-xs); color: var(--ink-faint); }
+.rel__row { display: flex; gap: var(--s-4); overflow-x: auto; padding-bottom: var(--s-3); }
+.rel__row > * { flex: 0 0 10rem; }
+/* La de la ficha se distingue del resto de la saga por un filo, no por quitarla de la fila:
+   verla en su sitio es lo que dice si vas por la primera o por la última. */
+.rel__row > .is-current { outline: 1px solid var(--azure); outline-offset: 3px; border-radius: var(--r-md); }
 
 /* ── Detalles ──────────────────────────────────────────────────────────── */
 .info { padding: 0 var(--s-6) var(--s-8); max-width: 60rem; }

@@ -10,7 +10,8 @@ import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
-import FolderPicker from '@/components/anime/FolderPicker.vue'
+import FolderPicker from '@/components/ui/FolderPicker.vue'
+import MediaQueue from '@/components/media/MediaQueue.vue'
 
 const store = useAnimeStore()
 const ui = useUiStore()
@@ -24,6 +25,7 @@ async function removeWithFiles(t) {
 }
 
 const pathInput = ref('')
+const browsing = ref(false)
 watch(() => store.dlSettings.download_path, (v) => { pathInput.value = v || '' }, { immediate: true })
 
 onMounted(async () => {
@@ -66,11 +68,20 @@ const cuenta = computed(() => ({
 }))
 const filtros = computed(() => FILTROS.map(f => ({ ...f, n: cuenta.value[f.id] })))
 
+// Con 87 torrents sembrando y ninguno bajando, la vista entera era un cartel en el tercio
+// superior y 700 px de negro debajo, más un botón para ver lo que ya tenemos aquí mismo. Si no
+// hay nada activo, se enseñan los terminados directamente y se avisa arriba; el filtro NO cambia,
+// así que la pestaña «Descargando» sigue diciendo la verdad sobre lo que hay descargando.
+const cayendoASembrando = computed(() =>
+  filtro.value === 'activas' && !busca.value.trim() &&
+  !filas.value.some(f => !isDone(f.t)) && cuenta.value.sembrando > 0)
+
 const visibles = computed(() => {
   const q = busca.value.trim().toLowerCase()
+  const modo = cayendoASembrando.value ? 'sembrando' : filtro.value
   return filas.value.filter(f => {
-    if (filtro.value === 'activas' && isDone(f.t)) return false
-    if (filtro.value === 'sembrando' && !isDone(f.t)) return false
+    if (modo === 'activas' && isDone(f.t)) return false
+    if (modo === 'sembrando' && !isDone(f.t)) return false
     return !q || f.r.title.toLowerCase().includes(q) || f.t.name.toLowerCase().includes(q)
   })
 })
@@ -89,12 +100,12 @@ const ajustes = ref(false)
 
 <template>
   <div class="dl">
+    <!-- Sin titular: la barra superior ya dice «Descargas» a 15 px de aquí, y un <h1> de 48 px
+         repitiendo la misma palabra no informa de nada. Mi Anime —la vista mejor resuelta— tampoco
+         tiene titular: el contenido empieza arriba. Lo que sí aporta (el estado de qBittorrent) se
+         queda. -->
     <header class="dl__head stagger">
-      <div style="--i:0">
-        <p class="eyebrow"><span class="tick" /> TRANSFERENCIAS</p>
-        <h1>Descargas</h1>
-      </div>
-      <div class="dl__conn" style="--i:1" :class="{ 'is-on': store.qbt.connected }">
+      <div class="dl__conn" style="--i:0" :class="{ 'is-on': store.qbt.connected }">
         <span class="dl__conn-dot" />
         {{ store.qbt.connected ? `qBittorrent ${store.qbt.version}` : 'Desconectado' }}
       </div>
@@ -125,7 +136,7 @@ const ajustes = ref(false)
         </div>
         <div class="loc__row">
           <input v-model="pathInput" class="loc__input" :placeholder="store.dlSettings.qbt_default || 'D:\\Anime'" spellcheck="false" />
-          <button class="loc__btn" @click="store.openDlBrowse('')"><Icon name="folder" :size="14" /> Explorar</button>
+          <button class="loc__btn" @click="browsing = true"><Icon name="folder" :size="14" /> Explorar</button>
           <button class="loc__btn loc__btn--save" @click="store.saveDlPath(pathInput)">Guardar</button>
         </div>
         <p class="loc__cur">
@@ -133,6 +144,11 @@ const ajustes = ref(false)
           <template v-else>Usando la carpeta por defecto de qBittorrent<template v-if="store.dlSettings.qbt_default">: <code>{{ store.dlSettings.qbt_default }}</code></template>. Deja el campo vacío y guarda para volver a ella.</template>
         </p>
       </section>
+
+      <!-- La cola de Sonarr/Radarr, ARRIBA y no en una vista propia: sus descargas ya salen en la
+           lista de torrents de abajo, pero sólo aquí se ve si un fichero al 100 % está atascado
+           importando. Se dibuja sola cuando hay algo; si no usas Cine, no existe. -->
+      <MediaQueue />
 
       <ContentToolbar v-if="store.qbtTorrents.length" :filters="filtros" v-model:filter="filtro"
                       v-model:search="busca" search-placeholder="Buscar en la cola…">
@@ -152,14 +168,15 @@ const ajustes = ref(false)
                   hint="Lo que descargues desde Buscar Anime aparecerá aquí." />
       <!-- «Nada bajando ahora» NO es «no tienes torrents»: con 87 sembrando, decir lo segundo
            te haría pensar que se han perdido. -->
-      <EmptyState v-else-if="!visibles.length && filtro === 'activas'" icon="download"
+      <EmptyState v-else-if="!visibles.length && filtro === 'activas'" full icon="download"
                   title="No hay nada descargando ahora."
-                  :hint="`Tienes ${cuenta.sembrando} torrents terminados sembrando.`">
-        <template #action><button @click="filtro = 'sembrando'">Ver los terminados</button></template>
-      </EmptyState>
-      <EmptyState v-else-if="!visibles.length" icon="search" title="Nada coincide con la búsqueda." />
+                  hint="Lo que envíes a qBittorrent desde Buscar Anime aparecerá aquí." />
+      <EmptyState v-else-if="!visibles.length" full icon="search" title="Nada coincide con la búsqueda." />
 
       <div v-else class="dl__list">
+        <p v-if="cayendoASembrando" class="dl__nota">
+          No hay nada descargando ahora — estos son tus {{ cuenta.sembrando }} torrents terminados.
+        </p>
         <div v-for="{ t, r, cover } in visibles" :key="t.hash" class="trow" :class="{ 'trow--done': isDone(t) }">
           <!-- Sin blur-up: la caja mide 44 px, así que el micro-thumb de 28 px no es un
                placeholder, es prácticamente la imagen final. Una petición por fila, no dos. -->
@@ -185,7 +202,7 @@ const ajustes = ref(false)
                     @click="store.qbtAction(isPaused(t) ? 'resume' : 'pause', t.hash)">
               <Icon :name="isPaused(t) ? 'play' : 'pause'" :size="14" />
             </button>
-            <button class="ti" data-tip="Verificar" @click="store.qbtAction('recheck', t.hash)"><Icon name="spark" :size="14" /></button>
+            <button class="ti" data-tip="Verificar" @click="store.qbtAction('recheck', t.hash)"><Icon name="refresh" :size="14" /></button>
             <!-- Quitar de qBittorrent CONSERVANDO los archivos: la forma de dejar de sembrar sin
                  perder el episodio. Es la acción habitual, por eso va antes y sin estilo de peligro. -->
             <button class="ti" data-tip="Dejar de sembrar (conserva los archivos)"
@@ -197,7 +214,8 @@ const ajustes = ref(false)
       </div>
     </template>
 
-    <FolderPicker />
+    <FolderPicker v-model:open="browsing" title="Elegir carpeta de descargas de anime"
+                  @pick="p => store.saveDlPath(p.win || p.path)" />
   </div>
 </template>
 
@@ -221,7 +239,9 @@ const ajustes = ref(false)
 .loc__cur code { font-family: var(--font-mono); color: var(--ink-soft); }
 
 /* folder picker */
-.dl__head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: var(--s-4); padding: var(--s-5) 0; }
+/* `flex-end`, no `space-between`: al quitar el titular quedó un solo hijo y `space-between` lo
+   mandaba al margen izquierdo, donde no pega con nada. El estado de qBittorrent va a la derecha. */
+.dl__head { display: flex; align-items: flex-end; justify-content: flex-end; flex-wrap: wrap; gap: var(--s-4); padding: var(--s-5) 0 var(--s-3); }
 .eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
 .tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
 
@@ -242,6 +262,7 @@ const ajustes = ref(false)
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-8) 0; color: var(--ink-faint); }
 
 .dl__list { display: flex; flex-direction: column; gap: var(--s-2); }
+.dl__nota { color: var(--ink-faint); font-size: var(--fs-sm); margin-bottom: var(--s-1); }
 .trow { display: flex; align-items: center; gap: var(--s-4); padding: var(--s-3) var(--s-4); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); transition: border-color var(--t-fast); }
 .trow:hover { border-color: var(--line-strong); }
 .trow--done { opacity: .72; }

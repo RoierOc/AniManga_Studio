@@ -8,7 +8,8 @@
  * Ahora `HeroBanner` es un ENVOLTORIO que traduce el store de anime a estos datos, igual que
  * `AnimeCard` envuelve a `MediaCard`. Toda la presentación vive aquí y sólo aquí.
  *
- * Cada item: `{ id, art, artFallback, logo, overline, title, meta[], tags[], progress, actions[] }`.
+ * Cada item: `{ id, art, artFallback, logo, overline, title, meta[], tags[], progress, actions[],
+ * titleAction? }` — `titleAction` hace que el logo/título abra la ficha (opcional).
  * `meta` acepta strings o `{ text, chip?, lead? }`; las acciones son `{label, icon, primary?, run}`.
  */
 import { computed, onUnmounted, ref, watch } from 'vue'
@@ -50,7 +51,11 @@ function onBgError() { if (bgIdx.value < tiers.value.length - 1) bgIdx.value++ }
 
 // Title treatment (el logo PNG de TMDB, estilo Crunchyroll). Si no hay o la URL falla → título.
 const logoFailed = ref(false)
-const logoUrl = computed(() => c.value?.logo || '')
+/* El logo se pinta como mucho a `min(35rem, 82%)` — medido 716 px en un monitor de 2560. Iba SIN
+   proxy: cada visita se lo pedía a TMDB a tamaño original (1,2 MB el peor de la biblioteca) para
+   una caja de medio ancho. Ahora va por `/api/img`, que lo cachea en disco y lo sirve reducido
+   conservando la transparencia (WebP con alfa; en JPEG el rótulo saldría sobre un cuadro negro). */
+const logoUrl = computed(() => (c.value?.logo ? imgProxy(c.value.logo, 720) : ''))
 const hasLogo = computed(() => !!logoUrl.value && !logoFailed.value)
 watch(() => c.value?.id, () => { bgIdx.value = 0; logoFailed.value = false })
 
@@ -138,8 +143,15 @@ onUnmounted(() => clearInterval(timer))
       <Transition name="hero-content" mode="out-in" :duration="380">
         <div v-if="c" :key="c.id" class="hero__body">
           <p v-if="c.overline" class="hero__eyebrow"><span class="hero__tick" /> {{ c.overline }}</p>
-          <img v-if="hasLogo" class="hero__logo" :src="logoUrl" :alt="c.title" @error="logoFailed = true" />
-          <h1 v-else class="hero__title">{{ c.title }}</h1>
+          <!-- El título es donde uno pincha por instinto, así que abre la ficha — el mismo gesto
+               que la Portada. `titleAction` es OPCIONAL a propósito: sin ella se pinta un `div`
+               y no un botón muerto, que es peor que no tener el gesto (parece roto). -->
+          <component :is="c.titleAction ? 'button' : 'div'" class="hero__name"
+                     :data-tip="c.titleAction ? `Ver ${c.title}` : null"
+                     @click="c.titleAction && c.titleAction()">
+            <img v-if="hasLogo" class="hero__logo" :src="logoUrl" :alt="c.title" @error="logoFailed = true" />
+            <h1 v-else class="hero__title">{{ c.title }}</h1>
+          </component>
 
           <div v-if="metaItems.length" class="hero__meta">
             <template v-for="(m, i) in metaItems" :key="i">
@@ -272,6 +284,18 @@ El desvanecido de ARRIBA es una curva, no una rampa recta, y ocupa el 20 % en ve
    separa del resto de la meta en vez de encadenarse con un punto. */
 .hero__chip { margin-left: var(--s-1); font-family: var(--font-mono); font-size: var(--fs-2xs);
   color: var(--cyan); padding: 2px 0.5rem; border-radius: var(--r-pill); background: var(--cyan-glow); }
+/* Mismas medidas que el hero de Inicio: los dos se leen como la misma pieza. */
+/* Bloque a lo ANCHO del cuerpo, no `width: fit-content`: el logo se dimensiona con
+   `max-width: min(35rem, 82%)`, y ese 82 % se resuelve contra ESTA caja — si encogiera al
+   contenido, el porcentaje se mediría contra el propio logo y saldría un 18 % más pequeño. */
+.hero__name { display: block; width: 100%; text-align: left;
+  transition: transform var(--t-base) var(--ease-snap), filter var(--t-base) var(--ease-silk); }
+/* El transform se aplica sobre el logo, no sobre la caja vacía de al lado. */
+button.hero__name { transform-origin: left center; }
+button.hero__name { cursor: pointer; }
+button.hero__name:hover { transform: translateY(-2px); filter: brightness(1.12); }
+button.hero__name:active { transform: translateY(0) scale(.99); }
+
 /* Title treatment de TMDB. La sombra lo despega del arte; el `logorise` evita que aparezca seco. */
 .hero__logo { max-width: min(35rem, 82%); max-height: clamp(6.875rem, 15vw, 12.5rem);
   width: auto; height: auto; object-fit: contain; object-position: left bottom;

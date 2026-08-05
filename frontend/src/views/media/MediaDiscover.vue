@@ -3,16 +3,14 @@
    lookup EXACTO por `tmdb:<id>` — antes se emparejaba por título y cada obra con nombre no inglés
    abría un «varias coincidencias, elige la correcta» que era puro peaje. */
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { api } from '@/lib/api'
 import { useMediaStore } from '@/stores/media'
-import { useUiStore } from '@/stores/ui'
 import MediaCard from '@/components/media/MediaCard.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
+import DensityToggle from '@/components/ui/DensityToggle.vue'
 
 const store = useMediaStore()
-const ui = useUiStore()
 
 const LISTS = [
   { id: 'trending', label: 'Tendencias' },
@@ -47,24 +45,8 @@ watch(sentinel, (el, prev) => {
 })
 onBeforeUnmount(() => io?.disconnect())
 
-async function add(it) {
-  if (it.already) { ui.toast('Ya está en tu biblioteca', 'info'); return }
-  store.adding = it.tmdb_id
-  try {
-    const t = it.title_original || it.title
-    const r = await api.get(`/api/media/resolve?kind=${store.discoverKind}` +
-      `&tmdb_id=${it.tmdb_id}&title=${encodeURIComponent(t)}&year=${it.year || ''}`)
-    if (!r.match) {
-      ui.toast(`«${t}» no está en el catálogo de ${store.discoverKind === 'movie' ? 'Radarr' : 'Sonarr'}`, 'error')
-      return
-    }
-    if (r.match.already) { ui.toast('Ya está en tu biblioteca', 'info'); it.already = true; return }
-    const ok = await store.add(r.match.ext_id, store.discoverKind)
-    if (ok) it.already = true
-  } catch (e) {
-    ui.toast(`No se pudo añadir: ${e?.body || e?.message || ''}`, 'error')
-  } finally { store.adding = '' }
-}
+// El alta vive en el store (`addFromTmdb`): «Para ti» hace exactamente lo mismo desde la portada.
+const add = (it) => store.addFromTmdb(it, store.discoverKind)
 </script>
 
 <template>
@@ -79,6 +61,7 @@ async function add(it) {
                 @click="pick(l.id)">{{ l.label }}</button>
       </div>
       <div class="toolbar__right">
+        <DensityToggle />
         <div class="sorts">
           <button class="sort" :class="{ 'is-active': store.discoverKind === 'series' }" @click="pickKind('series')">Series</button>
           <button class="sort" :class="{ 'is-active': store.discoverKind === 'movie' }" @click="pickKind('movie')">Películas</button>
@@ -106,7 +89,7 @@ async function add(it) {
                 @retry="store.loadDiscover()" />
 
     <template v-else>
-      <div class="mdisc__grid stagger">
+      <div class="grid mdisc__grid stagger">
         <MediaCard v-for="d in store.discover" :key="d.tmdb_id"
                    :cover="d.poster" :title="d.title"
                    :kind-label="store.discoverKind === 'movie' ? 'PELÍCULA' : 'SERIE'"
@@ -141,7 +124,11 @@ async function add(it) {
   cursor: pointer; transition: all var(--t-fast); }
 .gpill:hover { color: var(--ink); border-color: var(--line-strong); }
 .gpill.is-active { color: #fff; background: var(--azure); border-color: transparent; }
-.mdisc__grid { display: grid; gap: var(--s-5); grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); }
+/* Usa `.grid` de base.css y sólo redefine el ancho base (regla del sistema de diseño). Con eso
+   hereda gratis el control de densidad (`--dens`), que es lo que aquí faltaba: la rejilla propia
+   metía 7 tarjetas por fila a 1600 px y no había forma de cambiarlo. 14rem ≈ 5 por fila en
+   densidad normal, y el conmutador da las otras dos. */
+.mdisc__grid { --card-min: 14rem; }
 .mdisc__more { display: grid; place-items: center; min-height: 3.5rem; margin-top: var(--s-5); }
 .mdisc__morebtn { padding: var(--s-3) var(--s-6); border-radius: var(--r-pill); font-size: var(--fs-sm);
   font-weight: 600; color: var(--ink); background: var(--surface); border: 1px solid var(--line);

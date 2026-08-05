@@ -4,30 +4,23 @@
  * `MediaLibrary.vue`, así que cambiar de pestaña lo perdía (biblioteca recargada, búsqueda
  * borrada, filtros olvidados). Aquí sobrevive a la navegación y las vistas quedan tontas.
  *
- * Sin cola propia: las descargas se ven en la vista Descargas (General), que lista los torrents
- * de qBittorrent — el mismo cliente para anime, series y películas.
+ * La cola SÍ es propia (`queue`), y no es una duplicación de la vista de torrents de anime: lo que
+ * baja aquí lo pide Sonarr/Radarr, así que el estado que importa es el suyo («importando», «falta
+ * un fichero»), no el del torrent. Un torrent al 100 % con el import fallando es un caso real que
+ * qBittorrent da por terminado.
  */
 import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import { useAnimeStore } from '@/stores/anime'
+import { useTagsStore } from '@/stores/tags'
 import { formatBytes, mediaStatusLabel } from '@/lib/format'
 import { imgProxy } from '@/lib/img'
+import { vtGo } from '@/lib/vt'
 
-const SUB_KEY = 'media-sub'
-
-// Con guarda como en `ui.js`: fuera del navegador (tests) no hay localStorage, y un store que
-// revienta al construirse tumba la vista entera.
-function _readSub() {
-  try { return localStorage.getItem(SUB_KEY) || 'library' } catch { return 'library' }
-}
-function _writeSub(v) {
-  try { localStorage.setItem(SUB_KEY, v) } catch { /* sin almacenamiento: no es un fallo */ }
-}
 
 export const useMediaStore = defineStore('media', {
   state: () => ({
-    sub: _readSub(),
     status: {},
     series: [],
     movies: [],
@@ -68,9 +61,24 @@ export const useMediaStore = defineStore('media', {
     discoverLoadingMore: false,
     discoverGenre: '',        // id de género TMDB, '' = todos
     genres: { series: [], movie: [] },
+
+    // agenda / cola / historial — las tres pestañas que Cine no tenía
+    agenda: [], agendaErrors: {}, agendaLoading: false, agendaError: '', agendaLoaded: false,
+    queue: [], queueErrors: {}, queueLoading: false, queueError: '',
+    watched: [], grabs: [], historyLoading: false, historyError: '', historyLoaded: false,
+
+    artLoaded: false,     // arte de TMDB ya aplicado sobre lo que dieron Sonarr/Radarr
+
+    // «Para ti» (TMDB sobre tu biblioteca)
+    forYou: [], forYouError: '', forYouLoading: false, forYouLoaded: false,
   }),
 
   getters: {
+    /* La pestaña vive en `ui.tabs.media`, no aquí. Era un `ref` + localStorage propio, y por eso
+       atrás/adelante devolvía la sección con la pestaña equivocada: el historial no la veía.
+       Ahí la ve, la restaura, y de paso desaparece el localStorage a mano. */
+    sub: () => useUiStore().tabs.media,
+
     // Un servicio caído se DICE; nunca se disfraza de biblioteca vacía.
     // Dos fuentes, porque son dos preguntas distintas: `status` es el ping (`system/status`) y
     // `errors` es lo que falló al pedir la lista. Un Sonarr que contesta al ping pero revienta
@@ -83,11 +91,49 @@ export const useMediaStore = defineStore('media', {
     all: (s) => [...s.series, ...s.movies],
     discoverHasMore: (s) => s.discoverPage < s.discoverTotalPages,
 
+    /* Estado de visionado por obra, DERIVADO de lo que ya sabemos. No hay un estado manual como en
+       anime (Sonarr no lo tiene y pedirte que marques cosas a mano es peaje): lo empezado sale de
+       «Seguir viendo» y lo terminado, del historial. La clave es `<kind>:<id>`, la identidad
+       canónica de este dominio.
+
+       Ojo con el orden: una obra puede estar en las dos listas (viste 8 episodios y vas por el 9).
+       «Viendo» gana, porque es lo que estás haciendo AHORA. */
+    watchState(s) {
+      const st = {}
+      for (const w of s.watched) {
+        if (!w.watched) continue
+        st[w.kind === 'movie' ? `movie:${w.movie_id}` : `series:${w.series_id}`] = 'seen'
+      }
+      for (const c of s.continueItems) {
+        st[c.kind === 'movie' ? `movie:${c.movie_id}` : `series:${c.series_id}`] = 'watching'
+      }
+      for (const [k, p] of Object.entries(s.progressByKey)) {
+        // El progreso EN VIVO manda sobre el historial cargado al entrar: si acabas de empezar una
+        // película, la biblioteca no debería seguir diciendo que la tienes vista.
+        const [kind, id] = k.split(':')
+        if (kind === 'movie') st[`movie:${id}`] = p.watched ? 'seen' : (p.pos ? 'watching' : st[`movie:${id}`])
+      }
+      return st
+    },
+
     items(s) {
       let list = this.all
       if (s.filter === 'series') list = s.series
       else if (s.filter === 'movies') list = s.movies
       else if (s.filter === 'missing') list = list.filter(x => x.have < x.total)
+      else if (s.filter.startsWith('tag:')) {
+        const t = s.filter.slice(4)
+        const tags = useTagsStore()
+        list = list.filter(x => tags.forWork('media', `${x.kind}:${x.id}`).includes(t))
+      }
+      else if (s.filter === 'watching' || s.filter === 'seen') {
+        list = list.filter(x => this.watchState[`${x.kind}:${x.id}`] === s.filter)
+      }
+      else if (s.filter === 'unseen') {
+        // Sin empezar, pero DESCARGADO: ofrecer lo que no está en disco sería una lista de deseos,
+        // no algo que puedas poner esta noche.
+        list = list.filter(x => x.have > 0 && !this.watchState[`${x.kind}:${x.id}`])
+      }
 
       const q = s.search.trim().toLowerCase()
       if (q) list = list.filter(x => (x.title || '').toLowerCase().includes(q))
@@ -102,11 +148,16 @@ export const useMediaStore = defineStore('media', {
     },
 
     counts(s) {
+      const est = this.watchState
+      const conEstado = (v) => this.all.filter(x => est[`${x.kind}:${x.id}`] === v).length
       return {
         all: s.series.length + s.movies.length,
         series: s.series.length,
         movies: s.movies.length,
         missing: this.all.filter(x => x.have < x.total).length,
+        watching: conEstado('watching'),
+        seen: conEstado('seen'),
+        unseen: this.all.filter(x => x.have > 0 && !est[`${x.kind}:${x.id}`]).length,
       }
     },
 
@@ -132,40 +183,139 @@ export const useMediaStore = defineStore('media', {
 
     // Destacados del hero: lo que tiene arte ancho, priorizando lo que estás viendo.
     heroItems(s) {
-      const started = new Set(s.continueItems.map(c => c.series_id))
+      // Por id de serie, para poder colgar del hero el episodio EXACTO por el que vas. El hero
+      // decía «SIGUE VIENDO» y no llevaba ni episodio, ni barra, ni forma de reanudar: su botón
+      // abría la ficha. El dato estaba aquí al lado, sólo que no se pasaba.
+      const enCurso = new Map(s.continueItems.filter(c => c.kind !== 'movie').map(c => [c.series_id, c]))
       const withArt = this.all.filter(x => x.banner)
       const pick = [
-        ...withArt.filter(x => x.kind === 'series' && started.has(x.id)),
-        ...withArt.filter(x => !(x.kind === 'series' && started.has(x.id))),
+        ...withArt.filter(x => x.kind === 'series' && enCurso.has(x.id)),
+        ...withArt.filter(x => !(x.kind === 'series' && enCurso.has(x.id))),
       ].slice(0, 5)
-      return pick.map(x => ({
-        id: `${x.kind}:${x.id}`,
-        raw: x,
-        art: x.banner,
-        artFallback: x.poster,
-        overline: started.has(x.id) ? 'SIGUE VIENDO' : (x.kind === 'movie' ? 'PELÍCULA' : 'EN TU BIBLIOTECA'),
-        title: x.title,
-        // Ojo al duplicado: cuando la serie está completa, «Completa» y el estado (`ended` →
-        // «Terminada») dicen lo mismo. Se queda uno.
-        meta: (() => {
-          const completa = x.have >= x.total
-          const est = mediaStatusLabel(x.status)
-          return [
-            completa ? (x.kind === 'movie' ? 'Película' : '') : `${x.have} de ${x.total} episodios`,
-            x.year ? String(x.year) : '',
-            est,
-          ].filter(Boolean)
-        })(),
-      }))
+      return pick.map(x => {
+        const cont = x.kind === 'series' ? enCurso.get(x.id) : null
+        return {
+          id: `${x.kind}:${x.id}`,
+          raw: x,
+          cont,
+          art: x.banner,
+          artFallback: x.poster,
+          // El rótulo del título en PNG transparente, como en Mi Anime. Si no hay, `MediaHero`
+          // cae al título en texto: nunca queda un hueco.
+          logo: x.logo || '',
+          overline: cont ? 'SIGUE VIENDO' : (x.kind === 'movie' ? 'PELÍCULA' : 'EN TU BIBLIOTECA'),
+          title: x.title,
+          progress: cont && cont.duration ? Math.min(100, (cont.pos / cont.duration) * 100) : 0,
+          // Ojo al duplicado: cuando la serie está completa, «Completa» y el estado (`ended` →
+          // «Terminada») dicen lo mismo. Se queda uno.
+          meta: (() => {
+            const completa = x.have >= x.total
+            const est = mediaStatusLabel(x.status)
+            return [
+              // Si vas por un episodio concreto, ESO es lo que quieres leer primero; el recuento
+              // de la biblioteca pasa a segundo plano.
+              cont ? `T${cont.season} · Episodio ${cont.num}` : '',
+              completa ? (x.kind === 'movie' ? 'Película' : '') : `${x.have} de ${x.total} episodios`,
+              x.year ? String(x.year) : '',
+              est,
+            ].filter(Boolean)
+          })(),
+        }
+      })
     },
   },
 
   actions: {
-    setSub(v) { this.sub = v; _writeSub(v) },
+    setSub(v) { useUiStore().setTab('media', v) },
 
     async init() {
       if (!this.loaded) await this.load()
       this.loadContinue()
+      // El historial alimenta los filtros «Viendo/Vistas/Sin empezar» de la biblioteca, así que
+      // se pide al entrar y no al abrir su pestaña. MEDIDO: 40 ms.
+      if (!this.historyLoaded) this.loadHistory()
+      this.loadArt()
+      useTagsStore().load()
+    },
+
+    /* Arte de TMDB por encima del de Sonarr/Radarr. Va DETRÁS de la primera pintura a propósito:
+       la rejilla sale con el arte de Sonarr y se afina sola. MEDIDO: el fondo de una serie pasa de
+       1920×1080 a 3840×2160 (el hero se pinta a sangre: a 2560 el viejo se estiraba ×1,33) y
+       aparece el logo, que ninguna de las dos gestoras tiene. */
+    async loadArt() {
+      if (this.artLoaded) return
+      try {
+        const d = await api.get('/api/media/art')
+        const art = d.art || {}
+        if (!Object.keys(art).length) return
+        const aplicar = (x) => Object.assign(x, art[`${x.kind}:${x.id}`] || {})
+        this.series.forEach(aplicar)
+        this.movies.forEach(aplicar)
+        this.artLoaded = true
+      } catch (_) { /* la biblioteca ya se ve; esto sólo la mejora */ }
+    },
+
+    async loadAgenda({ back = 7, days = 21 } = {}) {
+      this.agendaLoading = true
+      this.agendaError = ''
+      try {
+        const d = await api.get(`/api/media/agenda?back=${back}&days=${days}`)
+        this.agenda = d.items || []
+        this.agendaErrors = d.errors || {}
+        this.agendaLoaded = true
+      } catch (e) {
+        this.agendaError = e?.body || e?.message || 'No se pudo cargar la agenda.'
+      } finally { this.agendaLoading = false }
+    },
+
+    async loadQueue() {
+      this.queueLoading = true
+      try {
+        const d = await api.get('/api/media/queue')
+        this.queue = d.items || []
+        this.queueErrors = d.errors || {}
+        this.queueError = ''
+      } catch (e) {
+        this.queueError = e?.body || e?.message || 'No se pudo leer la cola.'
+      } finally { this.queueLoading = false }
+    },
+
+    async cancelQueue(item, { blocklist = false } = {}) {
+      const ui = useUiStore()
+      try {
+        await api.post('/api/media/queue/remove', { app: item.app, id: item.id, blocklist })
+        this.queue = this.queue.filter(q => !(q.app === item.app && q.id === item.id))
+        ui.toast(blocklist ? 'Descarga cancelada y release descartada' : 'Descarga cancelada', 'ok')
+      } catch (e) {
+        ui.toast(`No se pudo cancelar: ${e?.body || e?.message || ''}`, 'error')
+      }
+      this.loadQueue()
+    },
+
+    async loadHistory() {
+      this.historyLoading = true
+      this.historyError = ''
+      try {
+        const d = await api.get('/api/media/history?limit=80')
+        this.watched = d.watched || []
+        this.grabs = d.grabs || []
+        this.historyLoaded = true
+      } catch (e) {
+        this.historyError = e?.body || e?.message || 'No se pudo cargar el historial.'
+      } finally { this.historyLoading = false }
+    },
+
+    async loadForYou() {
+      if (this.forYouLoading) return
+      this.forYouLoading = true
+      this.forYouError = ''
+      try {
+        const d = await api.get('/api/for_you/media')
+        this.forYou = d.items || []
+        this.forYouLoaded = true
+      } catch (e) {
+        this.forYouError = e?.body || e?.message || 'No se pudieron cargar las recomendaciones.'
+      } finally { this.forYouLoading = false }
     },
 
     async load() {
@@ -193,6 +343,66 @@ export const useMediaStore = defineStore('media', {
       try { this.continueItems = (await api.get('/api/media/continue')).items || [] } catch { /* no crítico */ }
     },
 
+    /* Marcar visto / no visto A MANO. Mi Anime lo tiene desde siempre (`toggleWatched`) y aquí
+       faltaba: si ves una película en otro sitio, o el reproductor se cierra antes del final, la
+       biblioteca se queda mintiendo y no había forma de corregirla.
+
+       No necesita endpoint nuevo: `/api/media/progress` ya decide «visto» con `ended`, y al
+       desmarcar se manda posición 0 — reanudar en el segundo final no serviría de nada. */
+    async setWatched(key, visto, duration = 0, meta = {}) {
+      const ui = useUiStore()
+      const antes = this.progressByKey[key]
+      // Optimista: la rejilla y los filtros reaccionan al instante, y se revierte si falla.
+      this.progressByKey = { ...this.progressByKey, [key]: { pos: 0, duration, watched: visto } }
+      try {
+        // `meta` (título, portada, nº de episodio) es lo que necesita el historial compartido:
+        // marcar a mano tiene que quedar registrado igual que verlo, o la Retrospectiva contaría
+        // una cosa y la biblioteca otra.
+        await api.post('/api/media/progress', { key, position: 0, duration, ended: visto, ...meta })
+        this.loadContinue()
+        this.historyLoaded = false
+        this.loadHistory()
+      } catch (_) {
+        const copia = { ...this.progressByKey }
+        if (antes) copia[key] = antes; else delete copia[key]
+        this.progressByKey = copia
+        ui.toast('No se pudo actualizar', 'error')
+      }
+    },
+
+    /* Abre la ficha desde una lista que sólo tiene el id (agenda, historial, cola). Si la obra ya
+       no está en la biblioteca no se hace nada: navegar a una ficha vacía es peor que no navegar. */
+    openById(kind, id) {
+      const it = (kind === 'movie' ? this.movies : this.series).find(x => x.id === Number(id))
+      if (it) this.openDetail(it)
+      return !!it
+    },
+
+    /* Alta desde una tarjeta de TMDB (Descubrir y «Para ti» hacen lo MISMO). Vivía suelto dentro
+       de `MediaDiscover.vue`; al aparecer el segundo consumidor sube al store en vez de copiarse:
+       el paso por `/resolve` (lookup exacto `tmdb:<id>`) es justo lo que se olvida al duplicar. */
+    async addFromTmdb(it, kind) {
+      const ui = useUiStore()
+      if (it.already) { ui.toast('Ya está en tu biblioteca', 'info'); return false }
+      this.adding = it.tmdb_id
+      try {
+        const t = it.title_original || it.title
+        const r = await api.get(`/api/media/resolve?kind=${kind}&tmdb_id=${it.tmdb_id}` +
+                                `&title=${encodeURIComponent(t)}&year=${it.year || ''}`)
+        if (!r.match) {
+          ui.toast(`«${t}» no está en el catálogo de ${kind === 'movie' ? 'Radarr' : 'Sonarr'}`, 'error')
+          return false
+        }
+        if (r.match.already) { ui.toast('Ya está en tu biblioteca', 'info'); it.already = true; return false }
+        const ok = await this.add(r.match.ext_id, kind)
+        if (ok) it.already = true
+        return ok
+      } catch (e) {
+        ui.toast(`No se pudo añadir: ${e?.body || e?.message || ''}`, 'error')
+        return false
+      } finally { this.adding = '' }
+    },
+
     /* Quita de la biblioteca. Borrar los ficheros es una decisión APARTE y explícita: dejar de
      * seguir una serie y liberar 40 GB no son lo mismo, y solo una de las dos es reversible. */
     async removeFromLibrary(item, { deleteFiles = false } = {}) {
@@ -208,7 +418,13 @@ export const useMediaStore = defineStore('media', {
       }
     },
 
-    openDetail(item) { this.detail = item },
+    // Igual que la ficha de anime: es una PÁGINA, así que registra entrada de historial (antes no
+    // lo hacía y "atrás" desde una serie te sacaba de la sección entera).
+    // `vtGo` para que el póster de la tarjeta vuele hasta el hero, como en anime y manga. Todo lo
+    // que cambia estado va DENTRO del callback: `startViewTransition` no lo ejecuta en el acto
+    // (ver lib/vt.js), así que leer `this.detail` justo después leería el valor viejo.
+    openDetail(item) { vtGo(() => { this.detail = item; useUiStore().pushNav() }) },
+    exitDetail() { useUiStore().back(() => this.closeDetail()) },
 
     /* Abre el selector de torrents directamente desde la tarjeta, como el panel de anime:
      * en una película busca la película; en una serie, la PRIMERA temporada incompleta —
@@ -389,6 +605,14 @@ export const useMediaStore = defineStore('media', {
 
     async playContinue(cw) {
       const ui = useUiStore()
+      // El riel mezcla series y películas: una película se reanuda por su propio camino, que ya
+      // sabe leer el minuto guardado (`livePos`). Sin esto, buscaba episodios de una serie que
+      // no existe y el clic no hacía nada.
+      if (cw.kind === 'movie') {
+        const peli = this.movies.find(m => m.id === cw.movie_id) ||
+                     { id: cw.movie_id, title: cw.title, poster: cw.poster }
+        return this.playMovie(peli)
+      }
       if (!cw.has_file) { ui.toast('Ese episodio aún no está descargado', 'info'); return }
       try {
         const eps = (await api.get(`/api/media/series/${cw.series_id}/episodes`)).episodes || []

@@ -8,7 +8,7 @@ import { useUiStore } from '@/stores/ui'
 import { imgProxy } from '@/lib/img'
 import MediaCard from '@/components/media/MediaCard.vue'
 import MediaHero from '@/components/media/MediaHero.vue'
-import ContinueRail from '@/components/media/ContinueRail.vue'
+import ContinueRail, { RAIL_W } from '@/components/media/ContinueRail.vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -16,18 +16,33 @@ import Skeleton from '@/components/ui/Skeleton.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import ContentToolbar from '@/components/ui/ContentToolbar.vue'
 import DensityToggle from '@/components/ui/DensityToggle.vue'
+import Select from '@/components/ui/Select.vue'
+import Spinner from '@/components/ui/Spinner.vue'
+import { useTagsStore } from '@/stores/tags'
 
 const store = useMediaStore()
 const ui = useUiStore()
+const tags = useTagsStore()
 const heroTint = ref('rgb(77, 141, 255)')
 const menu = ref(null)
 
-onMounted(() => store.init())
+onMounted(() => {
+  store.init()
+  // Fuera del camino crítico: son ~1,5 s de TMDB en frío y la rejilla no los espera.
+  if (!store.forYouLoaded) store.loadForYou()
+})
 
+/* Dos familias de filtro, y el orden lo dice: primero QUÉ es (series/películas), después DÓNDE
+   estás tú con ello (viendo/vistas/sin empezar) y al final el estado de los archivos.
+   Los tres del medio no son un estado que tengas que marcar a mano — Sonarr no lo tiene y pedirte
+   que lo mantengas sería peaje: salen del progreso que ya guardamos al reproducir. */
 const FILTERS = [
   { id: 'all', label: 'Todo' },
   { id: 'series', label: 'Series' },
   { id: 'movies', label: 'Películas' },
+  { id: 'watching', label: 'Viendo', color: 'var(--jade)' },
+  { id: 'unseen', label: 'Sin empezar', color: 'var(--violet)' },
+  { id: 'seen', label: 'Vistas', color: 'var(--azure-bright)' },
   { id: 'missing', label: 'Incompletas' },
 ]
 const SORTS = [
@@ -42,29 +57,63 @@ const heroItems = computed(() => store.heroItems.map(h => ({
   actions: [
     h.raw.kind === 'movie'
       ? { label: 'Ver película', icon: 'play', primary: true, run: () => store.playMovie(h.raw) }
-      : { label: 'Ver episodios', icon: 'play', primary: true, run: () => store.openDetail(h.raw) },
+      // Si el hero dice «sigue viendo», el botón tiene que REANUDAR, no abrir la ficha para que
+      // busques tú el episodio. Igual que en Mi Anime.
+      : h.cont
+        ? { label: `Continuar · T${h.cont.season}E${String(h.cont.num).padStart(2, '0')}`,
+            icon: 'play', primary: true, run: () => store.playContinue(h.cont) }
+        : { label: 'Ver episodios', icon: 'play', primary: true, run: () => store.openDetail(h.raw) },
     { label: 'Información', icon: 'spark', run: () => store.openDetail(h.raw) },
   ],
+  // Mismo gesto que en Inicio y en Mi Anime: el título abre la ficha. Sin esto, Cine sería la
+  // única de las tres portadas donde pinchar el logo no hace nada.
+  titleAction: () => store.openDetail(h.raw),
 })))
 
+// El riel mezcla series y películas: una película no tiene temporada ni episodio, así que su
+// subtítulo dice cuánto le queda, que es la información útil para decidir si la retomas ahora.
 const rail = computed(() => store.continueItems.map(c => ({
-  id: `${c.series_id}:${c.episode_id}`,
+  id: c.kind === 'movie' ? `mv:${c.movie_id}` : `${c.series_id}:${c.episode_id}`,
   raw: c,
-  thumb: imgProxy(c.still, 340),
+  thumb: imgProxy(c.still, RAIL_W),
   title: c.title,
-  subtitle: `T${c.season} · Episodio ${c.num}${c.episode_title ? ` — ${c.episode_title}` : ''}`,
-  badge: `${c.season}x${String(c.num).padStart(2, '0')}`,
+  subtitle: c.kind === 'movie'
+    ? (c.duration ? `Te quedan ${Math.max(1, Math.round((c.duration - c.pos) / 60))} min` : 'Película')
+    : `T${c.season} · Episodio ${c.num}${c.episode_title ? ` — ${c.episode_title}` : ''}`,
+  badge: c.kind === 'movie' ? 'PELÍCULA' : `${c.season}x${String(c.num).padStart(2, '0')}`,
   progress: c.duration ? (c.pos / c.duration) * 100 : 0,
 })))
 
+// Etiquetas propias: mismo mecanismo que manga y anime, con la identidad de ESTE dominio
+// (`<kind>:<id>`, porque una serie 5 y una película 5 son cosas distintas).
+const tagId = (it) => `${it.kind}:${it.id}`
+const tagOptions = computed(() => [
+  { value: '', label: 'Todas las etiquetas' },
+  ...tags.universe('media').map(t => ({
+    value: t, label: t,
+    hint: String(store.all.filter(x => tags.forWork('media', tagId(x)).includes(t)).length),
+  })),
+])
+const tagFilter = computed({
+  get: () => (store.filter.startsWith('tag:') ? store.filter.slice(4) : ''),
+  set: (v) => { store.filter = v ? `tag:${v}` : 'all' },
+})
+
 function cardFor(it) {
+  const est = store.watchState[tagId(it)]
   return {
     cover: it.poster,
     title: it.title,
     kindLabel: it.kind === 'movie' ? 'PELÍCULA' : 'SERIE',
+    // La marca de «vista» va en la tarjeta y no sólo en el filtro: recorrer la rejilla buscando
+    // qué te falta por ver era imposible sin abrir cada ficha.
+    flag: est === 'seen' ? { tone: 'soft', icon: 'check', label: 'VISTA' }
+        : est === 'watching' ? { tone: 'soft', icon: 'play', label: 'VIENDO' } : null,
     // Solo se marca lo que falta: una serie completa no necesita insignia.
     status: it.have < it.total ? { label: `Faltan ${it.total - it.have}`, color: 'var(--cyan)' } : null,
-    count: it.kind === 'series' ? { done: it.have, total: it.total } : null,
+    // Sin `total` la tarjeta pintaba un «0» suelto bajo el título, que no dice nada (pasaba en
+    // Rick and Morty y Arcane). Si no hay contra qué contar, no se cuenta.
+    count: it.kind === 'series' && it.total ? { done: it.have, total: it.total } : null,
     tags: [it.year ? String(it.year) : '', mediaStatusLabel(it.status)].filter(Boolean),
   }
 }
@@ -79,6 +128,7 @@ function openMenu(ev, it) {
         { label: 'Subtítulos en español', icon: 'globe', action: () => store.movieSubs(it) },
       ] : []),
       { label: 'Elegir torrent', icon: 'download', action: () => store.openPicker(it) },
+      { label: 'Etiquetas…', icon: 'spark', action: () => tags.openPicker('media', tagId(it), it.title) },
       { sep: true },
       { label: 'Quitar de la biblioteca', icon: 'close', action: () => remove(it, false) },
       { label: 'Eliminar CON los archivos', icon: 'trash', danger: true, action: () => remove(it, true) },
@@ -135,7 +185,12 @@ function play(it) {
                     :sorts="SORTS" :sort="store.sort" @update:sort="store.sort = $event"
                     :search="store.search" @update:search="store.search = $event"
                     search-placeholder="Buscar en tu biblioteca…">
-      <template #extra><DensityToggle /></template>
+      <template #extra>
+        <DensityToggle />
+        <!-- Sin etiquetas puestas no aparece: quien no las usa no ve un control de más. -->
+        <Select v-if="tagOptions.length > 1" v-model="tagFilter" icon="spark"
+                aria-label="Filtrar por etiqueta" :options="tagOptions" />
+      </template>
     </ContentToolbar>
 
     <!-- Mismo esqueleto que Manga y Anime: la rejilla ya tiene forma antes de llegar los datos,
@@ -172,6 +227,29 @@ function play(it) {
                  @contextmenu.prevent="openMenu($event, it)" />
     </TransitionGroup>
 
+    <!-- «Para ti» va AL FINAL, debajo de la rejilla: es descubrimiento, no biblioteca. Mismo sitio
+         y mismo criterio que en Mi Anime, para que las dos secciones se lean igual. -->
+    <section v-if="store.forYou.length || store.forYouLoading" class="fy">
+      <header class="fy__head">
+        <h3 class="fy__title">Para ti</h3>
+        <span class="fy__hint">a partir de lo que ya tienes</span>
+      </header>
+      <Spinner v-if="store.forYouLoading && !store.forYou.length" :size="18" />
+      <div v-else class="fy__row">
+        <MediaCard v-for="d in store.forYou" :key="d.kind + d.tmdb_id"
+                   :cover="d.poster" :title="d.title"
+                   :kind-label="d.kind === 'movie' ? 'PELÍCULA' : 'SERIE'"
+                   :status="d.score ? { label: `★ ${d.score}`, color: 'var(--cyan)' } : null"
+                   :flag="d.already ? { tone: 'soft', icon: 'check', label: 'EN TU BIBLIOTECA' } : null"
+                   :tags="[d.year ? String(d.year) : ''].filter(Boolean)"
+                   :play-label="d.already ? 'Ya la tienes' : (store.adding === d.tmdb_id ? 'Añadiendo…' : 'Añadir')"
+                   :play-icon="d.already ? 'check' : (store.adding === d.tmdb_id ? 'refresh' : 'plus')"
+                   :play-done="!!d.already" :play-busy="store.adding === d.tmdb_id"
+                   alt-label=""
+                   @open="store.addFromTmdb(d, d.kind)" @play="store.addFromTmdb(d, d.kind)" />
+      </div>
+    </section>
+
     <ContextMenu v-if="menu" v-bind="menu" @close="menu = null" />
   </div>
 </template>
@@ -198,5 +276,20 @@ function play(it) {
 .mlib__hero { margin-bottom: var(--s-6); }
 .toolbar, .mlib__grid { position: relative; padding-inline: var(--alib-pad); }
 /* La rejilla es la compartida (`.grid` en base.css); aquí sólo su ancho base y el respiro. */
-.mlib__grid { --card-min: 11rem; gap: var(--s-5); padding-bottom: var(--s-8); }
+/* El MISMO ancho base que Mi Anime y Biblioteca (`14.0625rem`). Con 11rem la tarjeta medía
+   241×362 y las de anime/manga 332×498: la misma `MediaCard`, un 28 % más pequeña sólo aquí, y al
+   cambiar de modo se notaba que era otra app. El resto de la rejilla (densidad, hueco, móvil)
+   vive en base.css. */
+.mlib__grid { --card-min: 14.0625rem; gap: var(--s-5); padding-bottom: var(--s-8); }
+
+/* «Para ti»: fila que se recorre, no rejilla. Es descubrimiento — no debe competir en peso con tu
+   biblioteca, que es lo que has venido a ver. */
+.fy { position: relative; z-index: 1; padding: 0 var(--alib-pad) var(--s-8); }
+.fy__head { display: flex; align-items: baseline; gap: var(--s-3); margin-bottom: var(--s-4); }
+.fy__title { font-family: var(--font-display); font-size: var(--fs-xl); }
+.fy__hint { font-size: var(--fs-xs); color: var(--ink-faint); }
+.fy__row { display: flex; gap: var(--s-4); overflow-x: auto; padding-bottom: var(--s-3); }
+/* `flex: 0 0 auto` con ancho fijo: dentro de un flex horizontal la tarjeta no tiene rejilla que
+   la mida, y sin base se encogería hasta el ancho de su título. */
+.fy__row > * { flex: 0 0 11rem; }
 </style>
