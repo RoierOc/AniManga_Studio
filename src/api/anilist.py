@@ -26,8 +26,16 @@ _GENRES_TTL = 3600
 # rejilla a 1600px: 230 px de fuente pintados a 298 px CSS — ampliados ya en dpr 1, y el doble de
 # mal en HiDPI. Es el mismo fallo que guardar el `.256.jpg` de MangaDex como portada definitiva.
 def _cover(node: dict) -> str:
+    """La portada MÁS GRANDE que sirva AniList para este nodo.
+
+    El orden de campos ya era el correcto, pero no bastaba: cuando a una serie le falta
+    `extraLarge` se cae a `large`, que son 230x325 — la mitad de lo que necesita una tarjeta.
+    `hd_url` sube además la RUTA (`/cover/medium/` → `/cover/large/`), que es donde AniList
+    codifica de verdad el tamaño. Ver [[feedback_max_resolution_images]].
+    """
+    from api.imgproxy import hd_url
     ci = (node or {}).get('coverImage') or {}
-    return ci.get('extraLarge') or ci.get('large') or ci.get('medium') or ''
+    return hd_url(ci.get('extraLarge') or ci.get('large') or ci.get('medium') or '')
 
 
 def _ql(query: str, variables: dict | None = None):
@@ -524,8 +532,8 @@ def _manga_recs_for(al_id: int) -> list:
 def _library_titles() -> list:
     """Títulos (nombres de carpeta) de la biblioteca de manga del modo activo."""
     try:
-        return [f.name for f in _Path(_manga_dir()).iterdir()
-                if f.is_dir() and not f.name.startswith('.')]
+        from api.roots import series_titles
+        return list(series_titles())
     except Exception:
         return []
 
@@ -550,17 +558,22 @@ def manga_for_you():
     titles = _library_titles()
     if not titles:
         return jsonify([])
+    from api.for_you import hoy, rotar
+
     owned = {_norm_key(t) for t in titles}
-    # Huella estable de la biblioteca → clave de caché del agregado.
-    fp = str(hash(frozenset(owned)))
+    # El DÍA entra en la clave junto con la huella de la biblioteca: las recomendaciones rotan a
+    # diario (ver abajo), así que la caché tiene que caducar con el día, no sólo con la biblioteca.
+    dia = hoy()
+    fp = str(hash((dia, frozenset(owned))))
     cached = _cache_get('manga_for_you', fp, _REC_TTL)
     if cached is not None:
         return jsonify(cached)
 
-    # Muestrea hasta 8 títulos (los alfabéticamente primeros, estable) para acotar el
-    # gasto de AniList; cada resolución + recs va cacheada, así que en llamadas
-    # sucesivas es barato aunque la muestra rote.
-    sample = sorted(titles, key=str.lower)[:8]
+    # Muestrea 8 títulos para acotar el gasto de AniList (cada resolución + recs va cacheada, así
+    # que en llamadas sucesivas es barato). La ventana se toma sobre el orden alfabético —estable,
+    # para que la caché por título sirva— pero GIRA cada día: antes eran siempre los 8 primeros,
+    # así que «Para ti» de manga enseñaba lo mismo indefinidamente.
+    sample = rotar(sorted(titles, key=str.lower), 8, dia)
     agg: dict = {}
     for tt in sample:
         al = _resolve_manga_al_id(tt)

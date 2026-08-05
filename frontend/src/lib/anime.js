@@ -20,6 +20,15 @@ export function currentSeason(now = new Date()) {
   return { season, year: now.getFullYear() }
 }
 
+// Temporada ± n trimestres. El año se lleva solo con la división entera: cuatro temporadas por
+// año, así que el índice absoluto (año*4 + posición) es un número de trimestre y desplazarse es
+// sumar. Hacerlo con ifs sobre el nombre exige tratar a mano los saltos de año en los dos sentidos.
+export const SEASON_ORDER = ['WINTER', 'SPRING', 'SUMMER', 'FALL']
+export function shiftSeason(cs, delta) {
+  const q = cs.year * 4 + SEASON_ORDER.indexOf(cs.season) + delta
+  return { season: SEASON_ORDER[((q % 4) + 4) % 4], year: Math.floor(q / 4) }
+}
+
 // ¿Este anime pertenece a la temporada en emisión ahora mismo?
 export function isCurrentSeason(anime, cs = currentSeason()) {
   return !!anime && (anime.season || '').toUpperCase() === cs.season

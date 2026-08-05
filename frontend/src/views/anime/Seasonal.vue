@@ -8,6 +8,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import Select from '@/components/ui/Select.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
+import { genero } from '@/lib/etiquetas'
 
 const store = useAnimeStore()
 
@@ -73,7 +74,7 @@ onMounted(() => { if (!store.seasonal.length) store.loadSeasonal() })
     <div v-if="genres.length" class="genres">
       <button class="gchip" :class="{ 'is-active': !store.seasonGenre }" @click="store.seasonGenre = ''">Todos</button>
       <button v-for="g in genres" :key="g" class="gchip" :class="{ 'is-active': store.seasonGenre === g }"
-              @click="store.seasonGenre = store.seasonGenre === g ? '' : g">{{ g }}</button>
+              @click="store.seasonGenre = store.seasonGenre === g ? '' : g">{{ genero(g) }}</button>
     </div>
 
     <div v-if="store.seasonalLoading" class="grid">

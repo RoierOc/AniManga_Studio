@@ -96,6 +96,12 @@ const items = computed(() => store.heroItems.map((it) => {
     tags: Array.isArray(a.genres) ? a.genres.slice(0, 4) : [],
     progress: progressOf(it),
     actions: actionsFor(it),
+    /* Pinchar el título abre la ficha, igual que en Inicio. Mismo criterio que el botón
+       secundario de `actionsFor`: para lo que aún NO está en tu biblioteca (temporada y
+       recomendaciones) ese botón es «+ Mi Anime», no «Información» — así que ahí tampoco se
+       ofrece el gesto, en vez de llevarte a una ficha de algo que no tienes. */
+    titleAction: (it.kind === 'seasonal' || it.kind === 'recommendation')
+      ? null : () => store.openDetail(a),
   }
 }))
 

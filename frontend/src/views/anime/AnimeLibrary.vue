@@ -1,10 +1,12 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
-import { ANIME_STATUS, STATUS_ORDER, nextUnwatchedEp, currentSeason, isCurrentSeason, SEASON_ES } from '@/lib/anime'
+import { ANIME_STATUS, STATUS_ORDER, nextUnwatchedEp, currentSeason, isCurrentSeason, shiftSeason, SEASON_ES } from '@/lib/anime'
 import { imgProxy } from '@/lib/img'
+import { ultimaTarjeta } from '@/lib/vt'
 import AnimeCard from '@/components/anime/AnimeCard.vue'
-import ContinueRail from '@/components/media/ContinueRail.vue'
+import AnimeRail from '@/components/anime/AnimeRail.vue'
+import ContinueRail, { RAIL_W } from '@/components/media/ContinueRail.vue'
 import HeroBanner from '@/components/anime/HeroBanner.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -12,9 +14,13 @@ import Skeleton from '@/components/ui/Skeleton.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
 import ContentToolbar from '@/components/ui/ContentToolbar.vue'
+import Select from '@/components/ui/Select.vue'
+import { useTagsStore } from '@/stores/tags'
 import DensityToggle from '@/components/ui/DensityToggle.vue'
 
 const store = useAnimeStore()
+const tags = useTagsStore()
+tags.load()
 
 // Aura del hero: color dominante del banner activo, teñido sutilmente detrás del home.
 const heroTint = ref('rgb(77, 141, 255)')
@@ -26,6 +32,7 @@ const reloads = []
 onMounted(() => {
   sync = setInterval(() => { if (store.hasActiveQbt()) store.loadLibrary(true) }, 15000)
   if (!store.seasonal.length) store.loadSeasonal()
+  store.loadForYou()   // recomendaciones sobre tu biblioteca (cacheadas 24 h en el backend)
   store.loadAiring()   // fresh airing schedule → "new episode just aired" hero
   // Hero banners/genres are backfilled server-side after the first library load;
   // refresh silently a couple of times so HD art appears without a manual reload.
@@ -41,7 +48,7 @@ const cwItems = computed(() => store.continueWatching.map(cw => ({
   raw: cw,
   thumb: (cw.ep.in_local || (cw.ep.in_qbt && cw.ep.progress >= 100))
     ? `/api/anime/thumb/${cw.anime.id}/${cw.ep.num}`
-    : (cw.anime.cover ? imgProxy(cw.anime.cover, 340) : ''),
+    : (cw.anime.cover ? imgProxy(cw.anime.cover, RAIL_W) : ''),
   title: cw.anime.title,
   subtitle: `Episodio ${cw.ep.num}`,
   badge: `EP ${cw.ep.num}`,
@@ -59,13 +66,26 @@ const SORTS = [
 // solo aparecen en su propia pestaña (viven ahí, no ensucian la lista principal).
 const INACTIVE = ['completed', 'dropped']
 
-// Temporada actual (recalculada por render → rueda sola cada trimestre).
-const season = computed(() => currentSeason())
+// Temporada actual (recalculada por render → rueda sola cada trimestre) desplazada por el paso
+// que hayas dado con las flechas. El desplazamiento es LOCAL a la vista y no se persiste: es una
+// consulta ("¿qué vi el otoño pasado?"), no una preferencia — al salir del filtro vuelve a hoy.
+const seasonStep = ref(0)
+const season = computed(() => shiftSeason(currentSeason(), seasonStep.value))
 const seasonLabel = computed(() => `${SEASON_ES[season.value.season]} ${season.value.year}`)
+
+/* AnimeRail espera `{ anime, ep? }`; el endpoint devuelve series planas de AniList. `episodes: []`
+   es necesario: la tarjeta lee esa lista y sin ella revienta al pintar el progreso. */
+const forYouItems = computed(() => store.forYou.map(a => ({
+  anime: { ...a, id: a.al_id, episodes: [], total_episodes: a.episodes || 0, last_watched_at: 0 },
+})))
 
 const filtered = computed(() => {
   let list = [...store.library]
-  if (store.libFilter === 'season') list = list.filter(a => isCurrentSeason(a, season.value))
+  if (store.libFilter.startsWith('tag:')) {
+    const t = store.libFilter.slice(4)
+    list = list.filter(a => tags.forWork('anime', a.id).includes(t))
+  }
+  else if (store.libFilter === 'season') list = list.filter(a => isCurrentSeason(a, season.value))
   else if (store.libFilter !== 'all') list = list.filter(a => a.status === store.libFilter)
   else list = list.filter(a => !INACTIVE.includes(a.status))
   const q = store.libSearch.trim().toLowerCase()
@@ -84,6 +104,21 @@ const filtered = computed(() => {
   return list
 })
 
+// Lo que responde la pregunta de verdad: de esa temporada, qué terminaste y qué quedó a medias.
+// Se calcula sobre la lista ya filtrada, así que respeta también la búsqueda.
+const seasonSummary = computed(() => {
+  if (store.libFilter !== 'season') return ''
+  const n = (...st) => filtered.value.filter(a => st.includes(a.status)).length
+  const partes = [
+    n('completed') && `${n('completed')} vistas`,
+    n('watching', 'on_hold') && `${n('watching', 'on_hold')} a medias`,
+    n('plan_to_watch') && `${n('plan_to_watch')} pendientes`,
+  ].filter(Boolean)
+  return partes.join(' · ')
+})
+
+const seasonEmpty = computed(() => store.libFilter === 'season' && !store.libSearch.trim())
+
 const counts = computed(() => {
   // El contador de "Todo" refleja lo que realmente muestra: solo activos.
   const c = { all: store.library.filter(a => !INACTIVE.includes(a.status)).length }
@@ -99,8 +134,28 @@ const libFilters = computed(() => [
   ...STATUS_ORDER.map(k => ({ id: k, label: ANIME_STATUS[k].label, n: counts.value[k], color: ANIME_STATUS[k].color })),
 ])
 
+// Las etiquetas en UN desplegable, no en pills: no tienen tope y la barra crecía sin control.
+// Mismo criterio y misma forma que en la biblioteca de manga (ver LibraryView).
+const tagOptions = computed(() => [
+  { value: '', label: 'Todas las etiquetas' },
+  ...tags.universe('anime').map(t => ({
+    value: t, label: t,
+    hint: String(store.library.filter(a => tags.forWork('anime', a.id).includes(t)).length),
+  })),
+])
+const tagFilter = computed({
+  get: () => (store.libFilter.startsWith('tag:') ? store.libFilter.slice(4) : ''),
+  set: (v) => { store.libFilter = v ? `tag:${v}` : 'all' },
+})
+
 // Si la temporada rota (o se vacía) mientras el filtro está activo, vuelve a "Todo".
-watch(() => counts.value.season, (n) => { if (store.libFilter === 'season' && !n) store.libFilter = 'all' })
+// Sólo en la temporada EN CURSO: una temporada pasada vacía es una respuesta legítima
+// («no viste nada ese trimestre»), y expulsar del filtro haría imposible atravesarla.
+watch(() => counts.value.season, (n) => {
+  if (store.libFilter === 'season' && !n && !seasonStep.value) store.libFilter = 'all'
+})
+// Salir del filtro vuelve a hoy: si no, el pill reaparecería en una temporada de hace dos años.
+watch(() => store.libFilter, (f) => { if (f !== 'season') seasonStep.value = 0 })
 
 // "Ver" desde la tarjeta hover: reproduce el próximo episodio no visto, o abre el detalle.
 function playFromCard(a) {
@@ -127,6 +182,7 @@ function openMenu(e, a) {
       { label: 'Abrir', icon: 'film', action: () => store.openDetail(a) },
       { label: 'Ver ahora', icon: 'play', action: () => playFromCard(a) },
       { label: 'Buscar torrents', icon: 'download', action: () => store.openTorrents(a) },
+      { label: 'Etiquetas…', icon: 'spark', action: () => tags.openPicker('anime', a.id, a.title) },
       { sep: true },
       { label: 'Borrar episodios', icon: 'trash', action: () => store.clearEpisodes(a) },
       { label: 'Quitar de biblioteca', icon: 'close', danger: true, action: () => store.removeFromLibrary(a.id) },
@@ -155,11 +211,29 @@ function openMenu(e, a) {
                     :search="store.libSearch" @update:search="store.libSearch = $event"
                     search-placeholder="Buscar en tu anime…">
       <template #extra>
+        <!-- Sólo existe mientras miras una temporada: fuera de ese filtro no significa nada. -->
+        <div v-if="store.libFilter === 'season'" class="snav">
+          <button class="snav__arrow" @click="seasonStep--"
+                  data-tip="Temporada anterior" aria-label="Temporada anterior">
+            <Icon name="chevron" :size="15" class="snav__prev" />
+          </button>
+          <span class="snav__lbl">{{ seasonLabel }}</span>
+          <button class="snav__arrow" @click="seasonStep++"
+                  data-tip="Temporada siguiente" aria-label="Temporada siguiente">
+            <Icon name="chevron" :size="15" />
+          </button>
+          <button v-if="seasonStep" class="snav__now" @click="seasonStep = 0">Hoy</button>
+        </div>
         <DensityToggle />
+        <!-- Sin etiquetas puestas no aparece: quien no las usa no ve un control de más. -->
+        <Select v-if="tagOptions.length > 1" v-model="tagFilter" icon="spark"
+                aria-label="Filtrar por etiqueta" :options="tagOptions" />
         <button class="iconbtn" @click="store.openScan()" data-tip="Carpetas de anime local"
                 aria-label="Carpetas de anime local"><Icon name="folder" :size="16" /></button>
       </template>
     </ContentToolbar>
+
+    <p v-if="seasonSummary" class="snav__sum">{{ seasonSummary }}</p>
 
     <div v-if="store.loading" class="grid">
       <Skeleton v-for="n in 10" :key="n" variant="poster" />
@@ -169,11 +243,16 @@ function openMenu(e, a) {
                 title="No se pudo cargar tu anime." :detail="store.loadError"
                 @retry="store.loadLibrary()" />
 
+    <!-- Una temporada pasada sin nada no es «sin resultados»: es la respuesta a la pregunta que
+         hiciste, y decirlo con su nombre evita que parezca que el filtro se rompió. -->
     <EmptyState v-else-if="!filtered.length" icon="film"
-                :title="store.library.length ? 'Sin resultados.' : 'Aún no has añadido anime.'"
-                :hint="store.library.length ? '' : 'Busca una serie y añádela para seguir sus episodios aquí.'">
+                :title="seasonEmpty ? `No tienes nada de ${seasonLabel}.`
+                        : store.library.length ? 'Sin resultados.' : 'Aún no has añadido anime.'"
+                :hint="seasonEmpty ? 'Usa las flechas para ver otra temporada.'
+                       : store.library.length ? '' : 'Busca una serie y añádela para seguir sus episodios aquí.'">
       <template #action>
-        <button v-if="store.library.length" class="is-primary" @click="store.libSearch = ''; store.libFilter = 'all'">
+        <button v-if="store.library.length" class="is-primary"
+                @click="store.libSearch = ''; store.libFilter = 'all'">
           <Icon name="close" :size="15" /> Quitar filtros
         </button>
         <template v-else>
@@ -184,16 +263,54 @@ function openMenu(e, a) {
     </EmptyState>
     <TransitionGroup v-else name="grid" tag="div" class="grid">
       <AnimeCard v-for="a in filtered" :key="a.id" :anime="a" @open="store.openDetail($event)" @play="playFromCard"
+                 :class="{ 'is-returned': String(a.id) === ultimaTarjeta }"
                  @contextmenu.prevent="openMenu($event, a)" />
     </TransitionGroup>
+
+    <!-- «Para ti» va AL FINAL, debajo de la rejilla: es descubrimiento, no biblioteca. Ponerlo
+         entre «Seguir viendo» y los filtros metía cosas que no tienes en medio de las que sí. -->
+    <AnimeRail v-if="forYouItems.length" class="alib__foryou" title="Para ti" :items="forYouItems"
+               @select="store.openPreview($event.anime)" />
     <ContextMenu v-model:open="cm.open" :x="cm.x" :y="cm.y" :items="cm.items" />
   </div>
 </template>
 
 <style scoped>
+/* Navegador de temporada. Va en la barra, pegado a los demás controles, y no en un bloque
+   propio: es un ajuste del filtro activo, no una sección. */
+.snav { display: flex; align-items: center; gap: var(--s-1); padding: 0 var(--s-1);
+  border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface-2); }
+.snav__arrow { display: grid; place-items: center; padding: var(--s-2) var(--s-1);
+  color: var(--ink-faint); transition: color var(--t-fast); }
+.snav__arrow:hover { color: var(--ink); }
+.snav__prev { transform: rotate(180deg); }
+/* Ancho mínimo: sin él la barra entera se movía de sitio al pasar de «Otoño 2025» a «Verano 2026»,
+   y las flechas huían del cursor cuando encadenas varios saltos. */
+.snav__lbl { min-width: 8.5rem; text-align: center; font-size: var(--fs-xs); font-weight: 600;
+  color: var(--ink); white-space: nowrap; }
+.snav__now { font-size: var(--fs-2xs); font-weight: 700; color: var(--azure-bright);
+  padding: 0 var(--s-2); }
+.snav__now:hover { color: #fff; }
+.snav__sum { margin: calc(var(--s-3) * -1) var(--alib-pad) var(--s-4);
+  font-size: var(--fs-xs); color: var(--ink-faint); }
+
 /* Ancho completo (de borde a borde del área de contenido): antes un max-width centrado
    dejaba los extremos vacíos. `--alib-pad` es el único margen lateral del grid/toolbar y lo
    reutiliza el hero (en negativo) para sangrar a los bordes sin descuadrarse. */
+/* Al volver a la rejilla, un pulso en la tarjeta de la que saliste. Dura poco y se va: es un
+   guiño para reencontrar el sitio, no un estado «seleccionado». `forwards` NO: si se quedara
+   fijo, la marca competiría con el hover y con la tarjeta que abras después. */
+.is-returned { animation: vuelta 1.6s var(--ease-silk) 1; border-radius: var(--r-md); }
+@keyframes vuelta {
+  0%   { box-shadow: 0 0 0 0 var(--azure-glow); }
+  25%  { box-shadow: 0 0 0 3px var(--azure-glow), 0 8px 28px var(--azure-glow); }
+  100% { box-shadow: 0 0 0 0 rgba(0,0,0,0); }
+}
+@media (prefers-reduced-motion: reduce) { .is-returned { animation: none; } }
+
+/* Separación de la rejilla: cerrada la biblioteca, empieza el descubrimiento. */
+.alib__foryou { margin-top: var(--s-8); padding-top: var(--s-6); border-top: 1px solid var(--line); }
+
 .alib { position: relative; --alib-pad: var(--s-6); padding: 0 var(--alib-pad); }
 /* El contenido va por encima del aura */
 .alib > * { position: relative; z-index: 1; }

@@ -43,7 +43,18 @@ const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 const playing = computed(() => np.value && !np.value.paused)
 const pos = computed(() => np.value?.pos || 0)
 const duration = computed(() => np.value?.duration || 0)
-const pct = computed(() => (duration.value > 0 ? Math.min(100, (pos.value / duration.value) * 100) : 0))
+const tlEl = ref(null)          // la barra: hace falta para medirla y capturar el puntero
+const arrastrando = ref(false)
+const posArrastre = ref(0)
+let ultimoEnvio = 0
+
+// Durante el arrastre la barra sigue al PUNTERO, no a la posición del vídeo: si esperase a que
+// mpv confirme cada salto, el pulgar se quedaría atrás y el gesto se sentiría pegajoso.
+const pct = computed(() => {
+  const d = duration.value
+  if (d <= 0) return 0
+  return Math.min(100, ((arrastrando.value ? posArrastre.value : pos.value) / d) * 100)
+})
 const muted = computed(() => store.nativeVol === 0)
 
 const audioIndex = computed(() => (np.value ? np.value.aid - 1 : 0))
@@ -135,10 +146,39 @@ function skipOp() { store.nativeSkipOp(); poke() }
 function toggleFs() { store.toggleNativeFullscreen(); poke() }
 function close() { store.closeNative() }
 
-function seekTo(e) {
+// Arrastrar la barra para buscar, como en YouTube: se mantiene pulsado y el vídeo sigue al
+// puntero. `setPointerCapture` hace que el gesto continúe aunque el cursor se salga de la barra
+// (o de la ventana), que es justo lo que uno hace al arrastrar deprisa.
+function posDeEvento(e) {
+  const r = tlEl.value.getBoundingClientRect()
+  const f = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))   // acotado: ver nativeSeek
+  return f * duration.value
+}
+
+function tlDown(e) {
   if (!duration.value) return
-  const r = e.currentTarget.getBoundingClientRect()
-  store.nativeSeek(((e.clientX - r.left) / r.width) * duration.value)
+  arrastrando.value = true
+  posArrastre.value = posDeEvento(e)
+  tlEl.value.setPointerCapture?.(e.pointerId)
+  store.nativeSeek(posArrastre.value)
+  poke()
+}
+
+function tlMove(e) {
+  onTlHover(e)                       // miniatura de previsualización, se arrastre o no
+  if (!arrastrando.value) return
+  posArrastre.value = posDeEvento(e)
+  // Un salto por cada píxel de movimiento ahogaría a mpv sin que se note mejor: se limita a
+  // ~8/s mientras se arrastra y el definitivo se manda al soltar.
+  const ahora = Date.now()
+  if (ahora - ultimoEnvio > 120) { ultimoEnvio = ahora; store.nativeSeek(posArrastre.value) }
+  poke()
+}
+
+function tlUp(e) {
+  if (!arrastrando.value) return
+  arrastrando.value = false
+  store.nativeSeek(posDeEvento(e))   // el definitivo, sin limitar
   poke()
 }
 function onTlHover(e) {
@@ -312,7 +352,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       <!-- barra de controles -->
       <footer ref="barEl" class="wp__bar" @click.stop>
         <!-- timeline -->
-        <div class="wp__timeline" @click="seekTo" @mousemove="onTlHover" @mouseleave="tlHover = -1">
+        <div ref="tlEl" class="wp__timeline" :class="{ 'is-drag': arrastrando }"
+             @pointerdown.prevent="tlDown" @pointermove="tlMove"
+             @pointerup="tlUp" @pointercancel="tlUp"
+             @mouseleave="arrastrando || (tlHover = -1)">
           <div class="wp__tl-cur" :style="{ width: pct + '%' }" />
           <div class="wp__tl-knob" :style="{ left: pct + '%' }" />
           <div v-if="tlHover >= 0" class="wp__preview" :style="{ left: tlLeft + 'px' }">
@@ -532,6 +575,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   opacity: 0; transition: opacity var(--t-fast); box-shadow: 0 0 8px var(--azure-glow);
 }
 .wp__timeline:hover .wp__tl-knob { opacity: 1; }
+/* Durante el arrastre no se depende del :hover — el puntero puede estar fuera de la barra. */
+.wp__timeline.is-drag { height: 0.5rem; }
+.wp__timeline.is-drag .wp__tl-knob { opacity: 1; transform: translate(-50%, -50%) scale(1.15); }
+.wp__timeline.is-drag { cursor: grabbing; }
 
 .wp__preview {
   position: absolute; bottom: calc(100% + var(--s-3)); transform: translateX(-50%);

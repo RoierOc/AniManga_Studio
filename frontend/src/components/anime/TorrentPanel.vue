@@ -28,7 +28,7 @@ const expanded = ref(new Set())
 // openTorrents() always pushes one history entry, so back consumes it and runs
 // the guarded restore (closes the panel + restores the previous sub-tab).
 // Close the torrent panel and stay on the search sub-view (no history jump).
-function goBack() { store.closeTorrents(); useUiStore().replaceNav() }
+function goBack() { useUiStore().back(() => store.closeTorrents()) }
 
 const LANGS = computed(() => [
   { id: 'all', label: 'Todos', n: store.langCounts.all },

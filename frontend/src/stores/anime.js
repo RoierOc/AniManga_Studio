@@ -3,7 +3,7 @@ import { api } from '@/lib/api'
 import { onSSE } from '@/lib/sse'
 import { useUiStore } from './ui'
 import { nextUnwatchedEp, isSpanishOrMulti, isEnglishSub } from '@/lib/anime'
-import { vtGo } from '@/lib/vt'
+import { vtGo, marcarTarjeta } from '@/lib/vt'
 import { isNative, send as nativeSend, onMessage as onNativeMessage } from '@/lib/nativeBridge'
 
 // Estilo de subtítulos: lo aplica el PLAYER en vivo con `sub-ass-style-overrides` de mpv, NO se
@@ -40,6 +40,9 @@ export const useAnimeStore = defineStore('anime', {
     recSeed: Math.floor(Math.random() * 100),  // rotates which 2 recs show — random per session
     libSort: localStorage.getItem('anime-libsort') || 'last_watched',  // recently-watched first by default
     libFilter: 'all',
+    forYou: [],              // recomendaciones agregadas sobre la biblioteca (B2)
+    forYouReason: '',        // 'sin_historial' → hay biblioteca pero nada visto todavía
+    _forYouLoading: false,
     libSearch: '',
 
     skipTimes: {},             // `${animeId}_${ep}` -> {op_start, op_end, ed_start, ed_end}
@@ -70,8 +73,6 @@ export const useAnimeStore = defineStore('anime', {
 
     // anime download location (qBittorrent save path)
     dlSettings: { download_path: '', qbt_default: '' },
-    dlBrowse: { open: false, path: '', win: '', parent: null, items: [], loading: false },
-
     // management
     linkTorrent: { show: false, list: [], loading: false, subpath: '' },
     epOverrideMenu: null,      // { anime, ep, x, y }
@@ -176,7 +177,18 @@ export const useAnimeStore = defineStore('anime', {
         })
         .map(a => {
           const eps = (a.episodes || [])
-          const inProg = eps.find(e => e.num > 0 && e.ep_type !== 'special' && (e.resume_pos > 0) && !e.watched && (e.in_local || (e.in_qbt && e.progress >= 100)))
+          const hay = e => e.num > 0 && e.ep_type !== 'special' && (e.in_local || (e.in_qbt && e.progress >= 100))
+          /* El ancla es el ÚLTIMO episodio que tocaste (`last_ep`), no el de número más alto con
+             posición guardada. Buscar «el primero con `resume_pos`» hacía que asomarse un minuto
+             al 7 dejase la serie clavada ahí aunque después vieras el 4 entero: la posición del 7
+             seguía guardada y no había forma de saber cuál era más reciente.
+             Si lo dejaste a medias, se reanuda ése; si lo terminaste, cae al siguiente sin ver. */
+          const ultimo = a.last_ep ? eps.find(e => e.num === a.last_ep && hay(e)) : null
+          const inProg = (ultimo && ultimo.resume_pos > 0 && !ultimo.watched)
+            ? ultimo
+            // Sin `last_ep` (series vistas antes de que existiera el campo) se mantiene el
+            // comportamiento de siempre, que acierta mientras no haya posiciones sueltas.
+            : (a.last_ep ? null : eps.find(e => hay(e) && e.resume_pos > 0 && !e.watched))
           const ep = inProg || nextUnwatchedEp(a)
           return ep ? { anime: a, ep } : null
         })
@@ -385,6 +397,25 @@ export const useAnimeStore = defineStore('anime', {
 
     setLibSort(id) { this.libSort = id; localStorage.setItem('anime-libsort', id) },
 
+    /* «Para ti»: recomendaciones agregadas sobre TU biblioteca (no de una serie suelta).
+     * El backend cachea 24 h con una huella de la biblioteca, así que esto es barato salvo la
+     * primera vez. `forYouReason` distingue «aún no has visto nada» (vacío legítimo, se explica)
+     * de «AniList no respondió» (fallo, se calla y se reintenta luego) — no son lo mismo. */
+    async loadForYou() {
+      if (this.forYou.length || this._forYouLoading) return
+      this._forYouLoading = true
+      try {
+        const r = await api.get('/api/for_you/anime')
+        if (Array.isArray(r)) { this.forYou = r; this.forYouReason = '' }
+        else { this.forYou = r?.items || []; this.forYouReason = r?.reason || '' }
+      } catch {
+        this.forYou = []
+        this.forYouReason = ''      // un fallo NO es «no tienes historial»
+      } finally {
+        this._forYouLoading = false
+      }
+    },
+
     /* ── Download location ──────────────────────────────────────────────── */
     async loadDlSettings() {
       try { this.dlSettings = await api.get('/api/anime/settings') || this.dlSettings } catch (_) {}
@@ -397,15 +428,6 @@ export const useAnimeStore = defineStore('anime', {
         useUiStore().toast(p ? 'Carpeta de descargas guardada' : 'Usando la carpeta por defecto de qBittorrent', 'ok')
       } catch (_) { useUiStore().toast('No se pudo guardar', 'error') }
     },
-    async openDlBrowse(path = '') {
-      this.dlBrowse.open = true; this.dlBrowse.loading = true
-      try {
-        const d = await api.get(`/api/anime/browse?path=${encodeURIComponent(path)}`)
-        this.dlBrowse = { open: true, path: d.path, win: d.win_path, parent: d.parent, items: d.items || [], loading: false }
-      } catch (_) { this.dlBrowse.loading = false; useUiStore().toast('No se pudo explorar', 'error') }
-    },
-    closeDlBrowse() { this.dlBrowse.open = false },
-
     async loadLibrary(silent = false) {
       if (!silent) this.loading = true
       this.loadError = ''
@@ -430,6 +452,9 @@ export const useAnimeStore = defineStore('anime', {
     hidePreview() { this.preview = null },
 
     openDetail(anime) {
+      // Recuerda de qué tarjeta saliste para señalarla al volver (rejillas de decenas de
+      // pósters: el scroll ya volvía bien, pero no había ninguna pista de cuál mirabas).
+      marcarTarjeta(anime.id)
       // vtGo = View Transition (el póster de la card "vuela" al hero del detalle)
       vtGo(() => {
         this.hidePreview()
@@ -811,8 +836,15 @@ export const useAnimeStore = defineStore('anime', {
       // antes de loadfile, no un seek posterior que se ignoraría) + tier Anime4K.
       nativeSend('loadfile', { path: res.win_path, start: resume })
       // Fijar la pista elegida (mpv no la autoselecciona con sub-auto=no + sub-add auto).
-      // Para las INCRUSTADAS vale ya: `sid` es una propiedad que sobrevive al cambio de archivo.
-      if (defSid > 0) nativeSend('track', { sid: String(defSid) })
+      // SÓLO si es INCRUSTADA: `sid` sobrevive al cambio de archivo, pero un sidecar todavía NO
+      // EXISTE en el archivo recién cargado. MEDIDO en el log de mpv (School-Live! E02):
+      //   177.925 loadfile · 177.926 set sid=4 ← la 4 aún no existe · 178.071 sub-add · 178.076 set sid=4
+      // En esa ventana mpv resuelve el sid por su cuenta y se queda en la pista inglesa, mientras
+      // la interfaz ya muestra «Español» seleccionado. El usuario lo veía como «está en inglés
+      // pero dice español», y se arreglaba solo al cambiar de pista a mano. Para los sidecar la
+      // selección se hace en `_pendingSubs`, que corre cuando mpv ya los tiene.
+      const elegida = subTracks[defSid - 1] || null
+      if (defSid > 0 && !(elegida && elegida.external)) nativeSend('track', { sid: String(defSid) })
       // Los sidecar (subs externos), en cambio, se añaden CUANDO el archivo nuevo ya está
       // sonando, no aquí. `loadfile` es ASÍNCRONO: vuelve antes de que mpv haya cambiado de
       // archivo, así que un `sub-add` inmediato se pega al archivo SALIENTE y muere con él.
@@ -904,6 +936,10 @@ export const useAnimeStore = defineStore('anime', {
       if (np.progressKey) {
         api.post('/api/media/progress', {
           key: np.progressKey, position: np.pos, duration: np.duration, ended,
+          // Título, portada y número de episodio viajan con el progreso porque el backend, al
+          // apuntar el visionado en el historial compartido, sólo tiene la clave — y salir a
+          // preguntárselos a Sonarr en cada latido del reproductor sería absurdo.
+          title: np.anime?.title || '', cover: np.anime?.cover || '', episode: np.ep?.num,
         }).catch(() => {})
         // Y se avisa al dueño del dominio EN EL ACTO, sin esperar al ida y vuelta: es lo que
         // hace que al salir del episodio el minuto aparezca ya en la ficha y en "Seguir viendo"
@@ -927,6 +963,17 @@ export const useAnimeStore = defineStore('anime', {
       nativeSend('pause', { value: v })
     },
     nativeSeek(pos) {
+      // ACOTAR ANTES DE NADA. mpv interpreta un absoluto NEGATIVO como «desde el final»: al
+      // arrastrar la barra del todo a la izquierda salía `pos = -0.16` y mpv saltaba al segundo
+      // 1471,3 → EOF → se cerraba el reproductor y aparecía «¿ver siguiente capítulo?».
+      // MEDIDO en el log de mpv:
+      //   Run command: seek, args=[target="-0.160215", flags="absolute"]
+      //   queuing seek to 1471.327785  →  EOF reached.
+      // Va aquí y no en `seekTo` porque por este método pasan TODOS los saltos: barra, teclado
+      // (un −10 s en el segundo 2 daba negativo igual) y «Saltar OP».
+      const dur = this.nativePlayer?.duration || 0
+      pos = Math.max(0, dur ? Math.min(pos, dur - 0.5) : pos)
+
       // Calibración del "Saltar OP": un seek en los 10 s siguientes al salto (y a menos de
       // 60 s del punto de aterrizaje) se lee como corrección → se aprende para esta serie.
       // El propio seek del salto (pos === target) no cuenta.
@@ -1301,6 +1348,7 @@ export const useAnimeStore = defineStore('anime', {
         if (ev.duration) ep.duration = ev.duration
       }
       if (ev.last_watched_at) anime.last_watched_at = ev.last_watched_at
+      anime.last_ep = Number(ev.ep_str) || anime.last_ep
       // MPV finished → autoplay next.
       // OJO: sólo para el mpv EXTERNO (sin overlay in-app). Con el reproductor NATIVO
       // abierto no debemos lanzar aquí el modal: el backend marca `watched` ya en los
@@ -1323,6 +1371,9 @@ export const useAnimeStore = defineStore('anime', {
       // Progreso parcial también actualiza la recencia → "Continuar viendo" reordena
       // y muestra la serie al instante (el backend lo manda al guardar posición >30s).
       if (ev.last_watched_at) anime.last_watched_at = ev.last_watched_at
+      // …y CUÁL era el episodio, que es lo que ancla "Seguir viendo". Sin esto el ancla no se
+      // movería hasta la siguiente recarga de la biblioteca.
+      anime.last_ep = Number(ev.ep_str) || anime.last_ep
     },
 
     /* ── qBittorrent ────────────────────────────────────────────────────── */

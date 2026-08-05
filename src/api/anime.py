@@ -29,6 +29,38 @@ from api.config_store import get_secret, set_secrets  # runtime-editable API key
 from api import sub_lang  # clasificación robusta de subtítulos ES/LAT (código + título)
 from api.observability import record_error, swallow  # hace VISIBLE el fallo silencioso
 from api.anilist import _cover as _al_cover  # AniList: extraLarge (460x650) antes que large (230x325)
+from api.imgproxy import hd_url as _hd       # sube el tamaño de las URLs de TMDB ya guardadas
+
+# ── Estado de seguimiento: un solo convenio ───────────────────────────────────
+# MEDIDO sobre la biblioteca real (87 series): 22 sin estado, más un 'FINISHED' y un '' sueltos.
+# `FINISHED` no es un estado de SEGUIMIENTO, es el estado de EMISIÓN de AniList que se coló al
+# importar. El resultado era que los filtros mentían: «Viendo» no listaba series que estabas
+# viendo, y las 22 sin estado no salían en ningún pill aunque sí en «Todo».
+_STATUS_VALIDOS = {'watching', 'completed', 'plan_to_watch', 'on_hold', 'dropped'}
+_STATUS_ALIAS = {
+    'FINISHED': 'completed', 'COMPLETED': 'completed', 'CURRENT': 'watching',
+    'RELEASING': 'watching', 'WATCHING': 'watching', 'PLANNING': 'plan_to_watch',
+    'NOT_YET_RELEASED': 'plan_to_watch', 'PAUSED': 'on_hold', 'DROPPED': 'dropped',
+}
+
+
+def _norm_status(raw, vistos: int, total: int) -> str:
+    """Devuelve siempre uno de los cinco estados. Nunca inventa por encima de lo que el usuario dijo.
+
+    Sólo se DEDUCE cuando no hay estado guardado, y se deduce de lo único fiable que hay: cuántos
+    episodios has visto. Sin esto, una serie terminada hace meses seguía apareciendo como si no la
+    hubieras tocado.
+    """
+    s = (raw or '').strip()
+    if s in _STATUS_VALIDOS:
+        return s
+    if s.upper() in _STATUS_ALIAS:
+        return _STATUS_ALIAS[s.upper()]
+    if total and vistos >= total:
+        return 'completed'
+    if vistos > 0:
+        return 'watching'
+    return 'plan_to_watch'
 
 anime_bp = Blueprint('anime', __name__)
 
@@ -90,36 +122,23 @@ def _history_path() -> _Path:
     return _Path(manga_dir()) / 'watch_history.json'
 
 def _history_read() -> list:
-    p = _history_path()
-    if not p.exists():
-        return []                     # sin historial aún ≠ fallo
-    try:
-        return json.loads(p.read_text(encoding='utf-8'))
-    except Exception as e:
-        record_error('anime', e, op='history_read', path=str(p))
-        return []
+    """Las entradas recientes (el fichero vivo). Para la serie COMPLETA, `history_store.read_all`.
+
+    El truncado a 500 que había aquí NO era un margen de sobra: medido el 2026-07-31 el fichero
+    estaba exactamente en 500 y cubría 21 días, así que cada episodio nuevo borraba el más viejo.
+    Ahora `history_store` archiva por meses en vez de tirar. Ver `api/history_store.py`.
+    """
+    from api import history_store
+    return history_store.read_live('watch')
 
 def _history_append(anime_id: str, title: str, episode: int, cover: str = ''):
-    history = _history_read()
-    now = int(time.time())
-    # Deduplicación defensiva: colapsa un re-registro del MISMO anime+episodio si
-    # aún es la entrada más reciente o se registró hace poco (< 6 h). El progreso
-    # nativo llama aquí cada ~5 s mientras el episodio está sobre el umbral de
-    # "visto", así que sin esto se acumularían decenas de entradas idénticas.
-    for i, h in enumerate(history[:20]):
-        if h.get('anime_id') == anime_id and h.get('episode') == episode:
-            if i == 0 or (now - int(h.get('watched_at', 0))) < 6 * 3600:
-                history.pop(i)                 # quita la vieja, re-insertamos arriba con ts fresco
-                break
-    history.insert(0, {
+    from api import history_store
+    history_store.append('watch', {
         'anime_id': anime_id,
         'title': title,
         'episode': episode,
         'cover': cover,
-        'watched_at': now,
-    })
-    with swallow('anime', 'history_write', path=str(_history_path())):
-        write_json_atomic(_history_path(), history[:500], indent=2, keep_backup=True)
+    }, dedup_keys=('anime_id', 'episode'))
 
 # ── Subtitle helpers ───────────────────────────────────────────────────────────
 
@@ -342,14 +361,21 @@ def _tmdb_images(tmdb_id, media_type='tv'):
         pool = textless or backdrops
         if pool:
             best = max(pool, key=lambda b: (b.get('vote_average') or 0, b.get('width') or 0))
-            out['backdrop'] = f"https://image.tmdb.org/t/p/w1280{best['file_path']}"
+            # `original`, no `w1280`: este backdrop se pinta a SANGRE (hero de Mi Anime y de la
+            # Portada). En un monitor de 2560 un w1280 se estira al doble y se ve blando —
+            # justo lo que delata una imagen mal servida. El proxy de imágenes lo cachea en
+            # disco, así que el peso extra se paga una vez por serie, no por visita.
+            out['backdrop'] = f"https://image.tmdb.org/t/p/original{best['file_path']}"
         logos = imgs.get('logos') or []
         # Prefer English, then PNG (transparent) over SVG, then most-voted.
         eng = [l for l in logos if l.get('iso_639_1') == 'en'] or logos
         if eng:
             blogo = max(eng, key=lambda l: ((l.get('file_path') or '').lower().endswith('.png'),
                                             l.get('vote_average') or 0))
-            out['logo'] = f"https://image.tmdb.org/t/p/w500{blogo['file_path']}"
+            # `original`: el logo se pinta hasta 42 rem de ancho sobre el hero de la Portada y de
+            # Mi Anime. Es un PNG con transparencia y trazos finos — es justo donde peor se ve un
+            # reescalado. Pesa poco (son letras, no una foto) y el proxy lo cachea.
+            out['logo'] = f"https://image.tmdb.org/t/p/original{blogo['file_path']}"
         posters = imgs.get('posters') or []
         eng_p = [p for p in posters if p.get('iso_639_1') in (None, 'en')] or posters
         if eng_p:
@@ -1459,6 +1485,14 @@ def _track_mpv_session(proc, wl_dir: str, anime_id: str, ep_str: str, duration: 
         else:
             lib[anime_id].get('positions', {}).pop(ep_str, None)
 
+        # QUÉ episodio tocaste el último. Sin este dato la UI tenía que ADIVINARLO, y adivinaba
+        # mal: «Seguir viendo» buscaba el primer episodio con posición guardada, así que asomarse
+        # un minuto al 7 dejaba la serie anclada ahí aunque después vieras el 4 entero. Los mapas
+        # `positions`/`watched` no llevan hora, y `last_watched_at` es de la SERIE, no del
+        # episodio, así que el dato no existía en ningún sitio. Se escribe en los dos caminos
+        # (visto y progreso parcial) porque los dos son «estuve aquí».
+        lib[anime_id]['last_ep'] = ep_str
+
         if watched:
             was_watched = bool(lib[anime_id].get('watched', {}).get(ep_str))
             lib[anime_id].setdefault('watched', {})[ep_str] = True
@@ -2162,24 +2196,29 @@ def anime_library_get():
                 'title': anime.get('title', ''),
                 'title_romaji': anime.get('title_romaji', ''),
                 'cover': anime.get('cover', ''),
-                'cover_xl': anime.get('cover_xl', ''),
-                'banner': anime.get('banner', ''),
+                'cover_xl': _hd(anime.get('cover_xl', '')),
+                'banner': _hd(anime.get('banner', ''), hero=True),
                 'banner_source': anime.get('banner_source', ''),
-                'banner_detail': anime.get('banner_detail', ''),
-                'logo': anime.get('logo', ''),
+                'banner_detail': _hd(anime.get('banner_detail', ''), hero=True),
+                'logo': _hd(anime.get('logo', ''), hero=True),
                 'synopsis': anime.get('synopsis', ''),
                 'genres': anime.get('genres', []),
                 'season': anime.get('season', ''),
                 'season_year': anime.get('season_year'),
                 'total_episodes': series_total or regular_count,
                 'format': anime.get('format', ''),
-                'status': anime.get('status', ''),
+                'status': _norm_status(anime.get('status'),
+                                       sum(1 for v in (anime.get('watched') or {}).values() if v),
+                                       series_total or regular_count),
                 'episodes': episodes_out,
                 'downloaded_count': regular_count,
                 'disk_size': disk_size,
                 'is_local': True,
                 'added_at': anime.get('added_at', 0),
                 'last_watched_at': anime.get('last_watched_at', 0),
+                # El último episodio que tocaste. Va como número (0 = no hay dato, entradas
+                # anteriores a este campo) para que el front no tenga que parsear.
+                'last_ep': int(anime.get('last_ep') or 0),
             })
             continue
 
@@ -2294,23 +2333,26 @@ def anime_library_get():
             'title': anime.get('title', ''),
             'title_romaji': anime.get('title_romaji', ''),
             'cover': anime.get('cover', ''),
-            'cover_xl': anime.get('cover_xl', ''),
-            'banner': anime.get('banner', ''),
+            'cover_xl': _hd(anime.get('cover_xl', '')),
+            'banner': _hd(anime.get('banner', ''), hero=True),
             'banner_source': anime.get('banner_source', ''),
-            'banner_detail': anime.get('banner_detail', ''),
-            'logo': anime.get('logo', ''),
+            'banner_detail': _hd(anime.get('banner_detail', ''), hero=True),
+            'logo': _hd(anime.get('logo', ''), hero=True),
             'synopsis': anime.get('synopsis', ''),
             'genres': anime.get('genres', []),
             'season': anime.get('season', ''),
             'season_year': anime.get('season_year'),
             'total_episodes': total,
             'format': anime.get('format', ''),
-            'status': anime.get('status', ''),
+            'status': _norm_status(anime.get('status'),
+                                   sum(1 for v in (anime.get('watched') or {}).values() if v),
+                                   total),
             'episodes': episodes_out,
             'downloaded_count': done_count,
             'disk_size': disk_size,
             'added_at': anime.get('added_at', added_at_fallback),
             'last_watched_at': anime.get('last_watched_at', 0),
+            'last_ep': int(anime.get('last_ep') or 0),
         })
     return jsonify(result)
 
@@ -3345,6 +3387,8 @@ def anime_native_progress():
         else:
             lib[anime_id].get('positions', {}).pop(ep_str, None)
 
+        lib[anime_id]['last_ep'] = ep_str   # ver el comentario en _track: la UI no puede adivinarlo
+
         if watched:
             was_watched = bool(lib[anime_id].get('watched', {}).get(ep_str))
             lib[anime_id].setdefault('watched', {})[ep_str] = True
@@ -3986,10 +4030,11 @@ def anime_history_get():
 
 @anime_bp.route('/history/clear', methods=['POST'])
 def anime_history_clear():
-    try:
-        _history_path().write_text('[]', encoding='utf-8')
-    except Exception:
-        pass
+    # `write_text` TRUNCA antes de escribir: si el proceso muere ahí, el fichero se pierde
+    # entero. Y hay que borrar también el archivo por meses, o «limpiar» dejaba doce ficheros
+    # de historial vivos que reaparecían en la retrospectiva.
+    from api import history_store
+    history_store.clear('watch')
     return jsonify({'ok': True})
 
 
@@ -4016,6 +4061,41 @@ query ($id: Int) {
   }
 }
 """
+
+
+def recs_for_al(al_id: int) -> list:
+    """Recomendaciones de AniList para UNA serie, cacheadas. Lanza si la red falla.
+
+    Extraído de la ruta para que `for_you.py` pueda agregarlas sobre toda la biblioteca sin
+    pasar por HTTP contra nosotros mismos.
+    """
+    cached = _al_cache_get('recs', al_id)
+    if cached is not None:
+        return cached
+    resp = _http.post(_ANILIST, json={'query': _REC_QUERY, 'variables': {'id': al_id}}, timeout=10)
+    nodes = (resp.json().get('data', {}).get('Media', {})
+             .get('recommendations', {}).get('nodes', []))
+    recs = []
+    for node in nodes:
+        if not node.get('rating'):
+            continue
+        m = node.get('mediaRecommendation')
+        if not m:
+            continue
+        recs.append({
+            'al_id':        m['id'],
+            'title':        m['title'].get('english') or m['title'].get('romaji', ''),
+            'title_romaji': m['title'].get('romaji', ''),
+            'cover':        _al_cover(m),
+            'score':        m.get('averageScore') or 0,
+            'genres':       (m.get('genres') or [])[:3],
+            'format':       m.get('format', ''),
+            'episodes':     m.get('episodes') or 0,
+            'status':       m.get('status', ''),
+            'rating':       node['rating'],
+        })
+    threading.Thread(target=_al_cache_set, args=('recs', al_id, recs), daemon=True).start()
+    return recs
 
 
 @anime_bp.route('/recommendations/<int:al_id>')

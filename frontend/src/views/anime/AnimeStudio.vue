@@ -23,7 +23,7 @@ const TABS = [
   { id: 'library',   label: 'Mi Anime',  icon: 'film' },
   { id: 'search',    label: 'Buscar',    icon: 'search' },
   { id: 'explore',   label: 'Explorar',  icon: 'globe' },
-  { id: 'seasonal',  label: 'Temporada', icon: 'spark' },
+  { id: 'seasonal',  label: 'Temporada', icon: 'sun' },
   { id: 'schedule',  label: 'Estrenos',  icon: 'clock' },
   { id: 'downloads', label: 'Descargas', icon: 'download' },
   { id: 'history',   label: 'Historial', icon: 'heart' },

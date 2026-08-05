@@ -434,7 +434,10 @@ def _dump_fonts(video, fontdir):
     fontdir = Path(fontdir)
     if str(video).lower().endswith(('.mkv', '.mka', '.mks', '.webm')):
         try:
-            j = subprocess.run(['mkvmerge', '-J', video],
+            # LC_ALL: WSL hereda LANG=en_US.UTF-8 pero ese locale NO está generado (sólo C.utf8),
+            # y mkvmerge ABORTA al arrancar. Sin esto se caía siempre al respaldo ffmpeg, que
+            # saca menos adjuntas (Wistoria: 28 de 65) → carteles con la tipografía equivocada.
+            j = subprocess.run(['mkvmerge', '-J', video], env={**os.environ, 'LC_ALL': 'C.UTF-8'},
                                capture_output=True, text=True, timeout=30)
             data = json.loads(j.stdout or '{}')
             fonts = [a for a in data.get('attachments', [])
@@ -449,6 +452,7 @@ def _dump_fonts(video, fontdir):
                         ext = '.ttf'
                     specs.append(f"{a['id']}:{fontdir / (str(a['id']) + ext)}")
                 subprocess.run(['mkvextract', video, 'attachments', *specs],
+                               env={**os.environ, 'LC_ALL': 'C.UTF-8'},
                                capture_output=True, timeout=120)
                 return
         except Exception:

@@ -4,6 +4,7 @@ import { useAnimeStore } from '@/stores/anime'
 import { imgProxy, imgThumb } from '@/lib/img'
 import { useBoxWidth } from '@/lib/useBoxWidth'
 import Icon from '@/components/ui/Icon.vue'
+import { genero } from '@/lib/etiquetas'
 
 const props = defineProps({ anime: { type: Object, required: true } })
 const store = useAnimeStore()
@@ -52,7 +53,7 @@ const scoreTier = computed(() => {
         <span v-if="anime.next_episode" class="sc__next"><template v-if="anime.episodes">· </template>EP {{ anime.next_episode }}</span>
       </div>
       <div v-if="anime.genres?.length" class="sc__genres">
-        <span v-for="(g, i) in anime.genres.slice(0, 3)" :key="g" class="sc__gtag">{{ i ? ' · ' : '' }}{{ g }}</span>
+        <span v-for="(g, i) in anime.genres.slice(0, 3)" :key="g" class="sc__gtag">{{ i ? ' · ' : '' }}{{ genero(g) }}</span>
       </div>
     </div>
   </article>

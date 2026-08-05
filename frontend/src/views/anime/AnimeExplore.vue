@@ -7,6 +7,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import Select from '@/components/ui/Select.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
+import { genero } from '@/lib/etiquetas'
 
 const store = useAnimeStore()
 
@@ -64,7 +65,7 @@ onMounted(() => {
 
     <div v-if="genres.length" class="genres">
       <button class="gchip" :class="{ 'is-active': !store.exploreGenre }" @click="setGenre(store.exploreGenre)">Todos</button>
-      <button v-for="g in genres" :key="g" class="gchip" :class="{ 'is-active': store.exploreGenre === g }" @click="setGenre(g)">{{ g }}</button>
+      <button v-for="g in genres" :key="g" class="gchip" :class="{ 'is-active': store.exploreGenre === g }" @click="setGenre(g)">{{ genero(g) }}</button>
     </div>
 
     <div v-if="store.exploreLoading && !store.explore.length" class="grid">
