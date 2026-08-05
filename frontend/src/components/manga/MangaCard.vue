@@ -41,7 +41,7 @@ const tags = computed(() => [
     :kind-label="kind"
     :status="status"
     :flag="flag"
-    :count="{ done: read, total }"
+    :count="total ? { done: read, total } : null"
     :tags="tags"
     play-label="Continuar"
     alt-label=""

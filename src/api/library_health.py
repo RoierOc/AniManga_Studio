@@ -15,6 +15,7 @@ from pathlib import Path
 from flask import Blueprint, request, jsonify
 
 from api.runtime import manga_dir
+from api.roots import series_dirs, series_titles
 from api.observability import record_error
 
 health_bp = Blueprint("health", __name__)
@@ -24,14 +25,16 @@ def _identity_snapshot() -> dict:
     """Estado de identidad MangaDex por obra, leído de la caché `.identity.json` (sin red). Una
     obra sin caché aún no se ha resuelto (no cuenta como problema); una CON caché pero sin
     `md_uuid` es 'sin identidad verificable'."""
-    root = Path(manga_dir())
+    # Todas las raíces: una obra que vive sólo en el segundo disco también tiene identidad
+    # que revisar, y antes ni se miraba. Ver `api/roots.py`.
     unresolved, unchecked = [], 0
-    if not root.exists():
+    folders = [dirs[0] for dirs in series_titles().values()]
+    if not folders:
         return {"unresolved": [], "unchecked": 0, "total": 0}
-    folders = [d for d in root.iterdir() if d.is_dir() and not d.name.startswith(".")]
     for d in folders:
-        p = d / ".identity.json"
-        if not p.exists():
+        p = next((x / ".identity.json" for x in series_dirs(d.name)
+                  if (x / ".identity.json").exists()), None)
+        if p is None:
             unchecked += 1
             continue
         try:

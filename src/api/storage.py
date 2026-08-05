@@ -25,7 +25,8 @@ _CH_RE = re.compile(r"ch(\d+)_\d+", re.IGNORECASE)
 from flask import Blueprint, jsonify, request
 
 from api.runtime import manga_dir, upscaled_dir, get_library_mode, QA_DIR
-from api.index_db import cached_measure, prune
+from api.index_db import cached_measure, drop, prune
+from api.observability import record_error
 
 storage_bp = Blueprint("storage", __name__)
 
@@ -157,7 +158,8 @@ def _measure_anime(series_dir: Path):
 
 
 def _translated_count(title: str) -> int:
-    meta = Path(manga_dir()) / title / ".transplant_meta.json"
+    from api.roots import series_dir
+    meta = series_dir(title) / ".transplant_meta.json"
     if not meta.exists():
         return 0
     try:
@@ -280,36 +282,49 @@ def _build_summary() -> dict:
 
     manga_names, up_names, anime_names = [], [], []
 
-    if manga_root.is_dir():
-        for entry in os.scandir(manga_root):
+    # Una obra repartida entre discos se mide SUMANDO sus carpetas: si no, el panel diría que
+    # ocupa la mitad de lo que ocupa y no cuadraría con el espacio libre real.
+    from api.roots import roots as _roots
+    for _r in _roots():
+        _mr = Path(_r["manga"])
+        if not _mr.is_dir():
+            continue
+        for entry in os.scandir(_mr):
             if not entry.is_dir(follow_symlinks=False) or entry.name.startswith("."):
                 continue
-            manga_names.append(entry.name)
-            b, ch, _ = cached_measure(_k_manga, entry.name, entry.path,
+            key = f'{entry.name}@{_r["id"]}'
+            manga_names.append(key)
+            b, ch, _ = cached_measure(_k_manga, key, entry.path,
                                       lambda p: (*_measure_series(Path(p)), {}))
-            series[entry.name] = {
+            row = series.setdefault(entry.name, {
                 "name": entry.name,
-                "original_bytes": b,
-                "original_chapters": ch,
+                "original_bytes": 0,
+                "original_chapters": 0,
                 "upscaled_bytes": 0,
                 "upscaled_chapters": 0,
                 "translated_chapters": _translated_count(entry.name),
-            }
+            })
+            row["original_bytes"] += b
+            row["original_chapters"] += ch
 
-    if up_root.is_dir():
-        for entry in os.scandir(up_root):
+    for _r in _roots():
+        _ur = Path(_r["upscaled"])
+        if not _ur.is_dir():
+            continue
+        for entry in os.scandir(_ur):
             if not entry.is_dir(follow_symlinks=False) or entry.name.startswith("."):
                 continue
-            up_names.append(entry.name)
-            b, ch, _ = cached_measure(_k_up, entry.name, entry.path,
+            key = f'{entry.name}@{_r["id"]}'
+            up_names.append(key)
+            b, ch, _ = cached_measure(_k_up, key, entry.path,
                                       lambda p: (*_measure_series(Path(p)), {}))
             row = series.setdefault(entry.name, {
                 "name": entry.name, "original_bytes": 0, "original_chapters": 0,
                 "upscaled_bytes": 0, "upscaled_chapters": 0,
                 "translated_chapters": _translated_count(entry.name),
             })
-            row["upscaled_bytes"] = b
-            row["upscaled_chapters"] = ch
+            row["upscaled_bytes"] += b
+            row["upscaled_chapters"] += ch
 
     for r in series.values():
         r["kind"] = "manga"
@@ -471,10 +486,16 @@ def series_size():
     title = (request.args.get("title") or "").strip()
     if not title:
         return jsonify({"error": "falta title"}), 400
-    orig = _safe_child(Path(manga_dir()), title)
-    up = _safe_child(Path(upscaled_dir()), title)
-    ob, oc = _measure_series(orig) if (orig and orig.is_dir()) else (0, 0)
-    ub, uc = _measure_series(up) if (up and up.is_dir()) else (0, 0)
+    # Suma de todos los discos donde viva la obra: el modal debe decir lo que ocupa ENTERA.
+    from api.roots import roots as _roots
+    ob = oc = ub = uc = 0
+    for _r in _roots():
+        o = _safe_child(Path(_r["manga"]), title)
+        u = _safe_child(Path(_r["upscaled"]), title)
+        if o and o.is_dir():
+            b, c = _measure_series(o); ob += b; oc += c
+        if u and u.is_dir():
+            b, c = _measure_series(u); ub += b; uc += c
     return jsonify({
         "name": title,
         "original_bytes": ob, "original_chapters": oc,
@@ -500,23 +521,36 @@ def series_delete():
     if scope not in ("upscaled", "original", "all"):
         return jsonify({"error": "scope inválido"}), 400
 
+    # Liberar espacio borra en TODOS los discos: si sólo se vaciara uno, el usuario vería
+    # menos espacio liberado del que pidió y la obra quedaría a medias.
+    from api.roots import roots as _roots
     targets = []
-    if scope in ("upscaled", "all"):
-        targets.append(_safe_child(Path(upscaled_dir()), title))
-    if scope in ("original", "all"):
-        targets.append(_safe_child(Path(manga_dir()), title))
+    for _r in _roots():
+        if scope in ("upscaled", "all"):
+            targets.append(_safe_child(Path(_r["upscaled"]), title))
+        if scope in ("original", "all"):
+            targets.append(_safe_child(Path(_r["manga"]), title))
 
     freed = 0
     for d in targets:
         if d and d.is_dir():
             freed += _tree_bytes(str(d))
             shutil.rmtree(d, ignore_errors=True)
-    # Invalidar la medición cacheada por mtime (index_db) para que summary/series
-    # reflejen el borrado sin esperar a un cambio de mtime.
-    try:
-        prune()
-    except Exception:
-        pass
+    # Invalidar la medición cacheada por mtime (index_db) para que summary/series reflejen el
+    # borrado ya. NO se puede esperar a un cambio de mtime: la carpeta ya no existe, así que su
+    # mtime no va a cambiar nunca más y la fila seguiría contando bytes que ya no están.
+    #
+    # ⚠️ Esto estaba escrito `prune()`, sin argumentos — un TypeError que el `except` de al lado
+    # se tragaba entero: liberar espacio NUNCA invalidaba nada y el panel seguía enseñando el
+    # tamaño viejo. Ejemplo de libro de `except: pass` sobre un camino que DECIDE algo.
+    # Mismo namespaceado por modo que `_build_summary`, o se borraría una fila que no es.
+    _suf = '' if get_library_mode() == 'normal' else f':{get_library_mode()}'
+    for _r in _roots():
+        for _ns in (f"manga{_suf}", f"upscaled{_suf}"):
+            try:
+                drop(_ns, f'{title}@{_r["id"]}')
+            except Exception as e:
+                record_error("storage", e, op="drop_measure", title=title, root=_r["id"])
     return jsonify({"ok": True, "freed": freed, "scope": scope})
 
 

@@ -84,6 +84,16 @@ def cached_measure(root, name, path, fn):
     return b, ch, extra or {}
 
 
+def drop(root, name):
+    """Olvida la medición de UNA serie. Para cuando se acaba de borrar de disco: su carpeta ya
+    no existe, así que el mtime no va a cambiar nunca más y la fila cacheada se quedaría
+    contando bytes que ya no están."""
+    with _lock:
+        c = _conn_get()
+        c.execute("DELETE FROM measure WHERE root=? AND name=?", (root, name))
+        c.commit()
+
+
 def prune(root, valid_names):
     """Drop cached rows for series that no longer exist on disk (freed space, renamed…)."""
     valid = set(valid_names)

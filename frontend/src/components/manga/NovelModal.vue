@@ -12,6 +12,7 @@ import { coverRGB, vivid } from '@/lib/coverColor'
 import Icon from '@/components/ui/Icon.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { useModal } from '@/lib/useModal'
+import { genero } from '@/lib/etiquetas'
 
 const novels = useNovelsStore()
 const d = computed(() => novels.detail)
@@ -131,7 +132,7 @@ useModal(() => !!d.value, () => novels.closeDetail(), modalEl)
             <p v-if="novel?.summary" class="synopsis">{{ novel.summary }}</p>
 
             <div v-if="genres.length" class="chips">
-              <span v-for="g in genres.slice(0, 10)" :key="g" class="chip">{{ g }}</span>
+              <span v-for="g in genres.slice(0, 10)" :key="g" class="chip">{{ genero(g) }}</span>
             </div>
 
             <div class="chhead">

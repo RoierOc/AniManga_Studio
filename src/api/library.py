@@ -17,8 +17,12 @@ from api.index_db import cached_measure, prune
 
 
 def _count_pages(path):
-    """(nº de páginas, nº de capítulos, {}) de una carpeta de serie. Capítulo = prefijo
-    chXXXX distinto entre archivos ch####_###.ext. Cacheado por mtime en index_db."""
+    """(nº de páginas, nº de capítulos, {chs}) de una carpeta de serie. Capítulo = prefijo
+    chXXXX distinto entre archivos ch####_###.ext. Cacheado por mtime en index_db.
+
+    `chs` (los prefijos, no sólo cuántos) va en el extra porque una obra puede estar REPARTIDA
+    entre discos: sumar los contadores de cada raíz contaría dos veces un capítulo con páginas
+    en ambos. Con los prefijos, la unión es exacta. Ver `api/roots.py`."""
     p = Path(path)
     images = list(p.glob('*.png')) + list(p.glob('*.jpg')) + list(p.glob('*.webp'))
     chapters = set()
@@ -26,7 +30,7 @@ def _count_pages(path):
         parts = img.stem.split('_')
         if parts and parts[0].startswith('ch'):
             chapters.add(parts[0])
-    return len(images), len(chapters), {}
+    return len(images), len(chapters), {'chs': sorted(chapters)}
 
 
 def _count_upscaled(path):
@@ -254,33 +258,57 @@ def _scan_folders():
     _libcount_key = f'libcount{_mode_suffix}'
     _libup_key = f'libup{_mode_suffix}'
 
-    folders = []
-    for f in Path(manga_dir()).iterdir():
-        if not f.is_dir() or f.name.startswith('.'):
-            continue   # salta carpetas internas: .cache, .import_staging, etc.
+    from api.roots import roots as _roots, series_titles
 
+    folders = []
+    # Una obra es su NOMBRE DE CARPETA, esté en el disco que esté: `series_titles()` funde las
+    # raíces, así que la misma obra repartida entre C: y D: sale UNA vez con sus cuentas sumadas
+    # (los capítulos por prefijo, para no contar dos veces uno con páginas en ambos discos).
+    for name, dirs in series_titles().items():
+        f = dirs[0]
+        image_count = 0
+        chapter_prefixes: set = set()
+        upscaled_count = 0
         # Per-folder page/chapter counts are cached by mtime (index_db) so the whole
         # library listing stays instant instead of globbing every folder each call.
-        image_count, chapters_count, _ = cached_measure(_libcount_key, f.name, str(f), _count_pages)
-        upscaled_count, _, _ = cached_measure(
-            _libup_key, f.name, str(Path(upscaled_dir()) / f.name), _count_upscaled)
+        # La clave lleva la raíz: dos discos con la misma obra son dos mediciones distintas.
+        for r in _roots():
+            d = Path(r['manga']) / name
+            if d.is_dir():
+                n, nch, extra = cached_measure(_libcount_key, f'{name}@{r["id"]}', str(d), _count_pages)
+                image_count += n
+                chs = (extra or {}).get('chs')
+                chapter_prefixes |= set(chs) if chs else set()
+                if not chs:
+                    chapter_prefixes |= {f'?{r["id"]}:{i}' for i in range(nch)}  # fila vieja sin `chs`
+            u = Path(r['upscaled']) / name
+            if u.is_dir():
+                nu, _, _ = cached_measure(_libup_key, f'{name}@{r["id"]}', str(u), _count_upscaled)
+                upscaled_count += nu
+        chapters_count = len(chapter_prefixes)
 
         source_meta = None
-        meta_path = f / '.source_meta.json'
-        if meta_path.exists():
-            try:
-                source_meta = json.loads(meta_path.read_text())
-            except Exception:
-                pass
+        for d in dirs:
+            meta_path = d / '.source_meta.json'
+            if meta_path.exists():
+                try:
+                    source_meta = json.loads(meta_path.read_text())
+                    break
+                except Exception:
+                    pass
 
-        # Estado de traducción por trasplante (badge "ES" en la tarjeta)
-        translated_count = 0
-        tp_path = f / '.transplant_meta.json'
-        if tp_path.exists():
-            try:
-                translated_count = len(json.loads(tp_path.read_text()).get('translated', []))
-            except Exception:
-                pass
+        # Estado de traducción por trasplante (badge "ES" en la tarjeta). Unión por NOMBRE de
+        # capítulo: si la obra está repartida, cada disco lleva su propio meta.
+        translated: set = set()
+        for d in dirs:
+            tp_path = d / '.transplant_meta.json'
+            if tp_path.exists():
+                try:
+                    translated |= set(json.loads(tp_path.read_text()).get('translated', []))
+                except Exception:
+                    pass
+        translated_count = len(translated)
+        meta_path = f / '.source_meta.json'
 
         # Portada SIEMPRE por nuestro /thumb (sirve el cover local si existe; si no lo baja de la
         # fuente/AniList/MangaDex, lo persiste y lo cachea — resiliente a Suwayomi apagado/id
@@ -288,22 +316,26 @@ def _scan_folders():
         # la portada (reescribe cover.jpg → mtime nuevo) la URL cambie y el navegador recargue
         # (si no, con Cache-Control de 1 día seguiría mostrando la vieja aunque el archivo cambió).
         local_cover = next(
-            (p for p in (f / 'cover.jpg', f / 'cover.png', f / 'cover.webp') if p.exists()),
+            (p for d in dirs for p in (d / 'cover.jpg', d / 'cover.png', d / 'cover.webp')
+             if p.exists()),
             None
         )
-        if local_cover or (source_meta or {}).get('thumbnailUrl') or lib_covers.get(f.name.lower().strip()):
+        if local_cover or (source_meta or {}).get('thumbnailUrl') or lib_covers.get(name.lower().strip()):
             try:
                 stamp_src = local_cover or (meta_path if meta_path.exists() else f)
                 mtime = int(stamp_src.stat().st_mtime)
             except Exception:
                 mtime = 0
-            cover = f"/api/library/thumb/{quote(f.name, safe='')}?v={mtime}"
+            cover = f"/api/library/thumb/{quote(name, safe='')}?v={mtime}"
         else:
             cover = None
 
         folders.append({
-            'id': f.name,
-            'name': f.name,
+            'id': name,
+            'name': name,
+            # Sólo cuando está repartida: la tarjeta pinta un aviso, y quien no reparte nada
+            # no ve un campo de más.
+            **({'split_roots': len(dirs)} if len(dirs) > 1 else {}),
             'chapter_count': chapters_count,
             'image_count': image_count,
             'page_count': image_count,
@@ -313,8 +345,11 @@ def _scan_folders():
             'translated_count': translated_count,
         })
 
-    prune(_libcount_key, [x['name'] for x in folders])
-    prune(_libup_key, [x['name'] for x in folders])
+    # Las claves del índice llevan `@raíz` (una medición por disco), así que podar con los
+    # nombres pelados borraría TODAS las filas y forzaría un remedido en cada carga.
+    _keys = [f'{x["name"]}@{r["id"]}' for x in folders for r in _roots()]
+    prune(_libcount_key, _keys)
+    prune(_libup_key, _keys)
     folders.sort(key=lambda x: x['name'].lower())
     return folders
 
@@ -356,13 +391,13 @@ def search_covers():
     """Search MangaDex for covers of library manga"""
     from api.resilient_http import http as http_requests
 
+    from api.roots import series_titles
     results = {}
-    for folder in Path(manga_dir()).iterdir():
-        if not folder.is_dir():
-            continue
-        
+    for _name, _dirs in series_titles().items():
+        folder = _dirs[0]
+
         # Skip if already has local cover
-        local_covers = list(folder.glob('cover.*')) + list(folder.glob('folder.*'))
+        local_covers = [p for d in _dirs for p in list(d.glob('cover.*')) + list(d.glob('folder.*'))]
         if local_covers:
             results[folder.name] = f"/uploads/{quote(folder.name, safe='')}/{local_covers[0].name}"
             continue
@@ -429,35 +464,40 @@ def get_chapter_status(title):
 @library_bp.route('/<path:title>')
 @library_bp.route('/chapters/<path:title>')
 def get_manga(title):
-    folder = Path(manga_dir()) / title
-    if not folder.exists():
-        # Try with spaces
-        folder = Path(manga_dir()) / title.replace('_', ' ')
-        if not folder.exists():
-            return jsonify({'error': 'Manga not found'}), 404
-    
-    chapters = get_chapters_from_folder(folder)
-    upscaled_folder = Path(upscaled_dir()) / title.replace('_', ' ')
+    from api.roots import series_dirs, series_pages
+
+    # La obra puede vivir en VARIOS discos: aquí se ve como una sola, con sus capítulos unidos.
+    folders = series_dirs(title) or series_dirs(title.replace('_', ' '))
+    if not folders:
+        return jsonify({'error': 'Manga not found'}), 404
+    name = folders[0].name
+    folder = folders[0]
+
+    # Capítulos: la lista de cada disco, fundida por número (un capítulo con páginas en dos
+    # discos suma sus páginas, no aparece dos veces).
+    by_ch: dict = {}
+    for d in folders:
+        for c in get_chapters_from_folder(d):
+            ch = c['chapter']
+            if ch in by_ch:
+                by_ch[ch]['page_count'] = by_ch[ch].get('page_count', 0) + c.get('page_count', 0)
+            else:
+                by_ch[ch] = dict(c)
+    chapters = list(by_ch.values())
     upscaled = {}
 
-    _IMAGE_EXTS = ['jpg', 'jpeg', 'png', 'webp']
-
-    # Count downloaded pages per chapter prefix
+    # Páginas descargadas / escaladas por prefijo de capítulo, ya fundidas entre discos.
     dl_by_ch: dict = {}
-    for ext in _IMAGE_EXTS:
-        for f in folder.glob(f'*.{ext}'):
-            parts = f.stem.split('_')
-            if parts and parts[0].startswith('ch'):
-                dl_by_ch.setdefault(parts[0], set()).add(f.stem)
+    for fname in series_pages(name):
+        parts = fname.rsplit('.', 1)[0].split('_')
+        if parts and parts[0].startswith('ch'):
+            dl_by_ch.setdefault(parts[0], set()).add(fname.rsplit('.', 1)[0])
 
-    # Count upscaled pages per chapter prefix
     up_by_ch: dict = {}
-    if upscaled_folder.exists():
-        for ext in _IMAGE_EXTS:
-            for f in upscaled_folder.glob(f'*.{ext}'):
-                parts = f.stem.split('_')
-                if parts and parts[0].startswith('ch'):
-                    up_by_ch.setdefault(parts[0], set()).add(f.stem)
+    for fname in series_pages(name, upscaled=True):
+        parts = fname.rsplit('.', 1)[0].split('_')
+        if parts and parts[0].startswith('ch'):
+            up_by_ch.setdefault(parts[0], set()).add(fname.rsplit('.', 1)[0])
 
     # True = fully upscaled, 'partial' = some pages missing
     for ch_key in set(dl_by_ch) | set(up_by_ch):
@@ -471,21 +511,28 @@ def get_manga(title):
         else:
             upscaled[ch_norm] = True
     
+    # Los metadatos viven junto a las páginas, así que en una obra repartida hay uno por disco:
+    # el primero que se lea manda para la identidad, y los capítulos traducidos se UNEN.
     source_meta = None
-    meta_path = folder / '.source_meta.json'
-    if meta_path.exists():
-        try:
-            source_meta = json.loads(meta_path.read_text())
-        except Exception:
-            pass
-
     transplant_meta = None
-    tp_path = folder / '.transplant_meta.json'
-    if tp_path.exists():
-        try:
-            transplant_meta = json.loads(tp_path.read_text())
-        except Exception:
-            pass
+    for d in folders:
+        meta_path = d / '.source_meta.json'
+        if source_meta is None and meta_path.exists():
+            try:
+                source_meta = json.loads(meta_path.read_text())
+            except Exception:
+                pass
+        tp_path = d / '.transplant_meta.json'
+        if tp_path.exists():
+            try:
+                tp = json.loads(tp_path.read_text())
+                if transplant_meta is None:
+                    transplant_meta = tp
+                else:
+                    transplant_meta['translated'] = sorted(
+                        set(transplant_meta.get('translated', [])) | set(tp.get('translated', [])))
+            except Exception:
+                pass
 
     return jsonify({
         'id': title,
@@ -548,33 +595,25 @@ def chapter_health(title):
     """Scan a manga's chapters for upscale completeness and download gaps.
     Returns per-chapter status so the UI can show repair indicators.
     """
+    from api.roots import series_dirs, series_pages
     actual = find_manga_folder(title)
 
-    dl_folder = Path(manga_dir()) / actual
-    up_folder = Path(upscaled_dir()) / actual
-
-    if not dl_folder.exists():
+    if not series_dirs(actual):
         return jsonify({'error': 'not found'}), 404
 
-    # Collect all downloaded pages grouped by chapter prefix (ch####)
-    _IMAGE_EXTS = ('jpg', 'jpeg', 'png', 'webp')
-    dl_by_ch: dict = {}
-    for ext in _IMAGE_EXTS:
-        for f in dl_folder.glob(f'*.{ext}'):
-            parts = f.stem.split('_')
+    # Páginas por prefijo de capítulo, unidas entre discos: una obra repartida NO puede
+    # reportar "falta el escalado" sólo porque esas páginas están en el otro disco.
+    def _by_chapter(up: bool) -> dict:
+        out: dict = {}
+        for fname in series_pages(actual, upscaled=up):
+            stem = fname.rsplit('.', 1)[0]
+            parts = stem.split('_')
             if parts and parts[0].startswith('ch'):
-                ch_key = parts[0]
-                dl_by_ch.setdefault(ch_key, set()).add(f.stem)
+                out.setdefault(parts[0], set()).add(stem)
+        return out
 
-    # Collect all upscaled pages grouped by chapter prefix
-    up_by_ch: dict = {}
-    if up_folder.exists():
-        for ext in _IMAGE_EXTS:
-            for f in up_folder.glob(f'*.{ext}'):
-                parts = f.stem.split('_')
-                if parts and parts[0].startswith('ch'):
-                    ch_key = parts[0]
-                    up_by_ch.setdefault(ch_key, set()).add(f.stem)
+    dl_by_ch = _by_chapter(False)
+    up_by_ch = _by_chapter(True)
 
     all_chapters = sorted(set(dl_by_ch) | set(up_by_ch))
     result = []
@@ -633,15 +672,20 @@ def edit_metadata(title):
     cover_b64 = (data.get('cover_b64') or '').strip()
     cover_url = (data.get('cover_url') or '').strip()
 
-    folder = Path(manga_dir()) / title
-    if not folder.exists():
+    from api.roots import roots as _roots, series_dir, series_dirs
+
+    all_folders = series_dirs(title)
+    if not all_folders:
         return jsonify({'error': 'not found'}), 404
+    folder = series_dir(title)   # la portada nueva va al disco principal de la obra
 
     # Update cover image — quita primero cualquier cover.* viejo para que la prioridad
     # jpg→png→webp del lector no deje una portada anterior "ensombreciendo" a la nueva.
+    # En TODOS los discos: si quedara una portada vieja en el otro, seguiría ganando al leerla.
     def _clear_covers():
-        for e in ('jpg', 'png', 'webp'):
-            (folder / f'cover.{e}').unlink(missing_ok=True)
+        for d in all_folders:
+            for e in ('jpg', 'png', 'webp'):
+                (d / f'cover.{e}').unlink(missing_ok=True)
 
     if cover_b64:
         import base64 as _b64
@@ -669,15 +713,29 @@ def edit_metadata(title):
         except Exception as e:
             return jsonify({'error': str(e)}), 500
 
-    # Rename folder
+    # Renombrar: la obra es su nombre de carpeta, así que hay que renombrarla EN TODOS los
+    # discos donde viva. Si sólo se renombrara en uno, la obra se partiría en dos.
     if new_title and new_title != title:
-        new_folder = Path(manga_dir()) / new_title
-        if new_folder.exists():
-            return jsonify({'error': 'Ya existe una carpeta con ese nombre'}), 409
-        folder.rename(new_folder)
-        up_folder = Path(upscaled_dir()) / title
-        if up_folder.exists():
-            up_folder.rename(Path(upscaled_dir()) / new_title)
+        for r in _roots():
+            for key in ('manga', 'upscaled'):
+                if (Path(r[key]) / new_title).exists():
+                    return jsonify({'error': 'Ya existe una carpeta con ese nombre'}), 409
+        renamed = []
+        try:
+            for r in _roots():
+                for key in ('manga', 'upscaled'):
+                    old = Path(r[key]) / title
+                    if old.exists():
+                        new = Path(r[key]) / new_title
+                        old.rename(new)
+                        renamed.append((new, old))
+        except OSError as e:
+            for new, old in reversed(renamed):   # a medio renombrar es peor que sin renombrar
+                try:
+                    new.rename(old)
+                except OSError:
+                    pass
+            return jsonify({'error': f'No se pudo renombrar: {e}'}), 500
         return jsonify({'ok': True, 'new_title': new_title})
 
     return jsonify({'ok': True})
@@ -698,9 +756,9 @@ def cover_options():
     ck = f"{title}|{md_id}"
     cached = None if refresh else cache_get('cover_options', ck, 604800)
 
+    from api.roots import series_dirs
     out = {'current': None, 'anilist': [], 'mangadex': []}
-    folder = Path(manga_dir()) / title
-    if folder.is_dir() and any((folder / f'cover.{e}').exists() for e in ('jpg', 'png', 'webp')):
+    if any((d / f'cover.{e}').exists() for d in series_dirs(title) for e in ('jpg', 'png', 'webp')):
         out['current'] = f"/api/library/cover/{quote(title, safe='')}"
 
     if cached is not None:
@@ -771,15 +829,12 @@ def scan_corrupt(title):
     """Check all downloaded images in a manga folder for corruption."""
     from PIL import Image, UnidentifiedImageError
 
-    folder = Path(manga_dir()) / title
-    if not folder.exists():
+    from api.roots import series_pages
+    # Todas las páginas de la obra, vivan en el disco que vivan: una revisión de integridad
+    # que sólo mirase un disco daría "todo bien" sobre media obra.
+    all_images = sorted(series_pages(title).values(), key=lambda p: p.name)
+    if not all_images:
         return jsonify({'error': 'not found'}), 404
-
-    _IMAGE_EXTS = ('jpg', 'jpeg', 'png', 'webp')
-    all_images = []
-    for ext in _IMAGE_EXTS:
-        all_images.extend(folder.glob(f'*.{ext}'))
-    all_images.sort()
 
     corrupt = []
     checked = 0
@@ -798,30 +853,34 @@ def scan_corrupt(title):
 
 
 def find_manga_folder(query):
+    """Nombre de carpeta real a partir de un título aproximado.
+
+    Es el resolutor por el que pasan lector, escalado y trasplante, así que mira TODAS las
+    raíces: si la obra está sólo en el segundo disco, buscarla nada más en el primero devolvía
+    el query tal cual y todo lo de después fallaba con un "no encontrado" que no lo era.
+    """
+    from api.roots import series_titles
     query_norm = query.lower().replace('-', ' ').replace('_', ' ')
     candidates = []
-    
-    for f in Path(manga_dir()).iterdir():
-        if not f.is_dir():
+
+    for name, dirs in series_titles().items():
+        folder_norm = name.lower().replace('-', ' ').replace('_', ' ')
+
+        if name == query:
+            candidates.append((10, name))
             continue
-        
-        folder_norm = f.name.lower().replace('-', ' ').replace('_', ' ')
-        has_images = len(list(f.glob('*.jpg'))) + len(list(f.glob('*.png'))) + len(list(f.glob('*.webp')))
-        
-        if f.name == query:
-            candidates.append((10, f.name))
+
+        if name.lower() == query.lower() or folder_norm == query_norm:
+            candidates.append((9, name))
             continue
-        
-        if f.name.lower() == query.lower() or folder_norm == query_norm:
-            candidates.append((9, f.name))
-            continue
-        
+
         if query_norm in folder_norm or folder_norm in query_norm:
-            if has_images:
-                candidates.append((5, f.name))
-            else:
-                candidates.append((1, f.name))
-    
+            has_images = any(
+                next(d.glob('*.jpg'), None) or next(d.glob('*.png'), None) or next(d.glob('*.webp'), None)
+                for d in dirs)
+            candidates.append((5 if has_images else 1, name))
+
+
     if candidates:
         candidates.sort(key=lambda x: -x[0])
         return candidates[0][1]
@@ -849,8 +908,12 @@ def _cover_variant(path: Path, w: int):
 @library_bp.route('/cover/<path:title>')
 def serve_local_cover(title):
     """Serve a locally-downloaded cover image."""
-    folder = Path(manga_dir()) / title
-    return _cover_file_response(folder) or ('not found', 404)
+    from api.roots import series_dirs
+    for d in series_dirs(title):
+        resp = _cover_file_response(d)
+        if resp is not None:
+            return resp
+    return 'not found', 404
 
 
 @library_bp.route('/thumb/<path:folder>')
@@ -859,9 +922,15 @@ def serve_manga_thumb(folder):
     sirve el cover local si existe; si no, lo descarga UNA vez de la fuente (despierta Suwayomi
     y re-resuelve el id si está caducado), lo persiste como cover.jpg y lo sirve. Resistente a
     JVM apagada / id caducado / arranque lento. `?w=` → micro-thumb para el blur-up."""
-    base = Path(manga_dir()) / folder
-    if not base.is_dir():
+    from api.roots import series_dir, series_dirs
+    dirs = series_dirs(folder)
+    if not dirs:
         return 'not found', 404
+    # La portada puede estar en cualquiera de los discos de la obra; si hay que descargarla,
+    # se persiste en el principal.
+    base = next((d for d in dirs
+                 if any((d / f'cover.{e}').exists() for e in ('jpg', 'png', 'webp'))),
+                series_dir(folder))
     w = request.args.get('w', type=int)
 
     resp = _cover_file_response(base)
@@ -909,14 +978,14 @@ def download_covers_offline():
         except Exception:
             pass
 
+    from api.roots import series_titles
     targets = []
-    for folder in Path(manga_dir()).iterdir():
-        if not folder.is_dir():
+    for _name, _dirs in series_titles().items():
+        folder = _dirs[0]
+        # Skip if local cover already exists (en cualquiera de sus discos)
+        if any((d / f'cover.{e}').exists() for d in _dirs for e in ('jpg', 'png', 'webp')):
             continue
-        # Skip if local cover already exists
-        if any((folder / f'cover.{e}').exists() for e in ('jpg', 'png', 'webp')):
-            continue
-        url = lib_covers.get(folder.name.lower().strip())
+        url = lib_covers.get(_name.lower().strip())
         if url and url.startswith('http'):
             targets.append((folder, url))
 

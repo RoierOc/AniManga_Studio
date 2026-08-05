@@ -36,6 +36,9 @@ from api.resilient_http import http as http_requests  # retry + backoff + per-ho
 
 from api.runtime import (manga_dir, upscaled_dir, QA_DIR, DATA_ROOT, normalize_chapter, build_task_id, write_json_atomic,
                          push_sse_event, cache_get, cache_set)
+# Resuelven el DISCO: `series_dir` el principal de la obra, `chapter_dir` el del capítulo
+# concreto (la traducción reescribe EN SITIO, así que tiene que escribir donde está el original).
+from api.roots import chapter_dir, series_dir, series_pages, series_up_dir
 from api.sources import _gql, SUWAYOMI_URL, SUWAYOMI_BASE, ensure_suwayomi
 from api.download import _fetch_with_retry, _dl_semaphore, _chapter_file_prefix
 from api.anilist import title_variants, chapters_by_al_id
@@ -141,7 +144,7 @@ def get_transplant_tasks() -> dict:
 
 
 def _meta_path(title: str) -> Path:
-    return Path(manga_dir()) / title / ".transplant_meta.json"
+    return series_dir(title) / ".transplant_meta.json"
 
 
 def _read_meta(title: str) -> dict:
@@ -395,18 +398,15 @@ _LOCAL_CH_RE = re.compile(r'^(ch\d+(?:\.\d+)?)_')
 def _local_chapter_files(title: str) -> dict:
     """{chapter_norm: [Path,...]} páginas locales agrupadas por capítulo — para mangas
     importados (CBZ/CBR) donde el ARTE es el contenido local, no una fuente de Suwayomi."""
-    folder = Path(manga_dir()) / title
+    # Unidas entre discos: si la obra está repartida, traducir tiene que ver TODOS sus
+    # capítulos, no los de un disco. Ver `api/roots.py`.
     out: dict = {}
-    if not folder.is_dir():
-        return out
-    for f in sorted(folder.iterdir()):
-        if not f.is_file():
-            continue
-        m = _LOCAL_CH_RE.match(f.name)
+    for name, path in sorted(series_pages(title).items()):
+        m = _LOCAL_CH_RE.match(name)
         if not m:
             continue
         chn = normalize_chapter(m.group(1))
-        out.setdefault(chn, []).append(f)
+        out.setdefault(chn, []).append(path)
     return out
 
 
@@ -425,7 +425,7 @@ def _local_art_files(title: str) -> dict:
     después) están en ESPAÑOL, así que usarlas como arte trasplantaría español sobre español.
     Para esos manda `.original_art/` — el arte pre-traducción — que por eso se conserva."""
     orig = _local_chapter_files(title)
-    up_root = Path(upscaled_dir()) / title
+    up_all = series_pages(title, upscaled=True)      # escalados de TODOS los discos
     out: dict = {}
     for chn, files in orig.items():
         prefix = _chapter_file_prefix(chn)
@@ -433,7 +433,7 @@ def _local_art_files(title: str) -> dict:
         if pristine:
             out[chn] = pristine            # capítulo ya traducido -> arte original guardado
             continue
-        up = sorted(p for p in up_root.glob(prefix + "_*") if p.is_file()) if up_root.is_dir() else []
+        up = [p for n, p in sorted(up_all.items()) if n.startswith(prefix + "_")]
         out[chn] = up if up else files
     return out
 
@@ -447,7 +447,7 @@ def _local_art_files(title: str) -> dict:
 # que vino de un tomo: ve capítulos `ch####` normales.
 
 def _source_meta_path(title: str) -> Path:
-    return Path(manga_dir()) / title / ".source_meta.json"
+    return series_dir(title) / ".source_meta.json"
 
 
 def _read_source_meta(title: str) -> dict:
@@ -482,7 +482,7 @@ def _split_volume(title: str, vol: dict, chapter_pages: list, source_prefix: str
     `source_prefix` permite leer desde un prefijo temporal (ver `_stage_volume`) en
     vez de `vol['prefix']` directamente — necesario para que el rename hacia el
     capítulo real no pise el placeholder de OTRO tomo aún pendiente."""
-    folder = Path(manga_dir()) / title
+    folder = series_dir(title)
     prefix = source_prefix or vol['prefix']
     files = sorted(folder.glob(f"{prefix}_*.*"))
     total_wanted = sum(c for _, c in chapter_pages)
@@ -504,7 +504,7 @@ def _stage_volume(title: str, vol: dict) -> str:
     rango real resuelto de un tomo cae sobre el nº de capítulo que otro tomo
     todavía pendiente usa como placeholder, el rename in-situ lo sobrescribe en
     silencio (corrupción de páginas detectada en pruebas con tomos encadenados)."""
-    folder = Path(manga_dir()) / title
+    folder = series_dir(title)
     files = sorted(folder.glob(f"{vol['prefix']}_*.*"))
     tmp_prefix = f"__staging{uuid.uuid4().hex[:10]}"
     for i, f in enumerate(files, 1):
@@ -516,7 +516,7 @@ def _free_chapter_prefix(title: str) -> str:
     """Siguiente prefijo ch#### libre en el manga — para reasignar el placeholder
     de un tomo pendiente si su nº original quedó ocupado por un capítulo real
     resuelto en esta misma pasada (ver `_unstage_volume`)."""
-    folder = Path(manga_dir()) / title
+    folder = series_dir(title)
     best = 0
     if folder.is_dir():
         for f in folder.iterdir():
@@ -532,7 +532,7 @@ def _unstage_volume(title: str, tmp_prefix: str, original_prefix: str) -> str:
     si OTRO tomo resuelto en esta misma pasada se quedó justo con ese nº de
     capítulo real (mismo riesgo de colisión que en el split, visto en pruebas).
     Devuelve el prefijo final usado, para que el caller actualice los metadatos."""
-    folder = Path(manga_dir()) / title
+    folder = series_dir(title)
     target_prefix = original_prefix
     if list(folder.glob(f"{original_prefix}_*.*")):
         target_prefix = _free_chapter_prefix(title)
@@ -1197,7 +1197,7 @@ def _fetch_ref(ref: str):
             return r.content if (r and r.status_code == 200 and r.content) else None
         except Exception:
             return None
-    p = Path(manga_dir()) / ref
+    p = series_dir(ref)
     try:
         return p.read_bytes() if p.exists() else None
     except Exception:
@@ -2004,7 +2004,7 @@ def _run_download_version(task_id: str, title: str, manga_id):
         have = set(_local_chapter_files(title).keys())
         todo = sorted([(chn, info) for chn, info in cmap.items() if chn not in have],
                       key=lambda x: _chnum(x[0]))
-        folder = Path(manga_dir()) / title
+        folder = series_dir(title)
         total = len(todo)
         _set_status(task_id, phase="downloading", chapterDone=0, chapterTotal=total)
         done = 0
@@ -2586,10 +2586,16 @@ def _orig_art_dir(out_dir: Path) -> Path:
 
 def original_art_files(title: str, prefix: str) -> list:
     """Páginas del arte ORIGINAL (pre-traducción) de un capítulo, si se conservaron."""
-    d = _orig_art_dir(Path(manga_dir()) / title)
-    if not d.is_dir():
-        return []
-    return sorted(p for ext in _IMG_EXT for p in d.glob(f"{prefix}_*.{ext}"))
+    # En el disco DEL CAPÍTULO: el arte pre-traducción se guarda junto a las páginas que
+    # sustituye, así que buscarlo sólo en el disco principal lo daría por perdido y se
+    # trasplantaría español sobre español.
+    from api.roots import series_dirs
+    for base in series_dirs(title):
+        d = _orig_art_dir(base)
+        hits = sorted(p for ext in _IMG_EXT for p in d.glob(f"{prefix}_*.{ext}")) if d.is_dir() else []
+        if hits:
+            return hits
+    return []
 
 
 def _preserve_original_art(out_dir: Path, prefix: str):
@@ -2629,8 +2635,14 @@ def _replace_chapter_in_place(out_dir: Path, prefix: str, stage_dir: Path, page_
 
 
 def _upscaled_folders(title: str):
-    """Las dos convenciones de nombre del mirror upscaled (con '_' y con espacios)."""
-    return {Path(upscaled_dir()) / title, Path(upscaled_dir()) / title.replace("_", " ")}
+    """Carpetas de escalados a invalidar: las dos convenciones de nombre ('_' y espacios) y
+    TODOS los discos — un 4K obsoleto en el otro disco seguiría sirviéndose como si valiera."""
+    from api.roots import roots as _roots
+    out = set()
+    for r in _roots():
+        out.add(Path(r['upscaled']) / title)
+        out.add(Path(r['upscaled']) / title.replace("_", " "))
+    return out
 
 
 def _invalidate_upscaled(title: str, prefix: str):
@@ -2830,7 +2842,7 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict,
     art_units = {_chnum(u["number"]): [m["number"] for m in u["members"]]
                  for u in _split_part_units([{"number": k} for k in _art_keys],
                                             lambda e: e["number"])}
-    out_dir = Path(manga_dir()) / title
+    out_dir = series_dir(title)
     out_dir.mkdir(parents=True, exist_ok=True)
     done_ch, translated, failed = [], set(), set()
     total = len(chapters)
@@ -2942,7 +2954,12 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict,
                 # (sobre el MISMO staging, antes de instalar el capítulo).
                 res = _rescue_alt_es(task_id, title, chn, tmp, stage, res,
                                      per_ch_es or es, ci, total)
-                _replace_chapter_in_place(out_dir, prefix, stage, res["pages"])
+                # EN EL DISCO DEL CAPÍTULO, no en el principal de la obra: la traducción
+                # reemplaza las páginas EN SITIO, así que escribirlas en otro disco no las
+                # traduciría, las DUPLICARÍA (el capítulo quedaría dos veces, en dos idiomas y
+                # en dos discos). Sólo cae a `out_dir` si el capítulo aún no existe en disco.
+                _replace_chapter_in_place(chapter_dir(title, prefix) or out_dir,
+                                          prefix, stage, res["pages"])
                 _invalidate_upscaled(title, prefix)
                 translated.add(chn)
                 done_ch.append({"chapter": chn, **{k: res[k] for k in
@@ -3088,7 +3105,8 @@ def qa_flag():
     case_dir = QA_DIR / "_flagged" / case_id
     case_dir.mkdir(parents=True, exist_ok=True)
     # La página de salida (lo que el usuario ve mal) vive en la biblioteca.
-    out_src = Path(manga_dir()) / title / page
+    from api.roots import find_file
+    out_src = find_file(f"{title}/{page}", prefer_upscaled=False) or (series_dir(title) / page)
     if out_src.exists():
         shutil.copy2(out_src, case_dir / f"output{out_src.suffix}")
     # Artefactos de depuración del bundle del capítulo (si la traducción fue en modo QA).

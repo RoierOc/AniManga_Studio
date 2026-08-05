@@ -21,6 +21,7 @@ from pathlib import Path
 import requests as _http
 
 from api.runtime import manga_dir, write_json_atomic
+from api.roots import series_dir, series_titles, series_up_dir  # resuelven el DISCO de la obra
 from api.mangadex import _canon, _all_titles, resolve_manga_by_title
 from api.observability import record_error
 
@@ -49,7 +50,7 @@ def _net_failed() -> bool:
 
 
 def _identity_path(title: str) -> Path:
-    return Path(manga_dir()) / title / _IDENTITY_FILE
+    return series_dir(title) / _IDENTITY_FILE
 
 
 def _read_identity(title: str) -> dict:
@@ -249,14 +250,11 @@ def verify_library(fix_source_meta: bool = True) -> list:
     también rompería leer/descargar de esa fuente). Nunca toca fuentes que no sean MangaDex.
     Devuelve un informe [{title, old, new, verified, fixed_source_meta, method}]."""
     from api.transplant import _read_source_meta, _write_source_meta
-    root = Path(manga_dir())
+    # Todas las raíces, una entrada por obra: con la biblioteca repartida, barrer sólo el
+    # primer disco dejaba sin verificar la identidad de lo que vive en el segundo.
     report = []
-    if not root.exists():
-        return report
-    for d in sorted(root.iterdir()):
-        if not d.is_dir() or d.name.startswith("."):   # salta .cache/.trash y demás no-obras
-            continue
-        title = d.name
+    for title in sorted(series_titles()):
+        d = series_dir(title)
         meta = _read_source_meta(title)
         old_pin = ""
         if str(meta.get("sourceId")) == "__mangadex__" and meta.get("mangaId"):

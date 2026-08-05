@@ -25,6 +25,9 @@ from api.runtime import (
     normalize_chapter,
     sanitize_title_for_id,
 )
+# `series_dir(title, root_id)` decide EN QUÉ DISCO cae la descarga: el que pida la UI, o el
+# que ya tenga la obra. Ver `api/roots.py`.
+from api.roots import series_dir
 
 
 download_bp = Blueprint('download', __name__)
@@ -218,21 +221,21 @@ def download_manga():
     if not manga_id:
         return jsonify({'status': 'error', 'message': 'mangaId required'}), 400
     
-    folder = Path(manga_dir()) / title
+    folder = series_dir(title, data.get('root'))
     folder.mkdir(parents=True, exist_ok=True)
 
     download_id = f"{sanitize_title_for_id(title)}_download_all"
     
     set_download_status(download_id, {'status': 'started', 'title': title, 'chapters': 0, 'max': max_chapters})
     
-    threading.Thread(target=thread_guard('download')(run_download), args=(download_id, manga_id, title, max_chapters), daemon=True).start()
+    threading.Thread(target=thread_guard('download')(run_download), args=(download_id, manga_id, title, max_chapters, data.get('root')), daemon=True).start()
     
     return jsonify({'status': 'started', 'title': title, 'folder': str(folder), 'task_id': download_id})
 
-def _run_download_chapter(download_id, title, chapter_norm, chapter_id, manga_id):
+def _run_download_chapter(download_id, title, chapter_norm, chapter_id, manga_id, root_id=None):
     """Background thread: resolve chapter ID if needed, then download all pages."""
     with _dl_semaphore:
-        folder = Path(manga_dir()) / title
+        folder = series_dir(title, root_id)
         folder.mkdir(parents=True, exist_ok=True)
 
         try:
@@ -354,7 +357,7 @@ def download_chapter():
 
     threading.Thread(
         target=thread_guard('download')(_run_download_chapter),
-        args=(download_id, title, chapter_norm, chapter_id, manga_id),
+        args=(download_id, title, chapter_norm, chapter_id, manga_id, data.get('root')),
         daemon=True,
     ).start()
 
@@ -412,17 +415,11 @@ def delete_chapter():
         pattern = f"{prefix}_*"
         deleted = 0
 
-        # Delete from downloaded folder
-        folder = Path(manga_dir()) / title
-        if folder.exists():
-            for f in folder.glob(pattern):
-                f.unlink()
-                deleted += 1
-
-        # Also delete from upscaled folder
-        upscaled_folder = Path(upscaled_dir()) / title
-        if upscaled_folder.exists():
-            for f in upscaled_folder.glob(pattern):
+        # En TODOS los discos: una obra repartida borraría sólo la mitad de sus páginas y el
+        # capítulo seguiría apareciendo a medias. Ver `api/roots.py`.
+        from api.roots import series_dirs, series_up_dirs
+        for d in series_dirs(title) + series_up_dirs(title):
+            for f in d.glob(pattern):
                 f.unlink()
                 deleted += 1
 
@@ -448,15 +445,13 @@ def delete_manga():
 
     try:
         import shutil
-        folder = Path(manga_dir()) / title
-        upscaled_folder = Path(upscaled_dir()) / title
+        # Borrar la obra la borra de TODOS los discos donde viva: si quedara la mitad en el
+        # otro, reaparecería en la biblioteca como una obra a medias.
+        from api.roots import series_dirs, series_up_dirs
 
         deleted = 0
-        if folder.exists():
-            shutil.rmtree(folder)
-            deleted += 1
-        if upscaled_folder.exists():
-            shutil.rmtree(upscaled_folder)
+        for d in series_dirs(title) + series_up_dirs(title):
+            shutil.rmtree(d, ignore_errors=True)
             deleted += 1
 
         # Auto-sana: quita la entrada seguida (por id exacto o por título insensible a mayúsculas)
@@ -514,7 +509,7 @@ def download_source_chapter():
 
     threading.Thread(
         target=thread_guard('download')(_run_source_download),
-        args=(download_id, title, chapter_norm, page_urls, source_id, manga_id, source_name, source_lang),
+        args=(download_id, title, chapter_norm, page_urls, source_id, manga_id, source_name, source_lang, data.get('root')),
         daemon=True,
     ).start()
 
@@ -526,10 +521,10 @@ def download_source_chapter():
     })
 
 
-def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=None, manga_id=None, source_name=None, source_lang=None):
+def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=None, manga_id=None, source_name=None, source_lang=None, root_id=None):
     import json as _json
     with _dl_semaphore:
-        folder = Path(manga_dir()) / title
+        folder = series_dir(title, root_id)
         folder.mkdir(parents=True, exist_ok=True)
         # Persist source context so the library can reload chapters from Suwayomi
         if source_id and manga_id:
@@ -630,7 +625,7 @@ def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=
             set_download_status(download_id, {'status': 'error', 'message': str(e)})
 
 
-def run_download(download_id, manga_id, title, max_chapters):
+def run_download(download_id, manga_id, title, max_chapters, root_id=None):
     try:
         chapters_by_num = {}
         offset = 0
@@ -661,7 +656,7 @@ def run_download(download_id, manga_id, title, max_chapters):
 
         chapters = sorted(chapters_by_num.keys(), key=lambda x: float(x) if x.replace('.', '').isdigit() else 0, reverse=True)[:max_chapters]
 
-        folder = Path(manga_dir()) / title
+        folder = series_dir(title, root_id)
         folder.mkdir(parents=True, exist_ok=True)
 
         for i, ch in enumerate(chapters):

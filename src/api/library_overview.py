@@ -1,3 +1,4 @@
+from api.roots import series_dir, series_up_dir  # resuelve el DISCO de la obra
 """Fusión «lo que hay en disco» + «lo que sigues» — la vista completa de la Biblioteca.
 
 Esto vivía en el frontend (`views/LibraryView.vue::load()`): dos peticiones y ~60 líneas de
@@ -24,10 +25,12 @@ def _identity_al_id(folder: str):
     """
     if not folder:
         return None
-    from pathlib import Path
-    from api.runtime import manga_dir
-    p = Path(manga_dir()) / folder / '.identity.json'
-    if not p.exists():
+    from api.roots import series_dirs
+    # En cualquiera de sus discos: la identidad se escribió junto a las páginas, y si la obra
+    # vive sólo en el segundo disco, mirar el principal la daría por no identificada.
+    p = next((d / '.identity.json' for d in series_dirs(folder)
+              if (d / '.identity.json').exists()), None)
+    if p is None:
         return None
     try:
         import json

@@ -6,7 +6,7 @@ import { useBoxWidth } from '@/lib/useBoxWidth'
 import { useDiscoveryStore } from '@/stores/discovery'
 
 const props = defineProps({ manga: { type: Object, required: true }, score: { type: Number, default: null } })
-defineEmits(['open'])
+defineEmits(['open', 'menu'])
 const disco = useDiscoveryStore()
 const thumb = computed(() => imgThumb(props.manga.cover))
 const [poster, boxW] = useBoxWidth(260)
@@ -24,7 +24,8 @@ const tier = computed(() => {
 </script>
 
 <template>
-  <article class="mc" tabindex="0" @click="$emit('open', manga)" @keydown.enter="$emit('open', manga)">
+  <article class="mc" tabindex="0" @click="$emit('open', manga)" @keydown.enter="$emit('open', manga)"
+           @contextmenu.prevent="$emit('menu', { ev: $event, manga })">
     <div class="mc__poster" ref="poster">
       <!-- imgProxy: el hotlink directo a uploads.mangadex.org devuelve el
            placeholder anti-hotlink en WebKitGTK (la app de escritorio) -->

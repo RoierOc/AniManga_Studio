@@ -2,19 +2,21 @@
 /* Explorar: unifica MangaDex y Fuentes (Suwayomi) en una sola vista, pero son
  * cosas MUY distintas → se eligen con un selector claro arriba y se conserva
  * TODO lo de cada una (KeepAlive mantiene el estado al cambiar de una a otra). */
-import { ref, computed, defineAsyncComponent } from 'vue'
+import { computed, defineAsyncComponent } from 'vue'
+import { useUiStore } from '@/stores/ui'
 import Icon from '@/components/ui/Icon.vue'
 
 const MangaDexView = defineAsyncComponent(() => import('@/views/MangaDexView.vue'))
 const SourcesView  = defineAsyncComponent(() => import('@/views/SourcesView.vue'))
 
-const TAB_KEY = 'manga-explore-tab'
 const TABS = [
   { id: 'mangadex', label: 'MangaDex', icon: 'search', desc: 'Catálogo oficial' },
   { id: 'sources',  label: 'Fuentes',  icon: 'globe',  desc: 'Extensiones (Suwayomi)' },
 ]
-const tab = ref(localStorage.getItem(TAB_KEY) === 'sources' ? 'sources' : 'mangadex')
-function setTab(id) { tab.value = id; try { localStorage.setItem(TAB_KEY, id) } catch (_) {} }
+// En el store (`ui.tabs.exp`), no en un ref local: así el historial la ve y "atrás" vuelve a ella.
+const ui = useUiStore()
+const tab = computed(() => ui.tabs.exp)
+const setTab = (id) => ui.setTab('exp', id)
 const current = computed(() => (tab.value === 'sources' ? SourcesView : MangaDexView))
 </script>
 

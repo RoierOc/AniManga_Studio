@@ -88,3 +88,64 @@ describe('exportAllVolumes()', () => {
     expect(api.post).not.toHaveBeenCalledWith('/api/export/start', expect.anything())
   })
 })
+
+// El nombre del tomo ES el nombre del fichero exportado: "Tomo 1.cbz" suelto no dice de qué obra
+// es, y dos series distintas se pisan el nombre en la carpeta de destino.
+describe('_tomoName: el CBZ lleva el nombre de la obra', () => {
+  it('antepone la obra al tomo', () => {
+    const s = withChapters([1])
+    s.current = { id: 'Witch Hat Atelier', name: 'Witch Hat Atelier' }
+    expect(s._tomoName({ volume: '1' })).toBe('Witch Hat Atelier - Tomo 1')
+  })
+
+  it('no la repite si la etiqueta de MangaDex ya la trae', () => {
+    const s = withChapters([1])
+    s.current = { id: 'Witch Hat Atelier', name: 'Witch Hat Atelier' }
+    expect(s._tomoName({ volume: '1', label: 'Witch Hat Atelier Vol. 1' })).toBe('Witch Hat Atelier Vol. 1')
+  })
+
+  it('sin obra conocida, deja el tomo tal cual', () => {
+    const s = withChapters([1])
+    s.current = {}
+    expect(s._tomoName({ volume: '3' })).toBe('Tomo 3')
+  })
+
+  it('el lote automático exporta con el nombre completo', () => {
+    const s = withChapters([1, 2])
+    s.current = { id: 'Witch Hat Atelier', name: 'Witch Hat Atelier' }
+    s.mdex.volumes = [{ volume: '1', chapters: ['1', '2'] }]
+    expect(s.volumePlan()[0].label).toBe('Witch Hat Atelier - Tomo 1')
+  })
+})
+
+/* Las portadas de MangaDex inventan tomos: `loadMdexVolumes` añade un chip por cada portada cuyo
+ * volumen no esté en el mapa. Las ediciones francesas y alemanas se numeran «1.1», «3.1», «12.1»
+ * → chips de tomo que no casan con ningún capítulo. */
+describe('portadas en otros idiomas no inventan tomos', () => {
+  it('descarta las portadas fr/de antes de derivar tomos', async () => {
+    const s = withChapters([1, 2])
+    s.mdex.id = 'X'
+    s.resolveMdexId = async () => 'X'
+    api.get.mockImplementation((url) => {
+      if (url.includes('/volumes/')) return Promise.resolve([{ volume: '1', label: 'Tomo 1', chapters: ['1', '2'], count: 2 }])
+      if (url.includes('/covers/')) return Promise.resolve([
+        { id: 'a', volume: '1', locale: 'es', url: 'u1' },
+        { id: 'b', volume: '1.1', locale: 'fr', url: 'u2' },
+        { id: 'c', volume: '3.1', locale: 'de', url: 'u3' },
+      ])
+      return Promise.resolve([])
+    })
+    await s.loadMdexVolumes()
+    expect(s.mdex.volumes.map(v => v.volume)).toEqual(['1'])
+  })
+
+  it('pide el mapa de tomos filtrado por idioma', async () => {
+    const s = withChapters([1])
+    s.resolveMdexId = async () => 'X'
+    api.get.mockResolvedValue([])
+    await s.loadMdexVolumes()
+    const pedido = api.get.mock.calls.map(c => c[0]).find(u => u.includes('/volumes/'))
+    // Sin `lang`, `aggregate` declara capítulos de CUALQUIER idioma y el tomo sale «5/6».
+    expect(pedido).toContain('lang=')
+  })
+})

@@ -32,18 +32,13 @@ def _history_path():
     return Path(manga_dir()) / 'reading_history.json'
 
 def _history_read():
-    try:
-        if _history_path().exists():
-            return json.loads(_history_path().read_text(encoding='utf-8'))
-    except Exception:
-        pass
-    return []
+    """Las entradas recientes. El histórico completo vive archivado por meses.
 
-def _history_write(history):
-    try:
-        write_json_atomic(_history_path(), history[:500], indent=2, keep_backup=True)
-    except Exception:
-        pass
+    Igual que el de anime, esto truncaba a 500 y por tanto BORRABA lo más antiguo en cada
+    escritura. Ahora `history_store` lo archiva en `reading_history_archive/YYYY-MM.json`.
+    """
+    from api import history_store
+    return history_store.read_live('reading')
 
 @reader_bp.route('/history')
 def get_history():
@@ -60,9 +55,8 @@ def record_history():
     if not title or chapter is None:
         return jsonify({'error': 'title and chapter required'}), 400
 
-    history = _history_read()
-    history = [h for h in history if not (h.get('title') == title and str(h.get('chapter')) == str(chapter))]
-    history.insert(0, {
+    from api import history_store
+    history_store.append('reading', {
         'title': title,
         'chapter': chapter,
         'cover': data.get('cover', ''),
@@ -73,14 +67,13 @@ def record_history():
         # panel de historial. El campo `source` de arriba es una cadena de DISPLAY ('online'); sin
         # esto, continuar un capítulo online desde el historial no tenía con qué re-resolver.
         'source_obj': data.get('source_obj'),
-        'read_at': int(time.time()),
-    })
-    _history_write(history)
+    }, dedup_keys=('title', 'chapter'), dedup_window=0, dedup_scan=0)
     return jsonify({'success': True})
 
 @reader_bp.route('/history/clear', methods=['POST'])
 def clear_history():
-    _history_write([])
+    from api import history_store
+    history_store.clear('reading')
     return jsonify({'success': True})
 
 # ── Progreso de lectura (qué capítulos has leído y por dónde vas) ─────────
@@ -194,34 +187,27 @@ def read_chapter():
 
     chapter_prefix = _chapter_prefix(chapter)
 
-    def chapter_pages(folder_path):
-        pages = []
-        for ext in ['jpg', 'png', 'webp']:
-            pages.extend(sorted(f.name for f in folder_path.glob(f'{chapter_prefix}*.{ext}')))
-        return sorted(pages)
-
-    upscaled_folder = Path(upscaled_dir()) / actual_folder
-    original_folder = Path(manga_dir()) / actual_folder
+    # Páginas del capítulo FUNDIDAS entre discos: leer no debe notar que la obra está
+    # repartida. La URL sigue siendo `<obra>/<página>` (sin disco) y `app.serve_upload` la
+    # resuelve contra todas las raíces. Ver `api/roots.py`.
+    from api.roots import series_pages
+    up_pages = series_pages(actual_folder, upscaled=True, prefix=chapter_prefix)
+    orig_pages = series_pages(actual_folder, prefix=chapter_prefix)
 
     if source == 'original':
-        folder = original_folder
-        resolved = 'original'
+        chosen, resolved = orig_pages, 'original'
     elif source == 'upscaled':
-        folder = upscaled_folder
-        resolved = 'upscaled'
+        chosen, resolved = up_pages, 'upscaled'
+    elif up_pages:
+        # Auto: escalado sólo si ESTE capítulo tiene páginas ahí
+        chosen, resolved = up_pages, 'upscaled'
     else:
-        # Auto: use upscaled only if this specific chapter has pages there
-        if upscaled_folder.exists() and chapter_pages(upscaled_folder):
-            folder = upscaled_folder
-            resolved = 'upscaled'
-        else:
-            folder = original_folder
-            resolved = 'original'
+        chosen, resolved = orig_pages, 'original'
 
-    if not folder.exists():
+    if not chosen:
         return jsonify({'pages': [], 'error': 'Folder not found'})
 
-    pages = chapter_pages(folder)
+    pages = sorted(chosen)
     # Cache-bust por mtime: las páginas se sirven con max_age de 7 días ("inmutables"), pero la
     # TRADUCCIÓN reescribe el archivo MANTENIENDO el nombre -> el navegador seguía mostrando la
     # versión vieja (inglés) de su caché tras re-traducir. Anexar ?v=<mtime> cambia la URL sólo
@@ -230,7 +216,7 @@ def read_chapter():
     out = []
     for p in pages:
         try:
-            v = int((folder / p).stat().st_mtime)
+            v = int(chosen[p].stat().st_mtime)
             out.append(f"{actual_folder}/{p}?v={v}")
         except OSError:
             out.append(f"{actual_folder}/{p}")
@@ -241,23 +227,21 @@ def read_chapter():
 def random_chapter():
     all_chapters = []
     
-    for folder in Path(manga_dir()).iterdir():
-        if not folder.is_dir():
-            continue
-        
-        images = list(folder.glob('*.jpg')) + list(folder.glob('*.png'))
-        if images:
-            all_chapters.append(folder.name)
-    
+    from api.roots import series_pages, series_titles
+
+    for name, dirs in series_titles().items():
+        if any(next(d.glob('*.jpg'), None) or next(d.glob('*.png'), None) for d in dirs):
+            all_chapters.append(name)
+
     if not all_chapters:
         return jsonify({'error': 'No manga in library'})
-    
+
     import random
     title = random.choice(all_chapters)
-    
-    images = list((Path(manga_dir()) / title).glob('*.jpg'))
+
+    images = sorted(series_pages(title))
     if images:
-        ch = images[0].stem.split('_')[0][2:]
+        ch = images[0].split('_')[0][2:]
     else:
         ch = '001'
     

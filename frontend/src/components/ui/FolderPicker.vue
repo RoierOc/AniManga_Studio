@@ -1,37 +1,73 @@
 <script setup>
-import { useAnimeStore } from '@/stores/anime'
+/* Explorador de carpetas del sistema. Primitiva compartida.
+ *
+ * Existía sólo para las descargas de anime (`components/anime/FolderPicker.vue`, atado al store
+ * de anime). Las carpetas de manga pedían la ruta ESCRITA a mano y ahí es donde se torcía: bajo
+ * WSL `D:\Manga` y `/mnt/d/Manga` son la misma carpeta pero `/Manga_Upscaler_project/...` NO está
+ * en ningún disco de Windows — vive dentro del .vhdx de WSL, o sea en C:. Tecleando no se
+ * distingue; navegando, sí: sólo se puede elegir lo que existe de verdad.
+ *
+ * Estado local a propósito: es UI efímera, no había razón para que viviera en un store.
+ * Usa `/api/anime/browse` (recorrido de directorios genérico, sólo vive ahí por historia).
+ */
+import { ref, watch } from 'vue'
+import { api } from '@/lib/api'
+import { useUiStore } from '@/stores/ui'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 
-const store = useAnimeStore()
-function useBrowsed() { store.saveDlPath(store.dlBrowse.win || ''); store.closeDlBrowse() }
+const props = defineProps({
+  open: { type: Boolean, default: false },
+  title: { type: String, default: 'Elegir carpeta' },
+})
+const emit = defineEmits(['update:open', 'pick'])
+
+const st = ref({ path: '', win: '', parent: null, items: [], loading: false })
+
+async function browse(path = '') {
+  st.value.loading = true
+  try {
+    const d = await api.get(`/api/anime/browse?path=${encodeURIComponent(path)}`)
+    st.value = { path: d.path, win: d.win_path, parent: d.parent, items: d.items || [], loading: false }
+  } catch (_) {
+    st.value.loading = false
+    useUiStore().toast('No se pudo explorar', 'error')
+  }
+}
+
+// Cada apertura empieza en la lista de discos: heredar la carpeta de la vez anterior es
+// justamente cómo se acaba guardando en el sitio equivocado sin mirar.
+watch(() => props.open, (v) => { if (v) browse('') })
+
+function close() { emit('update:open', false) }
+function use() { emit('pick', { path: st.value.path, win: st.value.win }); close() }
 </script>
 
 <template>
   <Teleport to="body">
-    <div v-if="store.dlBrowse.open" class="ov" @click.self="store.closeDlBrowse()">
+    <div v-if="open" class="ov" @click.self="close()">
       <div class="picker">
         <header class="picker__head">
-          <span>Elegir carpeta de descargas</span>
-          <button class="picker__x" @click="store.closeDlBrowse()"><Icon name="close" :size="16" /></button>
+          <span>{{ title }}</span>
+          <button class="picker__x" @click="close()"><Icon name="close" :size="16" /></button>
         </header>
         <div class="picker__bar">
-          <button class="picker__up" :disabled="store.dlBrowse.parent === null" @click="store.openDlBrowse(store.dlBrowse.parent || '')">
+          <button class="picker__up" :disabled="st.parent === null" @click="browse(st.parent || '')">
             <Icon name="chevron" :size="14" :style="{ transform: 'rotate(180deg)' }" /> Subir
           </button>
-          <code class="picker__path">{{ store.dlBrowse.win || 'Discos' }}</code>
+          <code class="picker__path">{{ st.win || 'Discos' }}</code>
         </div>
-        <div v-if="store.dlBrowse.loading" class="center"><Spinner :size="20" /></div>
+        <div v-if="st.loading" class="center"><Spinner :size="20" /></div>
         <div v-else class="picker__list">
-          <button v-for="it in store.dlBrowse.items" :key="it.path" class="picker__item" @click="store.openDlBrowse(it.path)">
+          <button v-for="it in st.items" :key="it.path" class="picker__item" @click="browse(it.path)">
             <Icon :name="it.is_drive ? 'download' : 'folder'" :size="15" />
             <span>{{ it.name }}</span>
           </button>
-          <p v-if="!store.dlBrowse.items.length" class="picker__empty">Sin subcarpetas.</p>
+          <p v-if="!st.items.length" class="picker__empty">Sin subcarpetas.</p>
         </div>
         <footer class="picker__foot">
-          <span class="picker__sel">{{ store.dlBrowse.win || '—' }}</span>
-          <button class="picker__use" :disabled="!store.dlBrowse.win" @click="useBrowsed">Usar esta carpeta</button>
+          <span class="picker__sel">{{ st.win || '—' }}</span>
+          <button class="picker__use" :disabled="!st.win" @click="use()">Usar esta carpeta</button>
         </footer>
       </div>
     </div>

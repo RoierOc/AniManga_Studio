@@ -1,5 +1,7 @@
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
+import ContextMenu from '@/components/ui/ContextMenu.vue'
+import { useUiStore } from '@/stores/ui'
 import { useMangadexStore } from '@/stores/mangadex'
 import { useDiscoveryStore } from '@/stores/discovery'
 import MdCard from '@/components/manga/MdCard.vue'
@@ -26,6 +28,28 @@ const AL_SORTS = [
   { id: 'POPULARITY_DESC', label: 'Popularidad' },
   { id: 'TRENDING_DESC', label: 'Tendencia' },
 ]
+/* Explorar es la rejilla de cientos de portadas: sin clic derecho, añadir 5 mangas a la biblioteca
+ * son 5 modales abiertos y cerrados. Las acciones son las que ya existen en el store. */
+const cm = ref({ open: false, x: 0, y: 0, items: [] })
+function openMenu({ ev, manga }) {
+  const yaEsta = disco.inLibrary(manga) || store.localIds.includes(String(manga.id))
+  cm.value = {
+    open: true, x: ev.clientX, y: ev.clientY,
+    items: [
+      { label: 'Abrir ficha', icon: 'search', action: () => (manga.al_id && !manga.id ? store.openAnilistResult(manga) : store.openDetail(manga)) },
+      { label: yaEsta ? 'Ya está en tu biblioteca' : 'Añadir a mi biblioteca', icon: 'plus', disabled: yaEsta, action: () => store.addLocal(manga) },
+      { sep: true },
+      { label: 'Copiar título', action: () => copiar(manga.title) },
+      ...(manga.id ? [{ label: 'Abrir en MangaDex ↗', icon: 'external', action: () => window.open(`https://mangadex.org/title/${manga.id}`, '_blank', 'noopener') }] : []),
+      ...(manga.al_id ? [{ label: 'Abrir en AniList ↗', icon: 'external', action: () => window.open(`https://anilist.co/manga/${manga.al_id}`, '_blank', 'noopener') }] : []),
+    ],
+  }
+}
+async function copiar(t) {
+  try { await navigator.clipboard.writeText(t || ''); useUiStore().toast('Título copiado', 'ok') }
+  catch (_) { useUiStore().toast('El portapapeles no está disponible', 'error') }
+}
+
 const SPECIAL_TABS = ['anilist', 'mylist']
 const canMore = computed(() => !SPECIAL_TABS.includes(store.tab) && store.tab !== 'search' && store.popular.length < store.total)
 
@@ -102,7 +126,7 @@ onMounted(() => {
         </template>
       </EmptyState>
       <div v-else class="grid">
-        <MdCard v-for="m in store.followed" :key="m.id" :manga="m" :score="store.score(m)" @open="store.openDetail($event)" />
+        <MdCard v-for="m in store.followed" :key="m.id" :manga="m" :score="store.score(m)" @open="store.openDetail($event)" @menu="openMenu" />
       </div>
     </template>
 
@@ -115,7 +139,7 @@ onMounted(() => {
                   hint="Prueba con otro orden o quita el filtro." />
       <template v-else>
         <div class="grid">
-          <MdCard v-for="m in store.alTop" :key="m.al_id" :manga="{ ...m, contentRating: 'safe' }" :score="m.score" @open="store.openAnilistResult($event)" />
+          <MdCard v-for="m in store.alTop" :key="m.al_id" :manga="{ ...m, contentRating: 'safe' }" :score="m.score" @open="store.openAnilistResult($event)" @menu="openMenu" />
         </div>
         <div v-if="store.alHasMore" class="more">
           <button class="morebtn" :disabled="store.alLoading" @click="store.loadAnilistTop(store.alPage + 1)">{{ store.alLoading ? 'Cargando…' : 'Cargar más' }}</button>
@@ -138,7 +162,7 @@ onMounted(() => {
                   :hint="store.tab === 'search' ? 'Prueba con menos palabras o con el título en inglés.' : ''" />
       <template v-else>
         <div class="grid">
-          <MdCard v-for="m in store.list" :key="m.id" :manga="m" :score="store.score(m)" @open="store.openDetail($event)" />
+          <MdCard v-for="m in store.list" :key="m.id" :manga="m" :score="store.score(m)" @open="store.openDetail($event)" @menu="openMenu" />
         </div>
         <div v-if="canMore" class="more">
           <button class="morebtn" :disabled="store.loading" @click="store.loadPopular(store.tab, store.page + 1)">
@@ -148,6 +172,7 @@ onMounted(() => {
       </template>
     </template>
 
+    <ContextMenu v-model:open="cm.open" :x="cm.x" :y="cm.y" :items="cm.items" />
   </div>
 </template>
 

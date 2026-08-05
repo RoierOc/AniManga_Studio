@@ -26,6 +26,31 @@ from api.runtime import (
     normalize_chapter,
 )
 from api.observability import thread_guard
+from api.roots import series_dir, series_dirs, series_pages, series_up_dir
+
+
+def _folders_for(actual_folder):
+    """(carpeta de originales, carpeta de escalados) de una obra: su disco PRINCIPAL.
+
+    ⚠️ Aquí NO se acepta un disco elegido a mano, a propósito. El selector de carpeta dice
+    dónde caen las DESCARGAS; el escalado no descarga nada: lee páginas que ya existen y
+    escribe el 4K **al lado de cada original** (`roots.up_dir_for`, dentro de
+    `run_upscale_chapter`), porque el 4K nunca cruza de disco. Aceptar un `root` aquí sólo
+    servía para romperlo: si el disco elegido no tenía la obra, esto devolvía
+    404 «Folder not found» y la UI decía «No se pudo iniciar el escalado» — con las páginas
+    perfectamente localizables en el otro disco. Estas dos carpetas son sólo el destino de
+    RESPALDO, para una página cuya raíz no se reconozca.
+    """
+    return series_dir(actual_folder), series_up_dir(actual_folder)
+
+
+def _pages_for(actual_folder, prefix='', upscaled=False):
+    """Páginas de una obra ordenadas por nombre, UNIDAS entre discos.
+
+    Escalar tiene que ver el capítulo entero aunque sus páginas estén repartidas: mirar un
+    solo disco escalaba media obra y daba el resto por «ya hecho»."""
+    return [p for _, p in sorted(series_pages(actual_folder, upscaled=upscaled, prefix=prefix).items())]
+
 
 _UPSCALE_STATUS_FILE = Path(UPSCALED_DIR) / '.upscale_status.json'
 _UPSCALE_IN_FLIGHT = {'upscaling', 'started', 'starting'}
@@ -640,10 +665,11 @@ def repair_chapter():
 
         from api.library import find_manga_folder
         actual_folder = find_manga_folder(title)
-        input_folder = Path(manga_dir()) / actual_folder
-        output_folder = Path(upscaled_dir()) / actual_folder
+        input_folder, output_folder = _folders_for(actual_folder)
 
-        if not input_folder.exists():
+        # "No está en NINGÚN disco" es lo único que es un 404 aquí. Mirar si existe en UNA
+        # carpeta concreta daba «Folder not found» con la obra entera en el disco de al lado.
+        if not series_dirs(actual_folder):
             return jsonify({'status': 'error', 'message': 'Folder not found'}), 404
 
         chapter_norm = normalize_chapter(chapter)
@@ -654,15 +680,13 @@ def repair_chapter():
         except (InvalidOperation, ValueError):
             ch_prefix = f"ch{chapter_norm}_"
 
-        all_images = sorted(input_folder.glob(ch_prefix + "*.*"))
+        all_images = _pages_for(actual_folder, ch_prefix)
 
-        # Find images whose stem is absent from the upscaled folder (check all extensions)
+        # Find images whose stem is absent from the upscaled folder (check all extensions).
+        # Ya escalado en CUALQUIER disco cuenta: si no, reparar re-escalaría lo que está hecho
+        # en el otro disco y encima lo duplicaría.
         output_folder.mkdir(parents=True, exist_ok=True)
-        _IMAGE_EXTS = ('jpg', 'jpeg', 'png', 'webp')
-        up_stems = set()
-        for ext in _IMAGE_EXTS:
-            for f in output_folder.glob(f'{ch_prefix}*.{ext}'):
-                up_stems.add(f.stem)
+        up_stems = {p.stem for p in _pages_for(actual_folder, ch_prefix, upscaled=True)}
 
         missing_images = [p for p in all_images if p.stem not in up_stems]
 
@@ -805,11 +829,10 @@ def upscale_chapter():
 
         from api.library import find_manga_folder
         actual_folder = find_manga_folder(title)
-        input_folder = Path(manga_dir()) / actual_folder
-        output_folder = Path(upscaled_dir()) / actual_folder
+        input_folder, output_folder = _folders_for(actual_folder)
         output_folder.mkdir(parents=True, exist_ok=True)
 
-        if not input_folder.exists():
+        if not series_dirs(actual_folder):
             return jsonify({'status': 'error', 'message': 'Folder not found'}), 404
 
         chapter_norm = normalize_chapter(chapter)
@@ -823,7 +846,7 @@ def upscale_chapter():
         except (InvalidOperation, ValueError):
             ch_prefix = f"ch{chapter_norm}_"
 
-        images = sorted(input_folder.glob(ch_prefix + "*.*"))
+        images = _pages_for(actual_folder, ch_prefix)
 
         if not images:
             return jsonify({'status': 'error', 'message': 'No images found', 'task_id': build_task_id(actual_folder, chapter_norm, 'upscale')}), 404
@@ -834,13 +857,16 @@ def upscale_chapter():
         exclude_pages = set(data.get('exclude_pages') or data.get('excludePages') or [])
         if exclude_pages:
             import shutil as _shutil
+            from api.roots import up_dir_for
             for p in images:
-                if p.name in exclude_pages and not (output_folder / p.name).exists():
-                    _shutil.copy2(p, output_folder / p.name)
+                if p.name in exclude_pages:
+                    dst = up_dir_for(p)      # al escalado del MISMO disco que el original
+                    dst.mkdir(parents=True, exist_ok=True)
+                    if not (dst / p.name).exists():
+                        _shutil.copy2(p, dst / p.name)
 
-        # Skip pages already upscaled (resume support)
-        _IMAGE_EXTS = ('jpg', 'jpeg', 'png', 'webp')
-        up_stems = {f.stem for ext in _IMAGE_EXTS for f in output_folder.glob(f'{ch_prefix}*.{ext}')}
+        # Skip pages already upscaled (resume support). Ya escalado en cualquier disco cuenta.
+        up_stems = {p.stem for p in _pages_for(actual_folder, ch_prefix, upscaled=True)}
         images_todo = [p for p in images if p.stem not in up_stems]
 
         if not images_todo:
@@ -1052,9 +1078,8 @@ def _color_ctx(data):
         return None, ({'status': 'error', 'message': f'{model_key} no es un modelo a color'}, 400)
     from api.library import find_manga_folder
     actual_folder = find_manga_folder(title)
-    input_folder = Path(manga_dir()) / actual_folder
-    output_folder = Path(upscaled_dir()) / actual_folder
-    if not input_folder.exists():
+    input_folder, output_folder = _folders_for(actual_folder)
+    if not series_dirs(actual_folder):
         return None, ({'status': 'error', 'message': 'Folder not found'}, 404)
     return (actual_folder, input_folder, output_folder, model_key), None
 
@@ -1069,12 +1094,11 @@ def color_pages():
         return jsonify({'error': 'title y chapter requeridos'}), 400
     from api.library import find_manga_folder
     actual_folder = find_manga_folder(title)
-    input_folder = Path(manga_dir()) / actual_folder
-    output_folder = Path(upscaled_dir()) / actual_folder
-    if not input_folder.exists():
+    input_folder, output_folder = _folders_for(actual_folder)
+    if not series_dirs(actual_folder):
         return jsonify({'error': 'Folder not found'}), 404
     chapter_norm, prefix = _color_prefix(chapter)
-    imgs = sorted(input_folder.glob(prefix + '*.*'))
+    imgs = _pages_for(actual_folder, prefix)   # unidas entre discos
     # Solo se muestran las páginas a COLOR (las B&N no son relevantes para este flujo).
     color_imgs = _detect_color(imgs)
     pages = [{'name': p.name, 'url': f'{actual_folder}/{p.name}', 'color': True} for p in color_imgs]
@@ -1096,11 +1120,10 @@ def color_pages_all():
     want = {normalize_chapter(c) for c in (request.args.get('chapters') or '').split(',') if c.strip()}
     from api.library import find_manga_folder
     actual_folder = find_manga_folder(title)
-    input_folder = Path(manga_dir()) / actual_folder
-    output_folder = Path(upscaled_dir()) / actual_folder
-    if not input_folder.exists():
+    input_folder, output_folder = _folders_for(actual_folder)
+    if not series_dirs(actual_folder):
         return jsonify({'error': 'Folder not found'}), 404
-    color_imgs = _detect_color(filter_by_chapters(sorted(input_folder.glob('ch*_*.*')), want))
+    color_imgs = _detect_color(filter_by_chapters(_pages_for(actual_folder, 'ch'), want))
     groups = {}
     for p in color_imgs:
         cn = _chapter_norm_of(p.name)
@@ -1123,7 +1146,7 @@ def color_status():
         return jsonify({'done': []}), 200
     from api.library import find_manga_folder
     actual_folder = find_manga_folder(title)
-    output_folder = Path(upscaled_dir()) / actual_folder
+    output_folder = series_up_dir(actual_folder)
     done = []
     if output_folder.exists():
         for m in output_folder.glob('.color_done_*'):
@@ -1147,7 +1170,7 @@ def upscale_pages():
         actual_folder, input_folder, output_folder, model_key = ctx
         chapter_norm, prefix = _color_prefix(chapter)
         wanted = {p if isinstance(p, str) else str(p) for p in pages}
-        images = [p for p in sorted(input_folder.glob(prefix + '*.*')) if p.name in wanted]
+        images = [p for p in _pages_for(actual_folder, prefix) if p.name in wanted]
         if not images:
             return jsonify({'status': 'error', 'message': 'Ninguna de las páginas elegidas existe'}), 404
         body, code = _start_color(actual_folder, input_folder, output_folder, images,
@@ -1178,7 +1201,7 @@ def upscale_pages_multi():
             if chapter is None or not wanted:
                 continue
             chapter_norm, prefix = _color_prefix(chapter)
-            found = [p for p in sorted(input_folder.glob(prefix + '*.*')) if p.name in wanted]
+            found = [p for p in _pages_for(actual_folder, prefix) if p.name in wanted]
             if found:
                 images.extend(found)
                 norms.append(chapter_norm)
@@ -1204,11 +1227,11 @@ def upscale_color():
         chapter = data.get('chapter')
         if chapter is not None and str(chapter) != '':
             chapter_norm, prefix = _color_prefix(chapter)
-            candidates = sorted(input_folder.glob(prefix + '*.*'))
+            candidates = _pages_for(actual_folder, prefix)
             id_suffix = chapter_norm + '_color'
         else:
             chapter_norm = None
-            candidates = sorted(input_folder.glob('ch*_*.*'))
+            candidates = _pages_for(actual_folder, 'ch')
             id_suffix = 'all_color'
         color_imgs = _detect_color(candidates)
         if not color_imgs:
@@ -1224,6 +1247,25 @@ def upscale_color():
 # ── Worker threads (chapter threads submit tiles to GPU worker) ───────────────
 
 def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=False, fast=False):
+    # Una obra puede estar REPARTIDA entre discos, así que el destino no es uno solo: cada
+    # página escalada se escribe en la carpeta escalada del MISMO disco que su original. Si no,
+    # quitar un disco dejaría el original en uno y su 4K en otro, y la obra quedaría a medias
+    # sin que nada avise. `output_folder` sigue siendo el destino por defecto (obra en un solo
+    # disco, o una página cuya raíz no se reconozca). Ver `api/roots.py`.
+    _out_by_parent: dict = {}
+
+    def _out_dir(img_path):
+        d = _out_by_parent.get(img_path.parent)
+        if d is None:
+            try:
+                from api.roots import up_dir_for
+                d = up_dir_for(img_path)
+            except Exception:
+                d = output_folder
+            d.mkdir(parents=True, exist_ok=True)
+            _out_by_parent[img_path.parent] = d
+        return d
+
     # Acota los capítulos concurrentes (cualquier modo) → evita el OOM de RAM por buffers
     # de reconstrucción en paralelo que crashea el WSL. Cola GPU única = sin pérdida de
     # rendimiento real. Se bloquea aquí hasta que haya un hueco de los _UPSCALE_MAX_PARALLEL.
@@ -1281,8 +1323,8 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                 # la resolución del arte HD.
                 if is_already_hires(img):
                     print(f"Copy hi-res (no upscale): {img_path.name} {img.width}x{img.height}", flush=True)
-                    out_path = output_folder / (img_path.stem + img_path.suffix)
-                    for _old in output_folder.glob(img_path.stem + '.*'):
+                    out_path = _out_dir(img_path) / (img_path.stem + img_path.suffix)
+                    for _old in _out_dir(img_path).glob(img_path.stem + '.*'):
                         if _old.suffix.lower() != img_path.suffix.lower():
                             try: _old.unlink()
                             except OSError: pass
@@ -1296,7 +1338,7 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                 # registro, no por los canales (MangaJaNai/DWTP son B&N pero de 3 canales).
                 if skip_color and is_color_page(img):
                     print(f"Copy color (no upscale): {img_path.name}", flush=True)
-                    out_path = output_folder / (img_path.stem + img_path.suffix)
+                    out_path = _out_dir(img_path) / (img_path.stem + img_path.suffix)
                     shutil.copy2(img_path, out_path)
                     skipped_color += 1
                     processed += 1
@@ -1315,8 +1357,8 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                     print(f"[upscale] WARN página descomunal {img_path.name} {img.width}x{img.height} "
                           f"→ recon~{_proj:.0f}MB > cap {_MAX_RECON_MB}MB (RAM disp={_av}MB): "
                           f"se copia SIN escalar (backstop anti-OOM)", flush=True)
-                    out_path = output_folder / (img_path.stem + img_path.suffix)
-                    for _old in output_folder.glob(img_path.stem + '.*'):
+                    out_path = _out_dir(img_path) / (img_path.stem + img_path.suffix)
+                    for _old in _out_dir(img_path).glob(img_path.stem + '.*'):
                         if _old.suffix.lower() != img_path.suffix.lower():
                             try: _old.unlink()
                             except OSError: pass
@@ -1334,11 +1376,11 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                 print(f"[bench] {'2x⚡' if fast else '4x '} {img_path.name} {img.width}x{img.height} "
                       f"recon~{_proj:.0f}MB — {_dt:.2f}s avg={_avg:.2f}s (n={len(_page_times)})  "
                       f"RAM disp={_avN}MB rss={_rssN}MB", flush=True)
-                out_path = output_folder / (img_path.stem + ".jpg")
+                out_path = _out_dir(img_path) / (img_path.stem + ".jpg")
                 # Evita que una copia previa con OTRA extensión (p.ej. el .png de una página a
                 # color que el modelo B&N copió tal cual) conviva con el .jpg recién escalado y
                 # lo duplique/ensombrezca en el lector.
-                for _old in output_folder.glob(img_path.stem + '.*'):
+                for _old in _out_dir(img_path).glob(img_path.stem + '.*'):
                     if _old.suffix.lower() != '.jpg':
                         try: _old.unlink()
                         except OSError: pass

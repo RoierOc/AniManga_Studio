@@ -1,5 +1,6 @@
 <script setup>
 import { computed, nextTick, ref, watch, onUnmounted } from 'vue'
+import { useRootsStore } from '@/stores/roots'
 import { useMangaStore } from '@/stores/manga'
 import { formatChapter, MANGA_STATUS, pageUrl } from '@/lib/manga'
 import { formatBytes } from '@/lib/format'
@@ -17,9 +18,29 @@ import MangaRecRail from '@/components/manga/MangaRecRail.vue'
 import CounterpartRow from '@/components/media/CounterpartRow.vue'
 import Select from '@/components/ui/Select.vue'
 import { useModal } from '@/lib/useModal'
+import { etaTarea } from '@/lib/eta'
 import { useMultiSelect } from '@/lib/useMultiSelect'
+import { genero, idioma } from '@/lib/etiquetas'
 
 const store = useMangaStore()
+
+/* Carpeta (disco) donde caen las descargas y los escalados de este lote.
+ *
+ * Vacío = automático, y es el valor correcto casi siempre: el backend manda lo nuevo al disco
+ * donde la obra YA vive, así que elegir a mano sólo hace falta cuando ese disco se llenó. Por
+ * eso el desplegable no aparece hasta que hay un segundo disco configurado. */
+const roots = useRootsStore()
+roots.load()
+const rootOptions = computed(() => [
+  { value: '', label: 'Descargar en: automático', hint: 'donde ya vive la obra' },
+  // Un disco que no está no se ofrece: elegirlo sólo serviría para que la descarga fallara.
+  ...roots.list.filter(r => r.online).map(r => ({
+    value: r.id,
+    label: `Descargar en: ${r.label}`,
+    // El espacio libre es el dato por el que se elige un disco; sin él la elección es a ciegas.
+    hint: `${formatBytes(r.free)} libres`,
+  })),
+])
 const ui = useUiStore()
 
 /* Cruza al otro lado de la app: del manga a su anime. `openRec` del store de anime ya decide
@@ -53,7 +74,9 @@ function addToLib() { if (libWork.value) disco.addToLibrary(libWork.value) }
 // navigate browser history (that was jumping to the previous page, sometimes Mi Anime).
 // replaceNav updates the current history entry to "closed"; the browser back/forward
 // buttons still reopen/close via the snapshot model.
-function closeModal() { store.close(); ui.replaceNav() }
+// Retrocede en vez de reescribir la entrada: así "adelante" reabre el manga y el siguiente
+// "atrás" no se salta un escalón. Ver ui.back(fallback).
+function closeModal() { ui.back(() => store.close()) }
 const m = computed(() => store.current)
 
 /* Ficha de la obra: la cabecera tenía un hueco de ~400x230 px a la derecha del título mientras
@@ -234,13 +257,14 @@ async function batchDownload() {
   store.armChain(started || [])
 }
 // Traducir necesita fuentes elegidas (pestaña Traducir). Sin ellas el chip se deshabilita en vez
-// de dejarte armar una cadena que fallaría al llegar a ese paso.
-const tpReady = computed(() => !!(store.tp.artSel && store.tp.esSel))
+// de dejarte armar una cadena que fallaría al llegar a ese paso. La condición vive en el store
+// (`tpReady`/`willTranslate`) para que el chip, este texto y `armChain` no puedan discrepar.
+const tpReady = computed(() => store.tpReady)
 // El botón dice lo que VA A PASAR, no "Descargar" a secas: es lo único que ve el usuario del
 // encadenado, así que si el texto no lo cuenta, el encadenado es invisible.
 const chainLabel = computed(() => {
   const c = store.chain
-  const tr = c.translate && tpReady.value
+  const tr = store.willTranslate
   if (tr && c.upscale) return 'Descargar, traducir y escalar'
   if (tr) return 'Descargar y traducir'
   if (c.upscale) return 'Descargar y escalar'
@@ -276,6 +300,32 @@ const downscale = ref(false)
 const qMin = computed(() => codec.value === 'webp' ? 70 : 85)
 // Keep quality within the codec's valid range when switching codecs.
 watch(codec, () => { if (quality.value < qMin.value) quality.value = qMin.value })
+
+/* Inspeccionar una portada (clic derecho): la rejilla pinta miniaturas de 256 px, así que a ojo
+ * todas parecen iguales — y no lo son (MangaDex sirve desde 800×1200 hasta 2400×3600). Se carga el
+ * ORIGINAL y se leen sus dimensiones reales; el peso viene de un HEAD al proxy, que ya la tiene en
+ * su caché de disco tras el <img>. */
+const covPrev = ref(null)   // { c, url, w, h, bytes }
+function inspectCover(c) {
+  const url = imgProxy(c.url)
+  covPrev.value = { c, url, w: 0, h: 0, bytes: 0 }
+  fetch(url, { method: 'HEAD' })
+    .then(r => { if (covPrev.value?.url === url) covPrev.value.bytes = +r.headers.get('content-length') || 0 })
+    .catch(() => {})
+}
+function onCovLoad(e) {
+  if (!covPrev.value) return
+  covPrev.value.w = e.target.naturalWidth
+  covPrev.value.h = e.target.naturalHeight
+}
+const covPrevMeta = computed(() => {
+  const p = covPrev.value
+  if (!p) return ''
+  const px = p.w ? `${p.w} × ${p.h}` : 'midiendo…'
+  const kb = p.bytes ? ` · ${(p.bytes / 1024).toFixed(0)} KB` : ''
+  const vol = p.c.volume && p.c.volume !== '?' ? ` · Tomo ${p.c.volume}` : ''
+  return px + kb + vol + (p.c.locale ? ` · ${p.c.locale}` : '')
+})
 
 // management panel
 const showManage = ref(false)
@@ -472,6 +522,13 @@ watch([sel, quality, codec, tab, () => store.excludedPages.length], () => {
   if (tab.value === 'tomo') store.loadExportPreview([...sel.value], quality.value, codec.value)
 })
 
+// Dónde aterrizan los tomos. Se enseña ANTES de exportar: un archivo que aparece sin decir dónde
+// es exactamente la sensación de navegador que estamos quitando.
+const tomosDir = ref({ dir: '', display: '' })
+watch(tab, (t) => {
+  if (t === 'tomo' && !tomosDir.value.display) api.get('/api/export/dir').then(d => { if (d?.dir) tomosDir.value = d }).catch(() => {})
+}, { immediate: true })
+
 function applyVol(vol) {
   const { selected, label } = store.applyMdexVolume(vol)
   if (selected.length) { sel.value = new Set(selected); volName.value = label }
@@ -493,10 +550,26 @@ async function exportAllTomos() {
   } finally { exportingAll.value = false }
 }
 
+const tomoCoverFrom = ref('')   // de dónde salió la portada elegida, para poder deshacer
 function onTomoCover(e) {
   const f = e.target.files?.[0]; if (!f) return
-  const r = new FileReader(); r.onload = () => { tomoCover.value = r.result }; r.readAsDataURL(f)
+  const r = new FileReader()
+  r.onload = () => { tomoCover.value = r.result; tomoCoverFrom.value = f.name }
+  r.readAsDataURL(f)
 }
+/* Las páginas a color detectadas son las CANDIDATAS naturales a portada — casi siempre la primera
+ * de un tomo lo es. Estaban sólo para excluirlas del CBZ; ahora clic derecho la usa de portada. */
+async function colorAsCover(cp) {
+  try {
+    const blob = await fetch(cp.url).then(r => { if (!r.ok) throw new Error(r.status); return r.blob() })
+    tomoCover.value = await new Promise((ok, no) => {
+      const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = no; r.readAsDataURL(blob)
+    })
+    tomoCoverFrom.value = cp.label
+    ui.toast(`Portada del tomo: ${cp.label}`, 'ok')
+  } catch (_) { ui.toast('No se pudo leer esa página', 'error') }
+}
+function clearTomoCover() { tomoCover.value = ''; tomoCoverFrom.value = '' }
 
 async function saveMeta() {
   const ok = await store.editMeta({ newTitle: renameVal.value.trim() })
@@ -512,10 +585,30 @@ const toggleSel = (ch) => { const s = new Set(sel.value); s.has(ch) ? s.delete(c
 const allSelected = computed(() => store.chapters.length > 0 && sel.value.size === store.chapters.length)
 const selectAll = () => { sel.value = allSelected.value ? new Set() : new Set(store.chapters.map(c => c.chapter)) }
 
+// Los tomos en curso DE ESTA obra, aquí mismo: el Centro de Actividad ya los tenía, pero desde la
+// pestaña donde se pulsa «Exportar» no se veía nada. Misma fuente (normalizedTasks) → en lockstep.
+const misExports = computed(() =>
+  store.normalizedTasks.filter(t => t.kind === 'export' && t.mangaId === store.current.id)
+    .sort((a, b) => b.ts - a.ts))
+
+// Estado de cada tomo por su NOMBRE (`_tomoName`, el mismo que viaja como `volume_name`), para
+// pintarlo en el chip del volumen: así la cola se ve donde se elige, no sólo en la lista de abajo.
+const estadoPorTomo = computed(() => {
+  const m = new Map()
+  for (const t of misExports.value) if (!m.has(t.label)) m.set(t.label, t)
+  return m
+})
+const volEstado = (v) => estadoPorTomo.value.get(store._tomoName(v)) || null
+
 async function doExport(toDrive = false) {
   if (!sel.value.size) return
   const chapters = [...sel.value].sort((a, b) => parseFloat(a) - parseFloat(b))
-  await store.exportTomo({ chapters, volumeName: volName.value, format: fmt.value, quality: quality.value, codec: codec.value, downscaleHalf: downscale.value, coverB64: tomoCover.value || store.mdex.coverB64, toDrive })
+  const id = await store.exportTomo({ chapters, volumeName: volName.value, format: fmt.value, quality: quality.value, codec: codec.value, downscaleHalf: downscale.value, coverB64: tomoCover.value || store.mdex.coverB64, toDrive })
+  // Encolado: el formulario queda libre para preparar el siguiente tomo mientras éste se
+  // exporta. Sin esto la selección anterior seguía marcada y el segundo tomo salía con los
+  // capítulos del primero dentro. Los ajustes (formato, calidad, códec) se conservan a propósito:
+  // en una tanda de tomos son siempre los mismos.
+  if (id && !toDrive) { sel.value = new Set(); clearTomoCover() }
 }
 
 // Escape cierra, el foco no se escapa por detrás y el fondo no scrollea.
@@ -573,7 +666,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                    @click="sinopsisAbierta = !sinopsisAbierta"
                    :data-tip="sinopsisAbierta ? 'Contraer' : 'Leer la sinopsis completa'">{{ info.synopsis }}</p>
                 <div v-if="info.genres?.length" class="work__tags">
-                  <span v-for="g in info.genres.slice(0, 5)" :key="g" class="work__tag">{{ g }}</span>
+                  <span v-for="g in info.genres.slice(0, 5)" :key="g" class="work__tag">{{ genero(g) }}</span>
                 </div>
               </div>
 
@@ -750,7 +843,14 @@ useModal(() => !!m.value, closeModal, modalEl)
                 </div>
                 <p v-if="codec === 'webp'" class="codec-hint">WebP pesa menos a calidad equivalente y conserva mejor el texto al comprimir. Requiere que tu lector lo soporte (la mayoría de los modernos sí).</p>
                 <label class="chk"><input v-model="downscale" type="checkbox" /> Reducir a la mitad (menor tamaño)</label>
-                <label class="upbtn"><Icon name="library" :size="13" /> {{ tomoCover ? 'Portada elegida ✓' : 'Portada del tomo (opcional)' }}<input type="file" accept="image/*" @change="onTomoCover" hidden /></label>
+                <div class="tcov">
+                  <label class="upbtn"><Icon name="library" :size="13" /> {{ tomoCover ? 'Portada elegida ✓' : 'Portada del tomo (opcional)' }}<input type="file" accept="image/*" @change="onTomoCover" hidden /></label>
+                  <template v-if="tomoCover">
+                    <img :src="tomoCover" class="tcov__pv" alt="" />
+                    <span class="tcov__from">{{ tomoCoverFrom }}</span>
+                    <button class="btn-xs" @click="clearTomoCover">Quitar</button>
+                  </template>
+                </div>
                 <div v-if="sel.size && store.exportPreview.pages" class="tprev">
                   <span class="tprev__main">{{ store.exportPreview.pages }} págs · ~{{ store.exportPreview.est_mb }} MB</span>
                   <span v-if="store.exportPreview.upscaled_pages" class="tprev__tag tprev__tag--4k">{{ store.exportPreview.upscaled_pages }} en 4K</span>
@@ -762,6 +862,32 @@ useModal(() => !!m.value, closeModal, modalEl)
                 <button v-if="store.drive.connected" class="exportbtn exportbtn--drive" :disabled="!sel.size" @click="doExport(true)">
                   <Icon name="globe" :size="15" /> Exportar a Google Drive
                 </button>
+                <p v-if="sel.size" class="qhint">Al exportar, el formulario queda libre para preparar el siguiente tomo. Se procesan 3 a la vez; el resto espera en cola.</p>
+
+                <div v-if="misExports.length" class="xjobs">
+                  <div v-for="t in misExports" :key="t.id" class="xjob" :class="{ 'is-err': t.status === 'error', 'is-done': t.status === 'done' }">
+                    <div class="xjob__top">
+                      <Spinner v-if="t.status === 'running' || t.status === 'queued'" :size="12" />
+                      <Icon v-else :name="t.status === 'error' ? 'alert' : 'check'" :size="13" />
+                      <span class="xjob__label">{{ t.label }}</span>
+                      <span class="xjob__pct">{{ t.status === 'error' ? 'Falló' : t.status === 'done' ? 'Listo' : t.status === 'queued' ? 'En cola' : t.pct + '%' }}</span>
+                      <span v-if="etaTarea(t)" class="xjob__eta">{{ etaTarea(t) }}</span>
+                    </div>
+                    <div v-if="t.status !== 'done'" class="xjob__bar"><span :style="{ width: t.pct + '%' }" /></div>
+                    <div v-if="t.msg && t.msg !== t.label" class="xjob__msg">{{ t.msg }}</div>
+                    <div class="xjob__acts">
+                      <button v-if="t.status === 'done'" class="dlink" @click="store.saveExportFile(t.id, { volume_name: t.label })">Guardar en Tomos</button>
+                      <button v-if="t.status === 'running' || t.status === 'queued'" class="dlink" @click="store.cancelExport(t.id)">Cancelar</button>
+                      <button v-else class="dlink" @click="store.dismissExport(t.id)">Quitar</button>
+                    </div>
+                  </div>
+                </div>
+
+                <div v-if="tomosDir.display" class="dests">
+                  <span class="dok">Se guardan en {{ tomosDir.display }}</span>
+                  <button class="dlink" @click="api.post('/api/export/reveal', {})">Abrir carpeta</button>
+                </div>
+
                 <div class="dests">
                   <button v-if="!store.drive.connected" class="dlink" @click="store.connectDrive()">Conectar Google Drive</button>
                   <template v-else><span class="dok">Drive: {{ store.drive.email }}</span><button class="dlink" @click="store.disconnectDrive()">Desconectar</button></template>
@@ -774,8 +900,9 @@ useModal(() => !!m.value, closeModal, modalEl)
                     <Spinner v-if="store.colorLoading" :size="11" />Detectar páginas a color
                   </button>
                   <div v-if="store.colorPages.length" class="colors__grid">
-                    <button v-for="cp in store.colorPages" :key="cp.filename" class="colorpg" :class="{ 'is-excl': store.excludedPages.includes(cp.filename) }"
-                            :data-tip="cp.label + (store.excludedPages.includes(cp.filename) ? ' (excluida)' : '')" @click="store.toggleExclude(cp.filename)">
+                    <button v-for="cp in store.colorPages" :key="cp.filename" class="colorpg" :class="{ 'is-excl': store.excludedPages.includes(cp.filename), 'is-cov': tomoCoverFrom === cp.label }"
+                            :data-tip="cp.label + (store.excludedPages.includes(cp.filename) ? ' (excluida)' : '') + ' · Clic derecho: usar de portada'"
+                            @click="store.toggleExclude(cp.filename)" @contextmenu.prevent="colorAsCover(cp)">
                       <img :src="cp.url" loading="lazy" decoding="async" alt="" />
                       <span v-if="store.excludedPages.includes(cp.filename)" class="colorpg__x"><Icon name="close" :size="12" /></span>
                     </button>
@@ -811,7 +938,15 @@ useModal(() => !!m.value, closeModal, modalEl)
                   </button>
                 </div>
                 <div v-if="store.mdex.volumes.length" class="mdex__vols">
-                  <button v-for="v in store.mdex.volumes" :key="v.volume" class="volchip" @click="applyVol(v)">{{ v.label || ('Tomo ' + v.volume) }}</button>
+                  <button v-for="v in store.mdex.volumes" :key="v.volume" class="volchip"
+                          :class="volEstado(v) ? 'is-' + volEstado(v).status : ''" @click="applyVol(v)">
+                    <Spinner v-if="volEstado(v)?.status === 'running'" :size="10" />
+                    <Icon v-else-if="volEstado(v)?.status === 'queued'" name="clock" :size="11" />
+                    <Icon v-else-if="volEstado(v)?.status === 'done'" name="check" :size="11" />
+                    <Icon v-else-if="volEstado(v)?.status === 'error'" name="alert" :size="11" />
+                    {{ v.label || ('Tomo ' + v.volume) }}
+                    <span v-if="volEstado(v)?.status === 'running'" class="volchip__pct">{{ volEstado(v).pct }}%</span>
+                  </button>
                 </div>
                 <!-- Auto-organizar: un CBZ por cada tomo, con los caps descargados que le tocan -->
                 <div v-if="volPlan.length" class="mdex__auto">
@@ -823,12 +958,28 @@ useModal(() => !!m.value, closeModal, modalEl)
                     <Spinner v-if="exportingAll" :size="11" /><Icon v-else name="library" :size="13" /> Exportar todos los tomos
                   </button>
                 </div>
+                <p v-if="store.mdex.coversHidden" class="mdex__covhint">
+                  {{ store.mdex.covers.length }} portadas en inglés, japonés y español
+                  · {{ store.mdex.coversHidden }} en otros idiomas ocultas
+                </p>
                 <div v-if="store.mdex.covers.length" class="mdex__covers">
-                  <button v-for="c in store.mdex.covers" :key="c.id || c.url" class="covsel" :class="{ 'is-sel': store.mdex.selectedCover?.url === c.url }" @click="store.selectMdexCover(c)">
-                    <img :src="c.url256 || c.url" loading="lazy" decoding="async" alt="" />
+                  <button v-for="c in store.mdex.covers" :key="c.id || c.url" class="covsel" :class="{ 'is-sel': store.mdex.selectedCover?.url === c.url }"
+                          data-tip="Clic: usar · Clic derecho: ver a tamaño real" @click="store.selectMdexCover(c)" @contextmenu.prevent="inspectCover(c)">
+                    <!-- imgProxy: el hotlink directo a uploads.mangadex.org devuelve el
+                         placeholder anti-hotlink (una imagen de MangaDex que no es la portada) -->
+                    <img :src="imgProxy(c.url256 || c.url)" loading="lazy" decoding="async" alt="" />
                     <span v-if="c.volume && c.volume !== 'none'" class="covsel__v">{{ c.volume }}</span>
                     <span v-if="store.mdex.coverLoadingId === c.id" class="covsel__load"><Spinner :size="11" /></span>
                   </button>
+                </div>
+                <!-- Inspector: original a tamaño real, con su resolución y su peso -->
+                <div v-if="covPrev" class="covzoom" @click="covPrev = null">
+                  <img :src="covPrev.url" alt="" @load="onCovLoad" @click.stop />
+                  <div class="covzoom__bar" @click.stop>
+                    <span class="covzoom__meta">{{ covPrevMeta }}</span>
+                    <button class="btn-xs" @click="store.selectMdexCover(covPrev.c); covPrev = null">Usar esta</button>
+                    <button class="btn-xs" @click="covPrev = null">Cerrar</button>
+                  </div>
                 </div>
               </div>
 
@@ -875,7 +1026,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                     <span class="muted">Idioma</span>
                     <Select :model-value="ver.langFilter" aria-label="Idioma" :options="[
                       { value: '', label: 'Todos', hint: String(ver.versions.length) },
-                      ...verLangs.map(l => ({ value: l, label: `${flag(l)} ${l}`, hint: String(ver.byLang[l].length) }))]"
+                      ...verLangs.map(l => ({ value: l, label: `${flag(l)} ${idioma(l)}`, hint: String(ver.byLang[l].length) }))]"
                       @change="store.verSetLangFilter($event)" />
                   </div>
                   <button class="btn-xs" @click="store.verDiscover(true)" data-tip="Volver a buscar (ignora la caché)">↻ Buscar de nuevo</button>
@@ -1222,7 +1373,7 @@ useModal(() => !!m.value, closeModal, modalEl)
               <ul class="mdupd__list">
                 <li v-for="c in store.mdUpdates.list.filter(x => x.isNew)" :key="c.chapterId" class="mdupd__row">
                   <span class="mdupd__n">Cap. {{ c.number }}</span>
-                  <span class="mdupd__lang">{{ flag(c.lang) }} {{ c.lang }}</span>
+                  <span class="mdupd__lang">{{ flag(c.lang) }} {{ idioma(c.lang) }}</span>
                   <span class="mdupd__date">{{ (c.publishedAt || '').slice(0, 10) }}</span>
                   <button class="mdupd__dl" @click="store.downloadMdUpdate(c)"><Icon name="download" :size="13" /> Descargar</button>
                 </li>
@@ -1234,7 +1385,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                 <Icon name="spark" :size="11" /> {{ store.effectiveSource.sourceName || 'versión fijada' }}
               </span>
               <Select v-if="store.mdLangs.length > 1" v-model="store.mdLang" aria-label="Idioma"
-                      :options="[{ value: '', label: 'Todos' }, ...store.mdLangs.map(l => ({ value: l, label: `${flag(l)} ${l}` }))]" />
+                      :options="[{ value: '', label: 'Todos' }, ...store.mdLangs.map(l => ({ value: l, label: `${flag(l)} ${idioma(l)}` }))]" />
             </div>
 
             <!-- «Continuar» ya no va aquí: subió a la cabecera, que no scrollea. -->
@@ -1329,7 +1480,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                           <circle class="dl-ring__fill" cx="12" cy="12" r="9"
                             :style="{ strokeDashoffset: 56.5 - (56.5 * (store.downloadByChapter[c.chapter].pct / 100)) }" />
                         </svg>
-                        <span class="chap__dlprog-n" v-if="store.downloadByChapter[c.chapter].total">{{ store.downloadByChapter[c.chapter].pct }}%</span>
+                        <span class="chap__dlprog-n">{{ store.downloadByChapter[c.chapter].total ? store.downloadByChapter[c.chapter].pct + '%' : '···' }}</span>
                       </div>
                     </template>
                     <template v-else>
@@ -1352,7 +1503,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                           <circle class="dl-ring__fill" cx="12" cy="12" r="9"
                             :style="{ strokeDashoffset: 56.5 - (56.5 * (store.downloadByChapter[c.chapter].pct / 100)) }" />
                         </svg>
-                        <span class="chap__dlprog-n" v-if="store.downloadByChapter[c.chapter].total">{{ store.downloadByChapter[c.chapter].pct }}%</span>
+                        <span class="chap__dlprog-n">{{ store.downloadByChapter[c.chapter].total ? store.downloadByChapter[c.chapter].pct + '%' : '···' }}</span>
                       </div>
                     </template>
                     <template v-else>
@@ -1373,7 +1524,7 @@ useModal(() => !!m.value, closeModal, modalEl)
                       <circle class="dl-ring__track" cx="12" cy="12" r="9" />
                       <circle class="dl-ring__fill" cx="12" cy="12" r="9" :style="{ strokeDashoffset: 56.5 - (56.5 * (store.upscaleByChapter[c.chapter].pct / 100)) }" />
                     </svg>
-                    <span class="chap__dlprog-n" v-if="store.upscaleByChapter[c.chapter].total">{{ store.upscaleByChapter[c.chapter].pct }}%</span>
+                    <span class="chap__dlprog-n">{{ store.upscaleByChapter[c.chapter].total ? store.upscaleByChapter[c.chapter].pct + '%' : '···' }}</span>
                     <button class="ib ib--danger" data-tip="Cancelar" @click="store.cancelUpscale(c.chapter)"><Icon name="close" :size="13" /></button>
                   </div>
                   <template v-else>
@@ -1404,6 +1555,13 @@ useModal(() => !!m.value, closeModal, modalEl)
               <div v-if="batchSel.size" class="batchbar">
                 <span class="batchbar__n">{{ batchSel.size }} seleccionado(s)</span>
                 <div class="batchbar__acts">
+                  <!-- Destino de las DESCARGAS. Sólo aparece si hay más de un disco Y hay algo
+                       que descargar: sobre capítulos ya locales no decide nada, porque el
+                       escalado escribe el 4K al lado de cada original y nunca cruza de disco.
+                       Enseñarlo ahí sugería que se podía escalar «hacia» otro disco — y eso fue
+                       justo lo que rompió el escalado con un 404. -->
+                  <Select v-if="roots.multi && batchStats.remote" v-model="roots.pick" icon="folder"
+                          aria-label="Carpeta donde se descarga" :options="rootOptions" />
                   <!-- La cadena: qué pasa cuando la descarga acabe. Chips y no un menú porque el
                        estado tiene que verse SIN abrir nada: es lo que decide qué hará el botón. -->
                   <div v-if="batchStats.remote" class="chain">
@@ -1413,11 +1571,11 @@ useModal(() => !!m.value, closeModal, modalEl)
                             data-tip="Escalar a 4K los capítulos al terminar de descargarlos">
                       <Icon v-if="store.chain.upscale" name="check" :size="11" /> 4K
                     </button>
-                    <button class="chain__chip" :class="{ 'is-on': store.chain.translate && tpReady }"
+                    <button class="chain__chip" :class="{ 'is-on': store.willTranslate }"
                             :disabled="!tpReady"
                             @click="store.setChain({ translate: !store.chain.translate })"
                             :data-tip="tpReady ? 'Traducir antes de escalar (traducir invalida el 4K, así que el orden importa)' : 'Elige fuente de arte y de español en la pestaña Traducir'">
-                      <Icon v-if="store.chain.translate && tpReady" name="check" :size="11" /> ES
+                      <Icon v-if="store.willTranslate" name="check" :size="11" /> ES
                     </button>
                   </div>
                   <button v-if="batchStats.remote" class="hbtn hbtn--accent" @click="batchDownload">
@@ -1524,7 +1682,11 @@ useModal(() => !!m.value, closeModal, modalEl)
 /* align-self:flex-start stops the flex row from stretching the cover to the (taller)
    info column's height. Keep the natural aspect ratio (width fixed, height auto) so the
    cover is shown whole — no cropping the sides, no distortion. */
-.modal__cover { width: 8.25rem; height: auto; align-self: flex-start; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0; }
+/* Destino del vuelo del póster desde la tarjeta (View Transition). `MediaCard` ya marcaba el
+   origen con `vtTag`, así que abrir un manga era el ÚNICO sitio donde la mitad del mecanismo
+   estaba puesta y no se veía nada: faltaba este nombre y el `vtGo` de `manga.open()`. */
+.modal__cover { width: 8.25rem; height: auto; align-self: flex-start; border-radius: var(--r-md); box-shadow: var(--shadow-md); flex-shrink: 0;
+  view-transition-name: detail-poster; }
 /* Resplandor del póster en su propio color dominante (#2). */
 .modal--art .modal__cover { box-shadow: var(--shadow-md), 0 6px 30px rgba(var(--cv), .45); }
 .modal__cover--ph { display: grid; place-items: center; background: var(--surface-2); color: var(--ink-ghost); width: 8.25rem; aspect-ratio: 2/3; }
@@ -1855,12 +2017,28 @@ useModal(() => !!m.value, closeModal, modalEl)
 .mdex__vols { display: flex; flex-wrap: wrap; gap: 0.3125rem; margin-bottom: var(--s-3); }
 .volchip { padding: 4px 0.625rem; border-radius: var(--r-pill); font-size: var(--fs-2xs); color: var(--violet); border: 1px solid color-mix(in srgb, var(--violet) 30%, transparent); transition: all var(--t-fast); }
 .volchip:hover { background: color-mix(in srgb, var(--violet) 14%, transparent); }
+/* Estado de la cola en el propio chip: dónde se elige el tomo es donde se quiere ver si ya va. */
+.volchip { display: inline-flex; align-items: center; gap: 0.375rem; }
+.volchip.is-running, .volchip.is-queued { background: color-mix(in srgb, var(--violet) 18%, transparent); color: #fff; }
+.volchip.is-queued { opacity: .75; }
+.volchip.is-done { color: var(--jade); border-color: color-mix(in srgb, var(--jade) 35%, transparent); }
+.volchip.is-error { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
+.volchip__pct { font-family: var(--font-mono); opacity: .8; }
+.mdex__covhint { font-size: var(--fs-2xs); color: var(--ink-faint); margin-bottom: var(--s-2); }
 .mdex__covers { display: grid; grid-template-columns: repeat(auto-fill, minmax(3rem, 1fr)); gap: 0.375rem; max-height: 11.25rem; overflow-y: auto; }
 .covsel { position: relative; aspect-ratio: 2/3; border-radius: var(--r-xs); overflow: hidden; border: 2px solid transparent; }
 .covsel img { width: 100%; height: 100%; object-fit: cover; }
 .covsel.is-sel { border-color: var(--azure); }
 .covsel__v { position: absolute; bottom: 0; left: 0; right: 0; font-family: var(--font-mono); font-size: 0.5rem; text-align: center; background: rgba(7,10,18,.75); color: var(--ice); }
 .covsel__load { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(7,10,18,.6); }
+/* `minmax(0, 1fr)`, NO `1fr`: el mínimo automático de una fila de rejilla es el min-content del
+   hijo, y el de una imagen es su alto NATURAL (2033 px) — la fila crecía hasta ahí, `max-height:
+   100%` se resolvía contra esa fila y la portada se pintaba a tamaño real, desbordando la pantalla
+   (se veía un trozo enorme, no la portada entera). */
+.covzoom { position: fixed; inset: 0; z-index: 60; display: grid; place-items: center; gap: var(--s-3); background: rgba(4,6,12,.9); backdrop-filter: blur(4px); padding: var(--s-4); grid-template-rows: minmax(0, 1fr) auto; }
+.covzoom img { max-width: 100%; max-height: 100%; min-height: 0; object-fit: contain; border-radius: var(--r-xs); box-shadow: 0 1.5rem 3rem rgba(0,0,0,.6); }
+.covzoom__bar { display: flex; align-items: center; gap: var(--s-3); }
+.covzoom__meta { font-family: var(--font-mono); font-size: 0.7rem; color: var(--ice); }
 
 .tomo__form { display: flex; flex-direction: column; gap: var(--s-3); }
 .fld { display: flex; flex-direction: column; gap: 0.3125rem; font-size: var(--fs-xs); color: var(--ink-faint); }
@@ -1881,6 +2059,22 @@ useModal(() => !!m.value, closeModal, modalEl)
 .mdex__auto-info strong { color: var(--azure-bright); }
 .mdex__auto-cov { display: inline-flex; align-items: center; gap: 0.3125rem; font-size: var(--fs-2xs); color: var(--ink-faint); cursor: pointer; }
 .exportbtn--auto { margin-top: 0; padding: var(--s-2) var(--s-4); }
+
+.qhint { margin-top: var(--s-2); font-size: var(--fs-2xs); color: var(--ink-faint); line-height: 1.4; }
+
+/* Tomos en curso, dentro de la propia pestaña de exportar */
+.xjobs { display: flex; flex-direction: column; gap: var(--s-2); margin-top: var(--s-3); }
+.xjob { border: 1px solid var(--line); border-radius: var(--r-sm); background: var(--surface); padding: var(--s-2) var(--s-3); }
+.xjob.is-err { border-color: color-mix(in srgb, var(--coral) 40%, transparent); color: var(--coral); }
+.xjob.is-done { border-color: color-mix(in srgb, var(--jade) 40%, transparent); }
+.xjob__top { display: flex; align-items: center; gap: var(--s-2); }
+.xjob__label { flex: 1; min-width: 0; font-size: var(--fs-xs); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.xjob__pct, .xjob__eta { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-faint); flex-shrink: 0; }
+.xjob__bar { height: 3px; margin-top: 5px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
+.xjob__bar span { display: block; height: 100%; background: var(--violet); transition: width var(--t-base) var(--ease-silk); }
+.xjob.is-err .xjob__bar span { background: var(--coral); width: 100% !important; }
+.xjob__msg { font-size: var(--fs-2xs); color: var(--ink-faint); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.xjob__acts { display: flex; gap: var(--s-3); margin-top: 4px; }
 .rangebox { display: inline-flex; align-items: center; gap: 3px; }
 .rangebox input { width: 2.625rem; padding: 4px 0.375rem; border-radius: var(--r-xs); background: var(--surface); border: 1px solid var(--line-2); color: var(--ink); font-size: var(--fs-2xs); text-align: center; }
 .rangebox button { padding: 4px 0.5rem; border-radius: var(--r-xs); font-size: var(--fs-2xs); font-weight: 600; color: var(--cyan); border: 1px solid color-mix(in srgb, var(--cyan) 30%, transparent); }
@@ -1898,6 +2092,10 @@ useModal(() => !!m.value, closeModal, modalEl)
 .colorpg.is-excl { border-color: var(--coral); }
 .colorpg.is-excl img { opacity: .4; }
 .colorpg__x { position: absolute; inset: 0; display: grid; place-items: center; color: var(--coral); background: rgba(7,10,18,.4); }
+.colorpg.is-cov { border-color: var(--azure); }
+.tcov { display: flex; align-items: center; gap: var(--s-2); flex-wrap: wrap; }
+.tcov__pv { width: 1.75rem; aspect-ratio: 2/3; object-fit: cover; border-radius: var(--r-xs); border: 1px solid var(--line-2); }
+.tcov__from { font-size: var(--fs-2xs); color: var(--ink-faint); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tprev { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-2); margin-top: var(--s-1); font-size: var(--fs-xs); color: var(--ink-soft); }
 .tprev__main { font-family: var(--font-mono); color: var(--ink); }
 .tprev__tag { font-size: var(--fs-2xs); padding: 1px 0.4375rem; border-radius: var(--r-pill); color: var(--ink-faint); border: 1px solid var(--line-2); }
@@ -2083,7 +2281,12 @@ useModal(() => !!m.value, closeModal, modalEl)
 .chap__dlbtn--ghost:hover:not(:disabled) { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
 .chap__srcmeta { font-size: var(--fs-2xs); color: var(--ink-ghost); max-width: 8.75rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chap__dlprog { display: inline-flex; align-items: center; gap: var(--s-2); padding: 4px 0.625rem; border-radius: var(--r-sm); background: var(--azure-haze); border: 1px solid var(--azure); }
-.chap__dlprog-n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--azure-bright); min-width: 1.75rem; }
+/* ANCHO FIJO a propósito. El número era `v-if="…total"`, así que un capítulo EN COLA (aún sin
+   total) no lo pintaba y su recuadro azul salía más estrecho que el que ya descarga: en una lista
+   de capítulos en cola se veía un escalón de anchuras. Ahora siempre hay número («···» mientras
+   no se sabe) y el ancho no baila entre «5%» y «100%». */
+.chap__dlprog-n { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--azure-bright);
+  width: 2.25rem; text-align: right; flex-shrink: 0; }
 .dl-ring { width: 1rem; height: 1rem; flex-shrink: 0; }
 .dl-ring__track { fill: none; stroke: var(--surface-3); stroke-width: 3; }
 .dl-ring__fill { fill: none; stroke: var(--azure); stroke-width: 3; stroke-linecap: round; stroke-dasharray: 56.5; transform: rotate(-90deg); transform-origin: 12px 12px; transition: stroke-dashoffset .4s var(--ease-silk); }

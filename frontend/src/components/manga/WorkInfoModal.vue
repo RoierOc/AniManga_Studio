@@ -11,6 +11,7 @@ import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import NovelVersions from '@/components/manga/NovelVersions.vue'
 import { useModal } from '@/lib/useModal'
+import { genero } from '@/lib/etiquetas'
 
 const disco = useDiscoveryStore()
 const w = computed(() => disco.work)
@@ -75,7 +76,7 @@ useModal(() => !!w.value, () => disco.closeWork(), modalEl)
             <div v-if="disco.workLoading && w._partial" class="wm__loading"><Spinner :size="18" /> Cargando ficha…</div>
 
             <div v-if="w.genres?.length" class="wm__chips">
-              <span v-for="g in w.genres.slice(0, 12)" :key="g" class="wm__chip">{{ g }}</span>
+              <span v-for="g in w.genres.slice(0, 12)" :key="g" class="wm__chip">{{ genero(g) }}</span>
             </div>
 
             <p v-if="w.synopsis" class="wm__synopsis">{{ w.synopsis }}</p>

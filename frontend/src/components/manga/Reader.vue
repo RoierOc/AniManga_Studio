@@ -383,7 +383,7 @@ function onKey(e) {
   if (gridOpen.value && e.key !== 'Escape' && e.key !== 'm') return
   switch (e.key) {
     case 'm': e.preventDefault(); gridOpen.value ? (gridOpen.value = false) : openGrid(); break
-    case 'Escape': gridOpen.value ? (gridOpen.value = false) : chOpen.value ? (chOpen.value = false) : setOpen.value ? (setOpen.value = false) : nightOpen.value ? (nightOpen.value = false) : endOpen.value ? (endOpen.value = false) : store.closeReader(); break
+    case 'Escape': gridOpen.value ? (gridOpen.value = false) : chOpen.value ? (chOpen.value = false) : setOpen.value ? (setOpen.value = false) : nightOpen.value ? (nightOpen.value = false) : endOpen.value ? (endOpen.value = false) : store.exitReader(); break
     case 'ArrowRight': e.preventDefault(); isRTL.value ? goPrev() : tryNext(); break
     case 'ArrowLeft': e.preventDefault(); isRTL.value ? tryNext() : goPrev(); break
     case ' ': e.preventDefault(); tryNext(); break
@@ -409,7 +409,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
       <div v-if="open" class="rd" :style="{ '--rd-tint': rdTint }" @mousemove="poke">
         <!-- Top bar -->
         <header class="rd__bar" :class="{ 'is-hidden': store.barsHidden }">
-          <button class="rd__btn" @click="store.closeReader()"><Icon name="chevron" :size="18" :style="{ transform: 'rotate(180deg)' }" /></button>
+          <button class="rd__btn" @click="store.exitReader()"><Icon name="chevron" :size="18" :style="{ transform: 'rotate(180deg)' }" /></button>
           <div class="rd__meta">
             <span class="rd__title">{{ isManga ? store.current?.name : store.reader.title }}</span>
             <!-- El número de capítulo deja de ser una etiqueta muerta y pasa a ser el selector. -->
@@ -631,7 +631,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
             <p v-else class="rd__end-done">Has llegado al último capítulo disponible.</p>
             <div class="rd__end-sub">
               <button class="rd__end-sbtn" @click="reReadChapter"><Icon name="clock" :size="14" /> Releer</button>
-              <button class="rd__end-sbtn" @click="store.closeReader()"><Icon name="library" :size="14" /> Biblioteca</button>
+              <button class="rd__end-sbtn" @click="store.exitReader()"><Icon name="library" :size="14" /> Biblioteca</button>
             </div>
           </div>
         </div>
@@ -661,7 +661,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
                 <p v-else class="rd__end-done">Has llegado al último capítulo disponible.</p>
                 <div class="rd__end-sub">
                   <button class="rd__end-sbtn" @click="reReadChapter"><Icon name="clock" :size="14" /> Releer</button>
-                  <button class="rd__end-sbtn" @click="store.closeReader()"><Icon name="library" :size="14" /> Biblioteca</button>
+                  <button class="rd__end-sbtn" @click="store.exitReader()"><Icon name="library" :size="14" /> Biblioteca</button>
                 </div>
               </div>
             </div>

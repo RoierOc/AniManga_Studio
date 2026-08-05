@@ -18,10 +18,13 @@ import Select from '@/components/ui/Select.vue'
 import ContentToolbar from '@/components/ui/ContentToolbar.vue'
 import DensityToggle from '@/components/ui/DensityToggle.vue'
 import ContinueRail from '@/components/media/ContinueRail.vue'
+import { useTagsStore } from '@/stores/tags'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
 const ui = useUiStore()
 const manga = useMangaStore()
+const tags = useTagsStore()
+tags.load()
 
 // Menú contextual (clic derecho) sobre las tarjetas de manga.
 const cm = ref({ open: false, x: 0, y: 0, items: [] })
@@ -31,6 +34,7 @@ function openMenu(e, m) {
     items: [
       { label: 'Abrir', icon: 'library', action: () => manga.open(m) },
       { label: 'Continuar leyendo', icon: 'play', action: () => manga.resumeManga(m) },
+      { label: 'Etiquetas…', icon: 'spark', action: () => tags.openPicker('manga', m.id, m.name) },
       { sep: true },
       { label: 'Quitar de biblioteca', icon: 'trash', danger: true, action: async () => { await manga.open(m); manga.deleteManga() } },
     ],
@@ -110,6 +114,28 @@ const libFilters = computed(() => [
   ...MANGA_STATUS_ORDER.map(k => ({ id: k, label: MANGA_STATUS[k].label, n: statusCounts.value[k], color: MANGA_STATUS[k].color })),
 ])
 
+/* Las etiquetas van en UN desplegable, no en pills.
+ *
+ * Primero fueron pills junto a los estados y era un error de escala: los estados son cinco y
+ * fijos, las etiquetas las inventa el usuario y no tienen tope — la barra crecía sin control y se
+ * volvía fea justo cuando más etiquetas tienes, que es cuando más falta hacen. Un desplegable
+ * ocupa lo mismo con 2 que con 40, y es además el gesto correcto: los estados se ven de un vistazo
+ * porque siempre son los mismos; las etiquetas hay que ir a buscarlas.
+ *
+ * Comparte `statusFilter` con los pills a propósito: filtrar es UNA cosa, así que elegir etiqueta
+ * suelta el estado y viceversa, sin código extra. */
+const tagOptions = computed(() => [
+  { value: '', label: 'Todas las etiquetas' },
+  ...tags.universe('manga').map(t => ({
+    value: t, label: t,
+    hint: String(items.value.filter(m => tags.forWork('manga', m.id).includes(t)).length),
+  })),
+])
+const tagFilter = computed({
+  get: () => (statusFilter.value.startsWith('tag:') ? statusFilter.value.slice(4) : ''),
+  set: (v) => { statusFilter.value = v ? `tag:${v}` : 'all' },
+})
+
 // "Continuar leyendo": series con progreso reciente, cruzadas con la biblioteca (cover/nombre).
 const continueItems = computed(() => {
   const byId = new Map(items.value.map(m => [m.id, m]))
@@ -140,7 +166,13 @@ const filtered = computed(() => {
   let list = items.value
   if (manga.pendingDelete.length) list = list.filter(m => !manga.pendingDelete.includes(m.id))
   // Estado como sección primaria (como anime): "Todo" = solo activos; cada estado, su pestaña.
-  if (statusFilter.value !== 'all') list = list.filter(m => m.status === statusFilter.value)
+  if (statusFilter.value.startsWith('tag:')) {
+    // Filtrar por etiqueta NO esconde lo terminado: si etiquetaste algo, quieres verlo salga
+    // como salga. Por eso no se aplica aquí el descarte de INACTIVE.
+    const t = statusFilter.value.slice(4)
+    list = list.filter(m => tags.forWork('manga', m.id).includes(t))
+  }
+  else if (statusFilter.value !== 'all') list = list.filter(m => m.status === statusFilter.value)
   else list = list.filter(m => !INACTIVE.includes(m.status))
   const q = search.value.trim().toLowerCase()
   if (q) list = list.filter(m => (m.name || '').toLowerCase().includes(q))
@@ -213,13 +245,11 @@ watch(() => manga.libraryDirty, () => load())
 
 <template>
   <div class="view">
-    <header class="lhead stagger">
-      <div class="lhead__head" style="--i:0">
-        <p class="lhead__eyebrow"><span class="lhead__tick" /> TU COLECCIÓN LOCAL</p>
-        <h1 class="lhead__title">Biblioteca</h1>
-      </div>
-    </header>
-
+    <!-- Sin titular: la barra superior ya dice «Biblioteca» justo encima, y las pestañas
+         Descargados/Locales están entre medias — la palabra salía dos veces en 150 px. Mi Anime,
+         la vista de referencia, tampoco tiene <h1>: el contenido empieza arriba del todo, y aquí
+         eso significa que «Continuar leyendo» es lo primero que ves. Las cifras de la colección
+         siguen al pie, en `.ltotals`. -->
     <!-- Continuar leyendo — el MISMO riel que anime y series, en modo póster.
          Va ANTES de los filtros, como en la biblioteca de anime: al abrir la sección lo que quieres
          casi siempre es seguir donde lo dejaste; la barra de filtros sólo la usas cuando buscas algo
@@ -233,6 +263,9 @@ watch(() => manga.libraryDirty, () => load())
                     search-placeholder="Filtrar series…">
       <template #extra>
         <DensityToggle />
+        <!-- Sin etiquetas puestas no aparece: quien no las usa no ve un control de más. -->
+        <Select v-if="tagOptions.length > 1" v-model="tagFilter" icon="spark"
+                aria-label="Filtrar por etiqueta" :options="tagOptions" />
         <Select v-model="sort" aria-label="Ordenar la biblioteca"
                 :options="SORTS.map(s => ({ value: s.id, label: s.label }))" />
         <!-- Lo que NO se usa a diario vive detrás de `⋯`. Antes cuatro botones compartían peso
@@ -310,21 +343,6 @@ watch(() => manga.libraryDirty, () => load())
    dejaba la imagen principal en flujo y su aspecto influía en la caja. Escala con rem. */
 
 
-/* ── Hero ─────────────────────────────────────────────────────────────── */
-.lhead {
-  display: flex; align-items: flex-end; justify-content: space-between;
-  flex-wrap: wrap; gap: var(--s-5);
-  padding: var(--s-5) 0 var(--s-6);
-}
-.lhead__eyebrow {
-  display: flex; align-items: center; gap: var(--s-2);
-  font-family: var(--font-mono); font-size: var(--fs-2xs);
-  letter-spacing: var(--tracking-caps); color: var(--azure);
-  margin-bottom: var(--s-2);
-}
-.lhead__tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
-.lhead__title { font-size: var(--fs-3xl); }
-
 /* Totales de la colección, al pie: una línea discreta, no tres cifras en tamaño display.
    Al perder el sitio prominente pierden también el peso tipográfico — si siguieran a --fs-2xl
    competirían con la rejilla desde abajo, que es el mismo problema movido de sitio. */
@@ -391,6 +409,5 @@ watch(() => manga.libraryDirty, () => load())
 
 @media (max-width: 540px) {
   .view { padding: var(--s-3) var(--s-4) var(--s-8); }
-  .lhead__stats { gap: var(--s-5); }
 }
 </style>

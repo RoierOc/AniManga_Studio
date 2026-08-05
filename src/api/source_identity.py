@@ -15,6 +15,7 @@ manga) vive en `sources.py` (`_source_manga_db` + guard de cruce en `/manga/<id>
 from pathlib import Path
 
 from api.runtime import manga_dir
+from api.roots import glob_series, series_dir, series_up_dir  # resuelven el DISCO de la obra
 from api.observability import record_error
 
 
@@ -47,11 +48,8 @@ def verify_source_refs(fix: bool = True) -> list:
     problema; 'auto'/'no-consultable' son informativos."""
     from api import sources as S
     import json as _json
-    root = Path(manga_dir())
     report = []
-    if not root.exists():
-        return report
-    for meta_path in sorted(root.glob("*/.source_meta.json")):
+    for meta_path in glob_series("*/.source_meta.json"):
         folder = meta_path.parent.name
         try:
             meta = _json.loads(meta_path.read_text(encoding="utf-8"))
@@ -99,7 +97,7 @@ def _title_variants_for(folder: str, title: str, meta: dict) -> list:
     import json as _json
     al = meta.get("al_id") or meta.get("anilist")
     try:
-        p = Path(manga_dir()) / folder / ".identity.json"
+        p = series_dir(folder) / ".identity.json"
         if not al and p.exists():
             al = (_json.loads(p.read_text(encoding="utf-8")) or {}).get("al_id")
     except Exception:

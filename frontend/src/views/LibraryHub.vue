@@ -3,16 +3,17 @@
  * y Locales (CBZ/CBR sueltos), más un botón Importar que abre el Taller. Reúne
  * lo que antes eran tres secciones (Biblioteca, Local, Taller) donde tiene
  * sentido: junto a tu contenido. KeepAlive conserva el estado de cada pestaña. */
-import { ref, computed, defineAsyncComponent } from 'vue'
+import { computed, defineAsyncComponent } from 'vue'
 import { useUiStore } from '@/stores/ui'
 import Icon from '@/components/ui/Icon.vue'
 import LibraryView from '@/views/LibraryView.vue'          // eager: vista de aterrizaje
 const LocalView = defineAsyncComponent(() => import('@/views/LocalView.vue'))
 
 const ui = useUiStore()
-const TAB_KEY = 'manga-library-tab'
-const tab = ref(localStorage.getItem(TAB_KEY) === 'local' ? 'local' : 'downloaded')
-function setTab(id) { tab.value = id; try { localStorage.setItem(TAB_KEY, id) } catch (_) {} }
+// La pestaña vive en el store (`ui.tabs.lib`) y no en un ref local: así viaja en el historial y
+// "atrás" te devuelve a la que estabas en vez de sacarte de Biblioteca.
+const tab = computed(() => ui.tabs.lib)
+const setTab = (id) => ui.setTab('lib', id)
 const current = computed(() => (tab.value === 'local' ? LocalView : LibraryView))
 </script>
 

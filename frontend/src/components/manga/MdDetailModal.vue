@@ -8,6 +8,7 @@ import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Select from '@/components/ui/Select.vue'
 import { useModal } from '@/lib/useModal'
+import { idioma } from '@/lib/etiquetas'
 
 const store = useMangadexStore()
 const manga = useMangaStore()        // for live download progress via its `downloads` map
@@ -64,7 +65,7 @@ useModal(() => !!d.value, () => store.closeDetail(), modalEl)
             <div class="modal__chhead">
               <span>Capítulos</span>
               <Select v-if="store.detailLangs.length > 1" v-model="store.detailLang" aria-label="Idioma"
-                      :options="[{ value: '', label: 'Todos' }, ...store.detailLangs.map(l => ({ value: l, label: `${flag(l)} ${l}` }))]" />
+                      :options="[{ value: '', label: 'Todos' }, ...store.detailLangs.map(l => ({ value: l, label: `${flag(l)} ${idioma(l)}` }))]" />
             </div>
 
             <div v-if="store.detailLoading" class="center"><Spinner /></div>

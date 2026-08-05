@@ -9,10 +9,11 @@ import { formatBytes } from '@/lib/format'
 import Icon from '@/components/ui/Icon.vue'
 import SubStyleCard from '@/components/anime/SubStyleCard.vue'
 import IntegrityCard from '@/components/anime/IntegrityCard.vue'
+import MangaRootsCard from '@/components/settings/MangaRootsCard.vue'
 import HealthCard from '@/components/settings/HealthCard.vue'
 import NovelSourcesCard from '@/components/settings/NovelSourcesCard.vue'
 import Spinner from '@/components/ui/Spinner.vue'
-import FolderPicker from '@/components/anime/FolderPicker.vue'
+import FolderPicker from '@/components/ui/FolderPicker.vue'
 import Select from '@/components/ui/Select.vue'
 
 const ui = useUiStore()
@@ -34,10 +35,13 @@ const TABS = [
      eran herramientas internas, y ocupaban más sitio que el único ajuste de verdad (el 4K). */
   { id: 'interno', label: 'Interno', icon: 'palette' },
 ]
-const tab = ref(localStorage.getItem('set-tab') || 'general')
-watch(tab, (v) => { try { localStorage.setItem('set-tab', v) } catch {} })
+// En el store (`ui.tabs.set`), no en un ref local: el historial la ve, así que "atrás" vuelve a la
+// pestaña de Ajustes en la que estabas en lugar de sacarte de Ajustes.
+const tab = computed(() => ui.tabs.set)
+const setTab = (id) => ui.setTab('set', id)
 
 const dlPath = ref('')
+const dlBrowse = ref(false)
 watch(() => anime.dlSettings.download_path, (v) => { dlPath.value = v || '' }, { immediate: true })
 
 const qaInfo = ref({ bytes: 0, flags: 0 })
@@ -66,7 +70,7 @@ let _knock = 0, _knockTimer = null
 function hidKnock() {
   clearTimeout(_knockTimer)
   _knockTimer = setTimeout(() => { _knock = 0 }, 1500)
-  if (++_knock >= 7) { _knock = 0; hidRevealed.value = true; tab.value = 'general' }
+  if (++_knock >= 7) { _knock = 0; hidRevealed.value = true; setTab('general') }
 }
 
 // Buffer de dígitos tecleados en Ajustes (fuera de inputs). Tras una pausa breve,
@@ -249,7 +253,7 @@ async function onImportFile(e) {
 
     <div class="set__shell">
       <nav class="set__rail">
-        <button v-for="t in TABS" :key="t.id" type="button" class="set__tab" :class="{ 'is-active': tab === t.id }" @click="tab = t.id">
+        <button v-for="t in TABS" :key="t.id" type="button" class="set__tab" :class="{ 'is-active': tab === t.id }" @click="setTab(t.id)">
           <Icon :name="t.icon" :size="16" /><span>{{ t.label }}</span>
         </button>
       </nav>
@@ -359,7 +363,7 @@ async function onImportFile(e) {
         <span>Carpeta de descargas <em>· cada serie en su subcarpeta; útil para usar otro disco</em></span>
         <div class="inline">
           <input v-model="dlPath" class="mono" :placeholder="anime.dlSettings.qbt_default || 'D:\\Anime'" spellcheck="false" />
-          <button class="btn" @click="anime.openDlBrowse('')"><Icon name="folder" :size="14" /> Explorar</button>
+          <button class="btn" @click="dlBrowse = true"><Icon name="folder" :size="14" /> Explorar</button>
           <button class="btn btn--accent" @click="anime.saveDlPath(dlPath)">Guardar</button>
         </div>
         <p class="hint">
@@ -465,6 +469,10 @@ async function onImportFile(e) {
             <div><h2>Almacenamiento</h2><p>Uso de disco por serie y limpieza de cachés prescindibles.</p></div>
           </div>
 
+    <!-- Dónde vive la biblioteca (varios discos) va ANTES del uso de disco: primero qué
+         carpetas hay, luego cuánto ocupan. -->
+    <section class="card"><MangaRootsCard /></section>
+    <div class="sep" />
     <IntegrityCard />
     <div class="sep" />
 <!-- Almacenamiento -->
@@ -687,7 +695,8 @@ async function onImportFile(e) {
       </div>
     </div>
 
-    <FolderPicker />
+    <FolderPicker v-model:open="dlBrowse" title="Elegir carpeta de descargas de anime"
+                  @pick="p => anime.saveDlPath(p.win || p.path)" />
   </div>
 </template>
 

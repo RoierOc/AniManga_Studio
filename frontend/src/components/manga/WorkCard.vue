@@ -36,7 +36,7 @@ function quickAdd() { disco.addToLibrary(props.work) }
       <!-- El tipo sólo cuando NO es manga: la chapa salía en el 100 % de las tarjetas y por tanto
            no distinguía nada. Manhwa/Manhua/Novela sí es información. -->
       <span v-if="work.type && work.type !== 'manga'" class="wc__type">{{ TYPE_LABEL[work.type] }}</span>
-      <span v-if="work.rating" class="wc__score"><Icon name="spark" :size="10" /> {{ work.rating }}</span>
+      <span v-if="work.rating" class="wc__score"><Icon name="star" :size="10" /> {{ work.rating }}</span>
       <button class="wc__add" :class="{ 'is-added': added }"
               :data-tip="added ? 'En tu biblioteca' : 'Añadir a biblioteca'"
               :aria-label="added ? 'En tu biblioteca' : 'Añadir a biblioteca'"

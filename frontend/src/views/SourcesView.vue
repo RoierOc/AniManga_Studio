@@ -1,10 +1,11 @@
 <script setup>
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useSourcesStore } from '@/stores/sources'
 import { useUiStore } from '@/stores/ui'
 import SourceDetailModal from '@/components/manga/SourceDetailModal.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import ContextMenu from '@/components/ui/ContextMenu.vue'
 
 const store = useSourcesStore()
 const ui = useUiStore()
@@ -27,12 +28,34 @@ function openManga(m) {
 }
 
 function openMangaFromGroup(m, groupSource) {
-  store.openDetail({
-    ...m,
-    sourceId: groupSource.id,
-    sourceName: groupSource.name,
-    sourceLang: groupSource.lang,
-  })
+  store.openDetail(conFuente(m, groupSource))
+}
+const conFuente = (m, s) => (s ? { ...m, sourceId: s.id, sourceName: s.name, sourceLang: s.lang } : m)
+
+/* Buscar en fuentes devuelve decenas de resultados por grupo: añadir tres a la biblioteca eran
+ * tres modales. `addToLibrary` trabaja sobre `detail`, así que el menú abre la ficha y añade —
+ * mismas acciones del store, sin duplicar la lógica de guardado. */
+const cm = ref({ open: false, x: 0, y: 0, items: [] })
+function openMenu(ev, m, groupSource = null) {
+  const manga = conFuente(m, groupSource)
+  cm.value = {
+    open: true, x: ev.clientX, y: ev.clientY,
+    items: [
+      { label: 'Abrir ficha', icon: 'search', action: () => store.openDetail(manga) },
+      {
+        label: manga.inLibrary ? 'Ya está en tu biblioteca' : 'Añadir a mi biblioteca',
+        icon: 'plus', disabled: !!manga.inLibrary,
+        action: async () => { await store.openDetail(manga); await store.addToLibrary() },
+      },
+      { sep: true },
+      { label: `Fuente: ${manga.sourceName || '—'}`, disabled: true },
+      { label: 'Copiar título', action: () => copiar(manga.title) },
+    ],
+  }
+}
+async function copiar(t) {
+  try { await navigator.clipboard.writeText(t || ''); ui.toast('Título copiado', 'ok') }
+  catch (_) { ui.toast('El portapapeles no está disponible', 'error') }
 }
 </script>
 
@@ -119,7 +142,7 @@ function openMangaFromGroup(m, groupSource) {
         </div>
         <div class="grid">
           <article v-for="(m, i) in store.popular" :key="m.sourceId + '_' + m.id + '_' + i" class="sc" tabindex="0"
-            @click="openManga(m)" @keydown.enter="openManga(m)">
+            @click="openManga(m)" @keydown.enter="openManga(m)" @contextmenu.prevent="openMenu($event, m)">
             <div class="sc__poster">
               <img v-if="m.thumbnailUrl" :src="m.thumbnailUrl" :alt="m.title" loading="lazy" decoding="async" referrerpolicy="no-referrer" @load="$event.target.classList.add('is-loaded')" class="sc__img" />
               <div v-else class="sc__ph"><Icon name="globe" :size="24" /></div>
@@ -147,7 +170,7 @@ function openMangaFromGroup(m, groupSource) {
             </div>
             <div class="grid">
               <article v-for="(m, i) in group.results" :key="m.sourceId + '_' + m.id + '_' + i" class="sc" tabindex="0"
-                @click="openMangaFromGroup(m, group.source)" @keydown.enter="openMangaFromGroup(m, group.source)">
+                @click="openMangaFromGroup(m, group.source)" @keydown.enter="openMangaFromGroup(m, group.source)" @contextmenu.prevent="openMenu($event, m, group.source)">
                 <div class="sc__poster">
                   <img v-if="m.thumbnailUrl" :src="m.thumbnailUrl" :alt="m.title" loading="lazy" decoding="async" referrerpolicy="no-referrer" @load="$event.target.classList.add('is-loaded')" class="sc__img" />
                   <div v-else class="sc__ph"><Icon name="globe" :size="24" /></div>
@@ -189,6 +212,7 @@ function openMangaFromGroup(m, groupSource) {
       </div>
     </template>
 
+    <ContextMenu v-model:open="cm.open" :x="cm.x" :y="cm.y" :items="cm.items" />
     <SourceDetailModal />
   </div>
 </template>

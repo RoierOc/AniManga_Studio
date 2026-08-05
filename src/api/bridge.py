@@ -24,6 +24,7 @@ import json as _json
 from flask import Blueprint, jsonify, request
 
 from api.resilient_http import http as http_requests
+from api.roots import glob_series
 from api.observability import record_error
 from api.anilist import _cover as _al_cover  # AniList: extraLarge (460x650) antes que large (230x325)
 from api.runtime import cache_get, cache_set, manga_dir
@@ -72,9 +73,9 @@ def _manga_al_ids() -> set | None:
     """al_id de la biblioteca de manga: los descargados (`.identity.json` por carpeta) más los
     seguidos sin descargar (`local_library.json`). Un manga que sigues cuenta como «lo tienes»."""
     try:
-        root = Path(manga_dir())
+        root = Path(manga_dir())    # local_library.json vive en la raíz base
         ids = set()
-        for p in root.glob("*/.identity.json"):
+        for p in glob_series("*/.identity.json"):
             try:
                 al = _json.loads(p.read_text(encoding="utf-8")).get("al_id")
             except Exception as e:

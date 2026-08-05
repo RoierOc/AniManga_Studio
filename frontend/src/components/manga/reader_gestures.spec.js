@@ -121,6 +121,10 @@ describe('gestos del lector', () => {
     expect(store.reader).not.toBeNull()          // el lector sigue abierto
     window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }))
     await wrapper.vm.$nextTick()
+    // Salir del lector va por el HISTORIAL (`ui.back`), para que "adelante" reabra el capítulo.
+    // Aquí no hay entrada a la que volver, así que cierra la red de seguridad de `back(fallback)`
+    // — 200 ms. Que este test tuviera que esperar es la señal de que el cambio llegó.
+    await new Promise(r => setTimeout(r, 260))
     expect(store.reader).toBeNull()
   })
 

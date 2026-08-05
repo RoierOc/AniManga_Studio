@@ -10,6 +10,7 @@ import json as _json
 from api.resilient_http import http as http_requests  # retry + backoff + per-host rate limiting
 
 from api.runtime import manga_dir, cache_get, cache_set, cache_invalidate, write_json_atomic
+from api.roots import glob_series, series_dir, series_up_dir  # resuelven el DISCO de la obra
 from api.observability import record_error
 
 sources_bp = Blueprint("sources", __name__)
@@ -683,7 +684,7 @@ def _persist_source_meta_id(old_id: int, new_id: int, title: str = "", new_url: 
     como ancla para futuras re-resoluciones. Busca la obra por cualquier id que case (top-level o
     pin) y, si no, por título."""
     try:
-        for meta_path in Path(manga_dir()).glob("*/.source_meta.json"):
+        for meta_path in glob_series("*/.source_meta.json"):
             try:
                 meta = _json.loads(meta_path.read_text())
             except Exception as e:
@@ -956,7 +957,7 @@ def enrich_library():
         return jsonify({"error": str(e), "offline": not _suwayomi_online()}), 503
 
     enriched = []
-    for meta_path in Path(manga_dir()).glob("*/.source_meta.json"):
+    for meta_path in glob_series("*/.source_meta.json"):
         try:
             meta = _json.loads(meta_path.read_text())
             sid = str(meta.get("sourceId", ""))
@@ -993,7 +994,7 @@ def save_to_library():
     if not title or not source_id or not manga_id:
         return jsonify({"error": "title, sourceId, mangaId required"}), 400
 
-    folder = Path(manga_dir()) / title
+    folder = series_dir(title)
     if only_if_exists and not folder.exists():
         return jsonify({"status": "skipped", "reason": "folder does not exist"})
 

@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
+import { genero } from '@/lib/etiquetas'
 
 // Riel horizontal de mangas recomendados (AniList). Reutilizable: la vista de
 // biblioteca lo usa para "Para ti" y el modal para "Similares a este". Un clic
@@ -40,13 +41,13 @@ const fmtLabel = (f) => ({ MANGA: 'Manga', MANHWA: 'Manhwa', MANHUA: 'Manhua', N
         <div class="rc__cov">
           <img v-if="r.cover" :src="imgProxy(r.cover, 160)" alt="" loading="lazy" decoding="async" />
           <span v-else class="rc__mono">{{ (r.title || '?').charAt(0) }}</span>
-          <span v-if="r.score" class="rc__score"><Icon name="spark" :size="10" /> {{ Math.round(r.score) }}</span>
+          <span v-if="r.score" class="rc__score"><Icon name="star" :size="10" /> {{ Math.round(r.score) }}</span>
           <span class="rc__go"><Icon name="search" :size="14" /></span>
         </div>
         <p class="rc__name">{{ r.title }}</p>
         <p class="rc__meta">
           <span v-if="fmtLabel(r.format)">{{ fmtLabel(r.format) }}</span>
-          <span v-if="r.genres && r.genres.length" class="rc__gen">{{ r.genres[0] }}</span>
+          <span v-if="r.genres && r.genres.length" class="rc__gen">{{ genero(r.genres[0]) }}</span>
         </p>
       </button>
     </div>

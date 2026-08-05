@@ -31,6 +31,7 @@ import xml.etree.ElementTree as ET
 
 from api.runtime import (MANGA_DIR, UPSCALED_DIR, manga_dir, upscaled_dir, normalize_chapter,
                          write_json_atomic)
+from api.roots import series_dir, series_up_dir  # resuelve el DISCO de la obra
 from api.cbz import _list_entries, _extract, _ARCHIVE_EXTS, _MIME
 
 import_bp = Blueprint('import_cbz', __name__)
@@ -428,7 +429,7 @@ def commit():
 
     entries = _list_entries(arc)
     n = len(entries)
-    folder = Path(manga_dir()) / title
+    folder = series_dir(title)
     folder.mkdir(parents=True, exist_ok=True)
 
     cover_idx = body.get('cover')
@@ -483,14 +484,10 @@ def commit():
 
 @import_bp.route('/list')
 def list_imported():
+    from api.roots import series_titles
     items = []
-    root = Path(manga_dir())
-    if not root.is_dir():
-        return jsonify(items)
-
-    for f in root.iterdir():
-        if not f.is_dir():
-            continue
+    for _name, _dirs in series_titles().items():
+        f = _dirs[0]
         meta = _read_meta(f)
         if not meta.get('imported'):
             continue
@@ -502,7 +499,7 @@ def list_imported():
             if m:
                 chapters.add(m.group(1))
 
-        upscaled = list((Path(upscaled_dir()) / f.name).glob('*.jpg')) if (Path(upscaled_dir()) / f.name).is_dir() else []
+        upscaled = list(series_up_dir(f.name).glob('*.jpg'))
 
         translated_count = 0
         tp_path = f / '.transplant_meta.json'

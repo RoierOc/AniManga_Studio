@@ -4,6 +4,7 @@ import { useSourcesStore } from '@/stores/sources'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import { useModal } from '@/lib/useModal'
+import { genero } from '@/lib/etiquetas'
 
 const store = useSourcesStore()
 const d = computed(() => store.detail)
@@ -38,7 +39,7 @@ useModal(() => !!d.value, () => store.closeDetail(), modalEl)
                 </button>
               </div>
               <div v-if="genres.length" class="modal__genres">
-                <span v-for="g in genres.slice(0, 5)" :key="g" class="g">{{ g }}</span>
+                <span v-for="g in genres.slice(0, 5)" :key="g" class="g">{{ genero(g) }}</span>
               </div>
             </div>
           </header>

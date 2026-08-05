@@ -17,9 +17,18 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 @pytest.fixture()
 def up(tmp_path, monkeypatch):
-    """Mirror upscaled sintético. NUNCA la biblioteca real."""
+    """Mirror upscaled sintético. NUNCA la biblioteca real.
+
+    Se parchea `api.roots`, no `T.upscaled_dir`: desde que la biblioteca puede estar repartida
+    en varios discos, "la carpeta de escalados" ya no es una sino una por raíz, y quien las
+    resuelve es `roots.py`. El aviso tiene que contar lo que el borrado se lleva EN TODAS.
+    """
+    import api.roots as R
     import api.transplant as T
-    monkeypatch.setattr(T, 'upscaled_dir', lambda: tmp_path)
+    monkeypatch.setattr(R, 'UPSCALED_DIR', tmp_path)
+    monkeypatch.setattr(R, 'MANGA_DIR', tmp_path / '_orig')
+    monkeypatch.setattr(R, '_ROOTS_FILE', tmp_path / '_roots.json')
+    monkeypatch.setattr(R, 'get_library_mode', lambda: 'normal')
     return T, tmp_path
 
 

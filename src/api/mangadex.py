@@ -873,14 +873,14 @@ def manga_updates():
         if not manga_id or not title:
             continue
 
+        # Capítulos locales: la obra puede estar repartida entre discos, así que se miran
+        # todas las raíces (si no, «te faltan capítulos» saldría por los que están en el otro).
+        from api.roots import series_pages
         local_chs: set = set()
-        folder = manga_dir_path / title
-        if folder.exists():
-            for img in folder.iterdir():
-                if img.is_file() and img.suffix.lower() in ('.jpg', '.png', '.webp'):
-                    parts = img.stem.split('_')
-                    if parts and parts[0].lower().startswith('ch'):
-                        local_chs.add(normalize_chapter(parts[0]))
+        for name in series_pages(title):
+            parts = name.rsplit('.', 1)[0].split('_')
+            if parts and parts[0].lower().startswith('ch'):
+                local_chs.add(normalize_chapter(parts[0]))
 
         if local_chs:
             candidates.append((manga_id, title, cover, local_chs))
@@ -987,16 +987,35 @@ def get_volumes(manga_id):
 
         # Prefer aggregate: it mirrors what MangaDex website shows per volume,
         # avoiding cross-language volume assignment conflicts from the feed.
-        agg_r = _SESSION.get(
-            f"https://api.mangadex.org/manga/{manga_id}/aggregate",
-            timeout=10,
-        )
-        if agg_r.ok:
-            agg_data = agg_r.json()
-            for vol_key, vol_data in (agg_data.get("volumes", {}) or {}).items():
+        #
+        # `aggregate` SIN filtro es AGNÓSTICO DEL IDIOMA: declara todo lo publicado en cualquier
+        # lengua. Medido en Witch Hat Atelier: 109 capítulos en 16 tomos, pero los `.5` que hacían
+        # que el Tomo 1 saliera «5/6» resultaron ser extras en CATALÁN (5.5, 11.5), es-la
+        # (42.5, 51.5, 67.5) y persa (23.5, 45.5, 62.5) — capítulos que esta biblioteca no va a
+        # tener nunca. Con `translatedLanguage[]`, el mismo tomo da exactamente los 5 que hay.
+        # `lang=` deja elegir; vacío = sin filtrar (comportamiento anterior).
+        langs = [l.strip() for l in (request.args.get('lang') or '').split(',') if l.strip()]
+
+        def _aggregate(langs_):
+            params = {"translatedLanguage[]": langs_} if langs_ else None
+            r = _SESSION.get(f"https://api.mangadex.org/manga/{manga_id}/aggregate",
+                             params=params, timeout=10)
+            if not r.ok:
+                return {}
+            out = {}
+            for vol_key, vol_data in (r.json().get("volumes", {}) or {}).items():
                 chaps = set(vol_data.get("chapters", {}).keys())
                 if chaps:
-                    volume_chapters[vol_key] = chaps
+                    out[vol_key] = chaps
+            return out
+
+        volume_chapters = _aggregate(langs)
+        lang_fallback = False
+        if langs and not volume_chapters:
+            # Obra que no existe en ninguno de esos idiomas: mejor el mapa completo que ninguno.
+            # Filtrar hasta dejarlo vacío sería decir «no hay tomos», que es otra cosa.
+            volume_chapters = _aggregate([])
+            lang_fallback = bool(volume_chapters)
 
         agg_had_data = bool(volume_chapters)
 
@@ -1042,6 +1061,8 @@ def get_volumes(manga_id):
             }
             if not agg_had_data:
                 entry["feedFallback"] = True
+            if lang_fallback:
+                entry["langFallback"] = True
             result.append(entry)
 
         def _vol_sort(v):
