@@ -404,7 +404,22 @@ def start():
 
 
 def _batch_public(b: dict) -> dict:
-    return {k: v for k, v in b.items() if not k.startswith("_")}
+    """Vista pública del lote + el avance del episodio EN CURSO.
+
+    Sin `current_*` la barra del lote sólo se movía una vez por episodio: en un lote de 8 eso son
+    8 saltos en 40 minutos, y entre salto y salto la interfaz parecía parada justo mientras el
+    usuario la miraba. El dato existía en la tarea de traducción; sólo había que exponerlo aquí,
+    que es lo que consultan tanto el modal como el Centro de Actividad.
+    """
+    out = {k: v for k, v in b.items() if not k.startswith("_")}
+    bid = b.get("batch_id")
+    for t in _tasks.values():
+        if isinstance(t, dict) and t.get("batch_id") == bid and t.get("status") not in (
+                "done", "error", "cancelled"):
+            out["current_progress"] = t.get("progress") or 0
+            out["current_message"] = t.get("message") or ""
+            break
+    return out
 
 
 @subbatch_bp.route("/<batch_id>")

@@ -33,8 +33,24 @@ describe('lote de subtítulos · Centro de Actividad', () => {
     const subChildren = s.normalizedTasks.filter(t => t.kind === 'subtitle')
     expect(batchTasks).toHaveLength(1)
     expect(batchTasks[0].label).toContain('5/12')
-    expect(batchTasks[0].pct).toBe(42)                 // 5/12
+    // La hija NO se pinta como fila propia, pero su avance SÍ cuenta: antes la barra del lote
+    // sólo se movía al terminar cada episodio (12 saltos en 40 min) y entre salto y salto
+    // parecía colgada. (5 + 0,40) / 12 = 45 %.
+    expect(batchTasks[0].pct).toBe(45)
+    expect(batchTasks[0].msg).toContain('')            // hereda el relato del episodio en curso
     expect(subChildren).toHaveLength(0)                // la hija con batch_id se suprimió
+
+  })
+
+  it('el lote hereda el mensaje y el episodio del que está en curso', () => {
+    const s = useMangaStore()
+    s.subtitleBatches = { b1: { batch_id: 'b1', status: 'running', done: 2, total: 8, title: 'Sonny Boy', current_episode: 7 } }
+    s.subtitles = { c: { status: 'translating', progress: 50, batch_id: 'b1', episode: 7,
+                         message: 'qwen2.5:14b: 238/558 líneas…' } }
+    const [b] = s.normalizedTasks.filter(t => t.kind === 'subtitle_batch')
+    expect(b.msg).toBe('qwen2.5:14b: 238/558 líneas…')
+    expect(b.label).toContain('ep. 7')
+    expect(b.batchId).toBe('b1')                       // hace falta para poder VOLVER al lote
   })
 
   it('una traducción suelta (sin lote) SÍ se cuenta', () => {

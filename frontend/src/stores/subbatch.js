@@ -42,6 +42,17 @@ export const useSubBatchStore = defineStore('subbatch', {
     itemByEp: (s) => (ep) => s.items.find(i => i.episode === ep),
     // Estado en vivo por episodio durante la ejecución.
     liveOf: (s) => (ep) => s.batch?.items?.find(i => i.episode === ep) || null,
+    // Al REABRIR un lote en marcha no hay escaneo, así que la lista sale del propio lote. El
+    // escaneo trae más (idioma detectado, fuentes), pero para mirar el progreso basta con esto.
+    filas: (s) => (s.episodes.length ? s.episodes
+      : (s.batch?.items || []).map(i => ({ ...i, file_present: true }))),
+    // Progreso REAL: episodios terminados + la fracción del que está en curso.
+    pctLote: (s) => {
+      const b = s.batch
+      if (!b || !b.total) return 0
+      const frac = Math.min(100, b.current_progress || 0) / 100
+      return Math.min(100, ((b.done || 0) + frac) / b.total * 100)
+    },
   },
 
   actions: {
@@ -64,6 +75,20 @@ export const useSubBatchStore = defineStore('subbatch', {
     close() {
       this.open = false
       if (poller) { clearInterval(poller); poller = null }
+    },
+
+    /** Vuelve a ABRIR un lote que ya está corriendo, sin re-escanear ni arrancar otro.
+     *
+     * `openFor` no vale para esto: resetea `batchId`/`batch` y lanza un escaneo nuevo, así que
+     * cerrar el modal con un lote en marcha dejaba la única vista detallada del progreso
+     * inaccesible durante los 40 minutos que dura. Se entra desde el Centro de Actividad. */
+    reopen(batchId, title) {
+      if (!batchId) return
+      this.open = true
+      this.title = title || this.title
+      this.batchId = batchId
+      this.running = true
+      this._poll()
     },
 
     async runScan() {

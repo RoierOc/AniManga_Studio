@@ -21,7 +21,13 @@ subtitle_bp = Blueprint('subtitle', __name__)
 
 _tasks: dict = {}
 _cancel_flags: dict = {}
-OLLAMA_BATCH_SIZE = 80          # 80 lines/batch → 25% fewer round trips; fits in 3200-token ctx
+# 20 y no 80. MEDIDO (1-ago-2026, 3 series × 2 modelos): con lotes de 80 el modelo fusiona dos
+# subtítulos de una misma frase, la numeración se descoloca y la bisección tiene que rehacer el
+# lote entero — 3 rescates con gemma4 y 6 con qwen2.5, tirando ~75 % del trabajo. Con lotes de 20
+# NO hubo un solo rescate en ninguna serie ni con ninguno de los dos modelos. Aunque son 4× más
+# llamadas y menos contexto compartido, sale MÁS RÁPIDO en reloj porque no rehace nada: gemma4
+# 0,44→0,32 s/línea. El lote largo era la causa, no el modelo (qwen2.5 @20 no se llegó a medir).
+OLLAMA_BATCH_SIZE = 20
 # Inter-batch pause — 0 by default (max speed). Set OLLAMA_BATCH_PAUSE_SECS=3 if MPV lags.
 _OLLAMA_BATCH_PAUSE = float(os.environ.get('OLLAMA_BATCH_PAUSE_SECS', '0'))
 _OLLAMA_TIMEOUT = 300           # seconds per batch (generous for 60 lines)
@@ -65,7 +71,14 @@ def _build_prompt(src_lang: str = 'eng') -> str:
         'Entrada: N|texto original\n'
         'Salida:  N|traducción al español\n'
         'El conteo NUNCA puede variar: si entran 60 líneas, salen 60 líneas. '
-        'Agregar, omitir o partir líneas desincroniza todos los subtítulos del episodio.\n\n'
+        'Agregar, omitir o partir líneas desincroniza todos los subtítulos del episodio.\n'
+        # La causa REAL del desfase medido en Zankyou no Terror: una frase partida en dos
+        # subtítulos («Yeah, this Detective Shibazaki» / «should\'ve figured out…») el modelo la
+        # fusionaba en una salida y seguía numerando. Decirle "no fusiones" no basta: hay que
+        # decirle qué hacer en su lugar.
+        'Si una frase está partida entre dos líneas consecutivas, NO las juntes: traduce la frase '
+        'entera y REPARTE la traducción entre esas mismas dos líneas, respetando sus números. '
+        'Cada número de entrada debe aparecer una vez en la salida, en orden.\n\n'
 
         '══ TRADUCCIÓN ══\n'
         '1. Traduce el texto del idioma fuente aplicando criterio: no toda palabra extranjera '
@@ -874,7 +887,8 @@ def _parse_ass(content: str):
     header = []
     events = []
     in_events = False
-    text_col = 9  # default for standard ASS (Layer…Effect,Text)
+    text_col = 9   # default for standard ASS (Layer…Effect,Text)
+    style_col = 3  # Layer,Start,End,Style,… — se re-lee del Format: por si el orden cambia
 
     for line in lines:
         stripped = line.rstrip('\n\r')
@@ -893,6 +907,8 @@ def _parse_ass(content: str):
             cols = [c.strip() for c in stripped.split(':', 1)[1].split(',')]
             if 'Text' in cols:
                 text_col = cols.index('Text')
+            if 'Style' in cols:
+                style_col = cols.index('Style')
             header.append(line)
             continue
 
@@ -904,6 +920,11 @@ def _parse_ass(content: str):
                 events.append({
                     'passthrough': False,
                     'prefix':      prefix,
+                    # El Style: hace falta para NO mandar a traducir el tipografiado. Ver
+                    # `_es_tipografiado`: sin él no hay forma de distinguir un cartel animado
+                    # de una línea de diálogo, y un episodio con efectos puede traer 179.000
+                    # líneas de relleno (medido en Sonny Boy).
+                    'style':       parts[style_col].strip() if len(parts) > style_col else '',
                     'text':        text,   # full text WITH tags — Gemini preserves {…}
                     'eol':         '\n' if line.endswith('\n') else '',
                 })
@@ -1038,6 +1059,54 @@ def _is_sign_style(name: str) -> bool:
     """True si el Style: parece tipografiado/cartel en vez de diálogo."""
     n = name or ''
     return bool(_SIGN_PREFIX_PAT.match(n) or _SIGN_ANY_PAT.search(n))
+
+
+# Proporción mínima de LETRAS (sobre caracteres no-espacio) para que un cartel se considere
+# lenguaje traducible. CONSTANTE editable; el MECANISMO es `_es_tipografiado`.
+#
+# 0,60 se eligió MIDIENDO los dos riesgos a la vez sobre 22 episodios de grupos distintos
+# (15.037 líneas). A 0,70 se colaban dos carteles de verdad —`\h\hHot! Hot!!!\h` y
+# `「Life, Death, and...」`, cuya proporción baja por los escapes y la puntuación, no por falta de
+# texto—; a 0,60 se conservan los dos y el episodio patológico sigue bajando de 4.941 a 558
+# líneas. Las ~120 líneas de decorado que se cuelan de más cuestan ~40 s; un cartel perdido no
+# se recupera.
+_RATIO_LETRAS_CARTEL = 0.60
+
+# `\h` (espacio duro) y `\N`/`\n` (salto) son ESCAPES del formato, no contenido: contarlos como
+# símbolos hundía la proporción de un cartel corto y lo hacía parecer decorado.
+_ESCAPES_ASS = re.compile(r'\\[hnN]')
+
+
+def _ratio_letras(texto: str) -> float:
+    """Fracción de caracteres alfabéticos, ignorando espacios y escapes ASS."""
+    cuerpo = [c for c in _ESCAPES_ASS.sub(' ', texto or '') if not c.isspace()]
+    if not cuerpo:
+        return 0.0
+    return sum(c.isalpha() for c in cuerpo) / len(cuerpo)
+
+
+def _es_tipografiado(estilo: str, visible: str) -> bool:
+    """True si la línea es DECORADO y no hay nada que traducir en ella.
+
+    Nace de un caso real: *Sonny Boy* lleva un efecto de «lluvia de código» y su pista de
+    diálogo trae **179.782 líneas** (87 MB) de 50 ms con contenido tipo `+$/a*6+$MF&9%$`. De
+    4.941 textos únicos sólo 355 eran diálogo. Eso no sólo multiplicaba por 14 el trabajo: ese
+    galimatías es IMPOSIBLE de devolver en el formato `N|texto`, así que cada lote que lo
+    contenía fallaba la verificación y se bisecaba hasta lotes de 2 — 3,75 s/línea frente a
+    los 0,34 normales. El lote de 8 episodios iba a tardar 41 horas.
+
+    Las DOS condiciones son necesarias, medido sobre el fichero real:
+      · sólo por estilo → se cargaba la letra del ED («From this moment on we're standing…»),
+        que sí se traduce;
+      · sólo por contenido → dejaba pasar 740 líneas de basura que rompen el formato igual.
+    Juntas: 4.941 → 437 líneas, **sin perder una sola línea de diálogo**.
+
+    Fallo SEGURO: ante la duda se traduce. Sólo se descarta lo que es a la vez de un estilo de
+    cartel Y pobre en letras; una línea normal en un estilo raro sigue pasando.
+    """
+    if not _is_sign_style(estilo):
+        return False
+    return _ratio_letras(visible) < _RATIO_LETRAS_CARTEL
 
 
 def restyle_ass_header(header: list) -> list:
@@ -1446,10 +1515,20 @@ def _translate_batch_ollama(texts: list, src_lang: str = 'eng') -> list:
     return translate_with_tag_protection(texts, lambda p: _translate_batch_ollama_raw(p, src_lang))
 
 
-def _translate_batch_ollama_raw(texts: list, src_lang: str = 'eng') -> list:
+def _translate_batch_ollama_raw(texts: list, src_lang: str = 'eng',
+                                _profundidad: int = 0) -> list:
+    """Traduce un lote EXIGIENDO que la numeración cuadre; si no, lo parte y reintenta.
+
+    El desfase de líneas (ver `api.sub_align`) nace aquí: si el modelo fusiona dos subtítulos de
+    una misma frase y sigue numerando, todo lo que viene detrás queda corrido y el episodio sale
+    con la respuesta antes que la pregunta. Un lote de 1 línea no puede numerarse mal, así que
+    partir por la mitad SIEMPRE converge; y sólo se paga en los lotes que fallan.
+    """
     if not texts:
         return []
     import urllib.request as _ur
+
+    from api.sub_align import hay_corrimiento, indices_completos, parse_numeradas
 
     n = len(texts)
     # system ~600t (extended prompt) + user header ~20t + n lines ~14t input + ~14t output each
@@ -1459,7 +1538,7 @@ def _translate_batch_ollama_raw(texts: list, src_lang: str = 'eng') -> list:
 
     system_prompt = _build_prompt(src_lang)
 
-    def _call() -> tuple[list, int]:
+    def _call() -> tuple[list, set]:
         numbered = '\n'.join(f'{i+1}|{t}' for i, t in enumerate(texts))
         payload = json.dumps({
             'model': _ollama_model(),
@@ -1485,43 +1564,65 @@ def _translate_batch_ollama_raw(texts: list, src_lang: str = 'eng') -> list:
         except Exception as e:
             raise RuntimeError(f'Ollama: {e}') from e
         raw = ((data.get('message') or {}).get('content') or '').strip()
-        result = list(texts)
-        found = 0
-        for line in raw.splitlines():
-            m = re.match(r'^(\d+)\|(.*)$', line)
-            if m:
-                idx = int(m.group(1)) - 1
-                if 0 <= idx < n:
-                    result[idx] = m.group(2)
-                    found += 1
-        return result, found
+        parsed, vistos = parse_numeradas(raw, n)
+        # Lo que el modelo no devolvió se queda con su original: una línea sin traducir se ve y se
+        # arregla; una línea con el texto de otra pasa por buena y desincroniza el episodio.
+        result = [p if p is not None else t for p, t in zip(parsed, texts)]
+        return result, vistos
 
-    result, found = _call()
-    if found < n * 0.85:
-        print(f'[subtitle] Ollama returned {found}/{n} lines — retrying batch…')
-        result2, found2 = _call()
-        if found2 > found:
-            result, found = result2, found2
-        if found == 0:
-            # Log raw response to help diagnose model format failures
-            numbered = '\n'.join(f'{i+1}|{t}' for i, t in enumerate(texts))
-            payload_debug = json.dumps({
-                'model': _ollama_model(),
-                'messages': [
-                    {'role': 'system', 'content': system_prompt},
-                    {'role': 'user',   'content': f'Traduce estas {n} líneas:\n\n{numbered}'},
-                ],
-                'stream': False,
-                'options': {'temperature': 0.01, 'num_predict': 200, 'num_ctx': num_ctx, 'num_gpu': -1},
-            }).encode()
-            try:
-                req2 = _ur.Request(f'{_ollama_url()}/api/chat', data=payload_debug,
-                                   headers={'Content-Type': 'application/json'}, method='POST')
-                with _ur.urlopen(req2, timeout=30) as resp2:
-                    debug_raw = ((json.loads(resp2.read()).get('message') or {}).get('content') or '').strip()
-                print(f'[subtitle] Ollama debug raw (primeras 300 chars): {debug_raw[:300]!r}')
-            except Exception:
-                pass
+    result, vistos = _call()
+    found = len(vistos)
+
+    # ── Puerta 1: la numeración tiene que estar COMPLETA ──────────────────────
+    # Antes bastaba con el 85 %, y una fusión en 80 líneas devuelve el 98,75 %: el fallo cabía
+    # entero dentro de la tolerancia y no saltaba nunca.
+    if not indices_completos(vistos, n):
+        faltan = sorted(set(range(n)) - vistos)[:6]
+        print(f'[subtitle] numeración incompleta: {found}/{n} (faltan {faltan}…) — reintento')
+        result2, vistos2 = _call()
+        if len(vistos2) > found:
+            result, vistos, found = result2, vistos2, len(vistos2)
+
+    # ── Puerta 2: aunque cuadre el conteo, el CONTENIDO puede ir corrido ───────
+    # Pasa cuando el modelo fusiona dos líneas y parte otra para cuadrar el total: los índices
+    # salen completos y aun así cada subtítulo lleva el texto del vecino.
+    desplazado = hay_corrimiento(texts, result) if indices_completos(vistos, n) else 0
+
+    if (not indices_completos(vistos, n) or desplazado) and n > 1 and _profundidad < 6:
+        motivo = f'corrido {desplazado:+d}' if desplazado else f'{found}/{n} índices'
+        print(f'[subtitle] lote de {n} líneas sin verificar ({motivo}) — partiendo en dos')
+        mitad = n // 2
+        izq = _translate_batch_ollama_raw(texts[:mitad], src_lang, _profundidad + 1)
+        der = _translate_batch_ollama_raw(texts[mitad:], src_lang, _profundidad + 1)
+        return izq + der
+
+    if not indices_completos(vistos, n):
+        # Se agotó la bisección. NO se puede devolver esto como si fuera bueno: se registra para
+        # que la costura sea visible y el episodio quede marcado.
+        record_error('subtitle', RuntimeError('lote sin verificar tras bisección'),
+                     op='ollama_align', lineas=n, indices=found)
+
+    if found == 0:
+        # El modelo no devolvió NADA con el formato pedido: se pide una muestra corta para poder
+        # ver en el log qué está contestando en realidad (suele ser un preámbulo o JSON).
+        numbered = '\n'.join(f'{i+1}|{t}' for i, t in enumerate(texts))
+        payload_debug = json.dumps({
+            'model': _ollama_model(),
+            'messages': [
+                {'role': 'system', 'content': system_prompt},
+                {'role': 'user',   'content': f'Traduce estas {n} líneas:\n\n{numbered}'},
+            ],
+            'stream': False,
+            'options': {'temperature': 0.01, 'num_predict': 200, 'num_ctx': num_ctx, 'num_gpu': -1},
+        }).encode()
+        try:
+            req2 = _ur.Request(f'{_ollama_url()}/api/chat', data=payload_debug,
+                               headers={'Content-Type': 'application/json'}, method='POST')
+            with _ur.urlopen(req2, timeout=30) as resp2:
+                debug_raw = ((json.loads(resp2.read()).get('message') or {}).get('content') or '').strip()
+            print(f'[subtitle] Ollama debug raw (primeras 300 chars): {debug_raw[:300]!r}')
+        except Exception:
+            pass
 
     # Aviso de "esto no se ha traducido". Sólo cuenta DIÁLOGO: una línea corta o una de karaoke
     # romaji es idéntica al original porque debe serlo, no porque haya fallado.
@@ -1579,9 +1680,11 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                 header, events = _parse_ass(content)
                 dialogue = [e for e in events if not e['passthrough']]
                 texts = [e['text'] for e in dialogue]
+                estilos = [e.get('style', '') for e in dialogue]
             else:
                 blocks = _parse_srt(content)
                 texts = [b['text'] for b in blocks]
+                estilos = [''] * len(texts)   # SRT no tiene estilos: nada que filtrar
 
             texts_orig = texts
             total_orig = len(texts_orig)
@@ -1597,6 +1700,7 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
             _TAG_RE_D = re.compile(r'\{[^}]*\}')
             _SKIP_RE_D = re.compile(r'^[\s♪♫…\-_.,!?¡¿:;\'\"()【】「」『』\[\]°·•—–]+$')
             _LEAD_TAG_RE = re.compile(r'^(\{[^}]*\})+')  # leading tag block(s)
+            _n_tipografiado = 0              # descartes por decorado, para el log
             _seen_vis: dict[str, int] = {}   # visible_text_key → dedup index
             _dedup_texts: list[str] = []     # representative full text (first occurrence)
             _dedup_to_orig: list[list[int]] = []
@@ -1606,6 +1710,12 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                 _vis_key = _vis.replace('\\N', ' ').strip()
                 if not _vis_key or _SKIP_RE_D.match(_vis_key):
                     continue  # passthrough — rebuild fallback handles it
+                # Decorado sin lenguaje (lluvia de código, efectos por fotograma): se deja tal
+                # cual. Salta por la MISMA puerta que el resto de descartes, así que la línea
+                # original se conserva intacta en la salida.
+                if _es_tipografiado(estilos[_p] if _p < len(estilos) else '', _vis_key):
+                    _n_tipografiado += 1
+                    continue
                 if _vis_key in _seen_vis:
                     _dedup_to_orig[_seen_vis[_vis_key]].append(_p)
                 else:
@@ -1615,6 +1725,9 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                     _dedup_to_orig.append([_p])
 
             texts = _dedup_texts
+            if _n_tipografiado:
+                print(f'[subtitle] {_n_tipografiado} lineas de tipografiado/decorado no se '
+                      f'traducen (quedan {len(texts)} de {total_orig})', flush=True)
             total = len(texts)
             _n_saved = total_orig - total
             if _n_saved > 0:
@@ -1689,8 +1802,11 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                     with done_count:
                         done_o[0] += 1
                     pct = 10 + int(78 * len(dedup_tm) / total)
+                    # El nombre del modelo se LEE, no se escribe a mano: `OLLAMA_MODEL` es
+                    # configurable desde Ajustes y el mensaje seguía diciendo «Qwen» pasara lo
+                    # que pasara.
                     upd('translating', min(pct, 88),
-                        f'Qwen: {len(dedup_tm)}/{total} líneas…', engine='ollama')
+                        f'{_ollama_model()}: {len(dedup_tm)}/{total} líneas…', engine='ollama')
 
             if _cancelled or _cancel_flags.pop(task_id, False):
                 _cancel_flags.pop(task_id, None)
@@ -1717,6 +1833,24 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
             # Passthrough positions (empty/symbol-only) fall back to original text
             translated = [translated_map.get(i, texts_orig[i]) for i in range(total_orig)]
 
+            # ── Control de alineación sobre el resultado FINAL ─────────────────
+            # La puerta por lote rechaza lo que puede; esto comprueba lo que el usuario va a ver
+            # de verdad. Un episodio corrido es peor que uno mal traducido: el subtítulo no
+            # corresponde a lo que suena y parece que el modelo alucinó. MEDIDO: pilla los 4
+            # episodios malos de Zankyou y ninguno de los 7 buenos.
+            try:
+                from api.sub_align import revisar_episodio
+                tramos = revisar_episodio(texts_orig, translated)
+                if tramos:
+                    record_error('subtitle', RuntimeError('subtítulo desalineado'),
+                                 op='align_check', tramos=len(tramos),
+                                 desde=tramos[0][0], desplazamiento=tramos[0][1])
+                    task['misaligned'] = [{'pos': p, 'delta': d} for p, d in tramos[:12]]
+                    print(f'[subtitle] ⚠️ {len(tramos)} tramos desalineados '
+                          f'(el primero en la línea {tramos[0][0]}, {tramos[0][1]:+d})')
+            except Exception as e:
+                record_error('subtitle', e, op='align_check')
+
             upd('injecting', 90, 'Añadiendo track español al MKV…')
 
             if is_ass:
@@ -1736,7 +1870,7 @@ def _do_translate(task_id: str, mkv_path: str, sub_index: int, codec: str, n_sub
                 return
 
         task.update(status='done', progress=100,
-                    message='¡Completado! (Qwen local)', output=out_mkv)
+                    message=f'¡Completado! ({_ollama_model()} local)', output=out_mkv)
 
     except Exception as e:
         task.update(status='error', progress=0,

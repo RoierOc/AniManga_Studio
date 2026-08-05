@@ -99,7 +99,7 @@ const LIVE = {
 
             <!-- Tabla de episodios -->
             <div class="sbb__list">
-              <div v-for="e in store.episodes" :key="e.episode" class="sbb__row" :class="{ 'is-current': store.batch?.current_episode === e.episode }">
+              <div v-for="e in store.filas" :key="e.episode" class="sbb__row" :class="{ 'is-current': store.batch?.current_episode === e.episode }">
                 <label class="sbb__pick" :class="{ 'is-disabled': !e.file_present || store.running }">
                   <input type="checkbox" :disabled="!e.file_present || store.running"
                          :checked="store.selected.has(e.episode)" @change="store.toggle(e.episode)" />
@@ -133,9 +133,13 @@ const LIVE = {
 
             <!-- Barra de progreso agregada -->
             <div v-if="store.running && store.batch" class="sbb__prog">
-              <div class="sbb__prog-bar"><span :style="{ width: (store.batch.total ? store.batch.done / store.batch.total * 100 : 0) + '%' }" /></div>
+              <div class="sbb__prog-bar"><span :style="{ width: store.pctLote + '%' }" /></div>
               <span class="sbb__prog-lbl">{{ store.batch.done }}/{{ store.batch.total }}</span>
             </div>
+            <!-- Lo que está haciendo AHORA. El backend ya lo contaba y aquí no se veía. -->
+            <p v-if="store.running && store.batch?.current_message" class="sbb__paso">
+              {{ store.batch.current_message }}
+            </p>
 
             <footer class="sbb__foot">
               <template v-if="store.running">
@@ -198,6 +202,7 @@ const LIVE = {
 .sbb__list { overflow-y: auto; padding: var(--s-2) var(--s-3); flex: 1; }
 .sbb__row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3);
   padding: var(--s-2) var(--s-3); border-radius: var(--r-sm); border: 1px solid transparent; }
+.sbb__paso { font-size: var(--fs-xs); color: var(--ink-faint); text-align: center; margin-top: var(--s-2); }
 .sbb__row.is-current { border-color: var(--azure); background: var(--azure-haze); }
 .sbb__pick { display: flex; align-items: center; gap: var(--s-3); min-width: 0; cursor: pointer; flex: 1; }
 .sbb__pick.is-disabled { cursor: default; opacity: .5; }
