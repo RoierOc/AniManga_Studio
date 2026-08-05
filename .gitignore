@@ -68,6 +68,12 @@ desktop/native/target/
 # Artefactos de compilación de Rust (regenerables con cargo build)
 desktop/native/target/
 
+# Scripts de captura de un solo uso (Playwright) y mockups descartados:
+# el mockup ya está implementado, y su arte son portadas reales de la biblioteca
+_shots*.mjs
+_mark_shot.mjs
+docs/dev/mockups/
+
 # Local configuration and public repository metadata.
 /.*/
 !/.github/
