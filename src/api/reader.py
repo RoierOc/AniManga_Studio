@@ -96,6 +96,50 @@ def _progress_read() -> dict:
     return d if isinstance(d, dict) else {}
 
 
+# ── Lápidas (tombstones) ─────────────────────────────────────────────────────
+# Sin esto, la unión de `read` es una trampa en cuanto hay DOS dispositivos: desmarcas un
+# capítulo en el móvil, el PC todavía lo tiene marcado, y en la siguiente fusión vuelve. Un
+# borrado tiene que viajar igual que una lectura, así que se guarda como dato en vez de
+# desaparecer: `del: {capítulo: ts}` para capítulos, y la obra entera se sustituye por
+# `{deleted_ts: ts}` en lugar de quitar la clave.
+#
+# Guardar la lápida DENTRO de la propia entrada (y no en un mapa aparte tipo `_deleted`) evita
+# inventar un espacio de nombres que podría chocar con una obra que se llame igual.
+#
+# la resolución es el `ts` de la OBRA, no el del capítulo — los marcados legados son
+# `true` y no llevan hora propia. Basta para el caso real (desmarcar y volver a marcar), y si
+# algún día hiciera falta más fino, el sitio es guardar la hora en `read[cap]` en vez de `true`.
+
+_LAPIDA_TTL_MS = 90 * 24 * 3600 * 1000   # pasado ese tiempo, todos los dispositivos se enteraron
+
+
+def es_lapida(entry) -> bool:
+    """Una obra borrada: sólo lleva la hora del borrado, ningún progreso."""
+    return isinstance(entry, dict) and 'deleted_ts' in entry and not entry.get('read')
+
+
+def podar_lapidas(data: dict, ahora_ms: int = 0) -> dict:
+    """Quita las lápidas ya caducadas para que el fichero no crezca sin fin."""
+    ahora = ahora_ms or int(time.time() * 1000)
+    fuera = []
+    for title, entry in (data or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        if es_lapida(entry) and ahora - int(entry.get('deleted_ts') or 0) > _LAPIDA_TTL_MS:
+            fuera.append(title)
+            continue
+        dels = entry.get('del')
+        if isinstance(dels, dict):
+            vivas = {c: t for c, t in dels.items() if ahora - int(t or 0) <= _LAPIDA_TTL_MS}
+            if vivas:
+                entry['del'] = vivas
+            else:
+                entry.pop('del', None)
+    for t in fuera:
+        data.pop(t, None)
+    return data
+
+
 def merge_progress(base: dict, incoming: dict) -> dict:
     """Funde dos progresos SIN destruir (mismo criterio que `backup.apply_payload`).
 
@@ -103,6 +147,8 @@ def merge_progress(base: dict, incoming: dict) -> dict:
       por sincronizar es peor que conservar una de más.
     - La POSICIÓN (lastChapter/lastPage/...) es la del `ts` más reciente: ahí sí manda
       quién leyó después, o al reanudar volverías a un punto viejo.
+    - …salvo que haya una LÁPIDA más nueva: un borrado explícito gana a una marca vieja, o
+      desmarcar un capítulo no serviría de nada con dos dispositivos.
     """
     out = {k: dict(v) for k, v in (base or {}).items() if isinstance(v, dict)}
     for title, inc in (incoming or {}).items():
@@ -112,19 +158,56 @@ def merge_progress(base: dict, incoming: dict) -> dict:
         if not cur:
             out[title] = dict(inc)
             continue
+
+        # Obra borrada en algún lado: gana el borrado, salvo que el otro lado haya SEGUIDO
+        # leyendo después (entonces la resucita: leer es una intención más reciente que borrar).
+        borrado = max(int(cur.get('deleted_ts') or 0), int(inc.get('deleted_ts') or 0))
+        if borrado:
+            actividad = max(int(cur.get('ts') or 0), int(inc.get('ts') or 0))
+            if borrado >= actividad:
+                out[title] = {'deleted_ts': borrado}
+                continue
+
         merged = dict(cur)
+        merged.pop('deleted_ts', None)
         merged['read'] = {**(cur.get('read') or {}), **(inc.get('read') or {})}
+
+        # Lápidas de capítulo: se quedan las dos, con la hora más alta de cada una.
+        dels = dict(cur.get('del') or {})
+        for c, t in (inc.get('del') or {}).items():
+            dels[str(c)] = max(int(t or 0), int(dels.get(str(c)) or 0))
+
         if int(inc.get('ts') or 0) >= int(cur.get('ts') or 0):
             for k, v in inc.items():
-                if k != 'read':
+                if k not in ('read', 'del'):
                     merged[k] = v
+
+        # Aplicar las lápidas de capítulo: cae la marca de leído si el borrado es al menos tan
+        # nuevo como la última actividad del lado que lo tenía marcado.
+        for c, t in list(dels.items()):
+            lado = inc if c in (inc.get('read') or {}) else cur
+            if int(t or 0) >= int(lado.get('ts') or 0):
+                merged['read'].pop(c, None)
+            else:
+                dels.pop(c)   # se volvió a leer después: la lápida ya no pinta nada
+
+        if dels:
+            merged['del'] = dels
+        else:
+            merged.pop('del', None)
         out[title] = merged
-    return out
+    return podar_lapidas(out)
+
+
+def sin_lapidas(data: dict) -> dict:
+    """Lo que se le enseña al cliente. Las lápidas son fontanería de sincronización: si viajaran
+    a la interfaz, una obra borrada seguiría apareciendo (vacía) en «continuar leyendo»."""
+    return {k: v for k, v in (data or {}).items() if not es_lapida(v)}
 
 
 @reader_bp.route('/progress')
 def get_progress():
-    return jsonify(_progress_read())
+    return jsonify(sin_lapidas(_progress_read()))
 
 
 @reader_bp.route('/progress', methods=['POST'])
@@ -139,7 +222,7 @@ def put_progress():
         return jsonify({'error': 'se esperaba un objeto {obra: progreso}'}), 400
     merged = merge_progress(_progress_read(), incoming)
     write_json_atomic(_progress_path(), merged, indent=2, keep_backup=True)
-    return jsonify(merged)
+    return jsonify(sin_lapidas(merged))
 
 
 @reader_bp.route('/progress/forget', methods=['POST'])
@@ -155,19 +238,28 @@ def forget_progress():
     """
     body = request.get_json(silent=True) or {}
     data = _progress_read()
+    ahora = int(time.time() * 1000)
+
+    # Se deja LÁPIDA en vez de quitar la clave: si desapareciera sin más, el otro dispositivo
+    # seguiría teniéndolo y la siguiente fusión lo devolvería. Ver `merge_progress`.
     for t in (body.get('titles') or []):
-        data.pop(str(t), None)
+        data[str(t)] = {'deleted_ts': ahora}
+
     for t, chapters in (body.get('chapters') or {}).items():
         entry = data.get(str(t))
         if not isinstance(entry, dict):
             continue
+        lapidas = dict(entry.get('del') or {})
         for c in (chapters or []):
             (entry.get('read') or {}).pop(str(c), None)
+            lapidas[str(c)] = ahora
             # Si era el capítulo por el que ibas, la posición deja de tener sentido.
             if str(entry.get('lastChapter')) == str(c):
                 for k in ('lastChapter', 'lastPage', 'lastTotal', 'ts',
                           'lastKind', 'lastRef', 'lastSource'):
                     entry.pop(k, None)
+        if lapidas:
+            entry['del'] = lapidas
     write_json_atomic(_progress_path(), data, indent=2, keep_backup=True)
     return jsonify({'ok': True})
 

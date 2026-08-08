@@ -70,6 +70,11 @@ def hd_url(url: str, *, hero: bool = False) -> str:
     return url
 
 
+def _hd_undo(url: str) -> str:
+    """Deshace lo que hizo `hd_url` para AniList: el tamaño que la API dio de verdad."""
+    return url.replace('/cover/large/', '/cover/medium/') if 's4.anilist.co' in url else url
+
+
 def _ext_for(content_type, url):
     ext = mimetypes.guess_extension((content_type or '').split(';')[0].strip()) if content_type else None
     if not ext:
@@ -142,6 +147,14 @@ def _fetch_and_cache(url):
 
     try:
         r = requests.get(url, timeout=_TIMEOUT, stream=True)
+        # Subir la ruta de AniList a `/cover/large/` supone que ese tamaño EXISTE, y en las fichas
+        # viejas no: el único fichero vive en `/cover/medium/` y la URL mejorada da 404, así que la
+        # portada desaparecía (visto en «Kaguya-hime: Taketori Monogatari», id 14471). Se vuelve a
+        # la que dio AniList. Cuesta una petición sólo en el caso que ya estaba roto.
+        if r.status_code == 404:
+            original = _hd_undo(url)
+            if original != url:
+                r = requests.get(original, timeout=_TIMEOUT, stream=True)
         r.raise_for_status()
     except Exception:
         return None

@@ -30,7 +30,10 @@ import urllib.parse
 import urllib.request
 
 QBT = "http://localhost:8080"
-VPN_HINT = "norton"
+# Por el PROTOCOLO, no por la marca: "Norton VPN WireGuard" y "AVG Secure VPN WireGuard" son el
+# mismo adaptador con otro nombre, y buscar la marca dejó a qBittorrent atado a un adaptador
+# fantasma sin que nadie se enterara (el vigilante lo leía como "VPN caída").
+VPN_HINT = "wireguard"
 INTERVAL = 20          # s. La reconexión de una VPN tarda segundos: sondear más rápido no gana nada.
 
 

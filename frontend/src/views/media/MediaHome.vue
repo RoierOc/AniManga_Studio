@@ -182,6 +182,7 @@ function play(it) {
 
     <ContentToolbar :filters="FILTERS.map(f => ({ ...f, n: f.id === 'all' ? undefined : store.counts[f.id] }))"
                     :filter="store.filter" @update:filter="store.filter = $event"
+                    :genres="store.generos"
                     :sorts="SORTS" :sort="store.sort" @update:sort="store.sort = $event"
                     :search="store.search" @update:search="store.search = $event"
                     search-placeholder="Buscar en tu biblioteca…">

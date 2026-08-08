@@ -609,6 +609,148 @@ def variants_route():
     return jsonify(title_variants(title or None, int(al_id) if al_id.isdigit() else None, media_type))
 
 
+_GENRES_ID_TTL = 30 * 86400   # los géneros de una obra no cambian: cachear meses, no minutos
+
+
+@anilist_bp.route('/genres_by_id', methods=['POST'])
+def genres_by_id():
+    """Géneros de VARIAS obras a la vez: `{al_ids:[…], titles:[…]}` → `{clave: ["Action", …]}`.
+
+    La biblioteca pinta los géneros en la tarjeta, y pedir la ficha completa (`/manga/<id>`) una
+    vez por obra son 28 peticiones para 28 tarjetas: la cuota de AniList (~30/min) se agota antes
+    de terminar la primera pantalla. Aquí una sola consulta trae 50, y lo ya cacheado ni se pide.
+
+    MEDIDO sobre la biblioteca real: de 218 obras sólo **27** tienen `al_id` — el resto se siguió
+    desde el Hub, que no guarda el id. Por eso se admiten TÍTULOS, resueltos por búsqueda con
+    alias GraphQL (10 por petición) y con tope por llamada: la biblioteca se completa en unas
+    cuantas visitas en vez de agotar la cuota de golpe. La clave devuelta es el título tal cual
+    se pidió.
+    """
+    body = request.get_json(silent=True) or {}
+    ids = [int(x) for x in (body.get('al_ids') or []) if str(x).lstrip('-').isdigit()]
+    out, faltan = {}, []
+    for i in dict.fromkeys(ids):        # sin repetidos, conservando el orden
+        hit = _cache_get(_GEN_NS_ID, str(i), _GENRES_ID_TTL)
+        (out.setdefault(str(i), hit) if hit is not None else faltan.append(i))
+
+    if faltan:
+        q = ('query ($ids: [Int]) { Page(perPage: 50) { media(id_in: $ids, type: MANGA) '
+             '{ id genres tags { name rank } } } }')
+        for lote in (faltan[k:k + 50] for k in range(0, len(faltan), 50)):
+            d = _ql(q, {'ids': lote})
+            if '_error' in d:
+                break                    # lo que ya se resolvió sigue valiendo; el resto, otra vez
+            for it in ((d.get('Page') or {}).get('media') or []):
+                g = _generos_de(it)
+                out[str(it['id'])] = g
+                _cache_set(_GEN_NS_ID, str(it['id']), g, ttl=_GENRES_ID_TTL, max_entries=3000)
+
+    _genres_por_titulo(body.get('titles') or [], out)
+    return jsonify(out)
+
+
+_GEN_MAX_BUSCADOS = 60   # títulos NUEVOS por llamada: ~6 peticiones, lejos de la cuota
+_GEN_SIN_FICHA = '__sin_ficha__'   # «AniList no la tiene» ≠ «aún no lo he mirado»
+# El sufijo del espacio de nombres es la invalidación: la v1 guardó 120 obras como «sin ficha»
+# por el 404 de `Media`, y esas mentiras duraban 30 días. Cambiar la clave las jubila sin tocar
+# el disco (el caché caduca solo).
+# v3: la v2 servía el PRIMER resultado de la búsqueda sin mirar cuál era. Con títulos genéricos
+# («Real», «Innocent», «Adabana») el primero es un doujin ADULTO que ni se llama así, y tres obras
+# de la biblioteca salieron marcadas «Hentai». Se jubila cambiando el espacio de nombres.
+_GEN_NS_TITULO = 'al_genres_t4'
+_GEN_NS_ID = 'al_genres_v2'        # sube con `_generos_de` (ahora también trae etiquetas)
+
+
+def _generos_de(media: dict) -> list:
+    """Géneros de una obra = los `genres` de AniList + sus etiquetas curadas (ver `genre_tags`).
+
+    Los 18 géneros de AniList no distinguen un GL de cualquier otro romance; la etiqueta «Yuri»
+    sí, con rango 96-99 en las obras del usuario. Van en la MISMA lista porque para quien filtra
+    son lo mismo: «de qué es esta obra»."""
+    from api.genre_tags import pick_tags
+    return (media.get('genres') or [])[:4] + pick_tags(media.get('tags'))
+
+
+def _norm_titulo(s: str) -> str:
+    """Título comparable: sin mayúsculas, sin puntuación y con los espacios colapsados.
+
+    «Ano Ko Ni Kiss To Shirayuri Wo» y «Ano Ko ni Kiss to Shirayuri wo» son la misma obra; sin
+    normalizar, ninguna búsqueda casaría nunca y la biblioteca se quedaría sin géneros."""
+    import re
+    return re.sub(r'[^a-z0-9]+', ' ', str(s or '').lower()).strip()
+
+
+def _elige_media(cands: list, pedido: str) -> dict | None:
+    """De los candidatos de una búsqueda, la obra que de verdad se pidió — o ninguna.
+
+    La regla que manda es **que el título COINCIDA** (romaji, inglés, nativo o sinónimo): AniList
+    ordena por popularidad, no por parecido, así que para un título genérico como «Real» devuelve
+    primero `S.H.N.D.: Ero Gal Iru tte Hontou desu ka!?` — que ni se llama así, y por el que tres
+    obras del usuario acabaron marcadas «Hentai».
+
+    `isAdult` sólo DESEMPATA entre las que sí coinciden (de tres obras llamadas «Real», la buena
+    es la que no es un doujin). Descartar lo adulto de entrada fue mi primer intento y era peor:
+    tiró cuatro obras correctas —«A Girl on the Shore» está marcada adulta en AniList y es
+    exactamente la que el usuario tiene—. La marca de adulto no dice «esto no es tuyo».
+
+    Sin coincidencia devuelve None y la obra se queda SIN géneros, que es el resultado correcto:
+    un género equivocado se cree, y encima se cachea 30 días."""
+    objetivo = _norm_titulo(pedido)
+    casan = []
+    for m in cands or []:
+        t = m.get('title') or {}
+        nombres = [t.get('romaji'), t.get('english'), t.get('native'), *(m.get('synonyms') or [])]
+        if any(_norm_titulo(n) == objetivo for n in nombres if n):
+            casan.append(m)
+    return next((m for m in casan if not m.get('isAdult')), casan[0] if casan else None)
+
+
+def _genres_por_titulo(titles: list, out: dict) -> None:
+    """Resuelve géneros por búsqueda de título y los mete en `out` (clave = título pedido)."""
+    pendientes = []
+    for t in dict.fromkeys(str(x).strip() for x in titles if str(x).strip()):
+        hit = _cache_get(_GEN_NS_TITULO, t.lower(), _GENRES_ID_TTL)
+        if hit is not None:
+            if hit != _GEN_SIN_FICHA and hit:
+                out[t] = hit
+        else:
+            pendientes.append(t)
+
+    for lote in (pendientes[k:k + 10] for k in range(0, min(len(pendientes), _GEN_MAX_BUSCADOS), 10)):
+        # Un alias por título: 10 búsquedas en UNA petición. Con `$s0…$s9` como variables no hay
+        # que escapar comillas ni apóstrofos del título (que los hay: "Ao no Hako - 'Special'").
+        #
+        # ⚠️ `Page(perPage:1){media(search:…)}`, NO `Media(search:…)`: `Media` es NO NULO, así que
+        # en cuanto UNO de los diez títulos no existe AniList responde 404 y devuelve **los diez
+        # alias a null** — se perdían 9 obras buenas por 1 mala, y encima se cacheaban como «sin
+        # ficha». MEDIDO: 98 de 218 obras con géneros; con `Page`, 205. `Page` devuelve lista
+        # vacía y no contamina a los vecinos.
+        #
+        # `perPage: 5` y no 1: el primer resultado NO es necesariamente el que buscas — AniList
+        # ordena por popularidad. `_elige_media` es quien decide cuál de los cinco (o ninguno).
+        campos = ' '.join(
+            f'm{i}: Page(perPage: 5) {{ media(search: $s{i}, type: MANGA) '
+            f'{{ isAdult genres synonyms title {{ romaji english native }} tags {{ name rank }} }} }}'
+            for i in range(len(lote)))
+        firma = ', '.join(f'$s{i}: String' for i in range(len(lote)))
+        d = _ql(f'query ({firma}) {{ {campos} }}', {f's{i}': t for i, t in enumerate(lote)})
+        if '_error' in d or not d:
+            # Sin cachear nada: un fallo de red (o un 429) NO es «esta obra no existe». Se
+            # registra porque si no, la biblioteca se quedaría a medio poblar en silencio para
+            # siempre — el mismo error mudo de siempre con otra ropa.
+            from api.observability import record_error
+            record_error('anilist', RuntimeError(d.get('_error') or 'respuesta vacía'),
+                         op='genres_by_title', pendientes=len(pendientes))
+            return
+        for i, t in enumerate(lote):
+            elegida = _elige_media((d.get(f'm{i}') or {}).get('media') or [], t)
+            g = _generos_de(elegida) if elegida else []
+            if g:
+                out[t] = g
+            _cache_set(_GEN_NS_TITULO, t.lower(), g or _GEN_SIN_FICHA,
+                       ttl=_GENRES_ID_TTL, max_entries=3000)
+
+
 @anilist_bp.route('/genres')
 def get_genres():
     """Genres + all non-adult non-spoiler tags from AniList, combined and sorted. Cached 1 h."""

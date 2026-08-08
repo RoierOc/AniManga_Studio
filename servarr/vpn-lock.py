@@ -30,7 +30,7 @@ QBT = "http://localhost:8080"
 # Fragmento que identifica al adaptador de la VPN. Se busca por SUBCADENA y no por nombre exacto
 # porque Windows le añade sufijos ("... #2") si el adaptador se recrea.
 # Es un DEFAULT, no un candado: si algún día cambias de VPN, `--bind otra` sin tocar el código.
-DEFAULT_HINT = "norton"
+DEFAULT_HINT = "wireguard"     # el protocolo, no la marca: Norton y AVG usan el mismo adaptador
 
 
 def api(path, data=None):

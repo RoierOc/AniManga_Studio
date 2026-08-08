@@ -16,6 +16,7 @@ import ContextMenu from '@/components/ui/ContextMenu.vue'
 import ContentToolbar from '@/components/ui/ContentToolbar.vue'
 import Select from '@/components/ui/Select.vue'
 import { useTagsStore } from '@/stores/tags'
+import { opcionesGenero, generoActivo, conGenero } from '@/lib/generos'
 import DensityToggle from '@/components/ui/DensityToggle.vue'
 
 const store = useAnimeStore()
@@ -79,9 +80,17 @@ const forYouItems = computed(() => store.forYou.map(a => ({
   anime: { ...a, id: a.al_id, episodes: [], total_episodes: a.episodes || 0, last_watched_at: 0 },
 })))
 
+/* Géneros de TU anime. `gen_tags` son los específicos (Yuri, Isekai, Escolar…) que el backend
+   guarda aparte para no cambiar lo que pintan las tarjetas; para FILTRAR son una lista sola. */
+const conTags = (a) => [...(a.genres || []), ...(a.gen_tags || [])]
+
 const filtered = computed(() => {
   let list = [...store.library]
-  if (store.libFilter.startsWith('tag:')) {
+  if (generoActivo(store.libFilter)) {
+    // Igual que las etiquetas: buscar «algo de acción» no puede esconderte lo ya terminado.
+    list = conGenero(list, generoActivo(store.libFilter), conTags)
+  }
+  else if (store.libFilter.startsWith('tag:')) {
     const t = store.libFilter.slice(4)
     list = list.filter(a => tags.forWork('anime', a.id).includes(t))
   }
@@ -133,6 +142,8 @@ const libFilters = computed(() => [
   { id: 'season', label: 'Temporada', n: counts.value.season, icon: 'spark', title: seasonLabel.value },
   ...STATUS_ORDER.map(k => ({ id: k, label: ANIME_STATUS[k].label, n: counts.value[k], color: ANIME_STATUS[k].color })),
 ])
+
+const generos = computed(() => opcionesGenero(store.library, conTags))
 
 // Las etiquetas en UN desplegable, no en pills: no tienen tope y la barra crecía sin control.
 // Mismo criterio y misma forma que en la biblioteca de manga (ver LibraryView).
@@ -207,6 +218,7 @@ function openMenu(e, a) {
                   @menu="({ ev, item }) => openCwMenu(ev, item.raw)" />
 
     <ContentToolbar :filters="libFilters" :filter="store.libFilter" @update:filter="store.libFilter = $event"
+                    :genres="generos"
                     :sorts="SORTS" :sort="store.libSort" @update:sort="store.setLibSort($event)"
                     :search="store.libSearch" @update:search="store.libSearch = $event"
                     search-placeholder="Buscar en tu anime…">

@@ -69,6 +69,7 @@ export const useAnimeStore = defineStore('anime', {
 
     // local scan paths
     scan: { show: false, paths: [], folders: [], loading: false, newPath: '',
+            adding: false, suggesting: 0,
             browseOpen: false, browsePath: '', browseWin: '', browseParent: null, browseItems: [] },
 
     // anime download location (qBittorrent save path)
@@ -1943,34 +1944,108 @@ export const useAnimeStore = defineStore('anime', {
       this.scan.loading = true
       try {
         this.scan.paths = await api.get('/api/anime/scanpaths') || []
-        this.scan.folders = await api.get('/api/anime/scan/folders') || []
-        // lazily fetch a suggestion for unmatched folders (sequential to avoid rate-limit)
-        for (const f of this.scan.folders) {
-          if (!f.mapped_id && f.suggestion === null) {
-            f.suggestion = await api.get(`/api/anime/scan/suggest?name=${encodeURIComponent(f.name)}`).catch(() => null)
-          }
-        }
-      } catch (_) {}
+        // `_q`/`_results`/`_searching` son de la búsqueda manual, uno por fila.
+        this.scan.folders = (await api.get('/api/anime/scan/folders') || [])
+          .map(f => ({ ...f, _q: '', _results: [], _searching: false, _sugLoading: false }))
+      } catch (_) { this.scan.folders = [] }
+      // Las carpetas se PINTAN ya. Las sugerencias son una llamada a AniList por carpeta y antes
+      // iban en serie DENTRO del `loading`: con 56 sin enlazar, el modal se quedaba en blanco
+      // medio minuto por un adorno. Ahora caen de fondo, cada fila con su propia rueda.
       finally { this.scan.loading = false }
+    },
+    /* Sugerencia de UNA fila, pedida cuando esa fila entra en pantalla.
+     *
+     * Pedirlas todas al abrir era el error: son 56 llamadas a AniList, que corta a ~30/min, así
+     * que la propia cola se castigaba con reintentos y esperas — y todo eso para adornar filas
+     * que el usuario no estaba mirando. De dos en dos y sólo lo visible: la primera pantalla está
+     * lista en un momento y bajar no acumula deuda. Las ya cacheadas en el servidor son gratis. */
+    async suggestFor(f) {
+      if (!f || f.mapped_id || f.suggestion != null || f._sugLoading) return
+      f._sugLoading = true
+      this._sugQ = this._sugQ || []
+      this._sugQ.push(f)
+      if ((this._sugActive || 0) >= 2) return
+      this._sugActive = (this._sugActive || 0) + 1
+      try {
+        for (let n = this._sugQ.shift(); n; n = this._sugQ.shift()) {
+          this.scan.suggesting = this._sugQ.length + 1
+          n.suggestion = await api.get(`/api/anime/scan/suggest?name=${encodeURIComponent(n.name)}`).catch(() => null)
+          n._sugLoading = false
+        }
+      } finally {
+        this._sugActive--
+        this.scan.suggesting = this._sugQ.length
+      }
     },
     async addScanPath(path) {
       const p = (path || this.scan.newPath || '').trim(); if (!p) return
-      try { await api.post('/api/anime/scanpaths', { path: p }); this.scan.newPath = ''; await this.loadScanFolders() }
-      catch (_) { useUiStore().toast('No se pudo añadir la ruta', 'error') }
+      const ui = useUiStore()
+      this.scan.adding = true
+      try {
+        await api.post('/api/anime/scanpaths', { path: p })
+        this.scan.newPath = ''
+        ui.toast('Ruta añadida, buscando carpetas…', 'ok')
+        await this.loadScanFolders()
+      }
+      // El servidor dice POR QUÉ (la ruta no existe, casi siempre); tragárselo dejaba al usuario
+      // mirando una lista vacía sin pista alguna.
+      catch (e) { ui.toast(e?.message || 'No se pudo añadir la ruta', 'error') }
+      finally { this.scan.adding = false }
     },
     async removeScanPath(path) {
       try { await api.del('/api/anime/scanpaths', { body: { path } }); await this.loadScanFolders() } catch (_) {}
     },
+    // La fila se pone en verde AL INSTANTE y el resto se hace por detrás. Antes se esperaba a
+    // recargar la biblioteca Y volver a escanear las carpetas: segundos mirando una fila que
+    // seguía diciendo "Sin coincidencia" cuando ya estaba enlazada. Si el servidor falla, la fila
+    // se deshace sola y se avisa — que es la única razón para no ser optimista.
     async matchFolder(folder, sug) {
       if (!sug) return
+      const antes = { id: folder.mapped_id, title: folder.matched_title, cover: folder.matched_cover }
+      folder.mapped_id = String(sug.id)
+      folder.matched_title = sug.title
+      folder.matched_cover = sug.cover
+      folder._results = []; folder._q = ''; folder._justMatched = true
+      setTimeout(() => { folder._justMatched = false }, 1200)
       try {
         await api.post('/api/anime/scan/match', { folder: folder.folder, anilist_id: sug.id, title: sug.title, cover: sug.cover })
         useUiStore().toast(`"${sug.title}" enlazado`, 'ok')
-        await this.loadLibrary(true); await this.loadScanFolders()
-      } catch (_) { useUiStore().toast('No se pudo enlazar', 'error') }
+        this.loadLibrary(true)                   // por detrás: la fila ya está bien
+      } catch (e) {
+        folder.mapped_id = antes.id; folder.matched_title = antes.title; folder.matched_cover = antes.cover
+        useUiStore().toast(e?.message || 'No se pudo enlazar', 'error')
+      }
+    },
+    // Buscar la serie a mano cuando la sugerencia falla o no hay ninguna. Estaba en la app vieja
+    // (`searchForScanFolder`) y se quedó sin migrar: sin esto, una carpeta con nombre raro
+    // ("konejeje", releases con etiquetas) no había forma de enlazarla.
+    async searchScanFolder(folder) {
+      const q = (folder._q || '').trim(); if (q.length < 2) return
+      folder._searching = true; folder._results = []
+      try {
+        const items = await api.get(`/api/anime/search?q=${encodeURIComponent(q)}`) || []
+        // 12, no 6: AniList devuelve una entrada POR TEMPORADA y las ordena por parecido del
+        // título, así que buscando "kaguya" la 2ª temporada caía en el puesto 7 y la 3ª en el 9 —
+        // fuera de la lista. Viajan también formato/año/episodios: sin eso dos temporadas se ven
+        // como dos líneas casi idénticas y no hay forma de saber cuál es cuál.
+        folder._results = items.slice(0, 12).map(a => ({
+          id: a.al_id || a.id, title: a.title, cover: a.cover,
+          format: a.format || '', season: a.season_label || '', episodes: a.episodes || 0,
+        }))
+        if (!folder._results.length) useUiStore().toast(`Sin resultados para "${q}"`, 'info')
+      } catch (e) { useUiStore().toast(e?.message || 'No se pudo buscar', 'error') }
+      finally { folder._searching = false }
     },
     async unmatchFolder(folder) {
-      try { await api.post('/api/anime/scan/unmatch', { folder: folder.folder }); await this.loadScanFolders(); await this.loadLibrary(true) } catch (_) {}
+      const antes = { id: folder.mapped_id, title: folder.matched_title, cover: folder.matched_cover }
+      folder.mapped_id = null; folder.matched_title = ''; folder.matched_cover = ''
+      try {
+        await api.post('/api/anime/scan/unmatch', { folder: folder.folder })
+        this.loadLibrary(true)
+      } catch (e) {
+        folder.mapped_id = antes.id; folder.matched_title = antes.title; folder.matched_cover = antes.cover
+        useUiStore().toast(e?.message || 'No se pudo desenlazar', 'error')
+      }
     },
     async browse(path = '') {
       try {

@@ -28,6 +28,7 @@ from api.platform import is_wsl as _is_wsl, is_macos as _is_macos
 from api.config_store import get_secret, set_secrets  # runtime-editable API keys (Ajustes)
 from api import sub_lang  # clasificación robusta de subtítulos ES/LAT (código + título)
 from api.observability import record_error, swallow  # hace VISIBLE el fallo silencioso
+from api.genre_tags import pick_tags  # géneros específicos (GL/BL, Isekai…) desde las tags de AniList
 from api.anilist import _cover as _al_cover  # AniList: extraLarge (460x650) antes que large (230x325)
 from api.imgproxy import hd_url as _hd       # sube el tamaño de las URLs de TMDB ya guardadas
 
@@ -37,11 +38,17 @@ from api.imgproxy import hd_url as _hd       # sube el tamaño de las URLs de TM
 # importar. El resultado era que los filtros mentían: «Viendo» no listaba series que estabas
 # viendo, y las 22 sin estado no salían en ningún pill aunque sí en «Todo».
 _STATUS_VALIDOS = {'watching', 'completed', 'plan_to_watch', 'on_hold', 'dropped'}
+# AniList tiene DOS vocabularios y aquí sólo vale uno. `MediaListStatus` (CURRENT, PLANNING,
+# COMPLETED…) dice qué has hecho TÚ con la serie: eso sí se traduce. `MediaStatus` (FINISHED,
+# RELEASING…) dice si la serie terminó de EMITIRSE, que no habla de ti para nada.
 _STATUS_ALIAS = {
-    'FINISHED': 'completed', 'COMPLETED': 'completed', 'CURRENT': 'watching',
-    'RELEASING': 'watching', 'WATCHING': 'watching', 'PLANNING': 'plan_to_watch',
-    'NOT_YET_RELEASED': 'plan_to_watch', 'PAUSED': 'on_hold', 'DROPPED': 'dropped',
+    'COMPLETED': 'completed', 'CURRENT': 'watching', 'WATCHING': 'watching',
+    'PLANNING': 'plan_to_watch', 'PAUSED': 'on_hold', 'DROPPED': 'dropped',
 }
+# Traducir estos a un estado de seguimiento marcaba como VISTA una serie recién enlazada con 0
+# episodios vistos — y «completed» está oculto en el filtro «Todo», así que la serie se guardaba
+# y desaparecía de la vista. Se ignoran: sin estado propio, manda lo que de verdad has visto.
+_STATUS_EMISION = {'FINISHED', 'RELEASING', 'NOT_YET_RELEASED', 'CANCELLED', 'HIATUS'}
 
 
 def _norm_status(raw, vistos: int, total: int) -> str:
@@ -56,6 +63,8 @@ def _norm_status(raw, vistos: int, total: int) -> str:
         return s
     if s.upper() in _STATUS_ALIAS:
         return _STATUS_ALIAS[s.upper()]
+    # Estado de EMISIÓN colado en el campo de seguimiento: vale tanto como no tener estado.
+    # (No hace falta migrar el fichero: las entradas ya contaminadas se arreglan al leerlas.)
     if total and vistos >= total:
         return 'completed'
     if vistos > 0:
@@ -259,7 +268,7 @@ def _anilist_enrich(al_id):
         episodes format status season seasonYear
         title{romaji english}
         coverImage{ extraLarge large medium }
-        bannerImage genres
+        bannerImage genres tags{ name rank }
         description(asHtml:false)
     }}'''
     r = _anilist_post(q, {'id': int(al_id)})
@@ -692,7 +701,11 @@ def _backfill_anime_metadata():
             continue
 
         # AniList enrichment when any key field is missing
-        if not (v.get('banner') and v.get('genres') and v.get('total_episodes') and v.get('cover_xl') and v.get('synopsis')):
+        # `gen_tags` entra en la guarda a propósito: las obras ya enriquecidas no las tienen, y
+        # sin esto el filtro por género se quedaría sin «Yuri», «Isekai» y compañía en todo lo que
+        # ya estaba en la biblioteca. Es UNA pasada de más, espaciada 1,5 s como el resto.
+        if not (v.get('banner') and v.get('genres') and v.get('total_episodes') and v.get('cover_xl')
+                and v.get('synopsis') and v.get('gen_tags') is not None):
             try:
                 m = _anilist_enrich(al_id)
                 processed += 1
@@ -706,6 +719,10 @@ def _backfill_anime_metadata():
                     if t.get('english') and not v.get('title_english'): v['title_english'] = t['english']; changed = True
                     if ci.get('extraLarge') and not v.get('cover_xl'): v['cover_xl'] = ci['extraLarge']; changed = True
                     if m.get('genres') and not v.get('genres'): v['genres'] = (m['genres'] or [])[:5]; changed = True
+                    # Géneros ESPECÍFICOS (GL/BL, Isekai, Escolar…) que los 18 `genres` de AniList
+                    # no distinguen. Van en su propio campo: `genres` lo pintan las tarjetas y no
+                    # queremos cambiar lo que enseñan, sólo por qué se puede filtrar.
+                    if v.get('gen_tags') is None: v['gen_tags'] = pick_tags(m.get('tags')); changed = True
                     if m.get('season') and not v.get('season'): v['season'] = m['season']; changed = True
                     if m.get('seasonYear') and not v.get('season_year'): v['season_year'] = m['seasonYear']; changed = True
                     if m.get('description') and not v.get('synopsis'):
@@ -807,6 +824,7 @@ def _scanpaths_read() -> dict:
         return {'paths': [], 'mappings': {}}
 
 def _scanpaths_write(data: dict):
+    _scan_cache.clear()          # cambió la lista de raíces: lo memoizado ya no vale
     write_json_atomic(_scanpaths_path(), data, indent=2, keep_backup=True)
 
 
@@ -827,13 +845,119 @@ def _anime_settings_write(data: dict):
     write_json_atomic(_anime_settings_path(), data, indent=2, keep_backup=True)
 
 
-def _list_anime_folders(root: str) -> list:
-    if _is_wsl() and re.match(r'^[A-Za-z]:[/\\]', root):
-        root = _win_to_wsl(root)
-    p = _Path(root)
-    if not p.exists():
+def _norm_scan_root(path: str) -> str:
+    """Forma canónica de una raíz de escaneo: WSL, sin barra final.
+
+    Se guarda YA normalizada porque si no, `E:\\Carpeta Anime` y `/mnt/e/Carpeta Anime` son dos
+    entradas distintas para la misma carpeta y ninguna de las dos casa con los `mappings`, que
+    siempre se escriben en forma WSL.
+    """
+    path = (path or '').strip().strip('"')
+    if _is_wsl() and re.match(r'^[A-Za-z]:[/\\]', path):
+        path = _win_to_wsl(path)
+    return path.rstrip('/') or path
+
+
+def _peek_dir(path: str):
+    """(¿tiene vídeos sueltos?, [subcarpetas]) con UN solo `scandir`.
+
+    Las dos preguntas se resuelven juntas a propósito: sobre DrvFS cada `scandir` cuesta de sobra
+    como para pagarlo dos veces por carpeta (era la mitad de los 78 s que tardaba `D:\\`).
+    """
+    vids, subs = False, []
+    try:
+        with os.scandir(path) as it:
+            for e in it:
+                try:
+                    if e.is_dir():
+                        if not _skip_dir(e.name):
+                            subs.append(e.path)
+                    elif not vids and os.path.splitext(e.name)[1].lower() in _VIDEO_EXTS:
+                        vids = True
+                except OSError:
+                    continue
+    except PermissionError:
+        pass                     # carpeta de sistema: "no puedo mirar" ≠ fallo, es lo esperado
+    except OSError as e:
+        record_error('anime', e, op='scan_list', path=path)
+    return vids, sorted(subs)
+
+
+# Un contenedor tiene MUCHAS obras dentro; una obra partida en temporadas tiene una o dos
+# subcarpetas. Con 3 se separan los dos casos sin preguntar nada al usuario.
+_CONTAINER_MIN = 3
+_SCAN_MAX_DEPTH = 3
+# Cada nivel que se baja son N `scandir` sobre DrvFS (~ms cada uno). Apuntar a la raíz de un disco
+# entero es legítimo, así que el recorrido lleva presupuesto: sin él, `D:\` tardaba minutos.
+_SCAN_MAX_DIRS = 600
+_SKIP_DIRS = {'system volume information', 'recovery', 'msocache', 'config.msi', 'windows',
+              'program files', 'program files (x86)', 'programdata', 'appdata', 'node_modules'}
+
+
+def _skip_dir(name: str) -> bool:
+    return name.startswith(('$', '.')) or name.lower() in _SKIP_DIRS
+
+
+def _son_episodios(paths: list) -> bool:
+    """¿Estas subcarpetas son EPISODIOS de una misma obra, en vez de obras distintas?
+
+    Estructuralmente son idénticas (`X/<12 carpetas con vídeo>` puede ser un contenedor de 12
+    obras o una obra con un episodio por carpeta), así que hay que mirar los NOMBRES: los
+    episodios sólo se diferencian en un número. `[SphinxAnime] K0s2 - 01/02/03…` → una obra;
+    `Chuunibyou / Dororo / Hyouka` → tres.
+    """
+    esqueletos = {re.sub(r'\d+', '#', _Path(p).name).strip() for p in paths}
+    return len(esqueletos) == 1
+
+
+def _walk_anime(subs: list, depth: int, budget: list) -> list:
+    out = []
+    for sub in subs:
+        if budget[0] <= 0:
+            break
+        budget[0] -= 1
+        vids, hijos = _peek_dir(sub)
+        if vids:
+            out.append(sub)                          # la carpeta ES la obra
+            continue
+        if depth <= 0 or not hijos:
+            continue
+        hijas = _walk_anime(hijos, depth - 1, budget)
+        if not hijas:
+            continue                                 # carpeta vacía o sin vídeos: no es nada
+        # Muchas obras DISTINTAS dentro = contenedor, se devuelven ellas. Pocas, o todas con el
+        # mismo nombre y un número (temporadas, episodios sueltos), = UNA obra: se devuelve la
+        # carpeta madre, que es la que `_scan_local_episodes` sabe recorrer entera.
+        if len(hijas) >= _CONTAINER_MIN and not _son_episodios(hijas):
+            out.extend(hijas)
+        else:
+            out.append(sub)
+    return out
+
+
+# Recorrer `D:\` entero son cientos de `scandir` sobre DrvFS: el resultado se memoiza para que
+# abrir el modal dos veces no lo pague dos veces. Se tira al añadir o quitar una raíz.
+_scan_cache: dict = {}
+_SCAN_TTL = 300
+
+
+def _list_anime_folders(root: str, depth: int = _SCAN_MAX_DEPTH) -> list:
+    """Carpetas de OBRA bajo `root`, bajando por los contenedores intermedios.
+
+    La biblioteca del usuario no es plana: `E:/Carpeta Anime/Carpeta Animes/<28 obras>`. Mirando
+    un solo nivel salían dos carpetas inútiles ("Carpeta Animes", "Peliculas") y ninguna obra, y
+    en la raíz de un disco salían `$RECYCLE.BIN` y los discos de música. Se baja mientras la
+    carpeta no tenga vídeos propios, y se para en cuanto los tiene: esa es la obra.
+    """
+    root = _norm_scan_root(root)
+    hit = _scan_cache.get(root)
+    if hit and time.time() - hit[0] < _SCAN_TTL:
+        return hit[1]
+    if not _Path(root).is_dir():
         return []
-    return sorted(str(sub) for sub in p.iterdir() if sub.is_dir())
+    out = _walk_anime(_peek_dir(root)[1], depth - 1, [_SCAN_MAX_DIRS])
+    _scan_cache[root] = (time.time(), out)
+    return out
 
 
 _SHORT_VIDEO_SECS = 600  # < 10 min → auto-special
@@ -2203,6 +2327,9 @@ def anime_library_get():
                 'logo': _hd(anime.get('logo', ''), hero=True),
                 'synopsis': anime.get('synopsis', ''),
                 'genres': anime.get('genres', []),
+                # Géneros específicos (Yuri, Isekai, Escolar…) para el filtro de la biblioteca.
+                # Van aparte de `genres` porque eso es lo que pinta la tarjeta y no cambia.
+                'gen_tags': anime.get('gen_tags') or [],
                 'season': anime.get('season', ''),
                 'season_year': anime.get('season_year'),
                 'total_episodes': series_total or regular_count,
@@ -2818,15 +2945,22 @@ def anime_link_torrent(anime_id):
 
 @anime_bp.route('/scanpaths', methods=['GET'])
 def anime_get_scanpaths():
-    return jsonify(_scanpaths_read().get('paths', []))
+    # `exists` va aparte del nombre: un disco desenchufado tiene que VERSE, no comportarse igual
+    # que una carpeta vacía. Cuesta un is_dir por raíz, no por carpeta.
+    return jsonify([{'path': p, 'exists': _Path(_norm_scan_root(p)).is_dir()}
+                    for p in _scanpaths_read().get('paths', [])])
 
 
 @anime_bp.route('/scanpaths', methods=['POST'])
 def anime_add_scanpath():
     body = request.get_json(silent=True) or {}
-    path = (body.get('path') or '').strip()
+    path = _norm_scan_root(body.get('path') or '')
     if not path:
-        return jsonify({'error': 'path required'}), 400
+        return jsonify({'error': 'Escribe una ruta'}), 400
+    # Guardar una ruta que no existe la deja ahí sin detectar nada y sin decir por qué: la queja
+    # "la ruta no se queda" era esto. Se rechaza en el momento, con el motivo.
+    if not _Path(path).is_dir():
+        return jsonify({'error': f'No existe la carpeta: {path}'}), 400
     data = _scanpaths_read()
     paths = data.get('paths', [])
     if path not in paths:
@@ -2840,8 +2974,10 @@ def anime_add_scanpath():
 def anime_remove_scanpath():
     body = request.get_json(silent=True) or {}
     path = (body.get('path') or '').strip()
+    norm = _norm_scan_root(path)
     data = _scanpaths_read()
-    data['paths'] = [p for p in data.get('paths', []) if p != path]
+    # Compara en crudo Y normalizado: las guardadas antes de normalizar siguen siendo borrables.
+    data['paths'] = [p for p in data.get('paths', []) if p != path and _norm_scan_root(p) != norm]
     _scanpaths_write(data)
     return jsonify({'ok': True})
 
@@ -2887,12 +3023,30 @@ def _clean_folder_name(name: str) -> str:
     return s.strip(' -_.')
 
 
+_SUGGEST_TTL = 30 * 86400        # el nombre de una carpeta no cambia; la respuesta tampoco
+_SUGGEST_MISS = '__sin_sugerencia__'
+
+
 @anime_bp.route('/scan/suggest', methods=['GET'])
 def anime_scan_suggest():
     """Return the best AniList match for a folder name (called lazily per row)."""
     folder_name = request.args.get('name', '').strip()
     if not folder_name:
         return jsonify(None)
+    # El nombre de una carpeta no cambia, y la respuesta de AniList para ese nombre tampoco: sin
+    # caché, abrir el modal costaba una llamada por carpeta sin enlazar (~56) CADA VEZ. Se cachea
+    # también el "no hay nada" (`{}`), que es un resultado tan válido como los demás y era el que
+    # más se repetía. `_SUGGEST_MISS` lo distingue de "no estaba cacheado".
+    from api.runtime import cache_get, cache_set
+    hit = cache_get('anime_suggest', folder_name, _SUGGEST_TTL)
+    if hit is not None:
+        return jsonify(None if hit == _SUGGEST_MISS else hit)
+
+    def _remember(value):
+        cache_set('anime_suggest', folder_name, value if value else _SUGGEST_MISS,
+                  ttl=_SUGGEST_TTL, max_entries=2000)
+        return jsonify(value)
+
     try:
         search_name = _clean_folder_name(folder_name)
         q = '''query($s:String){Page(perPage:5){media(search:$s,type:ANIME,sort:SEARCH_MATCH){
@@ -2914,7 +3068,7 @@ def anime_scan_suggest():
         if not items and search_name != folder_name:
             items = _search(search_name)
         if not items:
-            return jsonify(None)
+            return _remember(None)
 
         norm_folder = _normalize(folder_name)
         norm_clean  = _normalize(search_name)
@@ -2936,13 +3090,14 @@ def anime_scan_suggest():
 
         best = max(items, key=_score)
         t = best.get('title') or {}
-        return jsonify({
+        return _remember({
             'id': best['id'],
             'title': t.get('english') or t.get('romaji', ''),
             'cover': _al_cover(best),
         })
-    except Exception:
-        pass
+    except Exception as e:
+        # Un fallo de red NO se cachea: cachearlo dejaría la carpeta sin sugerencia un mes.
+        record_error('anime', e, op='scan_suggest', name=folder_name)
     return jsonify(None)
 
 
@@ -3038,7 +3193,10 @@ def anime_scan_match():
                 'cover':         _al_cover(al_media) or cover,
                 'total_episodes': al_media.get('episodes'),
                 'format':        al_media.get('format') or '',
-                'status':        al_media.get('status') or '',
+                # OJO: `al_media['status']` es el estado de EMISIÓN (FINISHED/RELEASING). NO va a
+                # `status`, que significa "qué he hecho YO con esta serie" — escribirlo ahí
+                # marcaba como vista toda serie terminada nada más enlazar la carpeta.
+                'airing_status': al_media.get('status') or '',
             }
     except Exception:
         pass

@@ -25,6 +25,15 @@ import CounterpartRow from '@/components/media/CounterpartRow.vue'
 
 const ui = useUiStore()
 
+/* Caso límite del filtro de género: nombre kilométrico (que tiene que recortarse con puntos
+   suspensivos, no ensanchar la barra) y contadores de 1 a 4 cifras. */
+const KIT_GEN = [
+  { value: '', label: 'Todos los géneros' },
+  { value: 'Slice of Life', label: 'Recuentos de la vida y sobremesas larguísimas', hint: '1284' },
+  { value: 'Action', label: 'Acción', hint: '24' },
+  { value: 'Music', label: 'Música', hint: '1' },
+]
+
 const LONG = 'Shuu ni Ichido Classmate wo Kau Hanashi: Futari no Jikan, Iiwake no 5000-en'
 const sel1 = ref('leyendo')
 const sel2 = ref('')
@@ -157,8 +166,12 @@ async function demoConfirm(danger) {
           :filter="tbFilter" @update:filter="tbFilter = $event"
           :sorts="[{ id: 'recent', label: 'Recientes' }, { id: 'az', label: 'A–Z' }]"
           :sort="tbSort" @update:sort="tbSort = $event"
+          :genres="KIT_GEN"
           :search="tbSearch" @update:search="tbSearch = $event" />
-        <p class="muted">«Completado» está oculto porque su contador es 0 — reaparece al seleccionarlo.</p>
+        <p class="muted">«Completado» está oculto porque su contador es 0 — reaparece al seleccionarlo.
+          El desplegable de género se pinta como un pill activo al elegir uno: al filtrar por género
+          los pills se apagan, y la barra no puede parecer «sin filtro». Caso límite a la vista: un
+          género de nombre largo junto a uno de una sola letra.</p>
       </div>
     </section>
 

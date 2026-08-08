@@ -114,6 +114,11 @@ app.register_blueprint(import_bp, url_prefix='/api/import')
 app.register_blueprint(discovery_bp, url_prefix='/api/discovery')
 app.register_blueprint(md_updates_bp, url_prefix='/api/md_updates')
 app.register_blueprint(roots_bp, url_prefix='/api/roots')
+# Acceso remoto. Sin prefijo: `guardia` tiene que ver TODAS las rutas, no un subárbol, y
+# /api/hello es la tarjeta de presentación que el móvil pide antes de tener token.
+from api.auth import auth_remote_bp, guardia
+app.register_blueprint(auth_remote_bp)
+app.before_request(guardia)
 from api.library_health import health_bp
 app.register_blueprint(health_bp, url_prefix='/api/health')
 from api.bridge import bridge_bp
@@ -391,7 +396,19 @@ if __name__ == '__main__':
     try:
         from waitress import serve
         print("   WSGI server: waitress")
-        serve(app, host='0.0.0.0', port=5101, threads=8)
+        # Dos puertos, no uno. El 5103 es la BOCA REMOTA: todo lo que entra por ahí se trata como
+        # remoto y necesita token, pase la IP que pase.
+        #
+        # Hace falta porque el único camino que tiene esta máquina para dejar entrar a un móvil es
+        # un `netsh portproxy` de Windows hacia el bucle local (el modo `mirrored` de WSL no
+        # entrega tráfico externo). Y ese puente reescribe el origen a 127.0.0.1: sin esta
+        # separación, `remote_addr` diría "local" para TODA la red y el guardián no serviría de
+        # nada — comprobado en un dispositivo real antes de escribir esto.
+        #
+        # El puerto de escucha no lo elige el cliente, así que es una señal en la que sí se puede
+        # confiar; la IP de origen y la cabecera `Host` no lo son.
+        from api.auth import PUERTO_REMOTO
+        serve(app, listen=f'0.0.0.0:5101 127.0.0.1:{PUERTO_REMOTO}', threads=8)
     except ImportError:
         print("   WSGI server: Flask dev (install waitress for production)")
         app.run(port=5101, debug=False, host='0.0.0.0')

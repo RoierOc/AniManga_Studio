@@ -23,7 +23,13 @@ const isRTL = computed(() => store.dir === 'rtl')
 const reqWidth = computed(() => {
   if (store.zoom > 1.01 || store.fit === 'original') return 0
   const dpr = Math.min(2, window.devicePixelRatio || 1)
-  return Math.min(2560, Math.round((window.innerWidth || 1280) * dpr))
+  const vw = window.innerWidth || 1280
+  // Ancho REALMENTE pintado, no el de la ventana: en paginado la página se topa en 62.5rem
+  // (`.rd__img.fit-width`) y en tira ocupa el % que elige el usuario. Pedir el ancho de la
+  // ventana traía hasta 4× más píxeles de los que se ven — y cada píxel de más el WebView lo
+  // descomprime y lo guarda en RAM (una página de MangaDex son 5,9 MP ≈ 23 MB).
+  const css = store.mode === 'webtoon' ? vw * (store.webtoonWidth / 100) : Math.min(vw, 1000)
+  return Math.min(2560, Math.round(css * dpr))
 })
 
 // Modo QA (testing): marcar la página actual como mal traducida. Solo sobre páginas locales.

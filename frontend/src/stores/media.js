@@ -10,6 +10,7 @@
  * qBittorrent da por terminado.
  */
 import { defineStore } from 'pinia'
+import { opcionesGenero, generoActivo, conGenero } from '@/lib/generos'
 import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import { useAnimeStore } from '@/stores/anime'
@@ -116,9 +117,16 @@ export const useMediaStore = defineStore('media', {
       return st
     },
 
+    /* Opciones del filtro por género — se calculan sobre TODO (series + películas) para que la
+       cuenta no cambie al saltar entre pestañas. Ver `lib/generos.js`. */
+    generos() {
+      return opcionesGenero(this.all)
+    },
+
     items(s) {
       let list = this.all
-      if (s.filter === 'series') list = s.series
+      if (generoActivo(s.filter)) list = conGenero(list, generoActivo(s.filter))
+      else if (s.filter === 'series') list = s.series
       else if (s.filter === 'movies') list = s.movies
       else if (s.filter === 'missing') list = list.filter(x => x.have < x.total)
       else if (s.filter.startsWith('tag:')) {

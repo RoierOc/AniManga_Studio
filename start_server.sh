@@ -167,10 +167,15 @@ trap 'echo "[watchdog] Detenido." >&2; exit 0' INT TERM
 while true; do
     "$PYTHON_BIN" -c "
 from app import app
+from api.auth import PUERTO_REMOTO
 try:
     from waitress import serve
-    print('[server] waitress WSGI — http://0.0.0.0:5101', flush=True)
-    serve(app, host='0.0.0.0', port=5101, threads=8)
+    # Dos bocas. El 5101 es la de siempre. El PUERTO_REMOTO sólo lo alimenta el puente de Windows
+    # (netsh portproxy) y TODO lo que entra por ahí se trata como remoto: ese puente reescribe el
+    # origen a 127.0.0.1, así que sin puertos separados la red entera parecería local y el token
+    # no protegería nada. Ver api/auth.py.
+    print(f'[server] waitress WSGI — http://0.0.0.0:5101 (+ boca remota {PUERTO_REMOTO})', flush=True)
+    serve(app, listen=f'0.0.0.0:5101 127.0.0.1:{PUERTO_REMOTO}', threads=8)
 except ImportError:
     app.run(port=5101, debug=False, threaded=True, host='0.0.0.0')
 "

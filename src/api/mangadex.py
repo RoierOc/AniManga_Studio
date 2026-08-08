@@ -4,10 +4,13 @@ MangaDex API Integration
 Full authentication and library management
 """
 
-from flask import Blueprint, jsonify, request, Response
+from flask import Blueprint, jsonify, request, Response, send_file
 import requests
 import time
 import json
+import hashlib
+import io
+import threading
 from pathlib import Path
 import os
 from urllib.parse import urlparse, quote
@@ -805,25 +808,16 @@ def chapter_pages(chapter_id):
         return jsonify({"error": str(e)}), 500
 
 
-@auth_bp.route('/page_proxy')
-def page_proxy():
-    """Stream a MangaDex@Home page image server-side. Fixes browser-direct 404s
-    (cold @home node + hotlink protection). Retries 404 because a cold node returns
-    404 while it fetches the image from MangaDex's backend, then serves it."""
-    url = request.args.get('u', '')
-    p = urlparse(url)
-    if p.scheme != 'https' or not p.netloc.lower().endswith('.mangadex.network'):
-        return ('', 400)
+def _md_page_fetch(url, stream):
+    """GET a un nodo MangaDex@Home con reintentos. Un nodo FRÍO responde 404 mientras se
+    trae la imagen del backend de MangaDex, así que el 404 también se reintenta.
+    Devuelve `(Response|None, último status)`."""
     last = 502
     for attempt in range(4):
         try:
-            r = requests.get(url, timeout=20, stream=True)
+            r = requests.get(url, timeout=20, stream=stream)
             if r.status_code == 200:
-                return Response(
-                    r.iter_content(65536),
-                    content_type=r.headers.get('Content-Type', 'image/jpeg'),
-                    headers={'Cache-Control': 'public, max-age=86400'},
-                )
+                return r, 200
             last = r.status_code
             r.close()
             if r.status_code in (404, 429, 502, 503) and attempt < 3:
@@ -834,7 +828,104 @@ def page_proxy():
             last = 502
             if attempt < 3:
                 time.sleep(0.4)
-    return ('', last)
+    return None, last
+
+
+# Rendiciones de páginas online, en disco. Se guarda SÓLO la reducida: el original de MangaDex
+# pesa ~1,5 MB y leer online llenaría el disco sin que nadie lo mirase dos veces.
+_PG_DIR = Path.home() / '.cache' / 'manga-upscaler' / 'mdpages'
+_PG_LADDER = (320, 640, 1024, 1400, 1800, 2400)   # anchos discretos: un fichero por peldaño, no por píxel pedido
+_PG_MAX = 900                                     # ~150 MB; al pasarse se tiran las más viejas
+_pg_writes = 0
+
+
+def _pg_prune():
+    """Acota el caché por número de ficheros. Cada 100 escrituras, no en cada una: ordenar 900
+    rutas por mtime cuesta 900 `stat` y no hay ninguna prisa por liberar."""
+    global _pg_writes
+    _pg_writes += 1
+    if _pg_writes % 100:
+        return
+    try:
+        fs = sorted(_PG_DIR.glob('*.jpg'), key=lambda p: p.stat().st_mtime)
+        for old in fs[:-_PG_MAX]:
+            old.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _pg_variant(url, w):
+    """Rendición JPEG de una página a `w` px de ancho, cacheada en disco. None si no procede
+    (no se pudo traer/decodificar, o el original ya es más pequeño) → se sirve el original."""
+    w = next((x for x in _PG_LADDER if w <= x), _PG_LADDER[-1])
+    dest = _PG_DIR / f'{hashlib.sha256(url.encode()).hexdigest()}_w{w}.jpg'
+    try:
+        if dest.stat().st_size > 0:
+            return dest
+    except OSError:
+        pass
+    r, _ = _md_page_fetch(url, stream=False)
+    if r is None:
+        return None
+    try:
+        from PIL import Image
+        _PG_DIR.mkdir(parents=True, exist_ok=True)
+        with Image.open(io.BytesIO(r.content)) as im:
+            if im.width <= w:
+                return None
+            h = max(1, round(im.height * w / im.width))
+            # Fondo BLANCO al aplanar: estas páginas son PNG y algunas llevan alfa; `convert('RGB')`
+            # a secas la pone sobre negro y la página sale invertida en los márgenes.
+            if 'A' in im.getbands() or (im.mode == 'P' and 'transparency' in im.info):
+                fondo = Image.new('RGB', im.size, 'white')
+                fondo.paste(im.convert('RGBA'), mask=im.convert('RGBA'))
+                im = fondo
+            # LANCZOS + 4:4:4: la página es TEXTO, y con bicúbico o croma submuestreado los
+            # bordes de las letras sangran.
+            im = im.convert('RGB').resize((w, h), Image.LANCZOS)
+            tmp = dest.with_suffix(f'.{os.getpid()}-{threading.get_ident()}.part')
+            im.save(tmp, 'JPEG', quality=88, subsampling=0, optimize=True, progressive=True)
+        tmp.replace(dest)
+        _pg_prune()
+        return dest
+    except Exception as e:
+        record_error('mangadex', e, op='page_resize', w=w)
+        return None
+
+
+@auth_bp.route('/page_proxy')
+def page_proxy():
+    """Sirve una página de MangaDex@Home a través del backend. Arregla los 404 que ve el
+    navegador al cargarlas directamente (nodo frío + protección de hotlink).
+
+    `?w=` = ancho al que se va a PINTAR, igual que en las páginas locales. Sin él se servía el
+    original SIEMPRE, y los originales de MangaDex son PNG de 2039×2894: **5,9 MP = ~23 MB ya
+    descomprimidos por página**. Con el capítulo entero en el lector eso desborda la caché de
+    imágenes del WebView, que descarta decodificaciones y deja la página EN BLANCO — de ahí que
+    sólo cargasen unas cuantas, y sólo con MangaDex (las locales sí honran `w`, y las de
+    Suwayomi vienen a ~1000 px). Con zoom o ajuste "original" el lector pide `w=0` → original.
+    """
+    url = request.args.get('u', '')
+    p = urlparse(url)
+    if p.scheme != 'https' or not p.netloc.lower().endswith('.mangadex.network'):
+        return ('', 400)
+    try:
+        w = int(request.args.get('w') or 0)
+    except ValueError:
+        w = 0
+    if w > 0:
+        hit = _pg_variant(url, w)
+        if hit is not None:
+            return send_file(str(hit), max_age=86400, conditional=True)
+
+    r, last = _md_page_fetch(url, stream=True)
+    if r is None:
+        return ('', last)
+    return Response(
+        r.iter_content(65536),
+        content_type=r.headers.get('Content-Type', 'image/jpeg'),
+        headers={'Cache-Control': 'public, max-age=86400'},
+    )
 
 @auth_bp.route('/local_library/update', methods=['POST'])
 def update_manga_data():

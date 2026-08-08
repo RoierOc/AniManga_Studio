@@ -46,7 +46,22 @@ const _encPagePath = (p) => {
   const q = m ? `?${m[2]}` : ''
   return path.split('/').map(encodeURIComponent).join('/') + q
 }
+/* Páginas de MangaDex@Home: SIEMPRE por nuestro proxy, nunca directas desde el navegador.
+ * Un nodo FRÍO responde 404 a la misma URL que sí funciona desde el servidor (y hay protección
+ * de hotlink), así que cargarlas con `<img src=CDN>` deja páginas EN BLANCO sin reintento
+ * posible — cargaban unas cuantas y el resto no. `page_proxy` reintenta el 404, quita el
+ * Referer cruzado y además reescala a `w`.
+ *
+ * Va aquí y no en quien pide las URLs porque son DOS caminos los que las entregan:
+ * `/api/mangadex/chapter/<id>/pages` (ya proxyaba) y `/api/transplant/chapter_urls` (no, y es
+ * el que usa "Leer" en las obras seguidas desde el Hub). Todo lo que el lector PINTA pasa por
+ * `pageUrl`; lo que se DESCARGA no, y ahí las URLs crudas son las correctas. */
+const MD_AT_HOME = /^https:\/\/[^/]+\.mangadex\.network\//
+
 export const pageUrl = (p, w = 0) => {
+  if (MD_AT_HOME.test(p)) {
+    return `/api/mangadex/page_proxy?u=${encodeURIComponent(p)}${w > 0 ? `&w=${w}` : ''}`
+  }
   if (/^(https?:)?\/\//.test(p)) return p
   const base = p.startsWith('/') ? p : `/uploads/${_encPagePath(p)}`
   return w > 0 ? `${base}${base.includes('?') ? '&' : '?'}w=${w}` : base

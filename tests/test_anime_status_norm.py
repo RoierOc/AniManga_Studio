@@ -16,11 +16,26 @@ def test_respeta_lo_que_el_usuario_eligio():
 
 
 def test_traduce_los_convenios_de_anilist():
-    """EL FALLO CONCRETO: la serie con 'FINISHED' no aparecía en ningún filtro."""
-    assert _norm_status('FINISHED', 0, 0) == 'completed'
+    """De AniList sólo vale `MediaListStatus`: lo que TÚ hiciste con la serie."""
     assert _norm_status('CURRENT', 0, 0) == 'watching'
     assert _norm_status('PLANNING', 0, 0) == 'plan_to_watch'
     assert _norm_status('PAUSED', 0, 0) == 'on_hold'
+    assert _norm_status('COMPLETED', 0, 0) == 'completed'
+
+
+def test_el_estado_de_EMISION_no_dice_nada_de_ti():
+    """2026-08-05: enlazar una carpeta guardaba el `MediaStatus` de AniList en el campo de
+    seguimiento. Toda serie terminada entraba como 'completed' con 0 episodios vistos — y
+    'completed' está OCULTO en el filtro «Todo», así que se guardaba y desaparecía de la vista.
+    El usuario lo vio como «no se están guardando las series en mi biblioteca».
+
+    FINISHED no es una opinión sobre ti: vale lo mismo que no tener estado, así que manda el
+    progreso real. Con esto las entradas ya contaminadas se arreglan solas al leerlas."""
+    assert _norm_status('FINISHED', vistos=0, total=12) == 'plan_to_watch'
+    assert _norm_status('FINISHED', vistos=12, total=12) == 'completed'   # vistos de verdad
+    assert _norm_status('RELEASING', vistos=3, total=12) == 'watching'
+    assert _norm_status('NOT_YET_RELEASED', vistos=0, total=0) == 'plan_to_watch'
+    assert _norm_status('CANCELLED', vistos=0, total=0) == 'plan_to_watch'
 
 
 def test_sin_estado_lo_deduce_del_progreso():

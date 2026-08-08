@@ -8,6 +8,7 @@
  * `open` (antes era @click nativo → las vistas se actualizaron). */
 import { computed } from 'vue'
 import { MANGA_STATUS } from '@/lib/manga'
+import { genero } from '@/lib/etiquetas'
 import { useMangaStore } from '@/stores/manga'
 import MediaCard from '@/components/media/MediaCard.vue'
 
@@ -28,9 +29,13 @@ const read = computed(() => store.readCountOf(props.manga.id))
 const total = computed(() => props.manga.chapter_count || 0)
 const pending = computed(() => Math.max(0, total.value - read.value))
 
+/* Progreso primero (es lo accionable), géneros después: dicen QUÉ es la obra de un vistazo, que
+   es justo lo que la tarjeta de manga no contaba y la de anime sí. Llegan de `/api/anilist/
+   genres_by_id` (LibraryView), así que sin al_id la tarjeta se queda como estaba. */
 const tags = computed(() => [
   pending.value ? `${pending.value} sin leer` : (total.value ? 'Al día' : ''),
   props.manga.upscaled ? `${props.manga.upscaled} en 4K` : '',
+  ...(props.manga.genres || []).slice(0, 3).map(genero),
 ].filter(Boolean))
 </script>
 

@@ -19,6 +19,7 @@ import ContentToolbar from '@/components/ui/ContentToolbar.vue'
 import DensityToggle from '@/components/ui/DensityToggle.vue'
 import ContinueRail from '@/components/media/ContinueRail.vue'
 import { useTagsStore } from '@/stores/tags'
+import { opcionesGenero, generoActivo, conGenero } from '@/lib/generos'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
 const ui = useUiStore()
@@ -136,6 +137,11 @@ const tagFilter = computed({
   set: (v) => { statusFilter.value = v ? `tag:${v}` : 'all' },
 })
 
+/* Géneros: mismo desplegable, misma ranura de filtro (ver `lib/generos.js`). Los géneros de manga
+   llegan de AniList en segundo plano (`loadGenres`), así que la lista se rellena sola cuando
+   aterrizan; hasta entonces está vacía y el control ni se pinta. */
+const generos = computed(() => opcionesGenero(items.value))
+
 // "Continuar leyendo": series con progreso reciente, cruzadas con la biblioteca (cover/nombre).
 const continueItems = computed(() => {
   const byId = new Map(items.value.map(m => [m.id, m]))
@@ -166,7 +172,12 @@ const filtered = computed(() => {
   let list = items.value
   if (manga.pendingDelete.length) list = list.filter(m => !manga.pendingDelete.includes(m.id))
   // Estado como sección primaria (como anime): "Todo" = solo activos; cada estado, su pestaña.
-  if (statusFilter.value.startsWith('tag:')) {
+  if (generoActivo(statusFilter.value)) {
+    // Como con las etiquetas: filtrar por género NO esconde lo terminado. Buscas algo que leer,
+    // y una obra acabada es justo eso.
+    list = conGenero(list, generoActivo(statusFilter.value))
+  }
+  else if (statusFilter.value.startsWith('tag:')) {
     // Filtrar por etiqueta NO esconde lo terminado: si etiquetaste algo, quieres verlo salga
     // como salga. Por eso no se aplica aquí el descarte de INACTIVE.
     const t = statusFilter.value.slice(4)
@@ -215,6 +226,7 @@ async function load() {
     // El cruce disco+seguimiento vive en el backend (`library_overview.py`), junto al resto
     // de la lógica de identidad: aquí sólo se pinta lo que llega.
     items.value = (await api.get('/api/library/overview')) || []
+    loadGenres()          // en segundo plano: la rejilla no espera a AniList para pintarse
   } catch (e) {
     // El mensaje real viaja hasta la vista: `ErrorState` lo pinta en pequeño y convierte
     // un "no va" en un informe de fallo útil. El toast se desvanece; esto se queda.
@@ -223,6 +235,25 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+/* Géneros de la tarjeta. Un solo POST para toda la biblioteca (el backend cachea 30 días por
+   obra), y si AniList no responde las tarjetas se quedan como estaban: un género que falta no
+   puede tumbar la biblioteca.
+   Sólo 27 de 218 obras tienen `al_id`, así que las demás van por TÍTULO — el backend las resuelve
+   a ritmo de tanda, y por eso esto se vuelve a llamar en cada carga: completa lo que faltó. */
+async function loadGenres() {
+  const al_ids = [...new Set(items.value.map(m => m.al_id).filter(Boolean))]
+  const titles = [...new Set(items.value.filter(m => !m.al_id && !m.novel).map(m => m.name).filter(Boolean))]
+  if (!al_ids.length && !titles.length) return
+  try {
+    const g = await api.post('/api/anilist/genres_by_id', { al_ids, titles })
+    if (!g) return
+    items.value = items.value.map(m => {
+      const gen = g[m.al_id] || g[m.name]
+      return gen?.length ? { ...m, genres: gen } : m
+    })
+  } catch (_) { /* sin géneros, la tarjeta sigue siendo la de siempre */ }
 }
 
 async function findCovers() {
@@ -259,7 +290,7 @@ watch(() => manga.libraryDirty, () => load())
 
     <!-- Controls -->
     <ContentToolbar :filters="libFilters" :filter="statusFilter" @update:filter="statusFilter = $event"
-                    :search="search" @update:search="search = $event"
+                    :genres="generos" :search="search" @update:search="search = $event"
                     search-placeholder="Filtrar series…">
       <template #extra>
         <DensityToggle />

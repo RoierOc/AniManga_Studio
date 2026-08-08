@@ -153,6 +153,7 @@ onMounted(() => {
   settings.loadKeys()
   settings.loadSyncStatus()
   ui.refreshHiddenStatus()
+  loadPair()
 })
 
 // ── API keys ──────────────────────────────────────────────────────────────
@@ -220,6 +221,33 @@ function copyPhoneUrl() {
     phoneCopied.value = true
     setTimeout(() => { phoneCopied.value = false }, 2000)
   })
+}
+
+/* Acceso remoto — el token con el que un móvil habla con este PC. Se pide sólo al abrir Ajustes
+   y `/api/pair` únicamente responde a peticiones locales, así que no puede filtrarse por la red. */
+const pair = ref({ url: '', token: '' })
+const pairShown = ref(false)
+const pairCopied = ref(false)
+async function loadPair() {
+  try { pair.value = await api.get('/api/pair') } catch (_) { /* servidor viejo: la tarjeta se queda vacía */ }
+}
+function copyPair() {
+  navigator.clipboard.writeText(pair.value.token || '').then(() => {
+    pairCopied.value = true
+    setTimeout(() => { pairCopied.value = false }, 2000)
+  })
+}
+async function rotatePair() {
+  if (!await ui.confirm({
+    title: 'Cambiar el token',
+    body: 'Los dispositivos ya emparejados dejarán de tener acceso y habrá que volver a emparejarlos.',
+    confirmLabel: 'Cambiar',
+  })) return
+  try {
+    pair.value = { ...pair.value, ...(await api.post('/api/pair/rotate')) }
+    pairShown.value = true
+    ui.toast('Token cambiado · vuelve a emparejar tus dispositivos', 'ok', 5000)
+  } catch (e) { ui.toast(e?.message || 'No se pudo cambiar', 'error', 5000) }
 }
 
 const importInput = ref(null)
@@ -567,6 +595,34 @@ async function onImportFile(e) {
             <span class="set__catic"><Icon name="refresh" :size="18" /></span>
             <div><h2>Copia y sincronización</h2><p>Guarda tu perfil en la nube, expórtalo a un archivo o a un tomo.</p></div>
           </div>
+
+    <!-- Acceso remoto -->
+    <section class="card">
+      <div class="card__title"><Icon name="globe" :size="16" /> Acceso remoto</div>
+      <p class="hint">
+        Este equipo atiende peticiones de otros dispositivos <b>sólo con este token</b>. Desde el
+        propio PC nunca hace falta. Úsalo para emparejar la aplicación de Android.
+      </p>
+      <div v-if="(pair.urls || []).length" class="dest dest--col">
+        <span class="dest__lbl">Direcciones</span>
+        <div v-for="u in pair.urls" :key="u" class="dest__row">
+          <code class="dest__url">{{ u }}</code>
+        </div>
+        <span class="dest__hint">— usa la que esté en la misma red que el dispositivo; si va por el
+          punto de acceso de este PC, es la <code>192.168.137.x</code></span>
+      </div>
+      <div class="dest">
+        <span class="dest__lbl">Token</span>
+        <code class="dest__url">{{ pairShown ? pair.token : '••••••••••••••••••••••••' }}</code>
+        <button class="btn btn--xs" @click="pairShown = !pairShown">{{ pairShown ? 'Ocultar' : 'Ver' }}</button>
+        <button class="btn btn--xs" @click="copyPair">{{ pairCopied ? '✓ Copiado' : 'Copiar' }}</button>
+        <button class="btn btn--xs btn--danger" @click="rotatePair">Cambiar</button>
+      </div>
+      <p class="hint">
+        Cambiar el token <b>desconecta cualquier dispositivo ya emparejado</b>: úsalo si pierdes uno.
+        Nunca abras el puerto 5101 en el router — fuera de casa, VPN.
+      </p>
+    </section>
 <!-- Copia y sincronización -->
     <section class="card">
       <div class="card__title"><Icon name="refresh" :size="16" /> Copia y sincronización</div>
