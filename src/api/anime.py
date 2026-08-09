@@ -2067,6 +2067,29 @@ def _anime_save_dir(anime_title: str) -> str:
     return _build_save_path(base, folder) if folder else base
 
 
+def _qbt_add_link(link: str, save_dir: str) -> tuple[bool, str]:
+    """Manda un enlace a qBittorrent. Devuelve `(ok, mensaje)`.
+
+    Vive aparte porque lo usan dos entradas —el escritorio por `qbt/add` y el móvil por
+    `episode_download`— y lo que hay que interpretar no es trivial: qBittorrent contesta `Ok.` en
+    texto plano unas veces y un JSON con contadores otras, así que una segunda copia de esta
+    lectura acabaría dando por buena una descarga que no arrancó.
+    """
+    form = {'urls': link}
+    if save_dir:
+        form['savepath'] = save_dir
+    r = _q('post', '/torrents/add', data=form)
+    body = r.text.strip()
+    ok = r.status_code in (200, 204) and body in ('Ok.', '')
+    if not ok and r.status_code == 200:
+        try:
+            j = r.json()
+            ok = j.get('success_count', 0) > 0 or j.get('failure_count', 0) == 0
+        except Exception:
+            pass
+    return ok, body or 'Ok.'
+
+
 @anime_bp.route('/qbt/add', methods=['POST'])
 def qbt_add():
     data = request.get_json(silent=True) or {}
@@ -2074,26 +2097,11 @@ def qbt_add():
     if not link:
         return jsonify({'error': 'no link'}), 400
     try:
-        form = {'urls': link}
-        explicit = (data.get('save_path') or '').strip()
-        if explicit:
-            form['savepath'] = explicit
-        else:
-            # Prefer the user-configured anime download folder (another disk), falling
-            # back to qBittorrent's own default save path. Each anime gets a subfolder.
-            save_dir = _anime_save_dir(data.get('anime_title') or '')
-            if save_dir:
-                form['savepath'] = save_dir
-        r = _q('post', '/torrents/add', data=form)
-        body = r.text.strip()
-        ok = r.status_code in (200, 204) and body in ('Ok.', '')
-        if not ok and r.status_code == 200:
-            try:
-                j = r.json()
-                ok = j.get('success_count', 0) > 0 or j.get('failure_count', 0) == 0
-            except Exception:
-                pass
-        return jsonify({'ok': ok, 'msg': body or 'Ok.'})
+        # Prefer the user-configured anime download folder (another disk), falling
+        # back to qBittorrent's own default save path. Each anime gets a subfolder.
+        save_dir = (data.get('save_path') or '').strip() or _anime_save_dir(data.get('anime_title') or '')
+        ok, msg = _qbt_add_link(link, save_dir)
+        return jsonify({'ok': ok, 'msg': msg})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -3508,6 +3516,86 @@ def anime_stream(anime_id, episode):
     if err:
         return jsonify({'error': err[0]}), err[1]
     return send_file(video, conditional=True)
+
+
+@anime_bp.route('/episode_torrents/<anime_id>/<int:episode>')
+def anime_episode_torrents(anime_id, episode):
+    """Torrents de UN episodio concreto de una serie que ya está en la biblioteca.
+
+    Existe para el MÓVIL. En el escritorio, la búsqueda por episodio la arma `stores/anime.js`:
+    resuelve los alias del anime, monta una consulta por alias (`«Título - 04»`) y funde las
+    listas. Reproducir ese cálculo en Kotlin sería mantener el mismo criterio en dos idiomas, y
+    el día que Nyaa cambie de forma sólo se arreglaría uno de los dos.
+
+    Las consultas se arman a partir de la ficha del SERVIDOR (`anime_id`), no de un título que
+    mande el cliente: el móvil pide «el episodio 4 de esto que ya tengo», no una búsqueda libre.
+    """
+    anime = _lib_read().get(str(anime_id))
+    if not anime:
+        return jsonify({'error': 'anime not in library'}), 404
+
+    base = [t for t in (anime.get('title_romaji'), anime.get('title')) if t]
+    # Los sinónimos sólo se piden POR ID. Buscar en AniList por nombre trae la ficha de otra obra
+    # cuando el título es genérico, y entonces las consultas de Nyaa se llenan de alias ajenos.
+    if anime.get('al_id'):
+        try:
+            from api.anilist import title_variants
+            base = title_variants(base[0] if base else None, anime['al_id'], 'ANIME') or base
+        except Exception:
+            pass
+
+    pad = f'{episode:02d}'
+    # Cat 1_0 (todo el anime) y no 1_2: si no, las releases en español no aparecen nunca.
+    vistos, salida = set(), []
+    for t in base[:4]:
+        for torrent in _nyaa_search(f'{t} - {pad}', '1_0'):
+            # El episodio suelto o un lote que lo contenga; lo demás es ruido de otra consulta.
+            if torrent['episode'] not in (episode, 0):
+                continue
+            clave = torrent['info_hash'] or torrent['title']
+            if clave in vistos:
+                continue
+            vistos.add(clave)
+            salida.append(torrent)
+
+    salida.sort(key=lambda t: (not t['trusted'], -t['seeders']))
+    return jsonify(salida[:30])
+
+
+@anime_bp.route('/episode_download/<anime_id>/<int:episode>', methods=['POST'])
+def anime_episode_download(anime_id, episode):
+    """Encarga al PC la descarga de un episodio. Es lo que pulsa el MÓVIL.
+
+    **La carpeta de destino no viaja nunca.** El cliente elige un torrent de la lista que le dio
+    `episode_torrents` y nada más; el dónde lo pone el servidor con `_anime_save_dir`, igual que
+    cuando se pulsa en el escritorio. Un endpoint que aceptase `save_path` de la red sería escribir
+    donde diga quien llame, y «es una app local» no es una defensa.
+    """
+    lib = _lib_read()
+    anime = lib.get(str(anime_id))
+    if not anime:
+        return jsonify({'error': 'anime not in library'}), 404
+    datos = request.get_json(silent=True) or {}
+    link = (datos.get('magnet') or datos.get('torrent_url') or '').strip()
+    if not link:
+        return jsonify({'error': 'no link'}), 400
+
+    try:
+        ok, msg = _qbt_add_link(link, _anime_save_dir(anime.get('title') or anime.get('title_romaji') or ''))
+    except Exception as e:
+        return jsonify({'ok': False, 'msg': str(e)}), 502
+    if not ok:
+        return jsonify({'ok': False, 'msg': msg}), 502
+
+    # Se apunta bajo el episodio PEDIDO aunque el torrent sea un lote: lo que el usuario quiere ver
+    # es ese episodio, y el resto del lote lo recoge igual el escaneo de la carpeta local.
+    anime.setdefault('episodes', {})[str(episode)] = {
+        'title':     datos.get('torrent_title', ''),
+        'info_hash': (datos.get('info_hash') or '').lower(),
+        'added_on':  int(time.time()),
+    }
+    _lib_write(lib)
+    return jsonify({'ok': True})
 
 
 @anime_bp.route('/native/resolve', methods=['POST'])

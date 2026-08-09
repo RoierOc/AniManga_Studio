@@ -344,17 +344,19 @@ def _serve_page_file(directory, name):
 # navegador). Resolver contra TODAS las raíces es lo que hace que una obra repartida entre
 # C: y D: se lea como una sola. Ver api/roots.py.
 def _find_page(filename: str, prefer_upscaled: bool):
-    from api.roots import find_file, roots as _roots
-    p = find_file(filename, prefer_upscaled=prefer_upscaled)
-    if p:
-        return p
-    # La extensión pedida puede no ser la del disco (el escalado sale .jpg; el original puede
-    # ser .png/.webp) — se prueban alternativas antes de rendirse.
-    base = Path(filename)
-    for ext in ('.jpg', '.png', '.webp', '.jpeg'):
-        if base.suffix.lower() == ext:
-            continue
-        p = find_file(str(base.with_suffix(ext)), prefer_upscaled=prefer_upscaled)
+    """🔴 «Escalada si existe» sólo es cierto si se prueban TODAS las extensiones primero.
+
+    El escalador escribe siempre `.jpg`, pero el original puede ser `.webp` (todo lo bajado de
+    MangaDex lo es) y el listado de páginas nombra los ORIGINALES. Buscando la extensión pedida en
+    escalados y originales antes de probar otras —que es lo que hacía `find_file`+bucle—, el
+    `.webp` original SIEMPRE ganaba y la versión escalada no se servía nunca: medido, una página
+    que en disco mide 4500x6400 llegaba al cliente como 1125x1600. Horas de GPU invisibles.
+
+    Ahora el orden es por CARPETA y no por extensión: primero todos los formatos en escalados,
+    después todos en originales."""
+    orden = ('upscaled', 'manga') if prefer_upscaled else ('manga', 'upscaled')
+    for clave in orden:
+        p = _find_page_in(filename, clave)
         if p:
             return p
     return None
