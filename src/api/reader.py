@@ -205,9 +205,21 @@ def sin_lapidas(data: dict) -> dict:
     return {k: v for k, v in (data or {}).items() if not es_lapida(v)}
 
 
+def _quiere_lapidas() -> bool:
+    """`?lapidas=1` — sólo para un cliente que SINCRONIZA, no para pintar una pantalla.
+
+    Sin esto, un borrado no puede viajar del PC al móvil: la obra simplemente falta en la
+    respuesta, y «falta» es exactamente lo que también significa «esta obra nunca existió aquí».
+    El móvil no puede distinguirlas y la obra borrada en el PC se queda para siempre en el móvil,
+    que además la resucitaría en el siguiente envío. Es «falló ≠ no había» aplicado al borrado.
+    """
+    return str(request.args.get('lapidas') or '').lower() in ('1', 'true', 'si', 'sí')
+
+
 @reader_bp.route('/progress')
 def get_progress():
-    return jsonify(sin_lapidas(_progress_read()))
+    data = _progress_read()
+    return jsonify(data if _quiere_lapidas() else sin_lapidas(data))
 
 
 @reader_bp.route('/progress', methods=['POST'])
@@ -222,7 +234,7 @@ def put_progress():
         return jsonify({'error': 'se esperaba un objeto {obra: progreso}'}), 400
     merged = merge_progress(_progress_read(), incoming)
     write_json_atomic(_progress_path(), merged, indent=2, keep_backup=True)
-    return jsonify(sin_lapidas(merged))
+    return jsonify(merged if _quiere_lapidas() else sin_lapidas(merged))
 
 
 @reader_bp.route('/progress/forget', methods=['POST'])

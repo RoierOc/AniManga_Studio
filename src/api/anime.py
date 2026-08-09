@@ -3472,6 +3472,44 @@ def anime_native_scrub(key, idx):
     return ('', 404)
 
 
+def video_de_biblioteca(anime_id: str, episode: int):
+    """Ruta del vídeo de un episodio SIN que el cliente diga ninguna ruta.
+
+    `resolve_episode_video` acepta `local_path` del cuerpo de la petición, y eso está bien para el
+    front del PC (que ya corre en la máquina) pero NO para un cliente de la red: servir bytes de
+    una ruta que elige quien llama es leer cualquier fichero del PC por HTTP. Aquí la ruta sale de
+    la biblioteca del servidor, así que lo único que el móvil controla es *qué episodio de qué
+    serie que ya existe*. Devuelve (ruta|None, (msg, status)|None).
+    """
+    anime = (_lib_read() or {}).get(str(anime_id))
+    if not anime:
+        return None, ('anime not in library', 404)
+    ep_str = str(episode)
+    ep = (anime.get('episodes') or {}).get(ep_str) or {}
+    datos = {'anime_id': str(anime_id), 'episode': episode}
+    if anime.get('local_path'):
+        datos['local_path'] = anime['local_path']
+    elif ep.get('info_hash'):
+        datos['info_hash'] = ep['info_hash']
+    else:
+        return None, ('episode has no source', 404)
+    return resolve_episode_video(datos)
+
+
+@anime_bp.route('/stream/<anime_id>/<int:episode>')
+def anime_stream(anime_id, episode):
+    """Sirve el vídeo del episodio para el reproductor del MÓVIL.
+
+    El móvil no torrentea ni monta discos: ve el fichero por HTTP. `conditional=True` es lo que
+    activa las peticiones por rango, y sin rangos no hay saltar al minuto 12 — mpv tendría que
+    tragarse el MKV entero desde el principio.
+    """
+    video, err = video_de_biblioteca(anime_id, episode)
+    if err:
+        return jsonify({'error': err[0]}), err[1]
+    return send_file(video, conditional=True)
+
+
 @anime_bp.route('/native/resolve', methods=['POST'])
 def anime_native_resolve():
     """Resuelve la ruta del vídeo para el reproductor NATIVO embebido (libmpv en la

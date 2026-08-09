@@ -92,3 +92,31 @@ def test_las_lapidas_caducan_y_no_engordan_el_fichero():
     assert 'Vieja' not in out
     assert 'Nueva' in out
     assert out['Con caps']['del'] == {'10': HOY}
+
+
+def test_las_lapidas_solo_salen_por_http_si_se_piden(tmp_path, monkeypatch):
+    """Un borrado tiene que poder VIAJAR del PC al móvil.
+
+    `sin_lapidas` existe para que la interfaz no pinte obras fantasma, pero aplicado también al
+    cliente que sincroniza deja la obra borrada simplemente AUSENTE de la respuesta — y «ausente»
+    es lo mismo que dice una obra que nunca existió en el PC. El móvil no puede distinguirlas, se
+    queda la obra para siempre y encima la resucita al enviar. Es «falló ≠ no había» aplicado al
+    borrado, así que el cliente de sync pide `?lapidas=1` y recibe el mapa crudo.
+    """
+    from flask import Flask
+    from api import reader
+
+    monkeypatch.setattr(reader, '_progress_path', lambda: tmp_path / 'p.json')
+    monkeypatch.setattr(reader, '_progress_read',
+                        lambda: {'Viva': {'read': {'1': True}, 'ts': HOY},
+                                 'Borrada': {'deleted_ts': HOY}})
+
+    app = Flask(__name__)
+    app.register_blueprint(reader.reader_bp, url_prefix='/api/reader')
+    c = app.test_client()
+
+    normal = c.get('/api/reader/progress').get_json()
+    assert 'Borrada' not in normal, 'la interfaz no debe ver obras fantasma'
+
+    sync = c.get('/api/reader/progress?lapidas=1').get_json()
+    assert sync['Borrada'] == {'deleted_ts': HOY}, 'el que sincroniza necesita el borrado explícito'
