@@ -12,6 +12,21 @@ for a in "$@"; do
   [ "$a" = "--single-process" ] && continue
   args+=("$a")
 done
+# 🔴 `--no-zygote` SIN `--no-sandbox` no arranca: Chromium 142 sale de inmediato con
+# «Zygote cannot be disabled if sandbox is enabled» y FlareSolverr lo reporta como
+# «invalid session id: session deleted as the browser has closed the connection» — un mensaje que
+# habla de la sesión de Selenium y no dice ni una palabra del motivo real. Se pasó un año dando por
+# roto FlareSolverr por esto.
+#
+# El sandbox aquí no se pierde: corriendo como root en WSL, Chromium ya no puede usarlo. Lo que
+# navega es un contenedor de resolver retos, no un navegador de uso general.
+args+=(--no-sandbox)
+
+# 🔴 Y el MISMO veneno que ya tenía el shim de `sh`: FlareSolverr va empaquetado con PyInstaller y
+# exporta su propio `LD_LIBRARY_PATH`, que Chromium HEREDA. Con las libs equivocadas debajo, la
+# resolución de nombres se rompe y la página falla con `net::ERR_INTERNET_DISCONNECTED` — que dice
+# «no tienes internet» cuando el internet está perfecto y lo roto es el enlazador.
+unset LD_LIBRARY_PATH
 exec /usr/sbin/chromium \
   --no-zygote --disable-gpu --disable-dev-shm-usage \
   "${args[@]}"

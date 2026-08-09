@@ -8,6 +8,7 @@ from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote
 import json
+import os
 from api.resilient_http import http as _http  # retry + backoff + per-host rate limiting
 import threading
 
@@ -588,6 +589,74 @@ def get_chapters_from_folder(folder):
     
     chapter_data.sort(key=lambda x: _chapter_sort_key(x['chapter']), reverse=True)
     return chapter_data
+
+
+@library_bp.route('/pages/<path:title>')
+def get_chapter_pages(title):
+    """Las páginas de un capítulo, EN ORDEN y como rutas de `/uploads/`.
+
+    Existe por el cliente de Android: una obra descargada puede estar en dos formatos —páginas
+    planas `ch0036_001.png` en la carpeta de la serie, o una subcarpeta por capítulo— y además
+    repartida entre discos. Reproducir esa lógica en el móvil sería copiarla, copiarla mal y
+    descubrirlo el día que abra una obra del otro formato. Aquí ya está resuelta.
+
+    Devuelve rutas relativas para que el cliente sólo tenga que anteponer el host: `/uploads/`
+    resuelve el disco por su cuenta y **da la versión escalada si existe**, que es justo lo que
+    esta biblioteca tiene y ninguna fuente de internet puede dar.
+    """
+    from api.roots import series_dirs
+
+    ch = normalize_chapter(request.args.get('chapter') or '')
+    if not ch:
+        return jsonify({'error': 'chapter required'}), 400
+
+    folders = series_dirs(title) or series_dirs(title.replace('_', ' '))
+    if not folders:
+        return jsonify({'error': 'Manga not found'}), 404
+    name = folders[0].name
+
+    # ⚠️ `os.scandir` y **filtrando por el NOMBRE antes de tocar el disco**. La carpeta de una obra
+    # larga tiene ~1900 ficheros y vive en /mnt/d (DrvFS): a ~0,7 ms por `stat`, preguntar
+    # «¿es fichero?» por cada uno costaba 8 SEGUNDOS por capítulo, medido. El nombre ya dice la
+    # extensión y el capítulo; sólo los treinta que quedan necesitan mirarse.
+    pages = []
+    for d in folders:
+        try:
+            entradas = list(os.scandir(d))
+        except OSError:
+            continue
+        subdirs = [e for e in entradas if not e.name.startswith('.') and e.is_dir()]
+        if subdirs:
+            for sub in subdirs:
+                if normalize_chapter(sub.name) != ch:
+                    continue
+                try:
+                    hijos = os.scandir(sub.path)
+                except OSError:
+                    continue
+                pages += [
+                    f'{name}/{sub.name}/{e.name}' for e in hijos
+                    if e.name.rsplit('.', 1)[-1].lower() in _PAGE_EXTS
+                ]
+        else:
+            for e in entradas:
+                nombre = e.name
+                if nombre.rsplit('.', 1)[-1].lower() not in _PAGE_EXTS:
+                    continue
+                if normalize_chapter(nombre.rsplit('.', 1)[0].split('_')[0]) == ch:
+                    pages.append(f'{name}/{nombre}')
+
+    # Por nombre: las páginas van numeradas con ceros a la izquierda justo para esto. Sin ordenar,
+    # `os.scandir` devuelve lo que le da el sistema de ficheros y el capítulo se lee desordenado.
+    pages.sort()
+    if not pages:
+        # «No hay ese capítulo» tiene que distinguirse de «el capítulo está vacío», que aquí no
+        # existe: una lista vacía con 200 haría que el lector se abriera en blanco sin decir nada.
+        return jsonify({'error': 'chapter not found'}), 404
+    return jsonify({'title': name, 'chapter': ch, 'pages': pages})
+
+
+_PAGE_EXTS = ('jpg', 'jpeg', 'png', 'webp')
 
 
 @library_bp.route('/chapter_health/<path:title>')
