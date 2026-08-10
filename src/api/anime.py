@@ -2250,8 +2250,18 @@ def anime_airing_get():
     al_ids = [v.get('al_id') for v in lib.values() if v.get('al_id')]
     try:
         return jsonify(_fetch_airing(al_ids))
-    except Exception:
-        return jsonify({})
+    except Exception as e:
+        # 🔴 Aquí había un `except Exception: return jsonify({})` mudo, que es EXACTAMENTE el error
+        # que documentación técnica llama el más caro del proyecto: «falló» y «no había» devolviendo el mismo
+        # valor. El carril «Emitido hoy» del móvil se quedaba vacío y decía «hoy no emite nada» con
+        # la misma cara con la que diría «no pude preguntar a AniList» — y no aparecía ni en el log
+        # ni en el contador de errores, así que desde fuera era indistinguible.
+        #
+        # ⚠️ Se mantiene el 200 y el diccionario vacío a propósito: el cliente ya sabe tratar `{}`
+        # y devolver un 500 rompería el Inicio entero por un carril. Lo que cambia es que ahora el
+        # fallo es VISIBLE (log + contador + SSE) y viaja marcado en `_error`.
+        record_error('anime', e, op='airing', ids=len(al_ids))
+        return jsonify({'_error': 'no se pudo consultar el calendario de AniList'})
 
 
 @anime_bp.route('/library')
