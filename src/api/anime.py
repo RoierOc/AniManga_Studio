@@ -3546,6 +3546,27 @@ def _gen_scrub_thumbs(video: str, key: str):
             _scrub_active.discard(key)
 
 
+@anime_bp.route('/scrub/<anime_id>/<int:episode>')
+def anime_scrub_info(anime_id, episode):
+    """Las miniaturas de la barra de progreso, para un cliente de la RED (el móvil).
+
+    Las genera y las sirve la misma maquinaria que usa el player nativo del PC; lo único que cambia
+    es la puerta. El nativo entra por `/native/prepare`, que resuelve la ruta del vídeo porque corre
+    en la propia máquina; un móvil **no puede decir ninguna ruta**, así que aquí sólo dice qué
+    episodio de qué serie y el fichero sale de la biblioteca del servidor (`video_de_biblioteca`).
+
+    Devuelve la clave y el intervalo; las imágenes se piden una a una a `/native/scrub/<key>/<idx>`.
+    Generar es idempotente y va en un hilo: la primera vez el móvil pedirá miniaturas que aún no
+    existen y recibirá 404, que es exactamente lo que el cliente ya sabe tratar.
+    """
+    video, err = video_de_biblioteca(anime_id, episode)
+    if err:
+        return jsonify({'error': err[0]}), err[1]
+    key = _scrub_key(video)
+    threading.Thread(target=_gen_scrub_thumbs, args=(video, key), daemon=True).start()
+    return jsonify({'key': key, 'interval': _SCRUB_IV})
+
+
 @anime_bp.route('/native/scrub/<key>/<int:idx>')
 def anime_native_scrub(key, idx):
     """Sirve la miniatura idx (1-based) del scrubbing. 404 si aún no está generada
