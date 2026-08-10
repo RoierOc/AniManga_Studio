@@ -51,6 +51,21 @@ const subFetching = computed(() => store.subFetching === subKey.value)
 // marcador/sidecar en disco) o recién hecho en esta sesión. No cuenta ES ya incrustados de origen.
 const hasES = computed(() => props.ep.es_injected || subTask.value?.status === 'done')
 
+/* La imagen de la tarjeta: **el fotograma del fichero que tienes, y si no, el still de TMDB**.
+ *
+ * La miniatura local gana siempre porque sale del vídeo de verdad — es ESTE episodio, no material
+ * de promoción. Pero para un episodio que aún no está descargado no hay vídeo del que sacar nada, y
+ * hasta ahora esa tarjeta se quedaba con la portada desenfocada: media rejilla eran nueve manchas
+ * borrosas idénticas. `meta.still` ya venía en `/api/anime/episode_meta` y no se usaba para esto.
+ *
+ * Idea traída del móvil, donde se probó primero. */
+const thumbSrc = computed(() => {
+  if (playable.value || props.ep.has_thumb) {
+    return `/api/anime/thumb/${props.anime.id}/${props.ep.num}${props.ep.ep_type === 'special' ? '?special=1' : ''}`
+  }
+  return meta.value?.still ? imgProxy(meta.value.still, 400) : ''
+})
+
 // Título real del episodio (TMDB/MAL) si lo tenemos; si no, la etiqueta derivada del archivo.
 const epTitle = computed(() => {
   if (props.ep.ep_type !== 'special' && meta.value?.title) return meta.value.title
@@ -143,7 +158,7 @@ function openMenu(ev) {
 
     <div class="ep__thumb" @click="onPrimary">
       <div class="ep__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 200)}')` : ''" />
-      <img v-if="playable || ep.has_thumb" class="ep__img" :src="`/api/anime/thumb/${anime.id}/${ep.num}${ep.ep_type === 'special' ? '?special=1' : ''}`"
+      <img v-if="thumbSrc" class="ep__img" :src="thumbSrc"
            loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
 
       <!-- Sobre la portada se queda SÓLO el nº (y el "Visto"). El título vive debajo. -->
