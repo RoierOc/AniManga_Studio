@@ -51,19 +51,66 @@ from api.observability import record_error
 
 anime_upscale_bp = Blueprint('anime_upscale', __name__)
 
-# ── La cadena ────────────────────────────────────────────────────────────────
-# Literalmente el CTRL+9 del `input.conf` del PC, en el mismo orden. Es la que el usuario eligió
-# tras comparar A HQ y ésta a pantalla partida en la tablet.
-CADENA = [
-    'Anime4K_Clamp_Highlights',
-    'Anime4K_Restore_CNN_UL',
-    'Anime4K_Upscale_CNN_x2_UL',
-    'Anime4K_AutoDownscalePre_x2',
-    'Anime4K_AutoDownscalePre_x4',
-    'Anime4K_Restore_CNN_M',
-    'Anime4K_Upscale_CNN_x2_M',
-    'Anime4K_Thin_HQ',
-]
+# ── Las cadenas ──────────────────────────────────────────────────────────────
+# Tres, porque «lo mejor» y «lo quiero ya» son necesidades distintas y las dos son legítimas: para
+# una serie que vas a ver esta noche, esperar 11 minutos por episodio no compensa.
+#
+# `min_por_min` = minutos de horno por minuto de vídeo. MEDIDO en la RTX 5070 con la GPU libre y el
+# emulador cerrado, las tres seguidas sobre el mismo clip (ver PROJECT_STATE). De ahí sale el tiempo
+# que la interfaz enseña ANTES de encolar: un número inventado es peor que ninguno.
+#
+# ⚠️ Y va CALIBRADO con un episodio entero, no con el clip. La «rápida» medía 3,4 min extrapolando
+# desde 60 s y tardó **4,2 min** de verdad: el clip no paga el arranque de Vulkan (~20 s), ni la
+# compilación de los shaders, ni el muxado de 9 pistas de subtítulos y 19 fuentes. Prometer de menos
+# es peor que prometer de más, así que los tres llevan el factor de abajo.
+_CALIBRACION = 4.2 / 3.4    # medido: episodio real / lo que predecía el clip
+PRESETS = {
+    'rapida': {
+        'etiqueta': 'Rápida',
+        'detalle': 'Mode A con la red mediana. Limpia y escala; sin la segunda pasada ni el afinado '
+                   'de líneas.',
+        'min_por_min': 8.5 / 60 * _CALIBRACION,
+        'cadena': [
+            'Anime4K_Clamp_Highlights',
+            'Anime4K_Restore_CNN_M',
+            'Anime4K_Upscale_CNN_x2_M',
+            'Anime4K_AutoDownscalePre_x2',
+            'Anime4K_AutoDownscalePre_x4',
+        ],
+    },
+    'equilibrada': {
+        'etiqueta': 'Equilibrada',
+        'detalle': 'Red grande y líneas afinadas. La mitad de tiempo que la máxima y muy cerca en '
+                   'imagen.',
+        'min_por_min': 17.1 / 60 * _CALIBRACION,
+        'cadena': [
+            'Anime4K_Clamp_Highlights',
+            'Anime4K_Restore_CNN_VL',
+            'Anime4K_Upscale_CNN_x2_VL',
+            'Anime4K_AutoDownscalePre_x2',
+            'Anime4K_AutoDownscalePre_x4',
+            'Anime4K_Upscale_CNN_x2_M',
+            'Anime4K_Thin_HQ',
+        ],
+    },
+    'maxima': {
+        'etiqueta': 'Máxima',
+        'detalle': 'A+A con la red UL y las líneas afinadas. Es el CTRL+9 de mpv y el techo de '
+                   'Anime4K: no hay nada por encima.',
+        'min_por_min': 28.0 / 60 * _CALIBRACION,
+        'cadena': [
+            'Anime4K_Clamp_Highlights',
+            'Anime4K_Restore_CNN_UL',
+            'Anime4K_Upscale_CNN_x2_UL',
+            'Anime4K_AutoDownscalePre_x2',
+            'Anime4K_AutoDownscalePre_x4',
+            'Anime4K_Restore_CNN_M',
+            'Anime4K_Upscale_CNN_x2_M',
+            'Anime4K_Thin_HQ',
+        ],
+    },
+}
+PRESET_POR_DEFECTO = 'maxima'
 
 _SHADER_DIRS = [
     '/mnt/c/Program Files (x86)/mpv/mpv/shaders',
@@ -149,11 +196,11 @@ def disponible() -> tuple[bool, str]:
     return True, ''
 
 
-def _shader_unido() -> str:
-    """Concatena la cadena en un solo .glsl junto a los originales, y devuelve su NOMBRE."""
+def _shader_unido(preset: str) -> str:
+    """Concatena la cadena del preset en un solo .glsl y devuelve su RUTA."""
     d = _dir_shaders()
-    destino = Path(d) / '_animanga_aa_ul_thin.glsl'
-    piezas = [Path(d) / f'{n}.glsl' for n in CADENA]
+    destino = Path(d) / f'_animanga_{preset}.glsl'
+    piezas = [Path(d) / f'{n}.glsl' for n in PRESETS[preset]['cadena']]
     faltan = [p.name for p in piezas if not p.exists()]
     if faltan:
         raise FileNotFoundError(f'faltan shaders: {", ".join(faltan)}')
@@ -164,7 +211,7 @@ def _shader_unido() -> str:
                                          for p in piezas), encoding='utf-8')
         except PermissionError:
             # `Program Files` sin permiso de escritura: se cae al TEMP de Windows.
-            tmp = Path(_temp_windows()) / '_animanga_aa_ul_thin.glsl'
+            tmp = Path(_temp_windows()) / f'_animanga_{preset}.glsl'
             tmp.write_text('\n'.join(p.read_text(encoding='utf-8', errors='replace')
                                      for p in piezas), encoding='utf-8')
             return str(tmp)
@@ -209,7 +256,7 @@ def _manga_ocupado() -> bool:
         return False
 
 
-def _hornear(tid: str, video: str) -> None:
+def _hornear(tid: str, video: str, preset: str) -> None:
     global _proc_actual
     salida = _salida_de(video)
     # ⚠️ El fichero a medias NO puede acabar en `.mkv`: vive en la carpeta de la serie, y el
@@ -217,7 +264,7 @@ def _hornear(tid: str, video: str) -> None:
     # Con `.parcial` queda fuera por extensión Y por `_es_a4k` (su stem sigue acabando en `.a4k`).
     parcial = salida[:-4] + '.parcial'
     total = _duracion(video)
-    shader = _shader_unido()
+    shader = _shader_unido(preset)
     cwd = os.path.dirname(shader)
 
     cmd = [
@@ -295,7 +342,7 @@ def _borrar(p: str) -> None:
 
 def _bucle() -> None:
     while True:
-        tid, video = _cola.get()
+        tid, video, preset = _cola.get()
         try:
             if tid in _cancelados:
                 _pon(tid, estado='cancelado')
@@ -310,7 +357,7 @@ def _bucle() -> None:
             if tid in _cancelados:
                 _pon(tid, estado='cancelado')
                 continue
-            _hornear(tid, video)
+            _hornear(tid, video, preset)
         except Exception as e:                          # noqa: BLE001 — un fallo no mata la cola
             _pon(tid, estado='error', error=str(e))
             record_error('anime_upscale', e, video=video)
@@ -352,11 +399,15 @@ def start():
             if t.get('video') == video and t.get('estado') in ('en cola', 'esperando', 'horneando'):
                 return jsonify({'id': t['id'], 'ya': True})
 
+    preset = (datos.get('calidad') or PRESET_POR_DEFECTO).strip()
+    if preset not in PRESETS:
+        return jsonify({'error': f'calidad desconocida: {preset}'}), 400
+
     tid = uuid.uuid4().hex[:12]
     _pon(tid, video=video, nombre=Path(video).name, estado='en cola', porcentaje=0.0,
-         encolado=time.time())
+         encolado=time.time(), calidad=preset, calidad_etiqueta=PRESETS[preset]['etiqueta'])
     _orden.append(tid)
-    _cola.put((tid, video))
+    _cola.put((tid, video, preset))
     _arranca_hilo()
     return jsonify({'id': tid})
 
@@ -401,6 +452,13 @@ def status():
         'actual': next((t for t in activos if t['estado'] != 'en cola'), None),
         'cola': [t for t in activos if t['estado'] == 'en cola'],
         'hechos': [t for t in trabajos if t.get('estado') in ('hecho', 'error', 'cancelado')][-20:],
-        'cadena': 'Mode A+A UL + Thin',
+        # La UI no hardcodea ni las calidades ni sus tiempos: salen de aquí, que es donde están
+        # los números MEDIDOS. Añadir un preset no obliga a tocar el frontend.
+        'calidades': [
+            {'id': k, 'etiqueta': v['etiqueta'], 'detalle': v['detalle'],
+             'min_por_min': round(v['min_por_min'], 4)}
+            for k, v in PRESETS.items()
+        ],
+        'por_defecto': PRESET_POR_DEFECTO,
         'resolucion': f'{ANCHO}x{ALTO}',
     })

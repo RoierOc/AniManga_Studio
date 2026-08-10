@@ -20,7 +20,10 @@ export const useAnimeUpscaleStore = defineStore('animeUpscale', {
     actual: null,        // { id, nombre, estado, porcentaje, quedan, video, salida }
     cola: [],
     hechos: [],
-    cadena: 'Mode A+A UL + Thin',
+    // Las calidades y sus tiempos MEDIDOS los manda el backend: aquí no se hardcodean, así que
+    // añadir un preset no obliga a tocar el frontend.
+    calidades: [],
+    porDefecto: 'maxima',
   }),
 
   getters: {
@@ -31,13 +34,23 @@ export const useAnimeUpscaleStore = defineStore('animeUpscale', {
       return todos.find((t) => t.video === path || t.salida === path) || null
     },
     hayAlgo: (s) => !!s.actual || s.cola.length > 0,
+
+    // Minutos aproximados de horno para ESTE episodio. Si conocemos su duración se usa; si no, se
+    // supone un episodio de 24 min, que es lo que dura casi todo lo que hay en la biblioteca.
+    // Redondeado a entero: dar «6,8 min» finge una precisión que no existe, porque el tiempo real
+    // depende de si la GPU está libre.
+    minutos: () => (calidad, duracionSeg) => {
+      const min = (duracionSeg && duracionSeg > 60) ? duracionSeg / 60 : 24
+      return Math.max(1, Math.round(min * (calidad.min_por_min || 0)))
+    },
   },
 
   actions: {
     async refrescar() {
       try {
         const d = await api.get('/api/anime/upscale/status')
-        this.$patch(d)
+        // `por_defecto` llega en snake_case; el resto casa por nombre.
+        this.$patch({ ...d, porDefecto: d.por_defecto || this.porDefecto })
         if (this.hayAlgo) this.sondear()
         else this.parar()
       } catch (_) { this.parar() }
@@ -66,11 +79,12 @@ export const useAnimeUpscaleStore = defineStore('animeUpscale', {
       if (sonda) { clearInterval(sonda); sonda = null }
     },
 
-    async hornear(path) {
+    async hornear(path, calidad) {
       const ui = useUiStore()
       try {
-        await api.post('/api/anime/upscale/start', { path })
-        ui.toast('En cola para escalar con Anime4K', 'success')
+        await api.post('/api/anime/upscale/start', { path, calidad })
+        const c = this.calidades.find((x) => x.id === calidad)
+        ui.toast(`En cola para escalar · ${c?.etiqueta || 'Anime4K'}`, 'success')
         await this.refrescar()
       } catch (e) { ui.toast(e?.message || 'No se pudo encolar', 'error') }
     },

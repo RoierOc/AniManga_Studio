@@ -147,7 +147,9 @@ export const useAnimeStore = defineStore('anime', {
     // Reproductor NATIVO embebido (libmpv en la shell Windows, vía nativeBridge).
     nativePlayer: null,          // {anime, ep, pos, duration, paused, tier} — abierto si != null
     // 'off' | 'high' | 'ultra' (los tiers 'fast'/'medium'/'artcnn'/'fsrcnnx' se retiraron → migran a 'high')
-    native4kTier: ['off', 'high', 'ultra'].includes(localStorage.getItem('anime-native-4k'))
+    // ⚠️ Un tier que falte en esta lista se guarda bien y al RECARGAR vuelve a 'high' en silencio.
+    // Añadir aquí cualquier id nuevo de A4K_MODES, o el ajuste no sobrevive a cerrar la app.
+    native4kTier: ['off', 'high', 'ultra', 'maximo'].includes(localStorage.getItem('anime-native-4k'))
       ? localStorage.getItem('anime-native-4k') : 'high',
     // Tier para IMAGEN REAL (series/películas). Aparte del de anime a propósito: Anime4K está
     // entrenado en line art y sobre imagen real deja halos, así que cada dominio guarda el suyo

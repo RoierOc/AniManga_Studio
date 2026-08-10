@@ -86,6 +86,28 @@ const SHADERS_ULTRA: &[&str] = &[
     "Anime4K_Thin_HQ.glsl",
 ];
 
+/// **La cadena del horneado, en vivo.** Es el CTRL+9 de mpv: A+A con la red UL y las líneas
+/// afinadas — la misma que `api/anime_upscale.py` cuece en el fichero, y la que el usuario eligió
+/// tras comparar a pantalla partida en la tablet.
+///
+/// Es MÁS que `ultra`, que se quedaba en VL y sin la segunda restauración (o sea, no era un A+A de
+/// verdad). Aquí la segunda pasada de restauración corre DESPUÉS del escalado, que es lo que hace
+/// que la imagen «se asiente» — y también lo que la encarece, porque a esas alturas se trabaja a
+/// resolución de salida y no a 1080p.
+///
+/// El presupuesto en vivo son 41,7 ms por fotograma a 23,976 fps. Si no cabe se notará como
+/// fotogramas perdidos, no como algo feo: mirar `frame-drop-count` antes de decidir.
+const SHADERS_MAXIMO: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_UL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_M.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+
 // --- Imagen REAL (series y películas) ---------------------------------------------------
 // Anime4K está entrenado en line art: sobre imagen real deja halos y piel de plástico. Estos
 // dos SÍ son genéricos:
@@ -102,6 +124,7 @@ fn tier_shaders(tier: &str) -> &'static [&'static str] {
     match tier {
         "high" => SHADERS_HIGH,
         "ultra" => SHADERS_ULTRA,
+        "maximo" => SHADERS_MAXIMO,
         "live" => SHADERS_LIVE,
         "live_lite" => SHADERS_LIVE_LITE,
         _ => &[], // off / none / desconocido

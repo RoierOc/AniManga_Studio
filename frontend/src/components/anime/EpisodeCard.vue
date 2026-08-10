@@ -108,7 +108,16 @@ const menuItems = computed(() => {
         items.push({ label: 'Escalado con Anime4K ✓', icon: 'check', disabled: true })
         items.push({ label: 'Volver al original (borra el escalado)', icon: 'close', danger: true, action: () => a4k.descartar(rutaOriginal.value) })
       } else if (a4k.disponible) {
-        items.push({ label: `Escalar con Anime4K (~10 min)`, icon: 'spark', action: () => a4k.hornear(rutaOriginal.value) })
+        // Una entrada por calidad, con su tiempo, en vez de un diálogo: elegir calidad ES la
+        // decisión, y meterla detrás de un modal la convierte en dos pasos para lo mismo.
+        // El tiempo va en la etiqueta porque es justo el dato con el que se elige.
+        for (const c of a4k.calidades) {
+          items.push({
+            label: `Escalar · ${c.etiqueta} (~${a4k.minutos(c, e.duration)} min)`,
+            icon: 'spark',
+            action: () => a4k.hornear(rutaOriginal.value, c.id),
+          })
+        }
       } else {
         items.push({ label: a4k.motivo || 'Escalado no disponible', icon: 'spark', disabled: true })
       }

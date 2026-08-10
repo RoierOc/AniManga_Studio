@@ -24,6 +24,9 @@ const A4K_MODES = [
   { id: 'off', label: 'Desactivado' },
   { id: 'high', label: 'A+A UL (Máx. calidad) · CTRL+8' },
   { id: 'ultra', label: 'A+A UL + Thin (Máx. + bordes) · CTRL+9' },
+  // La cadena que se hornea, ahora también en vivo. Es MÁS que 'ultra', que se quedaba en VL y sin
+  // la segunda restauración — o sea, no era un A+A de verdad.
+  { id: 'maximo', label: 'A+A UL real + Thin (lo máximo)' },
 ]
 // Imagen real (series/películas): Anime4K no aplica —está entrenado en line art—, así que el
 // menú ofrece los shaders genéricos. Los tiers los resuelve `tier_shaders()` en player.rs.
