@@ -780,7 +780,11 @@ export const useAnimeStore = defineStore('anime', {
         anime, ep, pos: startPos, duration: 0, paused: false, loading: true,
         // `isLive` = imagen real: lo marca quien abre desde series/películas (progressKey).
         isLive: !!opts.progressKey,
-        tier: opts.progressKey ? this.nativeLiveTier : this.native4kTier,
+        // ⚠️ Un episodio ya HORNEADO con Anime4K (`ep.a4k`) trae los shaders metidos en los píxeles:
+        // aplicárselos otra vez en vivo es pasar la red dos veces — se emborrona y encima cuesta
+        // fotogramas gratis. Se abre con los shaders apagados; el menú sigue disponible a mano.
+        tier: ep?.a4k ? 'off' : (opts.progressKey ? this.nativeLiveTier : this.native4kTier),
+        yaHorneado: !!ep?.a4k,
         _lastReport: 0, fullscreen: false,
         audioTracks: [], subTracks: [], aid: 1, sid: 0,
         speed: 1, subScale: this.nativeSubScale, subSync: 0,

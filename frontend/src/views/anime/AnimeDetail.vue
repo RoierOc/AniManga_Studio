@@ -17,6 +17,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 
 import { useSubBatchStore } from '@/stores/subbatch'
+import { useAnimeUpscaleStore } from '@/stores/animeUpscale'
 import { generos } from '@/lib/etiquetas'
 
 const store = useAnimeStore()
@@ -239,6 +240,9 @@ watch(() => store.player, (open) => {
   else v.play().catch(() => {})
 })
 onMounted(schedulePreview)
+// Estado del horneado Anime4K: se pide una vez al abrir la ficha; el store sondea solo si hay algo.
+const a4kStore = useAnimeUpscaleStore()
+onMounted(() => a4kStore.refrescar())
 watch(() => anime.value?.id, schedulePreview)
 onBeforeUnmount(() => clearTimeout(previewTimer))
 

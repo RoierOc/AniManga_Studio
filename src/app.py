@@ -89,6 +89,7 @@ from api.import_cbz import import_bp
 from api.discovery import discovery_bp
 from api.md_updates import md_updates_bp
 from api.roots import roots_bp
+from api.anime_upscale import anime_upscale_bp
 
 app.register_blueprint(library_bp, url_prefix='/api/library')
 app.register_blueprint(search_bp, url_prefix='/api/search')
@@ -104,6 +105,7 @@ app.register_blueprint(webdav_bp, url_prefix='/api/webdav')
 app.register_blueprint(cbz_bp, url_prefix='/api/cbz')
 app.register_blueprint(anilist_bp, url_prefix='/api/anilist')
 app.register_blueprint(anime_bp, url_prefix='/api/anime')
+app.register_blueprint(anime_upscale_bp, url_prefix='/api/anime/upscale')
 app.register_blueprint(subtitle_bp, url_prefix='/api/subtitle')
 app.register_blueprint(subbatch_bp, url_prefix='/api/subtitle/batch')
 app.register_blueprint(imgproxy_bp, url_prefix='/api/img')

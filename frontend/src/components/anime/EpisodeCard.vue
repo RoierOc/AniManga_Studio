@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
+import { useAnimeUpscaleStore } from '@/stores/animeUpscale'
 import { animeEpLabel, isEpisodePlayable } from '@/lib/anime'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
@@ -13,6 +14,13 @@ const props = defineProps({
   batch: { type: Object, required: true },
 })
 const store = useAnimeStore()
+const a4k = useAnimeUpscaleStore()
+
+// Escalado con Anime4K: `ep.a4k` lo pone el escaneo cuando existe el fichero horneado, y entonces
+// `ep.path` YA apunta a él (es el episodio principal) y `ep.original_path` guarda el de siempre.
+// ⚠️ La API llama `local_path` a la ruta del fichero, no `path`.
+const rutaOriginal = computed(() => props.ep.original_path || props.ep.local_path || '')
+const horneando = computed(() => a4k.trabajoDe(rutaOriginal.value))
 
 const playable = computed(() => isEpisodePlayable(props.ep, props.batch))
 const downloading = computed(() =>
@@ -53,6 +61,13 @@ const epTitle = computed(() => {
 const metaLine = computed(() => {
   if (downloading.value) return { text: `↓ Descargando ${Math.round(dlPct.value)}%`, cls: '' }
   if (!playable.value) return { text: 'Sin descargar', cls: 'ep__meta--muted' }
+  // El horneado tarda ~10 min: si sólo se viera al abrir el clic derecho, parecería que no pasa nada.
+  if (horneando.value) {
+    const t = horneando.value
+    if (t.estado === 'horneando') return { text: `✦ Escalando ${Math.round(t.porcentaje || 0)}%`, cls: 'ep__meta--resume' }
+    return { text: t.estado === 'esperando' ? '✦ Esperando la GPU' : '✦ En cola', cls: 'ep__meta--muted' }
+  }
+  if (props.ep.a4k) return { text: 'Anime4K ✦ 2880p', cls: 'ep__meta--done' }
   if (resumePct.value) return { text: `Reanudar · ${Math.round(resumePct.value)}%`, cls: 'ep__meta--resume' }
   if (hasES.value) return { text: 'Subtítulos ES ✓', cls: 'ep__meta--done' }
   return null
@@ -80,6 +95,24 @@ const menuItems = computed(() => {
     }
     else items.push({ label: 'Subtítulos en español', icon: 'globe', action: () => store.translateSubs(a, e) })
     if (a.mal_id || meta.value?.overview) items.push({ label: infoOpen.value ? 'Ocultar descripción' : 'Descripción', icon: 'menu', action: () => store.loadEpInfo(a, e) })
+    // Escalar con Anime4K. Sólo para episodios que están en disco: hornear necesita el fichero.
+    if (e.in_local && rutaOriginal.value) {
+      items.push({ sep: true })
+      if (horneando.value) {
+        const t = horneando.value
+        const txt = t.estado === 'horneando'
+          ? `Escalando… ${Math.round(t.porcentaje || 0)}%${t.quedan ? ` · faltan ${Math.ceil(t.quedan / 60)} min` : ''}`
+          : (t.estado === 'esperando' ? 'Esperando a la GPU…' : 'En cola para escalar')
+        items.push({ label: txt, icon: 'close', danger: true, action: () => a4k.cancelar(t.id) })
+      } else if (e.a4k) {
+        items.push({ label: 'Escalado con Anime4K ✓', icon: 'check', disabled: true })
+        items.push({ label: 'Volver al original (borra el escalado)', icon: 'close', danger: true, action: () => a4k.descartar(rutaOriginal.value) })
+      } else if (a4k.disponible) {
+        items.push({ label: `Escalar con Anime4K (~10 min)`, icon: 'spark', action: () => a4k.hornear(rutaOriginal.value) })
+      } else {
+        items.push({ label: a4k.motivo || 'Escalado no disponible', icon: 'spark', disabled: true })
+      }
+    }
     items.push({ sep: true })
     items.push({ label: e.watched ? 'Marcar como no visto' : 'Marcar como visto', icon: 'check', action: () => store.toggleWatched(a, e) })
     if (e.in_local) items.push({ label: 'Cambiar tipo de episodio', icon: 'menu', action: (ev) => store.openEpOverrideMenu(cm.value.evt, a, e) })

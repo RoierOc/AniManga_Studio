@@ -1121,7 +1121,11 @@ def _scan_local_episodes_sync(wsl_path: str, overrides: dict) -> list:
     if cached and cached[0] == fmtime and cached[1] == overrides_key:
         return cached[2]
 
-    files = sorted(f for f in p.rglob('*') if f.is_file() and f.suffix.lower() in _VIDEO_EXTS)
+    # Las horneadas con Anime4K no son episodios aparte: son OTRA VERSIÓN del mismo. Se sacan del
+    # listado aquí y cada episodio recoge la suya más abajo (si no, el capítulo 1 salía dos veces y
+    # el segundo se numeraba como el 2).
+    files = sorted(f for f in p.rglob('*')
+                   if f.is_file() and f.suffix.lower() in _VIDEO_EXTS and not _es_a4k(f))
     seen: set = set()
     episodes = []
     sp_counter = 0
@@ -1154,6 +1158,14 @@ def _scan_local_episodes_sync(wsl_path: str, overrides: dict) -> list:
         episodes.append({'num': ep_num, 'path': str(f), 'ep_type': 'episode',
                          'filename': f.name, 'size': _size_of(f)})
 
+    # `path` apunta a la horneada si existe (es la principal); `original_path` deja el de siempre a
+    # mano para poder verlo, y `a4k` es lo que pinta el distintivo en la lista.
+    for e in episodes:
+        h = a4k_de(e['path'])
+        if h:
+            e['original_path'], e['path'], e['a4k'] = e['path'], h, True
+            e['size'] = _size_of(_Path(h))
+
     result = sorted(episodes, key=lambda e: (e['ep_type'] != 'episode', e['num']))
     _scan_cache[wsl_path] = (fmtime, overrides_key, result)
     return result
@@ -1174,29 +1186,74 @@ def _win_to_wsl(path: str) -> str:
         return path
 
 
+# ── Episodios horneados con Anime4K ───────────────────────────────────────────
+# El horneado (api/anime_upscale.py) deja un fichero HERMANO `<nombre>.a4k.mkv` y NUNCA toca el
+# original: el original es lo que siembra qBittorrent y un remux le cambia el tamaño y el hash.
+#
+# Aquí sólo vive la parte de RESOLUCIÓN: si existe la versión horneada, ésa es el episodio. Va en
+# `_find_video` —el embudo por el que pasan los 12 sitios que abren un vídeo— y no en cada llamante,
+# que es como se queda la mitad de la app viendo el original sin que nadie se entere.
+_A4K_SUF = '.a4k'
+
+
+def a4k_de(video: str) -> str:
+    """Ruta de la versión horneada de `video`, o '' si no está. `video` puede ser ya la horneada."""
+    if not video:
+        return ''
+    p = _Path(video)
+    if p.stem.endswith(_A4K_SUF):
+        return str(p) if p.exists() else ''
+    h = p.with_name(p.stem + _A4K_SUF + '.mkv')
+    return str(h) if h.exists() else ''
+
+
+def original_de(video: str) -> str:
+    """El original del que salió una horneada (para poder seguir viéndolo)."""
+    p = _Path(video)
+    if not p.stem.endswith(_A4K_SUF):
+        return str(p)
+    base = p.with_suffix('').with_suffix('')       # quita .mkv y .a4k
+    for ext in _VIDEO_EXTS:
+        c = base.with_suffix(ext)
+        if c.exists():
+            return str(c)
+    return ''
+
+
+def _prefiere_a4k(video: str) -> str:
+    return a4k_de(video) or video
+
+
+def _es_a4k(f) -> bool:
+    return _Path(f).stem.endswith(_A4K_SUF)
+
+
 def _find_video(content_path: str, episode: int, subpath: str = '') -> str:
     # Windows path from qBittorrent → convert to WSL path first
     if _is_wsl() and re.match(r'^[A-Za-z]:[/\\\\]', content_path):
         content_path = _win_to_wsl(content_path)
     p = _Path(content_path)
     if p.is_file() and p.suffix.lower() in _VIDEO_EXTS:
-        return str(p)
+        return _prefiere_a4k(str(p))
     if p.is_dir():
         # Subpath narrows the search to a specific subfolder (e.g. Season 2 within a batch)
         if subpath:
             sub = p / subpath
             if sub.is_dir():
                 p = sub
-        candidates = sorted(f for f in p.rglob('*') if f.is_file() and f.suffix.lower() in _VIDEO_EXTS)
+        # Las horneadas se excluyen del emparejamiento y se recuperan al final con `_prefiere_a4k`:
+        # si entraran aquí, `ep01.a4k.mkv` y `ep01.mkv` competirían por el mismo número.
+        candidates = sorted(f for f in p.rglob('*')
+                            if f.is_file() and f.suffix.lower() in _VIDEO_EXTS and not _es_a4k(f))
         if not candidates:
             return ''
         if episode <= 0:
-            return str(candidates[0])
+            return _prefiere_a4k(str(candidates[0]))
         # Use _parse_episode for accurate matching (avoids false positives from hex hashes)
         for f in candidates:
             if _parse_episode(f.stem) == episode:
-                return str(f)
-        return str(candidates[0])
+                return _prefiere_a4k(str(f))
+        return _prefiere_a4k(str(candidates[0]))
     return ''
 
 
@@ -2278,7 +2335,10 @@ def anime_library_get():
             episodes_out = [
                 {
                     'num':        ep['num'],
-                    'title':      _local_ep_title(_Path(ep['path']).stem, ep.get('ep_type', 'episode')),
+                    # ⚠️ El título sale del ORIGINAL: el stem de una horneada acaba en `.a4k` y
+                    # se colaba en el nombre visible del episodio.
+                    'title':      _local_ep_title(_Path(ep.get('original_path') or ep['path']).stem,
+                                                  ep.get('ep_type', 'episode')),
                     'info_hash':  '',
                     'progress':   100,
                     'state':      'local',
@@ -2292,7 +2352,15 @@ def anime_library_get():
                     'duration':   durations_map.get(str(ep['num']), 0),
                     'ep_type':    ep.get('ep_type', 'episode'),
                     'filename':   ep.get('filename', _Path(ep['path']).name),
-                    'es_injected': _es_sub_injected(ep['path']),
+                    # También contra el ORIGINAL: el marcador de subtítulos se guardó con SU
+                    # nombre, y preguntando por el de la horneada salía siempre "no traducido".
+                    'es_injected': _es_sub_injected(ep.get('original_path') or ep['path']),
+                    # Este dict es una lista FIJA de claves: lo que no se nombre aquí, no llega a la
+                    # UI. `a4k` es lo que pinta el distintivo, apaga los shaders del reproductor
+                    # (aplicarlos sobre un horneado es pasar la red dos veces) y ofrece «volver al
+                    # original».
+                    'a4k':         bool(ep.get('a4k')),
+                    'original_path': ep.get('original_path', ''),
                 }
                 for ep in local_eps
             ]

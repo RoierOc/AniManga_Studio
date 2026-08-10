@@ -36,8 +36,11 @@ const scaleModes = computed(() => (np.value?.isLive ? LIVE_MODES : A4K_MODES))
 // El botón se llama por lo que hay detrás: en anime es Anime4K; en imagen real no lo es, así que
 // decir "Anime4K" ahí era mentira. Nombre genérico: "Shaders".
 const scaleName = computed(() => (np.value?.isLive ? 'Shaders' : 'Anime4K'))
-const scaleLabel = computed(() =>
-  np.value?.tier === 'off' ? scaleName.value : (np.value?.isLive ? 'Shaders·On' : 'A4K·Alto'))
+const scaleLabel = computed(() => {
+  // Ya horneado: decirlo en el botón, o «Desactivado» parece que has perdido la calidad.
+  if (np.value?.yaHorneado && np.value?.tier === 'off') return 'A4K·Horneado'
+  return np.value?.tier === 'off' ? scaleName.value : (np.value?.isLive ? 'Shaders·On' : 'A4K·Alto')
+})
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
 const playing = computed(() => np.value && !np.value.paused)
@@ -444,6 +447,10 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
                 <b :class="{ 'is-zero': np.sat === 1 }" @dblclick="setSat(1)">{{ Math.round((np.sat ?? 1) * 100) }}%</b>
                 <button :disabled="np.sat >= 3" aria-label="Más saturación" @click="bumpSat(0.05)">+</button>
               </div>
+              <p v-if="np.yaHorneado" class="wp__nota">
+                Este episodio ya está horneado con Anime4K: los shaders van dentro del vídeo.
+                Volver a activarlos pasa la red dos veces.
+              </p>
               <button v-for="m in scaleModes" :key="m.id" :class="{ 'is-sel': m.id === np.tier }"
                       @click="setA4k(m.id)">{{ m.label }}</button>
             </div>
@@ -642,6 +649,11 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   display: block; width: 100%; text-align: left; padding: var(--s-2) var(--s-3);
   border: none; background: transparent; color: var(--ink); font-size: var(--fs-xs);
   border-radius: var(--r-xs); cursor: pointer; min-height: 2.5rem;
+}
+.wp__nota {
+  margin: 0 0 var(--s-1); padding: var(--s-2) var(--s-3); max-width: 17rem;
+  font-size: var(--fs-xs); line-height: 1.4; color: var(--ink-dim);
+  background: var(--azure-haze); border-radius: var(--r-xs);
 }
 .wp__menu button:hover { background: var(--azure-haze); color: #fff; }
 .wp__menu button.is-sel { color: var(--azure-bright); font-weight: 700; }
