@@ -229,6 +229,14 @@ def _hornear(tid: str, video: str) -> None:
                 f'libplacebo=w={ANCHO}:h={ALTO}:custom_shader_path={os.path.basename(shader)},'
                 'hwdownload,format=yuv420p'),
         '-c', 'copy', '-c:v', 'hevc_nvenc', '-preset', PRESET, '-cq', str(CQ),
+        # 🔴 SIN ESTO EL AUDIO SE CORTA A LOS POCOS MINUTOS. La cadena de shaders va a 0,4x tiempo
+        # real, así que ffmpeg va tirando del audio muy por delante del vídeo; al pasar del tope de
+        # interleave (10 s por defecto) el muxer deja de esperar y suelta el audio ENTERO de golpe.
+        # MEDIDO en el horneado de prueba: en el minuto 10, el vídeo estaba en el byte 536 MB y el
+        # audio en el 17 MB — todo el audio en un bloque al principio. El fichero "tiene" su pista
+        # completa (ffprobe la lista con 23:40), pero un reproductor lineal se queda sin audio por
+        # delante y enmudece. `0` = no te rindas nunca, interleava bien.
+        '-max_interleave_delta', '0',
         '-progress', 'pipe:1', '-nostats',
         '-f', 'matroska',                  # el nombre acaba en `.parcial`: hay que decirle el envase
         _a_windows(parcial),
