@@ -1105,6 +1105,23 @@ def _scan_local_episodes(folder_path: str, overrides: dict = None) -> list:
 _scan_refreshing: set = set()
 
 
+def invalidar_escaneo(carpeta: str) -> None:
+    """Olvida el escaneo cacheado de una carpeta: el siguiente `/api/anime/library` la relee.
+
+    🔴 **Es lo que faltaba para que un episodio recién horneado pase a ser EL episodio.** La
+    resolución ya era correcta (`_prefiere_a4k` en `_find_video`, y `path`→horneada en el escaneo),
+    pero el escaneo se sirve con Stale-While-Revalidate y un TTL de 10 s: justo después de hornear,
+    la biblioteca seguía contestando con la lista de ANTES —sin `a4k`, con el original— y nadie
+    avisaba a la interfaz. Desde fuera eso es exactamente «he escalado y no se ha guardado»: hay que
+    salir de la ficha, esperar y volver a entrar para que aparezca.
+
+    El que escribe el fichero es quien sabe que la carpeta cambió, así que lo dice en vez de dejar
+    que se descubra por reloj.
+    """
+    _scan_cache.pop(carpeta, None)
+    _folder_checked_at.pop(carpeta, None)
+
+
 def _scan_local_episodes_sync(wsl_path: str, overrides: dict) -> list:
     """Escaneo real (bloqueante) de una carpeta; actualiza el caché. Lo llama el camino
     frío (sin caché) y el hilo de refresco del SWR de arriba."""

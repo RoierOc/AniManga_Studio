@@ -37,6 +37,7 @@ def _all_status():
     from api.transplant import get_transplant_tasks
     from api.subtitle import get_subtitle_tasks
     from api.subtitle_batch import get_batch_tasks
+    from api.anime_upscale import get_anime_upscale_tasks
 
     dl_status = _prune_finished(get_dl_status())
     up_status = _prune_finished(get_upscale_status())
@@ -54,9 +55,13 @@ def _all_status():
     # Lote de subtítulos: UNA entrada agregada por lote (5/12). Las traducciones IA hijas van en
     # `subtitles` con su `batch_id`; el front las suprime para no contarlas dos veces.
     subtitle_batches = get_batch_tasks()
+    # Horneado Anime4K. Es la tarea MÁS LARGA de la app (minutos por minuto de vídeo) y era la
+    # única que no salía en Actividad: tenía su propio /status para su propia pantalla y nunca se
+    # enganchó aquí. Se poda como las demás para que un horneado de ayer no siga en la lista.
+    anime_upscale_tasks = _prune_finished(get_anime_upscale_tasks())
     return {'downloads': dl_status, 'upscale': up_status, 'exports': export_tasks,
             'transplant': transplant_tasks, 'subtitles': subtitle_tasks,
-            'subtitle_batches': subtitle_batches}
+            'subtitle_batches': subtitle_batches, 'anime_upscale': anime_upscale_tasks}
 
 
 @status_bp.route('/stream')

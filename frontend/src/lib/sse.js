@@ -43,7 +43,7 @@ function ensure() {
       try { data = JSON.parse(e.data) } catch { return }
 
       // Aggregated status snapshot
-      if (data.downloads || data.upscale || data.exports || data.transplant || data.subtitles || data.subtitle_batches) {
+      if (data.downloads || data.upscale || data.exports || data.transplant || data.subtitles || data.subtitle_batches || data.anime_upscale) {
         statusListeners.forEach(fn => { try { fn(data) } catch (_) {} })
       }
       // Event bus

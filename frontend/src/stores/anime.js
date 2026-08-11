@@ -391,6 +391,9 @@ export const useAnimeStore = defineStore('anime', {
         onSSE('watched', (ev) => this._onWatched(ev))
         onSSE('position', (ev) => this._onPosition(ev))
         onSSE('download_complete', () => this.loadLibrary(true))
+        // Un episodio recién horneado ES otro fichero: hasta que la biblioteca no se relee, la
+        // ficha sigue enseñando el original y parece que escalar no ha servido de nada.
+        onSSE('anime_upscale_done', () => this.loadLibrary(true))
       }
     },
 

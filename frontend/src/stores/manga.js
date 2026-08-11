@@ -142,6 +142,19 @@ function normalizeTask(kind, id, v, actual = null) {
       episode: v.episode, pct: status === 'done' ? 100 : Math.min(100, Math.round(v.progress || 0)),
       label: v.episode != null ? `Ep. ${v.episode} · subtítulos` : 'Subtítulos' }
   }
+  if (kind === 'anime_upscale') {
+    // Horneado Anime4K de un episodio. Se agrupa bajo `anime:<serie>` igual que los subtítulos,
+    // para que use el icono del anime y el clic no abra el modal de manga.
+    //
+    // El nombre del fichero va en la segunda línea y no en la etiqueta: son cosas como
+    // `[SubsPlease] Serie - 07 (1080p) [A1B2C3D4].mkv`, que a lo ancho de una fila se come el resto.
+    const title = v.title || 'Anime'
+    return { ...base, mangaId: `anime:${title}`, title, isAnime: true,
+      msg: v.file || base.msg,
+      pct: status === 'done' ? 100 : Math.min(100, Math.round(v.progress || 0)),
+      eta: v.eta,
+      label: v.quality ? `Escalando a 4K · ${v.quality}` : 'Escalando a 4K' }
+  }
   if (kind === 'subtitle_batch') {
     // Lote de subtítulos: UNA tarjeta con el progreso global (5/12), agrupada bajo el mismo
     // `anime:<título>` para que use el icono/portada del anime y no abra el modal de manga.
@@ -261,6 +274,7 @@ export const useMangaStore = defineStore('manga', {
     transplant: {},           // { taskId: {status, phase, chapterDone, chapterTotal, ...} } — traducción + descarga de versión
     subtitles: {},            // { taskId: {status, progress, title, episode, ...} } — traducción de subs de anime (modelo)
     subtitleBatches: {},      // { batchId: {status, done, total, title, ...} } — lote de subtítulos (agregado)
+    animeUpscale: {},         // { id: {status, progress, title, file, quality, eta} } — horneado Anime4K
 
     // Centro de Actividad: historial DERIVADO del mismo snapshot (rebanada terminal). No se
     // graba en el cliente — activas e historial son la misma fuente de verdad y sobreviven F5.
@@ -617,6 +631,10 @@ export const useMangaStore = defineStore('manga', {
       for (const [id, v] of Object.entries(s.subtitles)) {
         const t = normalizeTask('subtitle', id, v); if (t) out.push(t)
       }
+      for (const [id, v] of Object.entries(s.animeUpscale)) {
+        if (s.cancelledIds.includes(id)) continue
+        const t = normalizeTask('anime_upscale', id, v); if (t) out.push(t)
+      }
       // El episodio en curso de cada lote, para que la tarjeta del lote pueda contar su avance.
       const enCurso = {}
       for (const v of Object.values(s.subtitles)) {
@@ -668,6 +686,7 @@ export const useMangaStore = defineStore('manga', {
         this.transplant = data.transplant || {}
         this.subtitles = data.subtitles || {}
         this.subtitleBatches = data.subtitle_batches || {}
+        this.animeUpscale = data.anime_upscale || {}
         // Escalado a color completado → marca el capítulo como "color hecho" (oculta el botón,
         // como el 4K). El marcador en disco (loadColorStatus) es la verdad persistente.
         for (const v of Object.values(this.upscale)) {
@@ -1828,6 +1847,14 @@ export const useMangaStore = defineStore('manga', {
       if (!t) return
       if (t.kind === 'translate') return this.cancelTransplant(t.id)
       if (t.kind === 'subtitle') { api.post(`/api/subtitle/cancel/${t.id}`).catch(() => {}); return }
+      if (t.kind === 'anime_upscale') {
+        // Cancelar el horneado mata ffmpeg y borra el fichero a medias; el `.parcial` de 1 GB no
+        // se queda por ahí. Se marca ya para que la fila desaparezca sin esperar al siguiente
+        // retrato, que puede tardar un par de segundos.
+        this._markCancelled(t.id)
+        api.post('/api/anime/upscale/cancel', { id: t.id }).catch(() => {})
+        return
+      }
       if (t.kind === 'export') {
         const terminal = ['done', 'complete', 'error', 'cancelled']
         if (terminal.includes(t.status)) return this.dismissExport(t.id)

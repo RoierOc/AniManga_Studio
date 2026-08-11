@@ -311,13 +311,18 @@ def _hornear(tid: str, video: str, preset: str) -> None:
     finally:
         _proc_actual = None
 
+    # ⚠️ `terminado` también al cancelar y al fallar, no sólo al acabar bien. El Centro de
+    # Actividad poda lo terminado por ese sello y lo que no lo trae lo tira entero: sin esto, un
+    # horneado cancelado o reventado no aparecía NUNCA en el historial — desaparecía sin más, que
+    # es justo lo que hace pensar que el botón no hizo nada.
     if tid in _cancelados:
         _borrar(parcial)
-        _pon(tid, estado='cancelado', porcentaje=0.0)
+        _pon(tid, estado='cancelado', porcentaje=0.0, terminado=time.time())
         return
     if proc.returncode != 0 or not os.path.exists(parcial):
         _borrar(parcial)
-        _pon(tid, estado='error', error=err[-500:] or f'ffmpeg salió con {proc.returncode}')
+        _pon(tid, estado='error', terminado=time.time(),
+             error=err[-500:] or f'ffmpeg salió con {proc.returncode}')
         record_error('anime_upscale', RuntimeError(err[-300:] or 'ffmpeg falló'), video=video)
         return
     # El rename es lo ÚLTIMO: hasta aquí `<nombre>.a4k.mkv` no existe, así que un corte de luz a
@@ -325,6 +330,14 @@ def _hornear(tid: str, video: str, preset: str) -> None:
     os.replace(parcial, salida)
     _pon(tid, estado='hecho', porcentaje=100.0, quedan=0,
          tamano=os.path.getsize(salida), terminado=time.time())
+    # **Y ahora se dice.** Sin estas dos líneas el episodio horneado tardaba en «existir»: el
+    # escaneo de la carpeta se sirve cacheado (TTL de 10 s + refresco en segundo plano) y la ficha
+    # no se entera de nada, así que había que salir y volver a entrar para verlo. Se tira el caché
+    # de ESA carpeta y se avisa por SSE, que es como se entera el resto de la app de lo demás.
+    from api.anime import invalidar_escaneo
+    from api.runtime import push_sse_event
+    invalidar_escaneo(os.path.dirname(salida))
+    push_sse_event('anime_upscale_done', path=salida)
 
 
 def _borrar(p: str) -> None:
@@ -424,7 +437,7 @@ def cancel():
         except OSError:
             pass
     else:
-        _pon(tid, estado='cancelado')
+        _pon(tid, estado='cancelado', terminado=time.time())
     return jsonify({'ok': True})
 
 
@@ -438,6 +451,47 @@ def discard():
         return jsonify({'error': 'no hay versión escalada'}), 404
     _borrar(horneada)
     return jsonify({'ok': True})
+
+
+#: Vocabulario de aquí → el del Centro de Actividad. `_mapStatus` del front habla en inglés y no
+#: tiene por qué aprenderse el de este módulo; traducir en la frontera es una línea, y evita que
+#: `horneando` caiga en el `return 'running'` por casualidad en vez de por decisión.
+_ESTADO_ACTIVIDAD = {
+    'en cola': 'queued', 'esperando': 'queued', 'horneando': 'running',
+    'hecho': 'done', 'error': 'error', 'cancelado': 'cancelled',
+}
+
+
+def get_anime_upscale_tasks() -> dict:
+    """El horneado, con la forma que consume el Centro de Actividad.
+
+    🔴 **Esto faltaba y por eso el escalado de anime era invisible.** Todo lo que tarda en esta app
+    —descargar, traducir, escalar manga, subtítulos— viaja en el MISMO retrato agregado
+    (`/api/status/stream`), que es de lo que se alimenta Actividad. El horneado se escribió con su
+    propio `/status` para su propia pantalla y nunca se enganchó, así que un proceso de **horas**
+    no salía en el único sitio donde se mira qué está pasando: parecía colgado.
+
+    Se traduce aquí y no en el navegador porque el resto del retrato ya llega traducido; que una
+    sola fuente hablase otro idioma obligaría a que el front supiera de este módulo.
+    """
+    with _lock:
+        crudos = [dict(_trabajos[t]) for t in _orden if t in _trabajos]
+    salida = {}
+    for t in crudos:
+        salida[t['id']] = {
+            'status': _ESTADO_ACTIVIDAD.get(t.get('estado'), 'running'),
+            # El título es la SERIE (la carpeta), no el nombre del fichero: en Actividad las tareas
+            # se agrupan por obra, y agrupar por nombre de fichero daría una tarjeta por episodio.
+            'title': Path(t.get('video', '')).parent.name or 'Anime',
+            'file': t.get('nombre', ''),
+            'progress': round(t.get('porcentaje') or 0, 1),
+            'quality': t.get('calidad_etiqueta', ''),
+            'eta': t.get('quedan'),
+            'error': t.get('error', ''),
+            'ended_at': t.get('terminado'),
+            '_ts': t.get('comenzado') or t.get('encolado'),
+        }
+    return salida
 
 
 @anime_upscale_bp.route('/status', methods=['GET'])
