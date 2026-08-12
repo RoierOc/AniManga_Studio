@@ -132,12 +132,39 @@ def _count_pages(folder: Path) -> int:
         return 0
 
 
+def titulo_en_disco(title: str) -> str:
+    """El título de una obra como **nombre de carpeta, jamás como ruta**.
+
+    Es la única puerta por la que un título del cliente se convierte en un sitio del disco, y
+    tiene que estar aquí y no en cada endpoint: `series_dir`, `series_up_dir` y sus plurales son
+    el cuello por el que pasan el lector, la descarga, el escalado, el trasplante y la
+    exportación. Una guarda por ruta de entrada es una guarda que el próximo endpoint se olvida.
+
+    🔴 **Sin esto se pueden escribir ficheros donde sea.** `Path('/biblioteca') / title` NO
+    contiene nada: en `pathlib`, si `title` es absoluto **gana él** (`Path('/a') / '/etc/x'` ==
+    `Path('/etc/x')`), y `../` atraviesa igual. Como `/api/download/download_source_chapter`
+    recibe además las URLs de las páginas, quien llame elige el contenido Y el destino. Que haga
+    falta el token no lo arregla: la app está publicada en el tailnet y la regla del proyecto es
+    que **un endpoint no acepta un destino del cliente**, sea cual sea la excusa.
+
+    Se queda con el ÚLTIMO tramo en vez de rechazar, porque un nombre de carpeta no puede llevar
+    barras en ningún sistema: para un título legítimo esto no cambia nada, y para uno con truco
+    lo deja dentro de la biblioteca, que es la propiedad que importa.
+    """
+    limpio = (title or '').replace('\\', '/').split('/')[-1].strip().strip('.')
+    if not limpio:
+        raise ValueError(f'título no válido como carpeta: {title!r}')
+    return limpio
+
+
 def series_dirs(title: str) -> list[Path]:
     """Carpetas de originales que EXISTEN para esta obra, en orden de raíz."""
+    title = titulo_en_disco(title)
     return [p for p in (Path(r['manga']) / title for r in roots()) if p.is_dir()]
 
 
 def series_up_dirs(title: str) -> list[Path]:
+    title = titulo_en_disco(title)
     return [p for p in (Path(r['upscaled']) / title for r in roots()) if p.is_dir()]
 
 
@@ -148,6 +175,7 @@ def series_root(title: str, root_id: str | None = None) -> dict:
     páginas suyas — así lo nuevo cae junto a lo viejo en vez de dispersarse más. Y si la
     obra no está en ninguna, la raíz activa.
     """
+    title = titulo_en_disco(title)
     forced = root_by_id(root_id)
     if forced:
         return forced
@@ -167,11 +195,11 @@ def series_root(title: str, root_id: str | None = None) -> dict:
 
 
 def series_dir(title: str, root_id: str | None = None) -> Path:
-    return Path(series_root(title, root_id)['manga']) / title
+    return Path(series_root(title, root_id)['manga']) / titulo_en_disco(title)
 
 
 def series_up_dir(title: str, root_id: str | None = None) -> Path:
-    return Path(series_root(title, root_id)['upscaled']) / title
+    return Path(series_root(title, root_id)['upscaled']) / titulo_en_disco(title)
 
 
 def up_dir_for(page_path) -> Path:
