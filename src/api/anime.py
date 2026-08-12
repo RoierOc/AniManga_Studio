@@ -124,6 +124,134 @@ def _lib_read() -> dict:
 def _lib_write(data: dict):
     write_json_atomic(_lib_path(), data, indent=2, keep_backup=True)
 
+
+# ── Identidad de una obra en la biblioteca ────────────────────────────────────
+# ⚠️ La CLAVE del dict NO es la identidad: una entrada nacida de Jikan (que sólo trae
+# `mal_id`) se guardaba con la clave = mal_id, y el backfill le rellenaba luego el `al_id`
+# SIN reclavarla. El siguiente `/library/add` desde AniList calculaba la clave con el al_id,
+# no la encontraba, y creaba una SEGUNDA entrada del mismo anime con sólo los episodios
+# nuevos (medido: Umamusume Cinderella Gray Part 2 en `61930` y `195240`). Por eso la clave
+# se RESUELVE contra lo que ya hay, en vez de acuñarse a ciegas.
+
+def _mismo_id(a, b) -> bool:
+    """¿Dos ids son el mismo? Compara como número: del cliente llegan como texto."""
+    if a is None or b is None:
+        return False
+    try:
+        return int(a) == int(b)
+    except (TypeError, ValueError):
+        return str(a) == str(b)
+
+
+def _lib_key(lib: dict, al_id=None, mal_id=None, title: str = '') -> str:
+    """La clave de esta obra en `lib`: la de la entrada que YA existe, o una nueva."""
+    for k, v in lib.items():
+        if (_mismo_id(al_id, v.get('al_id')) or _mismo_id(al_id, k)
+                or _mismo_id(mal_id, v.get('mal_id')) or _mismo_id(mal_id, k)):
+            return k
+    return str(al_id or mal_id or re.sub(r'[^a-z0-9]+', '_', (title or '').lower())[:40])
+
+
+# ── Una serie, VARIAS carpetas ────────────────────────────────────────────────
+# ⚠️ `local_path` era UNA carpeta, y una serie se reparte entre discos con toda naturalidad:
+# basta con cambiar la carpeta de descargas a mitad de temporada. Medido: los episodios 1-7 de
+# «Class de 2-banme…» estaban en `C:\Users\Example\Downloads\…` y los 8-12 en `D:\…`; la entrada
+# apuntaba a la de D: y la app enseñaba SÓLO los nuevos, como si los viejos no existieran.
+# `local_path` sigue siendo la carpeta principal (todo lo demás la usa); las otras van en
+# `local_paths` y se recorren siempre juntas.
+
+def _carpetas_de(anime: dict) -> list:
+    """Todas las carpetas donde vive esta serie, la principal primero, sin repetir."""
+    vistas, salida = set(), []
+    for p in [anime.get('local_path')] + list(anime.get('local_paths') or []):
+        p = (p or '').strip()
+        if p and p not in vistas:
+            vistas.add(p)
+            salida.append(p)
+    return salida
+
+
+def _anadir_carpeta(anime: dict, carpeta: str) -> bool:
+    """Registra otra carpeta de la serie. Devuelve si era nueva."""
+    if not carpeta or carpeta in _carpetas_de(anime):
+        return False
+    if not anime.get('local_path'):
+        anime['local_path'] = carpeta
+    else:
+        anime.setdefault('local_paths', []).append(carpeta)
+    return True
+
+
+def _escanear_carpetas(anime: dict) -> list:
+    """Episodios locales de TODAS sus carpetas. Gana la primera carpeta en los empates."""
+    carpetas = _carpetas_de(anime)
+    if len(carpetas) == 1:
+        return _scan_local_episodes(carpetas[0], anime.get('episode_overrides', {}))
+    fusion = {}
+    for carpeta in carpetas:
+        for ep in _scan_local_episodes(carpeta, anime.get('episode_overrides', {})):
+            fusion.setdefault((ep.get('ep_type', 'episode'), ep['num']), ep)
+    return [fusion[k] for k in sorted(fusion, key=lambda t: (t[0] != 'episode', t[1]))]
+
+
+def _buscar_video(anime: dict, episode: int, subpath: str = '') -> str:
+    """El fichero de un episodio, mire donde mire la serie."""
+    for carpeta in _carpetas_de(anime):
+        video = _find_video(carpeta, episode, subpath)
+        if video:
+            return video
+    return ''
+
+
+# Los campos de ESTADO del usuario: al fundir dos entradas se unen, nunca se pisan.
+_LIB_DICTS = ('episodes', 'watched', 'positions', 'durations', 'episode_overrides')
+
+
+def _fundir_entradas(base: dict, otra: dict) -> dict:
+    """Une `otra` dentro de `base` (que manda en los conflictos)."""
+    for campo in _LIB_DICTS:
+        unido = {**(otra.get(campo) or {}), **(base.get(campo) or {})}
+        if unido:
+            base[campo] = unido
+    for carpeta in _carpetas_de(otra):     # las carpetas se SUMAN, no se eligen
+        _anadir_carpeta(base, carpeta)
+    for campo, valor in otra.items():
+        if campo not in _LIB_DICTS and campo != 'local_paths' and not base.get(campo):
+            base[campo] = valor
+    for campo in ('last_watched_at', 'last_ep'):
+        base[campo] = max(int(base.get(campo) or 0), int(otra.get(campo) or 0))
+    marcas = [int(e.get('added_at') or 0) for e in (base, otra) if e.get('added_at')]
+    if marcas:
+        base['added_at'] = min(marcas)   # cuándo entró de verdad, no cuándo se clonó
+    return base
+
+
+def _canonizar_lib(lib: dict) -> bool:
+    """Una obra = UNA entrada, clavada por `al_id`. Devuelve si cambió algo.
+
+    Repara las duplicadas que ya estén en disco y desactiva la bomba de las entradas
+    clavadas por mal_id, que son las que la generan.
+    """
+    salida: dict = {}
+    cambiado = False
+    for k, v in lib.items():
+        canon = str(v['al_id']) if v.get('al_id') else k
+        if canon in salida:
+            # Manda la entrada con carpeta local; en empate, la que más episodios tenga.
+            a, b = salida[canon], v
+            if not a.get('local_path') and (b.get('local_path')
+                                            or len(b.get('episodes') or {}) > len(a.get('episodes') or {})):
+                a, b = b, a
+            salida[canon] = _fundir_entradas(a, b)
+            cambiado = True
+        else:
+            salida[canon] = v
+            cambiado = cambiado or canon != k
+    if cambiado:
+        lib.clear()
+        lib.update(salida)
+    return cambiado
+
 # ── Watch history ──────────────────────────────────────────────────────────────
 
 def _history_path() -> _Path:
@@ -803,6 +931,13 @@ def _backfill_anime_metadata():
 
     if changed:
         _lib_write(lib)
+    # Al final: el backfill acaba de resolver `al_id` para las entradas que sólo tenían
+    # mal_id, así que es aquí donde se pueden reclavar y fundir los clones ya en disco.
+    # Sobre una RELECTURA: este hilo puede llevar minutos y algo se ha podido dar de alta.
+    fresca = _lib_read()
+    if _canonizar_lib(fresca):
+        print('[anime] biblioteca canonizada: clones unificados', flush=True)
+        _lib_write(fresca)
     _backfill_done = True
 
 
@@ -2347,16 +2482,28 @@ def anime_library_get():
         for h in [h for h in _qbt_files_cache if h not in live]:
             _qbt_files_cache.pop(h, None)
     result = []
+    carpetas_nuevas: dict = {}
     for anime_id, anime in lib.items():
         watched_map   = anime.get('watched', {})
         positions_map = anime.get('positions', {})
         durations_map = anime.get('durations', {})
-        local_path = anime.get('local_path', '')
+        # Auto-reparación de una serie repartida entre discos: los `save_path` de sus PROPIOS
+        # torrents dicen dónde están los episodios que la carpeta principal no ve. El dato ya
+        # viene en `hash_map` (una sola llamada, hecha arriba): no cuesta ni una petición más.
+        # El `isdir` sólo se paga por carpeta desconocida, y una vez registrada ya no vuelve.
+        for ep_data in (anime.get('episodes') or {}).values():
+            t = hash_map.get((ep_data.get('info_hash') or '').lower())
+            if not t or t.get('progress', 0) < 1:
+                continue
+            carpeta = _win_to_wsl(t.get('save_path') or '')
+            if carpeta and carpeta not in _carpetas_de(anime) and os.path.isdir(carpeta):
+                _anadir_carpeta(anime, carpeta)
+                carpetas_nuevas.setdefault(anime_id, []).append(carpeta)
         # Sólo usar la rama LOCAL si el folder existe y tiene episodios. Un local_path
         # OBSOLETO/inaccesible (p.ej. un /mnt/d de otra máquina o un disco no montado) ya
         # NO debe ensombrecer el enlace por TORRENT: si no hay archivos locales reales,
         # caemos a la rama qBittorrent y el episodio queda enlazado/reproducible igual.
-        local_eps = _scan_local_episodes(local_path, anime.get('episode_overrides', {})) if local_path else []
+        local_eps = _escanear_carpetas(anime)
         if local_eps:
             regular_count = sum(1 for ep in local_eps if ep.get('ep_type', 'episode') == 'episode')
             episodes_out = [
@@ -2584,6 +2731,17 @@ def anime_library_get():
             'last_watched_at': anime.get('last_watched_at', 0),
             'last_ep': int(anime.get('last_ep') or 0),
         })
+    if carpetas_nuevas:
+        # ⚠️ Se persiste el DELTA sobre una relectura, nunca el `lib` de arriba: esta carga
+        # puede llevar 30 s escaneando discos, y guardarla entera pisa todo lo que se haya
+        # escrito mientras. Ya pasó: resucitó el clon que el backfill acababa de fundir.
+        fresca = _lib_read()
+        for aid, carpetas in carpetas_nuevas.items():
+            for carpeta in carpetas:
+                if aid in fresca:
+                    _anadir_carpeta(fresca[aid], carpeta)
+        _lib_write(fresca)
+        print(f'[anime] carpetas nuevas por save_path en {len(carpetas_nuevas)} serie(s)', flush=True)
     return jsonify(result)
 
 
@@ -2595,8 +2753,7 @@ def anime_library_add():
     al_id  = data.get('al_id')
     mal_id = data.get('mal_id')
     title  = (data.get('title') or '').strip()
-    anime_id = str(al_id or mal_id or re.sub(r'[^a-z0-9]+', '_', title.lower())[:40])
-    if not anime_id:
+    if not (al_id or mal_id or title):
         return jsonify({'error': 'need al_id, mal_id, or title'}), 400
 
     total_eps = data.get('total_episodes')
@@ -2619,6 +2776,9 @@ def anime_library_add():
             pass
 
     lib = _lib_read()
+    # La clave sale de la biblioteca, no de los ids sueltos: si esta obra ya está (aunque
+    # entrase por el otro id), se AÑADE a la que hay en vez de clonarla.
+    anime_id = _lib_key(lib, al_id, mal_id, title)
     if anime_id not in lib:
         lib[anime_id] = {
             'al_id': al_id, 'mal_id': mal_id,
@@ -2631,6 +2791,12 @@ def anime_library_add():
             'added_at': int(time.time()),
         }
     else:
+        # Completar el id que faltase: es lo que permite reconocerla la próxima vez
+        # por CUALQUIERA de los dos y lo que deja que `_canonizar_lib` la reclave.
+        if al_id and not lib[anime_id].get('al_id'):
+            lib[anime_id]['al_id'] = al_id
+        if mal_id and not lib[anime_id].get('mal_id'):
+            lib[anime_id]['mal_id'] = mal_id
         if not lib[anime_id].get('cover') and data.get('cover'):
             lib[anime_id]['cover'] = data['cover']
         if not lib[anime_id].get('total_episodes') and total_eps:
@@ -2645,10 +2811,11 @@ def anime_library_add():
     # al vincular una carpeta A MANO. Los vídeos seguían en disco; era la app la que no miraba.
     # Solo se pone si falta y si la carpeta EXISTE de verdad: un local_path fantasma haría que
     # la rama local gane y no muestre nada.
-    if not lib[anime_id].get('local_path'):
-        save_dir = _win_to_wsl(_anime_save_dir(title or data.get('title_romaji', '')))
-        if save_dir and os.path.isdir(save_dir):
-            lib[anime_id]['local_path'] = save_dir
+    # Se AÑADE, no se elige: si cambiaste la carpeta de descargas a mitad de temporada, los
+    # episodios viejos siguen en la otra y deben seguir viéndose (ver `_carpetas_de`).
+    save_dir = _win_to_wsl(_anime_save_dir(title or data.get('title_romaji', '')))
+    if save_dir and save_dir not in _carpetas_de(lib[anime_id]) and os.path.isdir(save_dir):
+        _anadir_carpeta(lib[anime_id], save_dir)
 
     # track_only = add anime to library without registering any episode
     if not data.get('track_only'):
@@ -2715,10 +2882,9 @@ def anime_episode_remove(anime_id, ep_num):
         # los datos (lo normal para dejar de sembrar) ya no hay info_hash por el que borrarlo.
         # Sin esto, "borrar episodio" quitaba la ficha y dejaba el vídeo ocupando disco EN
         # SILENCIO — el usuario cree que ha liberado espacio y no.
-        local_path = lib[anime_id].get('local_path', '')
-        if local_path:
+        if _carpetas_de(lib[anime_id]):
             try:
-                video = _find_video(local_path, int(ep_num))
+                video = _buscar_video(lib[anime_id], int(ep_num))
                 if video:
                     _Path(video).unlink(missing_ok=True)
             except Exception as e:
@@ -2961,17 +3127,21 @@ def anime_clear_episodes(anime_id):
     # Local-folder-linked anime have no torrent. Free space by deleting the scanned
     # video files and unlinking the folder (+ its scan mapping) so it isn't re-linked.
     # The entry is kept (cover/status/watch progress) → re-downloadable via torrents.
-    local_path = entry.get('local_path', '')
-    if local_path and delete_files:
-        for ep in _scan_local_episodes(local_path, entry.get('episode_overrides', {})):
+    carpetas = _carpetas_de(entry)
+    if carpetas and delete_files:
+        # TODAS sus carpetas: una serie repartida entre discos dejaría los ficheros de la
+        # otra ocupando espacio sin que nada volviese a mencionarlos.
+        for ep in _escanear_carpetas(entry):
             try:
                 _Path(ep['path']).unlink()
             except Exception:
                 pass
         entry.pop('local_path', None)
+        entry.pop('local_paths', None)
         entry.pop('episode_overrides', None)
         sp = _scanpaths_read()
-        if sp.get('mappings', {}).pop(local_path, None) is not None:
+        quitados = [sp.get('mappings', {}).pop(c, None) for c in carpetas]   # lista: sin cortocircuito
+        if any(q is not None for q in quitados):
             _scanpaths_write(sp)
 
     if remove_from_qbt:
@@ -3611,8 +3781,10 @@ def video_de_biblioteca(anime_id: str, episode: int):
     ep_str = str(episode)
     ep = (anime.get('episodes') or {}).get(ep_str) or {}
     datos = {'anime_id': str(anime_id), 'episode': episode}
-    if anime.get('local_path'):
-        datos['local_path'] = anime['local_path']
+    # La carpeta que de verdad contiene ESTE episodio: la serie puede estar repartida.
+    carpeta = next((c for c in _carpetas_de(anime) if _find_video(c, episode)), '')
+    if carpeta:
+        datos['local_path'] = carpeta
     elif ep.get('info_hash'):
         datos['info_hash'] = ep['info_hash']
     else:
@@ -4021,15 +4193,14 @@ def anime_thumb(anime_id, episode):
         return ('', 404)
 
     # Local-path anime: find video directly from folder
-    local_path = anime.get('local_path', '')
-    if local_path:
+    if _carpetas_de(anime):
         if is_special:
-            scanned  = _scan_local_episodes(local_path, anime.get('episode_overrides', {}))
+            scanned  = _escanear_carpetas(anime)
             specials = [e for e in scanned if e.get('ep_type') == 'special']
             matched  = next((e for e in specials if e['num'] == episode), None)
             video    = matched['path'] if matched else ''
         else:
-            video = _find_video(local_path, episode)
+            video = _buscar_video(anime, episode)
         if not video:
             return ('', 404)
     else:
@@ -4096,11 +4267,10 @@ def _pregen_thumbs():
     _THUMBS_DIR.mkdir(parents=True, exist_ok=True)
     lib = _lib_read()
     for anime_id, anime in lib.items():
-        local_path = anime.get('local_path', '')
-        if not local_path:
+        if not _carpetas_de(anime):
             continue
         try:
-            episodes = _scan_local_episodes(local_path, anime.get('episode_overrides', {}))
+            episodes = _escanear_carpetas(anime)
         except Exception:
             continue
         for ep in episodes:
@@ -4333,10 +4503,8 @@ def anime_subtitles(anime_id, episode):
     if not anime:
         return jsonify([])
 
-    local_path = anime.get('local_path', '')
-    if local_path:
-        video = _find_video(local_path, episode)
-    else:
+    video = _buscar_video(anime, episode)
+    if not video:
         ep_map = anime.get('episodes', {})
         ep_data = ep_map.get(str(episode)) or {}
         ih = (ep_data.get('info_hash') or '').lower()
