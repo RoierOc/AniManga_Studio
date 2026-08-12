@@ -1399,13 +1399,22 @@ def _find_video(content_path: str, episode: int, subpath: str = '') -> str:
                             if f.is_file() and f.suffix.lower() in _VIDEO_EXTS and not _es_a4k(f))
         if not candidates:
             return ''
-        if episode <= 0:
+        if episode <= 0 or len(candidates) == 1:
             return _prefiere_a4k(str(candidates[0]))
         # Use _parse_episode for accurate matching (avoids false positives from hex hashes)
         for f in candidates:
             if _parse_episode(f.stem) == episode:
                 return _prefiere_a4k(str(f))
-        return _prefiere_a4k(str(candidates[0]))
+        # ⚠️ Aquí ANTES se devolvía `candidates[0]`: pedir un episodio que no está te daba OTRO
+        # episodio, en silencio. Se vio pidiendo escalar el 99 de una serie de 10 — encoló el 1.
+        # «No está» no puede devolver lo mismo que «aquí lo tienes».
+        #
+        # El único caso legítimo del respaldo es una carpeta cuyos ficheros NO llevan número
+        # (medido sobre la biblioteca real: 2 carpetas de 85, y son partes en numeral romano —
+        # Kizumonogatari I/II/III). Ahí el orden alfabético SÍ es el orden de los episodios.
+        if all(_parse_episode(f.stem) <= 0 for f in candidates):
+            return _prefiere_a4k(str(candidates[episode - 1])) if episode <= len(candidates) else ''
+        return ''
     return ''
 
 

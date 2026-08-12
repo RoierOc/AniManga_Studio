@@ -67,9 +67,32 @@ def test_sin_carpetas_no_escanea_nada():
     assert _carpetas_de({}) == [] and _escanear_carpetas({}) == []
 
 
-if __name__ == '__main__':
-    test_reconoce_la_entrada_por_el_otro_id()
-    test_canonizar_funde_el_clon_sin_perder_estado()
-    test_canonizar_no_toca_una_biblioteca_sana()
-    test_sin_carpetas_no_escanea_nada()
-    print('ok')
+def _carpeta(tmp_path, nombres):
+    for n in nombres:
+        (tmp_path / n).write_bytes(b'x')
+    return str(tmp_path)
+
+
+def test_pedir_un_episodio_que_no_esta_no_devuelve_otro(tmp_path):
+    """«No está» no puede devolver lo mismo que «aquí lo tienes» (se coló al escalar el ep 99)."""
+    from api.anime import _find_video
+    d = _carpeta(tmp_path, [f'[G] Serie - {n:02d} [1080p].mkv' for n in (1, 2, 3)])
+    assert _find_video(d, 2).endswith('- 02 [1080p].mkv')
+    assert _find_video(d, 99) == ''          # antes devolvía el episodio 1
+
+
+def test_un_solo_fichero_sigue_valiendo_para_cualquier_episodio(tmp_path):
+    """Una película o un torrent de un solo vídeo: el número del nombre da igual."""
+    from api.anime import _find_video
+    d = _carpeta(tmp_path, ['Pelicula Sin Numero.mkv'])
+    assert _find_video(d, 1).endswith('Pelicula Sin Numero.mkv')
+
+
+def test_partes_en_numeral_romano_van_por_posicion(tmp_path):
+    """Kizumonogatari I/II/III: ningún nombre lleva número, el orden alfabético ES el orden."""
+    from api.anime import _find_video
+    d = _carpeta(tmp_path, ['[T] Kizumonogatari I - Tekketsu.mkv',
+                            '[T] Kizumonogatari II - Nekketsu.mkv',
+                            '[T] Kizumonogatari III - Reiketsu.mkv'])
+    assert _find_video(d, 2).endswith('II - Nekketsu.mkv')
+    assert _find_video(d, 4) == ''

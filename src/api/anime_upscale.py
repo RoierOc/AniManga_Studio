@@ -388,12 +388,43 @@ def _arranca_hilo() -> None:
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
 
+def _video_pedido(datos: dict):
+    """El vídeo del trabajo. Devuelve (ruta|None, (mensaje, código)|None).
+
+    Dos formas de nombrarlo, y **no son intercambiables según quién pregunte**:
+
+    - `{anime_id, episode}` — la ruta la resuelve el SERVIDOR contra su biblioteca. Es la única
+      que vale desde la red: lo único que el cliente controla es *qué episodio de qué serie que ya
+      existe*. Misma puerta que usa el streaming del móvil (`video_de_biblioteca`).
+    - `{path}` — sólo desde esta máquina. La app de escritorio ya corre aquí y tiene la ruta a
+      mano de la propia lista, así que ahorrarle una resolución es gratis. **Desde fuera se
+      rechaza**: aceptar una ruta de quien llama es recodificar —o borrar, en `/discard`—
+      cualquier fichero del PC por HTTP.
+    """
+    from api.auth import peticion_local
+    aid = str(datos.get('anime_id') or '').strip()
+    ep = datos.get('episode')
+    if aid and ep is not None:
+        from api.anime import video_de_biblioteca
+        try:
+            ruta, err = video_de_biblioteca(aid, int(ep))
+        except (TypeError, ValueError):
+            return None, ('episode no es un número', 400)
+        return (None, err) if err else (ruta, None)
+    ruta = (datos.get('path') or '').strip()
+    if not ruta:
+        return None, ('falta anime_id + episode', 400)
+    if not peticion_local():
+        return None, ('un cliente remoto no puede mandar rutas: usa anime_id + episode', 403)
+    return ruta, None
+
+
 @anime_upscale_bp.route('/start', methods=['POST'])
 def start():
     datos = request.get_json(silent=True) or {}
-    video = (datos.get('path') or '').strip()
-    if not video:
-        return jsonify({'error': 'falta path'}), 400
+    video, err = _video_pedido(datos)
+    if err:
+        return jsonify({'error': err[0]}), err[1]
 
     from api.anime import a4k_de, original_de
     # Si llega la ruta de una horneada (la lista ya devuelve ésa), se hornea el ORIGINAL.
@@ -445,7 +476,9 @@ def cancel():
 def discard():
     """Tirar la horneada y volver al original. Borrar 1,1 GB se pide explícitamente."""
     from api.anime import a4k_de
-    video = ((request.get_json(silent=True) or {}).get('path') or '').strip()
+    video, err = _video_pedido(request.get_json(silent=True) or {})
+    if err:
+        return jsonify({'error': err[0]}), err[1]
     horneada = a4k_de(video)
     if not horneada:
         return jsonify({'error': 'no hay versión escalada'}), 404
