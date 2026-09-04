@@ -65,4 +65,27 @@ describe('estados del lector de novelas', () => {
     expect(s.chapterErrorIndex).toBeNull()
     expect(s.reader.chapterIndex).toBe(0)
   })
+
+  it('hidrata el punto remoto más reciente sin sobrescribirlo con el local viejo', async () => {
+    const s = useNovelsStore()
+    s.progress = { n1: { title: 'Obra', chapterIndex: 1, at: 100 } }
+    api.get.mockResolvedValue({ n1: { title: 'Obra', chapterIndex: 4, at: 400 } })
+
+    await s.hydrateProgress()
+
+    expect(s.progress.n1.chapterIndex).toBe(4)
+    expect(api.post).not.toHaveBeenCalled()
+  })
+
+  it('sube al servidor el progreso local que todavía no conocía', async () => {
+    const s = useNovelsStore()
+    s.progress = { n1: { title: 'Obra', chapterIndex: 4, at: 400 } }
+    api.get.mockResolvedValue({ n1: { title: 'Obra', chapterIndex: 1, at: 100 } })
+    api.post.mockResolvedValue({ n1: { title: 'Obra', chapterIndex: 4, at: 400 } })
+
+    await s.hydrateProgress()
+
+    expect(api.post).toHaveBeenCalledWith('/api/novels/progress', s.progress)
+    expect(s.progress.n1.chapterIndex).toBe(4)
+  })
 })

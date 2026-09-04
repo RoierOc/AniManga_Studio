@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Backup API - Export/import the manga + anime tracking lists (titles, status,
+Backup API - Export/import the manga + anime + novel tracking lists (titles, status,
 read/watched progress) as a single portable JSON file, independent of any
 downloaded chapter/episode files. Meant for moving to a new PC without
 having to re-download anything just to remember what you were following.
@@ -34,8 +34,10 @@ def _progress_value(ch):
 
 
 def build_payload():
-    """Assemble the portable profile (manga + anime tracking/progress). Shared by
+    """Assemble the portable profile (manga + anime + novel tracking/progress). Shared by
     the file-download route and the Git sync backend (sync.py)."""
+    from api.novels import _progress_read as _novel_progress_read
+
     manga = load_local_library()
 
     anime_lib = _lib_read()
@@ -50,6 +52,7 @@ def build_payload():
         'exported_at': datetime.now(timezone.utc).isoformat(),
         'manga': manga,
         'anime': anime,
+        'novel_progress': _novel_progress_read(),
     }
 
 
@@ -58,7 +61,8 @@ def apply_payload(data):
     Returns per-domain counts. Shared by the file-import route and sync.restore."""
     manga_in = data.get('manga')
     anime_in = data.get('anime')
-    counts = {'manga': {'added': 0, 'merged': 0}, 'anime': {'added': 0, 'merged': 0}}
+    counts = {'manga': {'added': 0, 'merged': 0}, 'anime': {'added': 0, 'merged': 0},
+              'novels': {'added': 0, 'merged': 0}}
 
     if isinstance(manga_in, list):
         local_lib = load_local_library()
@@ -71,6 +75,20 @@ def apply_payload(data):
         a, m = _merge_anime(lib, anime_in)
         _lib_write(lib)
         counts['anime'] = {'added': a, 'merged': m}
+
+    novel_in = data.get('novel_progress')
+    if isinstance(novel_in, dict):
+        from api.novels import _progress_read as _novel_progress_read, merge_progress
+        from api.runtime import write_json_atomic
+        current = _novel_progress_read()
+        merged = merge_progress(current, novel_in)
+        if merged != current:
+            from api.novels import _PROGRESS_PATH
+            write_json_atomic(_PROGRESS_PATH, merged, indent=2, keep_backup=True)
+        counts['novels'] = {
+            'added': len(set(merged) - set(current)),
+            'merged': len(set(merged) & set(current)),
+        }
 
     return counts
 
@@ -172,8 +190,8 @@ def _merge_anime(lib, incoming):
 @backup_bp.route('/import', methods=['POST'])
 def import_backup():
     data = request.get_json(silent=True) or {}
-    if data.get('manga') is None and data.get('anime') is None:
-        return jsonify({'error': 'Archivo inválido: falta "manga" o "anime"'}), 400
+    if all(data.get(key) is None for key in ('manga', 'anime', 'novel_progress')):
+        return jsonify({'error': 'Archivo inválido: falta "manga", "anime" o "novel_progress"'}), 400
 
     counts = apply_payload(data)
     return jsonify({'ok': True, **counts})

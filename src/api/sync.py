@@ -2,7 +2,7 @@
 """
 Sync API — "Guardar / Recuperar biblioteca".
 
-Mirrors the portable *profile* (manga/anime progress, favorites, reading history,
+Mirrors the portable *profile* (manga/anime/novel progress, favorites, reading history,
 portable UI prefs) to a private Git repo so it survives a machine change, reinstall
 or local DB corruption, and is ready for future multi-device sync.
 
@@ -127,6 +127,7 @@ def _collect_profile():
     """Snapshot the local state into the profile dir (one file per domain)."""
     from api.backup import build_payload
     from api.reader import _history_read, _progress_read
+    from api.novels import _progress_read as _novel_progress_read
 
     payload = build_payload()
     _write_json('manga.json', payload.get('manga', []))
@@ -136,6 +137,7 @@ def _collect_profile():
     # los últimos 500 capítulos terminados): sin esto, restaurar en otra máquina traía la
     # biblioteca pero la dejaba entera "sin leer".
     _write_json('manga_progress.json', _progress_read())
+    _write_json('novel_progress.json', _novel_progress_read())
     _write_json('settings.json', get_prefs())
     # Collections are a planned concept; keep the file present but empty for forward-compat.
     if not (_PROFILE_DIR / 'collections.json').exists():
@@ -151,6 +153,7 @@ def _apply_profile():
     counts = apply_payload({
         'manga': _read_json('manga.json', None),
         'anime': _read_json('anime.json', None),
+        'novel_progress': _read_json('novel_progress.json', None),
     })
 
     # Reading history: union by (title, chapter), keep the newest read_at.

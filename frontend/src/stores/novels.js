@@ -6,6 +6,7 @@
 import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
+import { mergeNovelProgress, readLocalNovelProgress, sameNovelProgress, saveLocalNovelProgress } from '@/lib/novelProgress'
 
 export const useNovelsStore = defineStore('novels', {
   state: () => ({
@@ -47,7 +48,13 @@ export const useNovelsStore = defineStore('novels', {
     measure: parseInt(localStorage.getItem('novel-measure') || '38', 10) || 38, // ancho en rem
     serif: localStorage.getItem('novel-serif') !== '0',
     theme: localStorage.getItem('novel-theme') || 'night',   // night | sepia | light
-    progress: JSON.parse(localStorage.getItem('novel-progress-v1') || '{}'),
+    progress: readLocalNovelProgress(),
+    progressLoaded: false,
+    progressLoading: false,
+    progressError: '',
+    progressSyncTimer: null,
+    progressSyncInFlight: false,
+    progressSyncAgain: false,
   }),
 
   getters: {
@@ -62,6 +69,7 @@ export const useNovelsStore = defineStore('novels', {
 
   actions: {
     async loadLibrary() {
+      if (!this.progressLoaded && !this.progressLoading) this.hydrateProgress()
       this.libraryError = ''
       try { this.library = await api.get('/api/novels/library') || [] }
       catch (e) { this.libraryError = e?.message || 'No se pudo cargar la biblioteca de novelas' }
@@ -195,6 +203,7 @@ export const useNovelsStore = defineStore('novels', {
     async openReader(entry, chapterIndex = null) {
       const { pluginId, path } = entry.novel || entry
       const novelId = entry.id || `novel:${pluginId}:${path}`
+      if (!this.progressLoaded) await this.hydrateProgress()
       // Si la ficha ya cargó esta novela, no se vuelve a pedir: entrar a leer es instantáneo.
       const already = this.novel && this.novel.pluginId === pluginId && this.novel.path === path
       if (!already) await this.openNovel(pluginId, path, entry.title)
@@ -240,7 +249,72 @@ export const useNovelsStore = defineStore('novels', {
           total: this.novel?.chapters?.length || 0, at: Date.now(),
         },
       }
-      localStorage.setItem('novel-progress-v1', JSON.stringify(this.progress))
+      saveLocalNovelProgress(this.progress)
+      this._scheduleProgressSync()
+    },
+
+    async hydrateProgress() {
+      if (this.progressLoading) return
+      if (this.progressLoaded) return this.progress
+      this.progressLoading = true
+      this.progressError = ''
+      try {
+        const remote = await api.get('/api/novels/progress')
+        const merged = mergeNovelProgress(this.progress, remote)
+        this.progress = merged
+        saveLocalNovelProgress(merged)
+        this.progressLoaded = true
+        if (!sameNovelProgress(merged, remote)) {
+          try {
+            const saved = await api.post('/api/novels/progress', merged)
+            this.progress = mergeNovelProgress(this.progress, saved)
+            saveLocalNovelProgress(this.progress)
+          } catch (e) {
+            this.progressError = e?.message || 'No se pudo guardar el progreso de novelas'
+          }
+        }
+        return this.progress
+      } catch (e) {
+        this.progressError = e?.message || 'No se pudo cargar el progreso de novelas'
+        return this.progress
+      } finally {
+        this.progressLoading = false
+      }
+    },
+
+    retryProgress() {
+      this.progressLoaded = false
+      return this.hydrateProgress()
+    },
+
+    _scheduleProgressSync() {
+      clearTimeout(this.progressSyncTimer)
+      this.progressSyncTimer = setTimeout(() => {
+        this.progressSyncTimer = null
+        this._pushProgress()
+      }, 900)
+    },
+
+    async _pushProgress() {
+      if (this.progressSyncInFlight) {
+        this.progressSyncAgain = true
+        return
+      }
+      this.progressSyncInFlight = true
+      try {
+        const saved = await api.post('/api/novels/progress', this.progress)
+        this.progress = mergeNovelProgress(this.progress, saved)
+        saveLocalNovelProgress(this.progress)
+        this.progressError = ''
+      } catch (e) {
+        this.progressError = e?.message || 'No se pudo guardar el progreso de novelas'
+      } finally {
+        this.progressSyncInFlight = false
+        if (this.progressSyncAgain) {
+          this.progressSyncAgain = false
+          this._scheduleProgressSync()
+        }
+      }
     },
 
     setSetting(key, value) {

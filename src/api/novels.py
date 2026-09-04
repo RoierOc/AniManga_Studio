@@ -12,6 +12,8 @@ Endpoints (prefijo /api/novels):
   GET  /plugins?lang=English          → [{ id, name, lang, site, iconUrl }]
   GET  /search?pluginId=&q=&page=     → [{ name, path, cover }]
   GET  /popular?pluginId=&page=       → idem
+  GET  /progress                     → progreso durable por novela
+  POST /progress                     → fusiona progreso enviado por un cliente
   POST /novel   { pluginId, path }    → { name, cover, summary, author, chapters:[…] }
   POST /chapter { pluginId, path }    → { html, text, words }
 """
@@ -208,11 +210,48 @@ def _curated_ids(langs):
 
 # Preferencias de fuentes: qué plugins consultar y en qué idiomas. No son secretos,
 # así que van en su propio json (no en config.json, que es el almacén de claves).
-from api.runtime import DATA_ROOT, write_json_atomic  # noqa: E402
+from api.runtime import DATA_ROOT, read_json_safe, write_json_atomic  # noqa: E402
 import json as _json  # noqa: E402
 
 _PREFS_PATH = Path(DATA_ROOT) / "novels_prefs.json"
+_PROGRESS_PATH = Path(DATA_ROOT) / "novel_progress.json"
 _DEFAULT_PREFS = {"langs": ["en", "es"], "pluginIds": []}  # [] = usar la lista curada
+
+
+def _progress_read() -> dict:
+    data = read_json_safe(_PROGRESS_PATH, default={}, component='novels')
+    return data if isinstance(data, dict) else {}
+
+
+def _progress_at(value) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _clean_progress(value):
+    if not isinstance(value, dict):
+        return None
+    fields = ('title', 'pluginId', 'path', 'chapterIndex', 'chapterName', 'scroll', 'total', 'at')
+    return {field: value[field] for field in fields if field in value}
+
+
+def merge_progress(base: dict, incoming: dict) -> dict:
+    """Funde el último punto de lectura de cada novela sin pisar avances más recientes."""
+    out = {}
+    for novel_id, value in (base or {}).items():
+        clean = _clean_progress(value)
+        if clean is not None:
+            out[str(novel_id)] = clean
+    for novel_id, value in (incoming or {}).items():
+        clean = _clean_progress(value)
+        if clean is None:
+            continue
+        key = str(novel_id)
+        if key not in out or _progress_at(clean.get('at')) >= _progress_at(out[key].get('at')):
+            out[key] = clean
+    return out
 
 
 def _read_prefs() -> dict:
@@ -366,6 +405,21 @@ def _library():
 @novels_bp.route("/library")
 def library():
     return jsonify([m for m in _library() if m.get("kind") == "novel"])
+
+
+@novels_bp.route("/progress")
+def get_progress():
+    return jsonify(_progress_read())
+
+
+@novels_bp.route("/progress", methods=["POST"])
+def put_progress():
+    incoming = request.get_json(silent=True)
+    if not isinstance(incoming, dict):
+        return jsonify({"error": "se esperaba un objeto {novela: progreso}"}), 400
+    merged = merge_progress(_progress_read(), incoming)
+    write_json_atomic(_PROGRESS_PATH, merged, indent=2, keep_backup=True)
+    return jsonify(merged)
 
 
 @novels_bp.route("/library/add", methods=["POST"])
