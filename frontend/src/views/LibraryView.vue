@@ -21,6 +21,7 @@ import ContinueRail from '@/components/media/ContinueRail.vue'
 import { useTagsStore } from '@/stores/tags'
 import { opcionesGenero, generoActivo, conGenero } from '@/lib/generos'
 import Skeleton from '@/components/ui/Skeleton.vue'
+import { useGridKeyboard } from '@/lib/useGridKeyboard'
 
 const ui = useUiStore()
 const manga = useMangaStore()
@@ -161,6 +162,9 @@ const continueRail = computed(() => continueItems.value.map(m => ({
   badge: `CAP ${m._resume.lastChapter}`,
   progress: m._resume.pct || 0,
 })))
+
+const { selected: gridSelected, count: gridSelectionCount, clear: clearGridSelection, onKey: onGridKey } =
+  useGridKeyboard(() => filtered.value.map(m => m.id))
 
 /* Aquí vivía un `MediaHero` con el arte de tu propia colección. Retirado por decisión del
    usuario: el 33 % de la biblioteca no tiene `bannerImage` en AniList, así que caía a la PORTADA
@@ -336,8 +340,18 @@ watch(() => manga.libraryDirty, () => load())
       </template>
     </EmptyState>
 
-    <TransitionGroup v-else name="grid" tag="div" class="grid">
+    <p v-if="gridSelectionCount && !loading && !error" class="grid__selection" aria-live="polite">
+      <span>{{ gridSelectionCount }} marcada(s) · usa Espacio para alternar</span>
+      <button type="button" data-tip="Quitar marcas" @click="clearGridSelection">Limpiar</button>
+    </p>
+
+    <TransitionGroup v-if="!loading && !error && filtered.length" name="grid" tag="div" class="grid" role="grid"
+                     aria-label="Biblioteca de manga" aria-multiselectable="true"
+                     @keydown="onGridKey">
       <MangaCard v-for="m in filtered" :key="m.id" :manga="m" :updates="manga.updatesByTitle[m.name]?.new_count || 0"
+                 data-grid-item :data-grid-key="m.id" role="gridcell"
+                 :aria-selected="gridSelected.has(String(m.id))"
+                 :class="{ 'is-key-selected': gridSelected.has(String(m.id)) }"
                  @open="openItem(m)" @play="m.kind === 'novel' ? openItem(m) : manga.resumeManga(m)"
                  @contextmenu.prevent="openMenu($event, m)" />
     </TransitionGroup>
@@ -367,6 +381,10 @@ watch(() => manga.libraryDirty, () => load())
 
 <style scoped>
 .view { position: relative; padding: var(--s-4) var(--s-6) var(--s-8); max-width: var(--content-max); margin: 0 auto; }
+.grid__selection { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin: calc(var(--s-4) * -1) 0 var(--s-4); padding: var(--s-2) var(--s-3); border: 1px solid color-mix(in srgb, var(--azure) 34%, transparent); border-radius: var(--r-md); background: var(--azure-haze); color: var(--azure-bright); font-size: var(--fs-xs); }
+.grid__selection button { color: var(--ink-soft); font-size: var(--fs-xs); text-decoration: underline; text-underline-offset: 2px; }
+.grid__selection button:hover { color: var(--ink); }
+.grid :deep(.mcard.is-key-selected .mcard__poster) { border-color: var(--azure); box-shadow: 0 0 0 2px var(--azure), 0 0 24px -8px var(--azure-glow); }
 
 /* Caja de portada de tamaño FIJO (8.5×12.75rem = 2:3) con las imágenes en position
    absolute: así la imagen NUNCA dicta el tamaño de la tarjeta. Antes algunas salían

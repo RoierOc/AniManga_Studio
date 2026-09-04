@@ -38,6 +38,12 @@ const GLOBAL = [
   { k: ['Alt', '←/→'], d: 'Atrás / adelante en el historial' },
   { k: ['botones laterales'], d: 'Atrás / adelante (ratón)' },
 ]
+const LIBRARY = [
+  { k: ['←', '↑', '↓', '→'], d: 'Mover el foco por la rejilla' },
+  { k: ['Enter'], d: 'Abrir la tarjeta enfocada' },
+  { k: ['Espacio'], d: 'Marcar / desmarcar una tarjeta' },
+  { k: ['Esc'], d: 'Quitar las marcas' },
+]
 </script>
 
 <template>
@@ -51,6 +57,7 @@ const GLOBAL = [
             <div v-for="g in [
               { h: 'Lector de manga', rows: READER },
               { h: 'Reproductor', rows: PLAYER },
+              { h: 'Biblioteca', rows: LIBRARY },
               { h: 'Global', rows: GLOBAL },
             ]" :key="g.h" class="sc__col">
               <h3 class="sc__h">{{ g.h }}</h3>
@@ -71,7 +78,7 @@ const GLOBAL = [
 .sc { position: relative; width: min(52rem, 100%); max-height: 88vh; overflow-y: auto; background: var(--glass-strong); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow-xl); padding: var(--s-6); }
 .sc__x { position: absolute; top: var(--s-3); right: var(--s-3); width: 2rem; height: 2rem; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-soft); border: 1px solid var(--line); }
 .sc__title { font-size: var(--fs-xl); margin-bottom: var(--s-4); }
-.sc__cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s-6); }
+.sc__cols { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-6); }
 .sc__keys { flex-wrap: wrap; }
 .sc__h { font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); text-transform: uppercase; color: var(--azure); margin-bottom: var(--s-3); }
 .sc__row { display: flex; align-items: center; gap: var(--s-3); padding: 0.3125rem 0; font-size: var(--fs-sm); color: var(--ink-soft); }
