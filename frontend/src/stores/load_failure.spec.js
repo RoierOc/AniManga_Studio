@@ -13,7 +13,7 @@ import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
 import { useMediaStore } from './media'
-import { useAnimeStore } from './anime'
+import { useAnimeStore, mergeAnimeLibrarySummary } from './anime'
 import { useMangaStore } from './manga'
 import { useWorkshopStore } from './workshop'
 
@@ -104,6 +104,54 @@ describe('una carga que falla no puede parecer una biblioteca vacía', () => {
     expect(s.loadError).toBe('Taller no disponible')
     expect(s.loading).toBe(false)
     expect(s.items).toEqual([])
+  })
+})
+
+describe('pulso liviano de la biblioteca de anime', () => {
+  it('actualiza estados sin perder rutas que sólo necesita el detalle', async () => {
+    const s = useAnimeStore()
+    s.library = [{
+      id: 'a', title: 'Serie',
+      episodes: [{ num: 1, in_local: true, local_path: '/videos/ep01.mkv', filename: 'ep01.mkv' }],
+    }]
+    api.get.mockResolvedValue([{
+      id: 'a', title: 'Serie',
+      episodes: [{ num: 1, in_local: true, progress: 100, watched: true }],
+    }])
+
+    await s.loadLibrary(true, true)
+
+    expect(api.get).toHaveBeenCalledWith('/api/anime/library?summary=1')
+    expect(s.library[0].episodes[0]).toMatchObject({
+      in_local: true, progress: 100, watched: true,
+      local_path: '/videos/ep01.mkv', filename: 'ep01.mkv',
+    })
+  })
+
+  it('hace una lectura completa si el pulso descubre un episodio local nuevo', async () => {
+    const s = useAnimeStore()
+    s.library = [{ id: 'a', episodes: [{ num: 1, in_qbt: true, info_hash: 'hash' }] }]
+    api.get
+      .mockResolvedValueOnce([{ id: 'a', episodes: [{ num: 1, in_local: true, progress: 100 }] }])
+      .mockResolvedValueOnce([{ id: 'a', episodes: [{
+        num: 1, in_local: true, progress: 100, local_path: '/videos/ep01.mkv', filename: 'ep01.mkv',
+      }] }])
+
+    await s.loadLibrary(true, true)
+
+    expect(api.get.mock.calls.map(([path]) => path)).toEqual([
+      '/api/anime/library?summary=1', '/api/anime/library',
+    ])
+    expect(s.library[0].episodes[0].local_path).toBe('/videos/ep01.mkv')
+  })
+
+  it('descarta una ruta conservada cuando el episodio deja de estar local', () => {
+    const previous = [{ id: 'a', episodes: [{
+      num: 1, in_local: true, local_path: '/videos/ep01.mkv', filename: 'ep01.mkv',
+    }] }]
+    const summary = [{ id: 'a', episodes: [{ num: 1, in_local: false, in_qbt: false }] }]
+
+    expect(mergeAnimeLibrarySummary(previous, summary)[0].episodes[0]).not.toHaveProperty('local_path')
   })
 })
 

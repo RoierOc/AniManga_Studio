@@ -2425,6 +2425,26 @@ def anime_airing_get():
         return jsonify({'_error': 'no se pudo consultar el calendario de AniList'})
 
 
+def _compact_library_result(result: list) -> list:
+    """Reduce el payload de los sondeos sin cambiar el contrato de la carga completa.
+
+    Las tarjetas sólo necesitan el estado del episodio. Las rutas son datos de detalle y pueden
+    ocupar decenas de KB repetidas en cada sondeo mientras qBittorrent está activo; el cliente
+    conserva la última respuesta completa para reproducir y administrar esos episodios.
+    """
+    compact = []
+    for anime in result:
+        item = dict(anime)
+        item['episodes'] = []
+        for episode in anime.get('episodes') or []:
+            value = dict(episode)
+            for field in ('local_path', 'filename', 'original_path'):
+                value.pop(field, None)
+            item['episodes'].append(value)
+        compact.append(item)
+    return compact
+
+
 @anime_bp.route('/library')
 def anime_library_get():
     global _backfill_done
@@ -2751,6 +2771,8 @@ def anime_library_get():
                     _anadir_carpeta(fresca[aid], carpeta)
         _lib_write(fresca)
         print(f'[anime] carpetas nuevas por save_path en {len(carpetas_nuevas)} serie(s)', flush=True)
+    if request.args.get('summary') == '1':
+        return jsonify(_compact_library_result(result))
     return jsonify(result)
 
 

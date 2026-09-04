@@ -31,14 +31,14 @@ const heroTint = ref('rgb(77, 141, 255)')
 let sync = null
 const reloads = []
 onMounted(() => {
-  sync = setInterval(() => { if (store.hasActiveQbt()) store.loadLibrary(true) }, 15000)
+  sync = setInterval(() => { if (store.hasActiveQbt()) store.loadLibrary(true, true) }, 15000)
   if (!store.seasonal.length) store.loadSeasonal()
   store.loadForYou()   // recomendaciones sobre tu biblioteca (cacheadas 24 h en el backend)
   store.loadAiring()   // fresh airing schedule → "new episode just aired" hero
   // Hero banners/genres are backfilled server-side after the first library load;
   // refresh silently a couple of times so HD art appears without a manual reload.
-  reloads.push(setTimeout(() => store.loadLibrary(true), 7000))
-  reloads.push(setTimeout(() => store.loadLibrary(true), 20000))
+  reloads.push(setTimeout(() => store.loadLibrary(true, true), 7000))
+  reloads.push(setTimeout(() => store.loadLibrary(true, true), 20000))
 })
 onUnmounted(() => { if (sync) clearInterval(sync); reloads.forEach(clearTimeout) })
 

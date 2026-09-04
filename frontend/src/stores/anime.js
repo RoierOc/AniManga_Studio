@@ -26,6 +26,50 @@ let sseBound = false
 let dlPoll = null       // interval para refrescar el progreso de descarga de qBittorrent en vivo
 const subPollers = {}   // subKey -> interval handle
 
+const DETAIL_EPISODE_FIELDS = ['local_path', 'filename', 'original_path']
+
+function episodeKey(ep) {
+  return `${ep?.ep_type || 'episode'}:${ep?.num}`
+}
+
+/**
+ * Fusiona un pulso de biblioteca con la última foto completa.
+ *
+ * El pulso actualiza estados, progreso y vistos, pero no puede borrar de memoria las rutas que
+ * necesita el detalle/reproductor. Si un episodio deja de estar local, sus rutas se descartan:
+ * conservar una ruta vieja haría parecer reproducible un archivo que ya no existe.
+ */
+export function mergeAnimeLibrarySummary(previous = [], summary = []) {
+  if (!Array.isArray(summary)) return previous
+  const oldById = new Map((previous || []).map(anime => [anime.id, anime]))
+  return summary.map(fresh => {
+    const old = oldById.get(fresh.id)
+    if (!old) return fresh
+    const oldEpisodes = new Map((old.episodes || []).map(ep => [episodeKey(ep), ep]))
+    const episodes = (fresh.episodes || []).map(ep => {
+      const oldEp = oldEpisodes.get(episodeKey(ep))
+      if (!oldEp) return ep
+      const merged = { ...oldEp, ...ep }
+      if (ep.in_local !== true) DETAIL_EPISODE_FIELDS.forEach(field => { delete merged[field] })
+      return merged
+    })
+    return { ...old, ...fresh, episodes }
+  })
+}
+
+/** Pide una carga completa cuando el pulso descubre datos que no estaban en la foto anterior. */
+export function summaryNeedsFullLibrary(previous = [], summary = []) {
+  const oldById = new Map((previous || []).map(anime => [anime.id, anime]))
+  return (summary || []).some(anime => {
+    const oldEpisodes = new Map((oldById.get(anime.id)?.episodes || []).map(ep => [episodeKey(ep), ep]))
+    return (anime.episodes || []).some(ep => {
+      if (ep.in_local !== true) return false
+      const old = oldEpisodes.get(episodeKey(ep))
+      return !old?.local_path || (ep.a4k && !old.original_path)
+    })
+  })
+}
+
 export const useAnimeStore = defineStore('anime', {
   state: () => ({
     library: [],
@@ -435,13 +479,17 @@ export const useAnimeStore = defineStore('anime', {
         useUiStore().toast(p ? 'Carpeta de descargas guardada' : 'Usando la carpeta por defecto de qBittorrent', 'ok')
       } catch (_) { useUiStore().toast('No se pudo guardar', 'error') }
     },
-    async loadLibrary(silent = false) {
+    async loadLibrary(silent = false, summary = false) {
       if (!silent) this.loading = true
       this.loadError = ''
       try {
-        const data = await api.get('/api/anime/library')
-        this.library = Array.isArray(data) ? data : []
+        const previous = this.library
+        const data = await api.get(summary ? '/api/anime/library?summary=1' : '/api/anime/library')
+        const next = Array.isArray(data) ? data : []
+        const needsFull = summary && summaryNeedsFullLibrary(previous, next)
+        this.library = summary ? mergeAnimeLibrarySummary(previous, next) : next
         this._ensureDlPolling()   // si hay descargas en curso, refresca el progreso en vivo
+        if (summary && needsFull) await this.loadLibrary(true)
       } catch (e) {
         // El toast se desvanece; la rejilla se quedaba anunciando «Aún no has añadido anime»
         // para siempre. El fallo tiene que SOBREVIVIR en el estado para que la vista lo diga.
