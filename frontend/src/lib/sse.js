@@ -79,3 +79,14 @@ export function onStatus(fn) {
   statusListeners.add(fn)
   return () => statusListeners.delete(fn)
 }
+
+/* Fuerza una reconexión inmediata desde una vista que detectó `down`. El EventSource nativo ya
+ * reintenta por su cuenta, pero el usuario no debería tener que esperar su backoff para volver a
+ * ver Actividad después de arrancar el servidor. `lastSeq` se conserva para no perder eventos. */
+export function retrySse() {
+  clearTimeout(_hbTimer)
+  if (source) source.close()
+  source = null
+  sseState.value = 'connecting'
+  ensure()
+}

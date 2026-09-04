@@ -6,6 +6,7 @@ import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 
 const props = defineProps({ open: { type: Boolean, default: false } })
 const emit = defineEmits(['close'])
@@ -33,6 +34,9 @@ function continueReading(h) {
           </header>
 
           <div v-if="!store.historyLoaded" class="center"><Spinner /></div>
+          <ErrorState v-else-if="store.historyError && !store.history.length"
+                      title="No se pudo cargar el historial." :detail="store.historyError"
+                      @retry="store.loadHistory()" />
           <EmptyState v-else-if="!store.history.length" icon="library" title="Aún no has leído nada." />
 
           <div v-else class="hist__list">

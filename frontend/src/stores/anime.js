@@ -99,6 +99,7 @@ export const useAnimeStore = defineStore('anime', {
     // history
     history: [],
     historyLoaded: false,
+    historyError: '',          // una caída del servidor no es un historial vacío
 
     // seasonal
     seasonal: [],
@@ -2066,8 +2067,9 @@ export const useAnimeStore = defineStore('anime', {
 
     /* ── History ────────────────────────────────────────────────────────── */
     async loadHistory() {
+      this.historyError = ''
       try { this.history = await api.get('/api/anime/history') || [] }
-      catch (_) { this.history = [] }
+      catch (e) { this.historyError = e?.body || e?.message || 'No se pudo cargar el historial.' }
       finally { this.historyLoaded = true }
     },
     async clearHistory() {

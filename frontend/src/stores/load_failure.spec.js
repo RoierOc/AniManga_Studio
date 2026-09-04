@@ -14,6 +14,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
 import { useMediaStore } from './media'
 import { useAnimeStore } from './anime'
+import { useMangaStore } from './manga'
+import { useWorkshopStore } from './workshop'
 
 vi.mock('@/lib/api', () => ({
   api: { get: vi.fn(), post: vi.fn(), del: vi.fn().mockResolvedValue({}) },
@@ -77,6 +79,31 @@ describe('una carga que falla no puede parecer una biblioteca vacía', () => {
 
     expect(s.searchError).toBeTruthy()
     expect(s.searchResults).toEqual([])
+  })
+
+  it('los historiales conservan la causa y no se convierten en listas vacías', async () => {
+    api.get.mockRejectedValue(new Error('historial fuera de línea'))
+
+    const anime = useAnimeStore()
+    await anime.loadHistory()
+    expect(anime.historyError).toBe('historial fuera de línea')
+    expect(anime.historyLoaded).toBe(true)
+
+    const manga = useMangaStore()
+    await manga.loadHistory()
+    expect(manga.historyError).toBe('historial fuera de línea')
+    expect(manga.historyLoaded).toBe(true)
+  })
+
+  it('el Taller distingue una lista vacía de un fallo al listar importaciones', async () => {
+    api.get.mockRejectedValue(new Error('Taller no disponible'))
+    const s = useWorkshopStore()
+
+    await s.loadList()
+
+    expect(s.loadError).toBe('Taller no disponible')
+    expect(s.loading).toBe(false)
+    expect(s.items).toEqual([])
   })
 })
 

@@ -182,6 +182,61 @@ describe('init no se cae si un dominio falla', () => {
     await expect(home.init()).resolves.toBeUndefined()
     expect(home.loading).toBe(false)
   })
+
+  it('si no hay contenido y una carga falla, la Portada expone el error', async () => {
+    const home = useHomeStore()
+    const media = useMediaStore()
+    const animeStore = useAnimeStore()
+    vi.spyOn(animeStore, 'loadLibrary').mockImplementation(async () => {
+      animeStore.loadError = 'AniList no responde'
+    })
+    vi.spyOn(media, 'init').mockResolvedValue(undefined)
+    vi.spyOn(useNovelsStore(), 'loadLibrary').mockResolvedValue(undefined)
+    vi.spyOn(home, '_cargarMangaVisible').mockResolvedValue(undefined)
+    vi.spyOn(home, 'cargarNovedades').mockResolvedValue(undefined)
+    vi.spyOn(animeStore, 'loadAiring').mockResolvedValue(undefined)
+
+    await home.init()
+
+    expect(home.loadError).toBe('AniList no responde')
+  })
+
+  it('si queda contenido válido, un fallo de otro dominio no tapa la Portada', async () => {
+    const home = useHomeStore()
+    const media = useMediaStore()
+    const animeStore = useAnimeStore()
+    animeStore.library = [anime()]
+    vi.spyOn(media, 'init').mockImplementation(async () => {
+      media.loadError = 'Sonarr no responde'
+    })
+    vi.spyOn(useNovelsStore(), 'loadLibrary').mockResolvedValue(undefined)
+    vi.spyOn(home, '_cargarMangaVisible').mockResolvedValue(undefined)
+    vi.spyOn(home, 'cargarNovedades').mockResolvedValue(undefined)
+    vi.spyOn(animeStore, 'loadAiring').mockResolvedValue(undefined)
+
+    await home.init()
+
+    expect(home.continueAll.length).toBeGreaterThan(0)
+    expect(home.loadError).toBe('')
+  })
+
+  it('no recicla un error viejo de Cine cuando su biblioteca ya cargó correctamente', async () => {
+    const home = useHomeStore()
+    const media = useMediaStore()
+    const animeStore = useAnimeStore()
+    media.loaded = true
+    media.loadError = 'fallo anterior'
+    vi.spyOn(animeStore, 'loadLibrary').mockResolvedValue(undefined)
+    vi.spyOn(media, 'init').mockResolvedValue(undefined)
+    vi.spyOn(useNovelsStore(), 'loadLibrary').mockResolvedValue(undefined)
+    vi.spyOn(home, '_cargarMangaVisible').mockResolvedValue(undefined)
+    vi.spyOn(home, 'cargarNovedades').mockResolvedValue(undefined)
+    vi.spyOn(animeStore, 'loadAiring').mockResolvedValue(undefined)
+
+    await home.init()
+
+    expect(home.loadError).toBe('')
+  })
 })
 
 /* ── Rieles (agosto 2026) ────────────────────────────────────────────────────────────────

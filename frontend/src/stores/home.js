@@ -64,6 +64,8 @@ export const useHomeStore = defineStore('home', {
      * se había pintado, que es justo lo que la Biblioteca Oculta existe para evitar).
      * `null` = aún no se sabe; hasta entonces no se pinta manga, que es el lado seguro. */
     _mangaVisible: null,
+    mangaError: '',
+    loadError: '',
 
     /* ── Rieles ──────────────────────────────────────────────────────────
      * Cada riel se carga por su cuenta y guarda su propio error. Es la regla de la casa
@@ -280,7 +282,13 @@ export const useHomeStore = defineStore('home', {
      * fila no debe esperarlo. Un fallo de Sonarr deja la sección de cine vacía, no la Portada. */
     async init() {
       this._loading = true
+      this.loadError = ''
       const anime = useAnimeStore(), media = useMediaStore(), novels = useNovelsStore()
+      const animeNeedsLoad = !anime.library.length
+      // `continueItems` vacío también es una respuesta válida cuando Cine ya cargó su biblioteca;
+      // sólo un fallo de la carga completa debe alimentar el error global. Así no resucita un
+      // `loadError` antiguo después de una recarga correcta sin nada pendiente de ver.
+      const mediaNeedsLoad = !media.loaded
       const tareas = [
         anime.library.length ? null : anime.loadLibrary?.(),
         media.continueItems.length ? null : media.init?.(),
@@ -294,6 +302,13 @@ export const useHomeStore = defineStore('home', {
       // `allSettled`, no `all`: que Sonarr esté caído no puede tumbar la vista entera. Cada
       // dominio pinta cuando llega; manga y novelas ya están (localStorage) desde el primer frame.
       await Promise.allSettled(tareas)
+      if (!this.continueAll.length) {
+        this.loadError = [
+          animeNeedsLoad ? anime.loadError : '',
+          mediaNeedsLoad ? media.loadError : '',
+          this.mangaError,
+        ].find(Boolean) || ''
+      }
       this._loading = false
     },
 
@@ -301,11 +316,13 @@ export const useHomeStore = defineStore('home', {
      * Si la petición falla no se asume "todas visibles": se deja `null`, o sea sin manga en la
      * fila. Es la aplicación de «falló ≠ no había» al lado que no puede equivocarse. */
     async _cargarMangaVisible() {
+      this.mangaError = ''
       try {
         const obras = (await api.get('/api/library')) || []
         this._mangaVisible = new Set(obras.map(o => o.name || o.id).filter(Boolean))
-      } catch {
+      } catch (e) {
         this._mangaVisible = null
+        this.mangaError = e?.body || e?.message || 'No se pudo cargar la biblioteca de manga.'
       }
     },
 

@@ -5,6 +5,7 @@ import { useMangaStore } from '@/stores/manga'
 import MangaCard from '@/components/manga/MangaCard.vue'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 
@@ -139,6 +140,9 @@ onMounted(() => store.loadList())
     <div v-if="store.loading" class="grid">
       <Skeleton v-for="n in 4" :key="n" variant="poster" />
     </div>
+    <ErrorState v-else-if="store.loadError && !store.items.length"
+                title="No se pudo cargar el Taller." :detail="store.loadError"
+                @retry="store.loadList()" />
     <EmptyState v-else-if="!store.items.length" icon="upload" title="Aún no has importado nada."
                 hint="Sube un archivo arriba para empezar." />
     <div v-else class="grid">

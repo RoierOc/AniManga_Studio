@@ -4,6 +4,7 @@ import { useAnimeStore } from '@/stores/anime'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 
 const store = useAnimeStore()
 onMounted(() => { if (!store.historyLoaded) store.loadHistory() })
@@ -79,6 +80,9 @@ function rango(g) {
         <div class="hrow__meta"><div class="skel skel--t" /><div class="skel skel--s" /></div>
       </div>
     </div>
+    <ErrorState v-else-if="store.historyError && !store.history.length"
+                title="No se pudo cargar el historial." :detail="store.historyError"
+                @retry="store.loadHistory()" />
     <EmptyState v-else-if="!store.history.length" icon="heart" title="Aún no has visto nada." />
 
     <div v-else class="hist__days">

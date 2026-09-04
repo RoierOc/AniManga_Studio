@@ -4,6 +4,9 @@ import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
+import { imgProxy } from '@/lib/img'
+import { retrySse, sseState } from '@/lib/sse'
 import { relativeTime } from '@/lib/format'
 import { etaTarea as eta } from '@/lib/eta'
 import { useSubBatchStore } from '@/stores/subbatch'
@@ -36,16 +39,24 @@ function match(groups) {
 }
 const activeGroups = computed(() => match(store.processingGroups))
 const historyGroups = computed(() => match(store.historyGroups))
+const activityConnectionDown = computed(() => sseState.value === 'down')
+const activeConnectionError = computed(() => activityConnectionDown.value && !q.value.trim() && !store.processingGroups.length)
+const historyConnectionError = computed(() => activityConnectionDown.value && !q.value.trim() && !store.historyTasks.length)
 
 function openManga(g) {
   // Grupos de anime (traducción de subtítulos) no tienen modal de manga → no-op.
   if (g.isAnime) return
   store.open({ id: g.mangaId, name: g.title, cover: g.cover })
 }
+
+function retryActivity() { retrySse() }
 </script>
 
 <template>
   <div class="act">
+    <p v-if="activityConnectionDown" class="act__warn">
+      <Icon name="alert" :size="14" /> Actividad está desconectada; los datos visibles pueden estar desactualizados.
+    </p>
     <div class="act__bar">
       <div class="act__tabs">
         <button :class="{ on: tab === 'active' }" @click="tab = 'active'">
@@ -73,7 +84,7 @@ function openManga(g) {
           <header class="card__head" @click="openManga(g)">
             <span class="card__cover">
               <span class="card__mono">{{ monogram(g.title) }}</span>
-              <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" decoding="async"
+              <img v-if="g.cover" :src="imgProxy(g.cover, 96)" alt="" loading="lazy" decoding="async"
                    @error="$event.target.classList.add('is-fail')"
                    @load="$event.target.classList.remove('is-fail')" />
             </span>
@@ -105,6 +116,9 @@ function openManga(g) {
           </div>
         </article>
       </div>
+      <ErrorState v-else-if="activeConnectionError" title="No se pudo conectar con Actividad."
+                  detail="El servidor no está enviando el estado de los trabajos."
+                  @retry="retryActivity" />
       <EmptyState v-else full icon="check" title="No hay nada en proceso"
         hint="Descargas, traducciones, escalados 4K y tomos aparecerán aquí en tiempo real." />
     </template>
@@ -116,7 +130,7 @@ function openManga(g) {
           <header class="card__head" @click="openManga(g)">
             <span class="card__cover">
               <span class="card__mono">{{ monogram(g.title) }}</span>
-              <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" decoding="async"
+              <img v-if="g.cover" :src="imgProxy(g.cover, 96)" alt="" loading="lazy" decoding="async"
                    @error="$event.target.classList.add('is-fail')"
                    @load="$event.target.classList.remove('is-fail')" />
             </span>
@@ -133,6 +147,9 @@ function openManga(g) {
           </div>
         </article>
       </div>
+      <ErrorState v-else-if="historyConnectionError" title="No se pudo conectar con Actividad."
+                  detail="El servidor no está enviando el historial de trabajos."
+                  @retry="retryActivity" />
       <EmptyState v-else full icon="clock" title="Historial vacío"
         hint="Aquí quedará lo que termine en esta sesión." />
     </template>
@@ -141,6 +158,7 @@ function openManga(g) {
 
 <style scoped>
 .act { padding: var(--s-5) var(--s-6); max-width: 64rem; margin: 0 auto; }
+.act__warn { display: flex; align-items: center; gap: var(--s-2); margin: 0 0 var(--s-3); color: var(--warn); font-size: var(--fs-xs); }
 .act__bar { display: flex; align-items: center; gap: var(--s-4); flex-wrap: wrap; margin-bottom: var(--s-5); }
 .act__tabs { display: flex; gap: var(--s-2); }
 .act__tabs button { display: inline-flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-4); border-radius: var(--r-pill); font-size: var(--fs-sm); font-weight: 600; color: var(--ink-faint); border: 1px solid var(--line); transition: all var(--t-fast); }

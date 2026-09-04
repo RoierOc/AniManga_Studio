@@ -228,7 +228,10 @@ function onKey(e) {
 
       <!-- `v-if` propio, ya no `v-else` del riel: entre medias hay cuatro rieles más, y el
            vacío de la Portada es «no has empezado NADA», no «no hay fila de continuar». -->
-      <EmptyState v-if="store.isEmpty"
+      <ErrorState v-if="store.loadError"
+                  title="No se pudo cargar la Portada." :detail="store.loadError"
+                  @retry="store.init()" />
+      <EmptyState v-else-if="store.isEmpty"
                   icon="home"
                   title="Aún no has empezado nada"
                   body="Cuando veas un episodio o leas un capítulo, aparecerá aquí para que puedas retomarlo de un clic.">

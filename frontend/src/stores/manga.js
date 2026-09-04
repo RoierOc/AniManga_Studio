@@ -334,6 +334,7 @@ export const useMangaStore = defineStore('manga', {
     // reading history (server-persisted, recorded when a chapter is marked read)
     history: [],
     historyLoaded: false,
+    historyError: '',          // una caída del servidor no es un historial vacío
 
     // chapter health + color pages + offline covers
     health: {},                 // chapterNorm -> { status, missing_upscaled, missing_pages }
@@ -2920,8 +2921,9 @@ export const useMangaStore = defineStore('manga', {
       } catch (_) {}
     },
     async loadHistory() {
+      this.historyError = ''
       try { this.history = await api.get('/api/reader/history') || [] }
-      catch (_) { this.history = [] }
+      catch (e) { this.historyError = e?.body || e?.message || 'No se pudo cargar el historial.' }
       finally { this.historyLoaded = true }
     },
     async clearHistory() {

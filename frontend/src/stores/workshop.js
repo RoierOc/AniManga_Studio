@@ -17,6 +17,7 @@ export const useWorkshopStore = defineStore('workshop', {
   state: () => ({
     items: [],
     loading: false,
+    loadError: '',
     analyzing: false,
     committing: false,
     // staged = { token, filename, title, method, count, cover, chapters:[{chapter,start,count}], busy }
@@ -31,9 +32,11 @@ export const useWorkshopStore = defineStore('workshop', {
   actions: {
     async loadList() {
       this.loading = true
+      this.loadError = ''
       try {
         this.items = await api.get('/api/import/list')
       } catch (e) {
+        this.loadError = e?.body || e?.message || 'No se pudo cargar el Taller.'
         useUiStore().toast('No se pudo cargar el Taller', 'error')
       } finally {
         this.loading = false
