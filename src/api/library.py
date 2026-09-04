@@ -426,6 +426,14 @@ def get_overview():
     return jsonify(build_overview(_scan_folders(), safe_tracked(load_local_library)))
 
 
+@library_bp.route('/duplicates')
+def get_duplicates():
+    """Auditor de duplicados: sólo lectura, acotado al modo de biblioteca actual."""
+    from api.library_duplicates import scan_duplicates
+    from api.mangadex import load_local_library
+    return jsonify(scan_duplicates(_scan_folders(), load_local_library()))
+
+
 @library_bp.route('/cache_cover', methods=['POST'])
 def cache_cover():
     """Save a cover URL discovered by the frontend into the disk cache."""

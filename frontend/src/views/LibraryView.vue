@@ -7,6 +7,7 @@ import { useNovelsStore } from '@/stores/novels'
 import { MANGA_STATUS, MANGA_STATUS_ORDER } from '@/lib/manga'
 import MangaCard from '@/components/manga/MangaCard.vue'
 import HistoryPanel from '@/components/manga/HistoryPanel.vue'
+import DuplicateManager from '@/components/manga/DuplicateManager.vue'
 import { imgProxy, imgThumb } from '@/lib/img'
 import Spinner from '@/components/ui/Spinner.vue'
 import Icon from '@/components/ui/Icon.vue'
@@ -53,6 +54,7 @@ function openTools(e) {
     open: true, x: r.left, y: r.bottom + 6,
     items: [
       { label: 'Historial de lectura', icon: 'clock', action: () => { showHistory.value = true } },
+      { label: 'Revisar duplicados', icon: 'alert', action: () => { duplicatesOpen.value = true } },
       { label: 'Explorar novelas (SkyNovels)', icon: 'book', action: () => novels.openBrowse() },
       { sep: true },
       { label: findingCovers.value ? 'Buscando portadas…' : 'Buscar portadas faltantes',
@@ -217,6 +219,7 @@ const totals = computed(() => ({
 }))
 
 const novels = useNovelsStore()
+const duplicatesOpen = ref(false)
 
 // Una novela abre su FICHA (sinopsis + capítulos + continuar), igual que un manga abre la suya.
 // Entrar directo a leer perdía el contexto: no se veía por dónde ibas ni se podía saltar de capítulo.
@@ -225,6 +228,21 @@ function openItem(m) {
     return novels.openDetail({ id: m.trackedId, title: m.name, cover: m.cover, novel: m.novel })
   }
   manga.open(m)
+}
+
+function openDuplicate(record) {
+  const local = record.kind === 'folder'
+  manga.open({
+    id: local ? record.name : (record.tracked_id || record.name),
+    name: record.name,
+    cover: record.cover,
+    mdId: record.md_id || null,
+    al_id: record.al_id || null,
+    trackedId: record.tracked_id || record.md_id || null,
+    trackedOnly: !local,
+    status: record.status || '',
+    source_meta: record.source_meta || undefined,
+  })
 }
 
 const findingCovers = ref(false)
@@ -412,6 +430,7 @@ watch(() => manga.libraryDirty, () => load())
                   @select="manga.discoverRec" />
 
     <HistoryPanel :open="showHistory" @close="showHistory = false" />
+    <DuplicateManager v-model:open="duplicatesOpen" @open="openDuplicate" />
     <ContextMenu v-model:open="cm.open" :x="cm.x" :y="cm.y" :items="cm.items" />
   </div>
 </template>
