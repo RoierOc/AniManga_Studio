@@ -7,6 +7,7 @@ import MediaCard from '@/components/media/MediaCard.vue'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 
 const store = useMediaStore()
 const term = ref('')
@@ -53,11 +54,10 @@ function onType() {
       </button>
     </form>
 
-    <!-- Un fallo NO se pinta como "sin resultados": son cosas distintas. -->
-    <p v-if="store.searchErr" class="msearch__warn"><Icon name="alert" :size="14" /> {{ store.searchErr }}</p>
-
     <Spinner v-if="store.searching" />
-    <EmptyState v-else-if="results === null && !store.searchErr" icon="search"
+    <ErrorState v-else-if="store.searchErr" title="No se pudo buscar en el catálogo."
+                :detail="store.searchErr" @retry="run" />
+    <EmptyState v-else-if="results === null" icon="search"
                 title="Busca una serie o película"
                 hint="Se busca en el catálogo de Sonarr y Radarr; el título original en inglés suele acertar más." />
     <EmptyState v-else-if="results && !results.length" icon="search" title="Sin resultados"
@@ -85,8 +85,6 @@ function onType() {
 .msearch__go { padding: var(--s-2) var(--s-4); border-radius: var(--r-pill); background: var(--azure);
   color: #fff; border: 0; font: inherit; font-weight: 600; font-size: var(--fs-sm); cursor: pointer; }
 .msearch__go:disabled { opacity: .5; cursor: default; }
-.msearch__warn { display: flex; align-items: center; gap: var(--s-2); color: var(--warn);
-  font-size: var(--fs-sm); margin-bottom: var(--s-4); }
 .msearch__grid { display: grid; gap: var(--s-5); grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); }
 .msearch__add { width: 100%; margin-top: var(--s-2); padding: var(--s-2); border-radius: var(--r-sm);
   background: var(--surface-2); border: 1px solid var(--line); color: var(--ink); font: inherit;
