@@ -6,6 +6,7 @@ import { useVersionsStore } from './versions'
 import { useRootsStore } from './roots'
 import { taskId, pageUrl, pageUrlOriginal, pageUrlUpscaled } from '@/lib/manga'
 import { vtGo, marcarTarjeta } from '@/lib/vt'
+import { effectiveReaderPrefs, readReaderPrefs, saveReaderPrefs } from '@/lib/readerPrefs'
 
 let statusBound = false
 let _progressTimer = 0   // agrupa las subidas del progreso de lectura
@@ -2280,6 +2281,26 @@ export const useMangaStore = defineStore('manga', {
     /* ── Reader ─────────────────────────────────────────────────────────── */
     _resetView() { this.zoom = 1.0; this.panX = 0; this.panY = 0; this.compareMode = false; this.barsHidden = false; this.scanCompareMode = false; this.comparePages2 = []; this.compareLabels = null },
 
+    // El valor global sigue siendo el fallback; una obra que ya se ha configurado recuerda sólo
+    // sus tres preferencias de presentación y no contamina la siguiente lectura.
+    _applyReaderPrefs(title) {
+      const p = effectiveReaderPrefs(title, this.readerModeOverride?.[title])
+      this.mode = p.mode
+      this.fit = p.fit
+      this.dir = p.dir
+    },
+    _persistReaderPref(field, value) {
+      const title = this.reader?.title
+      if (title) {
+        saveReaderPrefs(title, { [field]: value })
+        return
+      }
+      const globalKey = { mode: 'reader-mode', fit: 'reader-fit', dir: 'reader-dir' }[field]
+      if (globalKey) {
+        try { localStorage.setItem(globalKey, String(value)) } catch (_) {}
+      }
+    },
+
     // titleOverride/coverOverride let continueHistory() jump straight into the
     // reader for a local chapter without first opening the manga modal (which
     // would otherwise need to reload chapters/cover just to populate `current`).
@@ -2288,6 +2309,7 @@ export const useMangaStore = defineStore('manga', {
       this.readerLoading = true
       this._resetView()
       this.reader = { title, chapter, source, kind: 'manga', cover: coverOverride || this.current?.cover || '' }
+      this._applyReaderPrefs(title)
       this.pages = []
       this.page = 0
       // Leer un capítulo es una PÁGINA, no un estado interno: sin esta entrada, "atrás" desde el
@@ -2443,6 +2465,7 @@ export const useMangaStore = defineStore('manga', {
     openReaderRaw(title, pages, label = '') {
       this._resetView()
       this.reader = { title, chapter: label, source: '', kind: 'cbz' }
+      this._applyReaderPrefs(title)
       this.pages = pages
       this.page = 0
       useUiStore().pushNav()
@@ -2455,6 +2478,7 @@ export const useMangaStore = defineStore('manga', {
     openOnlineReader(title, chapter, pages, label = '', meta = null, cover = '') {
       this._resetView()
       this.reader = { title, chapter, source: 'online', kind: 'manga', sourceLabel: label, onlineMeta: meta, cover: cover || this.current?.cover || '' }
+      this._applyReaderPrefs(title)
       this.pages = pages
       this.page = 0
       useUiStore().pushNav()
@@ -2623,14 +2647,17 @@ export const useMangaStore = defineStore('manga', {
     prevPage() { const step = this.spreadActive ? 2 : 1; this.setPage(Math.max(this.page - step, 0)) },
 
     setMode(m) {
+      if (!['paged', 'webtoon'].includes(m)) return
       this.mode = m
-      localStorage.setItem('reader-mode', m)
       // Cambiar de modo manualmente fija la preferencia para ESTA serie, para que
       // la auto-detección no la vuelva a sobreescribir en próximas aperturas.
       const t = this.reader?.title
       if (t) {
+        this._persistReaderPref('mode', m)
         this.readerModeOverride[t] = m
         try { localStorage.setItem('reader-mode-series', JSON.stringify(this.readerModeOverride)) } catch (_) {}
+      } else {
+        this._persistReaderPref('mode', m)
       }
       this._resetView()
     },
@@ -2664,7 +2691,7 @@ export const useMangaStore = defineStore('manga', {
     },
     async _autoMode(title) {
       // Override manual → respétalo y no detectes.
-      const ov = this.readerModeOverride[title]
+      const ov = readReaderPrefs(title).mode || this.readerModeOverride[title]
       if (ov === 'paged' || ov === 'webtoon') { this.mode = ov; return }
       const pages = this.pages
       if (!pages || !pages.length) return
@@ -2688,9 +2715,9 @@ export const useMangaStore = defineStore('manga', {
       }
       if (!decided) this._applyAutoMode('paged')   // ninguna cargó → asume manga (paginado)
     },
-    cycleFit() { const M = ['width', 'height', 'original']; this.fit = M[(M.indexOf(this.fit) + 1) % 3]; localStorage.setItem('reader-fit', this.fit) },
-    setFit(f) { if (['width', 'height', 'original'].includes(f)) { this.fit = f; localStorage.setItem('reader-fit', f) } },
-    toggleDir() { this.dir = this.dir === 'rtl' ? 'ltr' : 'rtl'; localStorage.setItem('reader-dir', this.dir) },
+    cycleFit() { const M = ['width', 'height', 'original']; this.setFit(M[(M.indexOf(this.fit) + 1) % 3]) },
+    setFit(f) { if (['width', 'height', 'original'].includes(f)) { this.fit = f; this._persistReaderPref('fit', f) } },
+    toggleDir() { this.dir = this.dir === 'rtl' ? 'ltr' : 'rtl'; this._persistReaderPref('dir', this.dir) },
     // Spread on: snap to an aligned page so the pairs no se descuadran (0-1, 2-3, … o, con
     // desfase, 0 sola y luego 1-2, 3-4, …).
     toggleSpread() {

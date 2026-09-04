@@ -37,7 +37,7 @@ function reader(pages = 10) {
 }
 
 describe('doble página con desfase', () => {
-  beforeEach(() => { setActivePinia(createPinia()) })
+  beforeEach(() => { setActivePinia(createPinia()); localStorage.clear() })
 
   it('sin desfase empareja par-impar', () => {
     const s = reader()
@@ -90,5 +90,37 @@ describe('doble página con desfase', () => {
     expect(s.spreadPair).toEqual([3])
     s.nextPage()
     expect(s.page).toBe(4)        // paso de 1, como siempre
+  })
+})
+
+describe('preferencias del lector aplicadas por obra', () => {
+  beforeEach(() => { setActivePinia(createPinia()); localStorage.clear() })
+
+  it('aplica la preferencia explícita sin cambiar los valores globales', () => {
+    localStorage.setItem('reader-mode', 'paged')
+    localStorage.setItem('reader-fit', 'width')
+    localStorage.setItem('reader-dir', 'rtl')
+    localStorage.setItem('reader-prefs:obra', JSON.stringify({ mode: 'webtoon', fit: 'original', dir: 'ltr' }))
+
+    const s = useMangaStore()
+    s._applyReaderPrefs('obra')
+
+    expect({ mode: s.mode, fit: s.fit, dir: s.dir }).toEqual({ mode: 'webtoon', fit: 'original', dir: 'ltr' })
+    expect(localStorage.getItem('reader-mode')).toBe('paged')
+    expect(localStorage.getItem('reader-fit')).toBe('width')
+    expect(localStorage.getItem('reader-dir')).toBe('rtl')
+  })
+
+  it('guarda el ajuste de una obra y deja intacto el fallback de otra', () => {
+    const s = useMangaStore()
+    s.reader = { title: 'obra-a', kind: 'manga' }
+    s.setMode('webtoon')
+    s.setFit('original')
+    s.toggleDir()
+
+    s._applyReaderPrefs('obra-b')
+    expect({ mode: s.mode, fit: s.fit, dir: s.dir }).toEqual({ mode: 'paged', fit: 'width', dir: 'rtl' })
+    s._applyReaderPrefs('obra-a')
+    expect({ mode: s.mode, fit: s.fit, dir: s.dir }).toEqual({ mode: 'webtoon', fit: 'original', dir: 'ltr' })
   })
 })
