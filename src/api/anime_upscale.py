@@ -3,7 +3,7 @@
 Hornear anime con Anime4K — la otra mitad del escalador que esta app ya es.
 
 **Qué hace**: coge un episodio de la biblioteca y lo vuelve a codificar con la cadena de shaders
-`Mode A+A UL + Thin` aplicada, dejando un fichero HERMANO `<nombre>.a4k.mkv`. A partir de ahí ese
+`Mode A+B UL + Thin` aplicada, dejando un fichero HERMANO `<nombre>.a4k.mkv`. A partir de ahí ese
 fichero ES el episodio (lo resuelve `anime._find_video`), y el original se queda intacto al lado.
 
 **Por qué existe**: Anime4K en vivo es una red convolucional sobre cada fotograma; una tablet no la
@@ -94,9 +94,9 @@ PRESETS = {
         ],
     },
     'maxima': {
-        'etiqueta': 'Máxima',
-        'detalle': 'A+A con la red UL y las líneas afinadas. Es el CTRL+9 de mpv y el techo de '
-                   'Anime4K: no hay nada por encima.',
+        'etiqueta': 'Máxima estable',
+        'detalle': 'Dos escalados con red UL y líneas afinadas; la segunda restauración es Soft '
+                   'para conservar detalle sin shimmer en negros.',
         'min_por_min': 28.0 / 60 * _CALIBRACION,
         'cadena': [
             'Anime4K_Clamp_Highlights',
@@ -104,7 +104,7 @@ PRESETS = {
             'Anime4K_Upscale_CNN_x2_UL',
             'Anime4K_AutoDownscalePre_x2',
             'Anime4K_AutoDownscalePre_x4',
-            'Anime4K_Restore_CNN_M',
+            'Anime4K_Restore_CNN_Soft_M',
             'Anime4K_Upscale_CNN_x2_M',
             'Anime4K_Thin_HQ',
         ],

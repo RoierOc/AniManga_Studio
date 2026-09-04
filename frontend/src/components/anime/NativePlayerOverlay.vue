@@ -22,12 +22,11 @@ let hideTimer = null
 
 const A4K_MODES = [
   { id: 'off', label: 'Desactivado' },
-  { id: 'high', label: 'A+A UL (Máx. calidad) · CTRL+8' },
-  { id: 'ultra', label: 'A+A UL + Thin (Máx. + bordes) · CTRL+9' },
-  // La cadena que se hornea, ahora también en vivo. Es MÁS que 'ultra', que se quedaba en VL y sin
-  // la segunda restauración — o sea, no era un A+A de verdad.
-  { id: 'maximo', label: 'A+A UL real + Thin (lo máximo)' },
+  { id: 'high', label: 'Calidad · A HQ' },
+  { id: 'ultra', label: 'Muy alta · A HQ + Thin' },
+  { id: 'maximo', label: 'Máxima estable · A+B UL + Thin' },
 ]
+const A4K_TIER_LABEL = { high: 'A4K·HQ', ultra: 'A4K·Nítido', maximo: 'A4K·Máximo' }
 // Imagen real (series/películas): Anime4K no aplica —está entrenado en line art—, así que el
 // menú ofrece los shaders genéricos. Los tiers los resuelve `tier_shaders()` en player.rs.
 const LIVE_MODES = [
@@ -42,7 +41,8 @@ const scaleName = computed(() => (np.value?.isLive ? 'Shaders' : 'Anime4K'))
 const scaleLabel = computed(() => {
   // Ya horneado: decirlo en el botón, o «Desactivado» parece que has perdido la calidad.
   if (np.value?.yaHorneado && np.value?.tier === 'off') return 'A4K·Horneado'
-  return np.value?.tier === 'off' ? scaleName.value : (np.value?.isLive ? 'Shaders·On' : 'A4K·Alto')
+  if (np.value?.tier === 'off') return scaleName.value
+  return np.value?.isLive ? 'Shaders·On' : (A4K_TIER_LABEL[np.value?.tier] || 'A4K·On')
 })
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
