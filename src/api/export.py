@@ -28,6 +28,7 @@ import numpy as np
 from flask import Blueprint, jsonify, request, send_file
 from PIL import Image
 
+from api import export_queue
 from api.runtime import manga_dir, upscaled_dir, normalize_chapter, cache_get, cache_set, DATA_ROOT
 from api.observability import record_error
 from api.config_store import get_prefs
@@ -37,10 +38,16 @@ _COLOR_TTL = 30 * 86400   # la firma de contenido en la clave auto-invalida; el 
 
 # ── Async export task tracking ────────────────────────────────────────────────
 _export_tasks: dict = {}          # task_id → task dict
+_export_requests: dict = {}       # task_id → petición mínima para reanudar/reintentar
 _export_lock = threading.Lock()
+_state_write_lock = threading.Lock()
 _export_semaphore = threading.Semaphore(3)  # max 3 concurrent exports
 _EXPORT_TTL = 7200                # clean up temp files after 2 hours
 _cancel_flags: set = set()        # task_ids requested to be cancelled
+_STATE_WRITE_INTERVAL = 1.0       # el progreso no debe fsync por cada página
+_last_state_write = 0.0
+_recovery_ids: set = set()
+_recovery_started = False
 
 # Hilos que codifican páginas en paralelo. Tope de 4 aunque haya 12 núcleos: una página 4K de
 # 44 MP ocupa ~44 MB descomprimida, y el resto de la máquina (MPV, el worker de la GPU) tiene que
@@ -65,40 +72,146 @@ def _export_tmp_root() -> Path:
 
 
 _EXPORT_TMP = _export_tmp_root()
-# Tomos huérfanos de arranques anteriores: el archivo vive hasta que el navegador lo descarga, así
-# que un cierre a medias los deja para siempre. Al arrancar no hay ninguna tarea viva que los use.
-shutil.rmtree(_EXPORT_TMP, ignore_errors=True)
 _EXPORT_TMP.mkdir(parents=True, exist_ok=True)
+
+
+def _restore_export_state():
+    """Carga la cola y deja los trabajos que estaban corriendo listos para reanudarse.
+
+    Un ZIP parcial no es reanudable de forma segura: se elimina y se reconstruye desde las páginas
+    originales. Un ZIP terminado sí se conserva para que el usuario pueda guardarlo tras volver a
+    abrir la aplicación.
+    """
+    tasks, requests = export_queue.load_state()
+    for task_id, raw in tasks.items():
+        task_id = str(task_id)
+        if not task_id or any(ch not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-' for ch in task_id):
+            continue
+        task = dict(raw)
+        status = task.get('status')
+        task.setdefault('task_id', task_id)
+        task.setdefault('created_at', time.time())
+        task.setdefault('progress', 0)
+        task.setdefault('total', 0)
+        task.setdefault('error', None)
+        task.setdefault('tmp_path', None)
+
+        spec = requests.get(task_id)
+        if isinstance(spec, dict):
+            _export_requests[task_id] = export_queue.restore_request(spec)
+
+        if status in ('queued', 'running'):
+            partial = task.get('tmp_path')
+            if partial:
+                try:
+                    Path(partial).unlink(missing_ok=True)
+                except OSError as exc:
+                    record_error('export', exc, op='recover_partial', task=task_id)
+            task.update({
+                'status': 'queued', 'progress': 0, 'total': 0, 'tmp_path': None,
+                'message': 'Reanudado tras reiniciar AniManga Studio',
+            })
+            if _export_requests.get(task_id, {}).get('title') and _export_requests.get(task_id, {}).get('chapters'):
+                _recovery_ids.add(task_id)
+            else:
+                task.update({
+                    'status': 'error',
+                    'error': 'No se pudo reanudar: faltan los parámetros de exportación',
+                    'message': 'La tarea no tenía una petición recuperable',
+                })
+        elif status == 'complete':
+            tmp = task.get('tmp_path')
+            try:
+                owned = tmp and Path(tmp).resolve().parent == _EXPORT_TMP.resolve()
+                exists = owned and Path(tmp).is_file()
+            except OSError:
+                exists = False
+            if not exists:
+                task.update({
+                    'status': 'error', 'tmp_path': None,
+                    'error': 'file missing',
+                    'message': 'El archivo terminado ya no está disponible',
+                })
+        _export_tasks[task_id] = task
+    export_queue.prune_payloads(_export_requests)
 
 # UN pool de codificación para TODAS las exportaciones, no uno por tarea: con 3 tomos a la vez,
 # tres pools de 4 hilos saturarían la máquina y cada uno iría más lento que si fueran en fila.
 # Compartido, el trabajo se reparte y el total de CPU en vuelo sigue acotado.
 _enc_pool = ThreadPoolExecutor(max_workers=_ENC_WORKERS, thread_name_prefix='export-enc')
 
+
+_restore_export_state()
+
+
+def _persist_export_state(force=False):
+    """Guarda el snapshot sin convertir el progreso por página en I/O síncrono."""
+    global _last_state_write
+    now = time.monotonic()
+    with _state_write_lock:
+        if not force and now - _last_state_write < _STATE_WRITE_INTERVAL:
+            return
+        with _export_lock:
+            tasks = {key: dict(value) for key, value in _export_tasks.items()}
+            requests = {key: dict(value) for key, value in _export_requests.items()}
+        try:
+            export_queue.save_state(tasks, requests, durable=force)
+            _last_state_write = now
+        except Exception as exc:
+            # El worker no debe morir porque el disco no aceptó una actualización del ledger; el
+            # siguiente cambio vuelve a intentarlo y el fallo queda visible en observabilidad.
+            record_error('export', exc, op='persist_state')
+
 def get_export_tasks() -> dict:
-    return dict(_export_tasks)
+    _start_recovered_exports()
+    with _export_lock:
+        return {key: dict(value) for key, value in _export_tasks.items()}
 
 def _set_export(task_id: str, updates: dict):
+    force = False
     with _export_lock:
         if task_id in _export_tasks:
             # Stamp completion time once, on entering a terminal state — feeds Activity history.
             if updates.get('status') in ('complete', 'error', 'cancelled') and not _export_tasks[task_id].get('ended_at'):
                 updates = {**updates, 'ended_at': time.time()}
+            force = updates.get('status') in ('queued', 'complete', 'error', 'cancelled')
             _export_tasks[task_id].update(updates)
+    _persist_export_state(force=force)
 
 def _cleanup_exports():
     now = time.time()
     with _export_lock:
         to_remove = [k for k, v in list(_export_tasks.items())
-                     if now - v.get('created_at', 0) > _EXPORT_TTL]
+                     if v.get('status') in ('complete', 'error', 'cancelled', 'downloaded')
+                     and now - v.get('created_at', 0) > _EXPORT_TTL]
     for k in to_remove:
-        tmp = _export_tasks.get(k, {}).get('tmp_path')
+        with _export_lock:
+            task = _export_tasks.pop(k, None)
+            _export_requests.pop(k, None)
+        tmp = task.get('tmp_path') if task else None
         if tmp:
             try:
                 Path(tmp).unlink(missing_ok=True)
             except Exception:
                 pass
-        _export_tasks.pop(k, None)
+        export_queue.remove_payload(k)
+    if to_remove:
+        _persist_export_state(force=True)
+
+
+def _start_recovered_exports():
+    """Arranca una sola vez los trabajos que sobrevivieron a un reinicio."""
+    global _recovery_started
+    with _export_lock:
+        if _recovery_started:
+            return
+        _recovery_started = True
+        ids = list(_recovery_ids)
+        _recovery_ids.clear()
+    for task_id in ids:
+        data = _export_requests.get(task_id)
+        if data:
+            threading.Thread(target=_run_export, args=(task_id, data), daemon=True).start()
 
 try:
     import mozjpeg_lossless_optimization as _mozjpeg
@@ -598,6 +711,7 @@ def _run_export(task_id: str, data: dict):
 def start_export():
     """Start an async export. Returns {task_id} immediately; poll /export/status/<id>."""
     _cleanup_exports()
+    _start_recovered_exports()
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip()
     if not title:
@@ -606,6 +720,11 @@ def start_export():
         return jsonify({"error": "select at least one chapter"}), 400
 
     task_id = uuid.uuid4().hex[:10]
+    try:
+        persisted_request = export_queue.prepare_request(task_id, data)
+    except OSError as exc:
+        record_error('export', exc, op='prepare_state', task=task_id)
+        return jsonify({'error': 'No se pudo preparar la cola durable'}), 500
     with _export_lock:
         _export_tasks[task_id] = {
             'task_id': task_id,
@@ -618,7 +737,10 @@ def start_export():
             'tmp_path': None,
             'filename': None,
             'error': None,
+            'profile': str(data.get('profile') or '')[:40],
         }
+        _export_requests[task_id] = persisted_request
+    _persist_export_state(force=True)
     threading.Thread(target=_run_export, args=(task_id, data), daemon=True).start()
     return jsonify({'task_id': task_id, 'status': 'queued'})
 
@@ -767,14 +889,55 @@ def export_cancel(task_id):
     return jsonify({'ok': True, 'status': 'cancelling'})
 
 
+@export_bp.route("/retry/<task_id>", methods=["POST"])
+def export_retry(task_id):
+    """Reencola una exportación fallida o cancelada usando su petición durable."""
+    old = _export_tasks.get(task_id)
+    if not old:
+        return jsonify({'error': 'not found'}), 404
+    if old.get('status') not in ('error', 'cancelled'):
+        return jsonify({'error': 'only failed or cancelled exports can be retried'}), 400
+    data = _export_requests.get(task_id)
+    if not data:
+        return jsonify({'error': 'export request is no longer available'}), 400
+
+    new_id = uuid.uuid4().hex[:10]
+    try:
+        persisted_request = export_queue.prepare_request(new_id, data)
+    except OSError as exc:
+        record_error('export', exc, op='prepare_retry_state', task=new_id)
+        return jsonify({'error': 'No se pudo preparar el reintento'}), 500
+    with _export_lock:
+        _export_tasks[new_id] = {
+            'task_id': new_id,
+            'status': 'queued',
+            'title': data.get('title', ''),
+            'volume_name': data.get('volume_name') or data.get('title') or 'tomo',
+            'progress': 0,
+            'total': 0,
+            'created_at': time.time(),
+            'tmp_path': None,
+            'filename': None,
+            'error': None,
+            'profile': str(data.get('profile') or '')[:40],
+        }
+        _export_requests[new_id] = persisted_request
+    _persist_export_state(force=True)
+    threading.Thread(target=_run_export, args=(new_id, data), daemon=True).start()
+    return jsonify({'task_id': new_id, 'status': 'queued'})
+
+
 @export_bp.route("/task/<task_id>", methods=["DELETE"])
 def export_dismiss(task_id):
     """Dismiss a finished export task from the queue and delete its temp file."""
     with _export_lock:
         task = _export_tasks.pop(task_id, None)
+        _export_requests.pop(task_id, None)
     if task and task.get('tmp_path'):
         try:
             Path(task['tmp_path']).unlink(missing_ok=True)
         except Exception:
             pass
+    export_queue.remove_payload(task_id)
+    _persist_export_state(force=True)
     return jsonify({'ok': True})

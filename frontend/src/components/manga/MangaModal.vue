@@ -21,6 +21,7 @@ import { useModal } from '@/lib/useModal'
 import { etaTarea } from '@/lib/eta'
 import { useMultiSelect } from '@/lib/useMultiSelect'
 import { genero, idioma } from '@/lib/etiquetas'
+import { EXPORT_PROFILES, exportProfileValues } from '@/lib/exportProfiles'
 
 const store = useMangaStore()
 
@@ -300,6 +301,15 @@ const fmt = ref('cbz')
 const quality = ref(92)
 const codec = ref('jpeg')
 const downscale = ref(false)
+const exportProfile = ref('manual')
+watch(exportProfile, (name) => {
+  const values = exportProfileValues(name)
+  if (!values) return
+  fmt.value = values.format
+  codec.value = values.codec
+  quality.value = values.quality
+  downscale.value = values.downscaleHalf
+})
 // WebP holds up at lower quality than JPEG (no ringing on text), so its slider floor is lower.
 const qMin = computed(() => codec.value === 'webp' ? 70 : 85)
 // Keep quality within the codec's valid range when switching codecs.
@@ -549,7 +559,7 @@ async function exportAllTomos() {
   try {
     await store.exportAllVolumes({
       format: fmt.value, quality: quality.value, codec: codec.value,
-      downscaleHalf: downscale.value, coverPerVolume: autoVolCover.value,
+      downscaleHalf: downscale.value, profile: exportProfile.value, coverPerVolume: autoVolCover.value,
     })
   } finally { exportingAll.value = false }
 }
@@ -607,7 +617,7 @@ const volEstado = (v) => estadoPorTomo.value.get(store._tomoName(v)) || null
 async function doExport(toDrive = false) {
   if (!sel.value.size) return
   const chapters = [...sel.value].sort((a, b) => parseFloat(a) - parseFloat(b))
-  const id = await store.exportTomo({ chapters, volumeName: volName.value, format: fmt.value, quality: quality.value, codec: codec.value, downscaleHalf: downscale.value, coverB64: tomoCover.value || store.mdex.coverB64, toDrive })
+  const id = await store.exportTomo({ chapters, volumeName: volName.value, format: fmt.value, quality: quality.value, codec: codec.value, downscaleHalf: downscale.value, profile: exportProfile.value, coverB64: tomoCover.value || store.mdex.coverB64, toDrive })
   // Encolado: el formulario queda libre para preparar el siguiente tomo mientras éste se
   // exporta. Sin esto la selección anterior seguía marcada y el segundo tomo salía con los
   // capítulos del primero dentro. Los ajustes (formato, calidad, códec) se conservan a propósito:
@@ -833,6 +843,9 @@ useModal(() => !!m.value, closeModal, modalEl)
             <div v-else-if="tab === 'tomo'" class="tomo">
               <div class="tomo__form">
                 <label class="fld"><span>Nombre del tomo</span><input v-model="volName" type="text" placeholder="Volumen 1" /></label>
+                <label class="fld"><span>Perfil de exportación</span>
+                  <Select block v-model="exportProfile" aria-label="Perfil de exportación" :options="EXPORT_PROFILES" />
+                </label>
                 <div class="fld-row">
                   <label class="fld"><span>Formato</span>
                     <Select block v-model="fmt" aria-label="Formato"
@@ -882,7 +895,8 @@ useModal(() => !!m.value, closeModal, modalEl)
                     <div class="xjob__acts">
                       <button v-if="t.status === 'done'" class="dlink" @click="store.saveExportFile(t.id, { volume_name: t.label })">Guardar en Tomos</button>
                       <button v-if="t.status === 'running' || t.status === 'queued'" class="dlink" @click="store.cancelExport(t.id)">Cancelar</button>
-                      <button v-else class="dlink" @click="store.dismissExport(t.id)">Quitar</button>
+                      <button v-if="t.status === 'error' || t.status === 'cancelled'" class="dlink" @click="store.retryExport(t.id)">Reintentar</button>
+                      <button v-if="t.status === 'done' || t.status === 'error' || t.status === 'cancelled'" class="dlink" @click="store.dismissExport(t.id)">Quitar</button>
                     </div>
                   </div>
                 </div>

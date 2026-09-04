@@ -97,7 +97,8 @@ function normalizeTask(kind, id, v, actual = null) {
       pct: _pct(v.progress ?? v.current, v.total), label: v.chapter != null ? `Cap. ${v.chapter}` : 'Escalar todo' }
   if (kind === 'export')
     return { ...base, mangaId: v.title || v.volume_name || '', title: v.title || v.volume_name || '',
-      pct: status === 'done' ? 100 : _pct(v.progress, v.total), label: v.volume_name || 'Tomo', file: status === 'done' }
+      pct: status === 'done' ? 100 : _pct(v.progress, v.total), label: v.volume_name || 'Tomo',
+      file: status === 'done', profile: v.profile || '' }
   if (kind === 'translate') {
     // `chapterDone` is the 1-based chapter being WORKED ON (not the count completed), so a
     // single-chapter job would otherwise pin the bar at 100%. Make it page-aware: chapters
@@ -2069,6 +2070,13 @@ export const useMangaStore = defineStore('manga', {
       if (!this.dismissedExports.includes(id)) this.dismissedExports = [...this.dismissedExports, id]
       try { await api.del(`/api/export/task/${encodeURIComponent(id)}`) } catch (_) {}
     },
+    async retryExport(id) {
+      try {
+        const d = await api.post(`/api/export/retry/${encodeURIComponent(id)}`, {})
+        if (d?.task_id) { useUiStore().toast('Exportación reencolada', 'info'); return d.task_id }
+      } catch (e) { useUiStore().toast(e?.message || 'No se pudo reintentar la exportación', 'error') }
+      return null
+    },
 
     /* ── Tomo export + destinations ─────────────────────────────────────── */
     async loadDestinations() {
@@ -2097,11 +2105,11 @@ export const useMangaStore = defineStore('manga', {
       if (i?.url) m.web = i.url
       return m
     },
-    async exportTomo({ chapters, volumeName, format = 'cbz', quality = 92, codec = 'jpeg', downscaleHalf = false, coverB64 = '', toDrive = false }) {
+    async exportTomo({ chapters, volumeName, format = 'cbz', quality = 92, codec = 'jpeg', downscaleHalf = false, coverB64 = '', profile = 'manual', toDrive = false }) {
       const body = {
         title: this.current.id, chapters, volume_name: volumeName || this.current.name,
         meta: this._comicMeta(volumeName || this.current.name),
-        format, quality, codec, downscale_half: downscaleHalf, ...(coverB64 ? { cover_data: coverB64 } : {}),
+        format, quality, codec, profile, downscale_half: downscaleHalf, ...(coverB64 ? { cover_data: coverB64 } : {}),
         ...(this.excludedPages.length ? { exclude_pages: this.excludedPages } : {}),
       }
       try {
@@ -2429,7 +2437,7 @@ export const useMangaStore = defineStore('manga', {
     // Exporta AUTOMÁTICAMENTE un tomo por cada volumen de MangaDex (auto-organiza los caps
     // descargados según el mapa oficial). Reutiliza exportTomo (backend/Actividad ya cablean
     // el progreso). Portada por tomo si hay una en mdex.covers para ese volumen.
-    async exportAllVolumes({ format = 'cbz', quality = 92, codec = 'jpeg', downscaleHalf = false, toDrive = false, coverPerVolume = true } = {}) {
+    async exportAllVolumes({ format = 'cbz', quality = 92, codec = 'jpeg', downscaleHalf = false, profile = 'manual', toDrive = false, coverPerVolume = true } = {}) {
       const ui = useUiStore()
       const plan = this.volumePlan()
       if (!plan.length) { ui.toast('No hay tomos con capítulos descargados para organizar', 'warn'); return { queued: 0 } }
@@ -2444,7 +2452,7 @@ export const useMangaStore = defineStore('manga', {
         }
         const taskId = await this.exportTomo({
           chapters: t.chapters, volumeName: t.label, format, quality, codec, downscaleHalf,
-          coverB64, toDrive,
+          coverB64, profile, toDrive,
         })
         if (taskId || toDrive) queued++
       }
