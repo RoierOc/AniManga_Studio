@@ -86,21 +86,23 @@ const SHADERS_ULTRA: &[&str] = &[
     "Anime4K_Upscale_CNN_x2_M.glsl",
 ];
 
-/// **Máxima estable.** Es el Modo B+B con red UL: dos restauraciones suaves y dos escalas
-/// condicionales. `Thin_HQ` queda fuera de este tier porque su realce de bordes puede volver a
-/// hacer visibles las pequeñas variaciones de la CNN en movimiento; las dos restauraciones UL/M
-/// ya aportan el detalle adicional sin esa inestabilidad.
+/// **Máxima calidad.** Es exactamente el CTRL+9 de mpv: A+A con red UL, `Thin_HQ` y las mismas
+/// etapas condicionales. La primera restauración reconstruye a resolución nativa, la segunda
+/// asienta el resultado después del upscale y Thin devuelve el trazo fino que el perfil B+B estaba
+/// suavizando demasiado.
 ///
-/// No añadimos una tercera pasada: una CNN no recupera información nueva al recibir dos veces el
-/// resultado ya reconstruido; sólo amplifica halos, ruido y diferencias entre fotogramas.
+/// No añadimos una tercera restauración: una CNN no recupera información nueva al recibir dos veces
+/// el resultado ya reconstruido; sólo amplifica halos, ruido y diferencias entre fotogramas. El
+/// antialias temporal se corrige por separado con `temporal-dither=no`.
 const SHADERS_MAXIMO: &[&str] = &[
     "Anime4K_Clamp_Highlights.glsl",
-    "Anime4K_Restore_CNN_Soft_UL.glsl",
+    "Anime4K_Restore_CNN_UL.glsl",
     "Anime4K_Upscale_CNN_x2_UL.glsl",
     "Anime4K_AutoDownscalePre_x2.glsl",
     "Anime4K_AutoDownscalePre_x4.glsl",
-    "Anime4K_Restore_CNN_Soft_M.glsl",
+    "Anime4K_Restore_CNN_M.glsl",
     "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_Thin_HQ.glsl",
 ];
 
 // --- Imagen REAL (series y películas) ---------------------------------------------------
@@ -128,7 +130,7 @@ fn tier_shaders(tier: &str) -> &'static [&'static str] {
 
 #[cfg(test)]
 mod anime4k_tier_tests {
-    use super::tier_shaders;
+    use super::{dither_depth_for_display, tier_shaders};
 
     #[test]
     fn ultra_es_una_doble_pasada_soft_en_hq() {
@@ -144,18 +146,26 @@ mod anime4k_tier_tests {
     }
 
     #[test]
-    fn maximo_es_una_doble_pasada_soft_ul_sin_thin() {
+    fn maximo_es_exactamente_el_ctrl9_a_a_ul_con_thin() {
         assert_eq!(tier_shaders("maximo"), [
             "Anime4K_Clamp_Highlights.glsl",
-            "Anime4K_Restore_CNN_Soft_UL.glsl",
+            "Anime4K_Restore_CNN_UL.glsl",
             "Anime4K_Upscale_CNN_x2_UL.glsl",
             "Anime4K_AutoDownscalePre_x2.glsl",
             "Anime4K_AutoDownscalePre_x4.glsl",
-            "Anime4K_Restore_CNN_Soft_M.glsl",
+            "Anime4K_Restore_CNN_M.glsl",
             "Anime4K_Upscale_CNN_x2_M.glsl",
+            "Anime4K_Thin_HQ.glsl",
         ]);
-        assert!(!tier_shaders("maximo").contains(&"Anime4K_Restore_CNN_M.glsl"));
-        assert!(!tier_shaders("maximo").contains(&"Anime4K_Thin_HQ.glsl"));
+        assert_eq!(tier_shaders("maximo").iter()
+            .filter(|s| s.starts_with("Anime4K_Restore_CNN_"))
+            .count(), 2);
+    }
+
+    #[test]
+    fn dithering_respeta_la_profundidad_del_swapchain() {
+        assert_eq!(dither_depth_for_display(true), "10");
+        assert_eq!(dither_depth_for_display(false), "8");
     }
 }
 
@@ -397,6 +407,13 @@ fn hdr_format(hdr: bool) -> DXGI_FORMAT {
     } else {
         DXGI_FORMAT_B8G8R8A8_UNORM
     }
+}
+
+/// mpv debe cuantizar a la profundidad real de la superficie que recibe el resultado.
+/// En HDR la interop usa R10G10B10A2; dejar `auto` hizo que libmpv eligiera 8 bits y
+/// aplicara dithering a cada frame, justo donde el doble CNN puede hacer visible el shimmer.
+fn dither_depth_for_display(display_hdr: bool) -> &'static str {
+    if display_hdr { "10" } else { "8" }
 }
 
 /// Etiqueta el swapchain como SDR sRGB (G22/P709). Es el DEFAULT: la inmensa mayoría
@@ -656,7 +673,10 @@ impl Player {
             init.set_property("dscale", "mitchell")?;
             init.set_property("cscale", "ewa_lanczossoft")?;
             init.set_property("correct-downscaling", "yes")?;
-            init.set_property("dither-depth", "auto")?;
+            // La superficie interop ya se creó con el formato real del display: 10 bits en HDR,
+            // 8 en SDR. `auto` estaba resolviendo a 8 bits incluso con FBO rgba16f, cuantizando
+            // las sombras procesadas antes de entregarlas al swapchain.
+            init.set_property("dither-depth", dither_depth_for_display(want_hdr))?;
             // Anime4K ya genera una imagen determinista por fotograma. El dithering temporal de
             // mpv rota ocho patrones en cada frame; en una LCD esa rotación se percibe como
             // shimmer, especialmente en sombras y tras un segundo pase CNN.
@@ -859,6 +879,12 @@ impl Player {
         set_srgb_colorspace(&self.swapchain);
         let was_hdr_display = self.display_hdr.get();
         self.display_hdr.set(want_hdr);
+        // La ventana puede cambiar de monitor SDR a HDR (o al revés). El swapchain ya fue
+        // recreado con la profundidad nueva; mantener el valor anterior volvería a cuantizar
+        // la salida a 8 bits o a solicitar 10 bits sobre una superficie SDR.
+        let _ = self
+            .mpv
+            .set_property("dither-depth", dither_depth_for_display(want_hdr));
         let (phys_w, phys_h) = monitor_physical(&monitor_output_desc(&self.device, self.main_hwnd));
         log_line(&format!(
             "[resize] {}x{} -> {}x{}  display_hdr {} -> {}  monitor_fisico={phys_w}x{phys_h}",
