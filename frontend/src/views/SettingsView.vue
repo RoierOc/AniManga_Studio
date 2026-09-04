@@ -15,6 +15,8 @@ import NovelSourcesCard from '@/components/settings/NovelSourcesCard.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import FolderPicker from '@/components/ui/FolderPicker.vue'
 import Select from '@/components/ui/Select.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
+import { filterSettingsSections } from '@/lib/settingsSearch'
 
 const ui = useUiStore()
 const manga = useMangaStore()
@@ -23,22 +25,29 @@ const settings = useSettingsStore()
 
 // Settings categories (left rail). Persisted so you land where you left off.
 const TABS = [
-  { id: 'general', label: 'General', icon: 'spark' },
-  { id: 'anime', label: 'Anime', icon: 'film' },
-  { id: 'conexiones', label: 'Conexiones', icon: 'globe' },
-  { id: 'salud', label: 'Salud', icon: 'check' },
-  { id: 'novelas', label: 'Novelas', icon: 'book' },
-  { id: 'almacenamiento', label: 'Almacenamiento', icon: 'folder' },
-  { id: 'copia', label: 'Copia y sync', icon: 'refresh' },
+  { id: 'general', label: 'General', icon: 'spark', description: 'Escalado 4K y biblioteca oculta', keywords: ['modelo', 'modo eco', 'código secreto', 'manga'] },
+  { id: 'anime', label: 'Anime', icon: 'film', description: 'Descargas, qBittorrent y subtítulos', keywords: ['carpeta', 'ruta', 'episodios', 'servidor'] },
+  { id: 'conexiones', label: 'Conexiones', icon: 'globe', description: 'Claves API e importación de .env', keywords: ['servicios', 'api', 'token', 'credenciales'] },
+  { id: 'salud', label: 'Salud', icon: 'check', description: 'Integridad, fuentes y diagnósticos', keywords: ['reparar', 'verificar', 'errores'] },
+  { id: 'novelas', label: 'Novelas', icon: 'book', description: 'Fuentes e idiomas', keywords: ['capítulos', 'literatura', 'web'] },
+  { id: 'almacenamiento', label: 'Almacenamiento', icon: 'folder', description: 'Raíces, espacio de disco y caché', keywords: ['carpetas', 'disco', 'limpiar', 'originales', '4k'] },
+  { id: 'copia', label: 'Copia y sync', icon: 'refresh', description: 'Respaldo, Git, Drive y biblioteca móvil', keywords: ['sincronización', 'backup', 'exportar', 'remoto', 'webdav', 'android'] },
   /* La Cocina del diseño y el modo QA son andamiaje de desarrollo y vivían en «General», que es
      la pestaña que se abre por defecto: dos de las tres tarjetas que veías al entrar en Ajustes
      eran herramientas internas, y ocupaban más sitio que el único ajuste de verdad (el 4K). */
-  { id: 'interno', label: 'Interno', icon: 'palette' },
+  { id: 'interno', label: 'Interno', icon: 'palette', description: 'Cocina del diseño y modo QA', keywords: ['testing', 'traducción', 'debug'] },
 ]
 // En el store (`ui.tabs.set`), no en un ref local: el historial la ve, así que "atrás" vuelve a la
 // pestaña de Ajustes en la que estabas en lugar de sacarte de Ajustes.
 const tab = computed(() => ui.tabs.set)
 const setTab = (id) => ui.setTab('set', id)
+const settingsQuery = ref('')
+const visibleTabs = computed(() => filterSettingsSections(settingsQuery.value, TABS))
+const hasSettingsQuery = computed(() => Boolean(settingsQuery.value.trim()))
+watch(visibleTabs, (tabs) => {
+  if (hasSettingsQuery.value && tabs.length && !tabs.some((item) => item.id === tab.value)) setTab(tabs[0].id)
+})
+function clearSettingsSearch() { settingsQuery.value = '' }
 
 const dlPath = ref('')
 const dlBrowse = ref(false)
@@ -277,16 +286,32 @@ async function onImportFile(e) {
     <header class="set__head">
       <p class="eyebrow" @click="hidKnock"><span class="tick" /> CONFIGURACIÓN</p>
       <h1>Ajustes</h1>
+      <label class="set__search">
+        <Icon name="search" :size="16" />
+        <input v-model="settingsQuery" type="search" placeholder="Buscar un ajuste…"
+               aria-label="Buscar un ajuste" spellcheck="false" />
+        <button v-if="hasSettingsQuery" type="button" class="set__search-clear"
+                aria-label="Limpiar búsqueda" data-tip="Limpiar búsqueda" @click="clearSettingsSearch">
+          <Icon name="close" :size="14" />
+        </button>
+      </label>
+      <p v-if="hasSettingsQuery" class="set__search-hint">
+        {{ visibleTabs.length ? `${visibleTabs.length} sección(es) encontrada(s)` : 'Sin secciones coincidentes' }}
+      </p>
     </header>
 
     <div class="set__shell">
       <nav class="set__rail">
-        <button v-for="t in TABS" :key="t.id" type="button" class="set__tab" :class="{ 'is-active': tab === t.id }" @click="setTab(t.id)">
+        <button v-for="t in visibleTabs" :key="t.id" type="button" class="set__tab" :class="{ 'is-active': tab === t.id }" @click="setTab(t.id)">
           <Icon :name="t.icon" :size="16" /><span>{{ t.label }}</span>
         </button>
       </nav>
 
       <div class="set__pane">
+        <EmptyState v-if="hasSettingsQuery && !visibleTabs.length" icon="search"
+                    title="No encontramos ese ajuste"
+                    hint="Prueba con palabras como carpeta, API, idioma, disco o respaldo." />
+        <template v-else>
         <!-- General -->
         <div v-show="tab === 'general'" class="set__cat">
           <div class="set__cathead">
@@ -748,6 +773,7 @@ async function onImportFile(e) {
         <p class="hint">Los casos se guardan en <code>data/_translation_qa/</code> (salida + arte EN + ES emparejada + overlay + diagnóstico) para afinar el algoritmo. Apagar el modo no borra lo ya guardado.</p>
       </section>
         </div>
+        </template>
       </div>
     </div>
 
@@ -761,6 +787,13 @@ async function onImportFile(e) {
 .set__head { padding: var(--s-5) 0 var(--s-5); }
 .eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
 .tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
+.set__search { display: flex; align-items: center; gap: var(--s-2); max-width: 34rem; margin-top: var(--s-4); padding: var(--s-2) var(--s-3); border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--surface); color: var(--ink-faint); }
+.set__search:focus-within { border-color: var(--azure); box-shadow: 0 0 0 3px color-mix(in srgb, var(--azure) 12%, transparent); }
+.set__search input { flex: 1; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; color: var(--ink); font-size: var(--fs-sm); }
+.set__search input::placeholder { color: var(--ink-ghost); }
+.set__search-clear { display: grid; place-items: center; padding: 0.125rem; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--ink-faint); cursor: pointer; }
+.set__search-clear:hover { color: var(--ink); background: var(--surface-2); }
+.set__search-hint { margin-top: var(--s-2); font-size: var(--fs-2xs); color: var(--ink-faint); }
 
 /* ── two-pane shell: sticky category rail + content ─────────────────────── */
 .set__shell { display: grid; grid-template-columns: 216px minmax(0, 1fr); gap: var(--s-6); align-items: start; }
