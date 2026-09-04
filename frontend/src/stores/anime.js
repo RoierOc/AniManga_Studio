@@ -1547,6 +1547,26 @@ export const useAnimeStore = defineStore('anime', {
         await this.loadLibrary(true)
       } catch (e) { useUiStore().toast('Error: ' + (e.message || 'qBittorrent'), 'error') }
     },
+    // Pausar/reanudar una selección sin refrescar la lista por cada torrent. Sólo se usa para
+    // acciones reversibles; el borrado de archivos conserva la confirmación individual.
+    async qbtActionBatch(action, hashes) {
+      const unique = [...new Set((hashes || []).map(String).filter(Boolean))]
+      if (!unique.length) return { total: 0, successful: 0, failed: 0 }
+      let successful = 0
+      for (const hash of unique) {
+        try {
+          await api.post('/api/anime/qbt/action', { action, hash, delete_files: false })
+          successful++
+        } catch (_) {}
+      }
+      await this.loadQbt()
+      await this.loadLibrary(true)
+      const failed = unique.length - successful
+      const ui = useUiStore()
+      if (failed) ui.toast(`${failed} torrent${failed === 1 ? '' : 's'} no se pudo actualizar`, 'error')
+      else ui.toast(`${successful} torrent${successful === 1 ? '' : 's'} actualizado${successful === 1 ? '' : 's'}`, 'ok')
+      return { total: unique.length, successful, failed }
+    },
 
     /* ── Seasonal ───────────────────────────────────────────────────────── */
     async loadSeasonal() {

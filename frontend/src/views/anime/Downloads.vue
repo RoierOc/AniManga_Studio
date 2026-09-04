@@ -12,6 +12,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import FolderPicker from '@/components/ui/FolderPicker.vue'
 import MediaQueue from '@/components/media/MediaQueue.vue'
+import { useGridKeyboard } from '@/lib/useGridKeyboard'
 
 const store = useAnimeStore()
 const ui = useUiStore()
@@ -85,6 +86,17 @@ const visibles = computed(() => {
     return !q || f.r.title.toLowerCase().includes(q) || f.t.name.toLowerCase().includes(q)
   })
 })
+
+const { selected: selectedHashes, count: selectedCount, clear: clearSelection, onKey: onGridKey } =
+  useGridKeyboard(() => visibles.value.map(({ t }) => t.hash))
+const selectedRows = computed(() => visibles.value.filter(({ t }) => selectedHashes.has(String(t.hash))))
+const selectedActive = computed(() => selectedRows.value.filter(({ t }) => !isDone(t) && !isPaused(t)))
+const selectedPaused = computed(() => selectedRows.value.filter(({ t }) => !isDone(t) && isPaused(t)))
+
+async function batchQbtAction(action, rows) {
+  const result = await store.qbtActionBatch(action, rows.map(({ t }) => t.hash))
+  if (result?.successful) clearSelection()
+}
 
 // «T1 · Ep 3 · 1080p», sin las partes que no se saben (y sin el `·` huérfano de cada una).
 function detalle(r) {
@@ -173,11 +185,27 @@ const ajustes = ref(false)
                   hint="Lo que envíes a qBittorrent desde Buscar Anime aparecerá aquí." />
       <EmptyState v-else-if="!visibles.length" full icon="search" title="Nada coincide con la búsqueda." />
 
-      <div v-else class="dl__list">
+      <div v-else class="dl__list" role="listbox" aria-label="Descargas de qBittorrent"
+           :aria-multiselectable="true" @keydown="onGridKey">
+        <div v-if="selectedCount" class="dl__selection" aria-live="polite">
+          <span>{{ selectedCount }} marcada(s)</span>
+          <button v-if="selectedActive.length" type="button" class="dl__selection-action"
+                  @click="batchQbtAction('pause', selectedActive)">
+            Pausar {{ selectedActive.length }}
+          </button>
+          <button v-if="selectedPaused.length" type="button" class="dl__selection-action"
+                  @click="batchQbtAction('resume', selectedPaused)">
+            Reanudar {{ selectedPaused.length }}
+          </button>
+          <button type="button" data-tip="Quitar marcas" @click="clearSelection">Limpiar</button>
+        </div>
         <p v-if="cayendoASembrando" class="dl__nota">
           No hay nada descargando ahora — estos son tus {{ cuenta.sembrando }} torrents terminados.
         </p>
-        <div v-for="{ t, r, cover } in visibles" :key="t.hash" class="trow" :class="{ 'trow--done': isDone(t) }">
+        <div v-for="{ t, r, cover } in visibles" :key="t.hash" class="trow"
+             :class="{ 'trow--done': isDone(t), 'trow--selected': selectedHashes.has(String(t.hash)) }"
+             data-grid-item :data-grid-key="t.hash" role="option" tabindex="0"
+             :aria-selected="selectedHashes.has(String(t.hash))">
           <!-- Sin blur-up: la caja mide 44 px, así que el micro-thumb de 28 px no es un
                placeholder, es prácticamente la imagen final. Una petición por fila, no dos. -->
           <div class="trow__poster">
@@ -262,9 +290,14 @@ const ajustes = ref(false)
 .empty { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-8) 0; color: var(--ink-faint); }
 
 .dl__list { display: flex; flex-direction: column; gap: var(--s-2); }
+.dl__selection { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3); padding: var(--s-2) var(--s-3); border: 1px solid color-mix(in srgb, var(--azure) 34%, transparent); border-radius: var(--r-md); background: var(--azure-haze); color: var(--azure-bright); font-size: var(--fs-xs); }
+.dl__selection-action { padding: var(--s-1) var(--s-2); border: 1px solid var(--azure); border-radius: var(--r-sm); color: var(--azure-bright); font-size: var(--fs-xs); }
+.dl__selection-action:hover { background: color-mix(in srgb, var(--azure) 14%, transparent); }
+.dl__selection > button:last-child { margin-left: auto; color: var(--ink-soft); font-size: var(--fs-xs); text-decoration: underline; text-underline-offset: 2px; }
 .dl__nota { color: var(--ink-faint); font-size: var(--fs-sm); margin-bottom: var(--s-1); }
 .trow { display: flex; align-items: center; gap: var(--s-4); padding: var(--s-3) var(--s-4); border-radius: var(--r-md); background: var(--surface); border: 1px solid var(--line); transition: border-color var(--t-fast); }
 .trow:hover { border-color: var(--line-strong); }
+.trow--selected { border-color: var(--azure); box-shadow: 0 0 0 1px var(--azure-glow); }
 .trow--done { opacity: .72; }
 .trow__poster {
   position: relative; flex-shrink: 0; width: 2.75rem; aspect-ratio: 2 / 3; overflow: hidden;

@@ -50,4 +50,20 @@ describe('liberación por lote de Mi Anime', () => {
       vi.useRealTimers()
     }
   })
+
+  it('pausa una selección de torrents y refresca sólo al final', async () => {
+    const store = useAnimeStore()
+    store.loadQbt = vi.fn().mockResolvedValue(undefined)
+    store.loadLibrary = vi.fn().mockResolvedValue(undefined)
+
+    const result = await store.qbtActionBatch('pause', ['h1', 'h1', 'h2'])
+
+    expect(result).toEqual({ total: 2, successful: 2, failed: 0 })
+    expect(api.post).toHaveBeenCalledTimes(2)
+    expect(api.post).toHaveBeenNthCalledWith(1, '/api/anime/qbt/action', {
+      action: 'pause', hash: 'h1', delete_files: false,
+    })
+    expect(store.loadQbt).toHaveBeenCalledOnce()
+    expect(store.loadLibrary).toHaveBeenCalledOnce()
+  })
 })
