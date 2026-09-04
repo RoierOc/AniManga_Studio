@@ -128,9 +128,20 @@ fn tier_shaders(tier: &str) -> &'static [&'static str] {
     }
 }
 
+/// Serializa la cadena como una lista de rutas de mpv. En Windows el separador de las
+/// opciones de tipo path-list es `;`, así que el `C:` de cada ruta no se interpreta como
+/// una operación del comando porque viaja en un único argumento de `mpv_command`.
+fn shader_paths(tier: &str) -> String {
+    tier_shaders(tier)
+        .iter()
+        .map(|shader| format!("{SHADER_DIR}/{shader}"))
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 #[cfg(test)]
 mod anime4k_tier_tests {
-    use super::{dither_depth_for_display, tier_shaders};
+    use super::{shader_paths, tier_shaders};
 
     #[test]
     fn ultra_es_una_doble_pasada_soft_en_hq() {
@@ -163,9 +174,11 @@ mod anime4k_tier_tests {
     }
 
     #[test]
-    fn dithering_respeta_la_profundidad_del_swapchain() {
-        assert_eq!(dither_depth_for_display(true), "10");
-        assert_eq!(dither_depth_for_display(false), "8");
+    fn la_cadena_se_envia_como_una_lista_atomica_de_rutas_windows() {
+        let paths = shader_paths("maximo");
+        assert_eq!(paths.matches(';').count(), 7);
+        assert!(paths.starts_with("C:/Program Files (x86)/mpv/mpv/shaders/"));
+        assert!(paths.ends_with("Anime4K_Thin_HQ.glsl"));
     }
 }
 
@@ -407,13 +420,6 @@ fn hdr_format(hdr: bool) -> DXGI_FORMAT {
     } else {
         DXGI_FORMAT_B8G8R8A8_UNORM
     }
-}
-
-/// mpv debe cuantizar a la profundidad real de la superficie que recibe el resultado.
-/// En HDR la interop usa R10G10B10A2; dejar `auto` hizo que libmpv eligiera 8 bits y
-/// aplicara dithering a cada frame, justo donde el doble CNN puede hacer visible el shimmer.
-fn dither_depth_for_display(display_hdr: bool) -> &'static str {
-    if display_hdr { "10" } else { "8" }
 }
 
 /// Etiqueta el swapchain como SDR sRGB (G22/P709). Es el DEFAULT: la inmensa mayoría
@@ -673,14 +679,17 @@ impl Player {
             init.set_property("dscale", "mitchell")?;
             init.set_property("cscale", "ewa_lanczossoft")?;
             init.set_property("correct-downscaling", "yes")?;
-            // La superficie interop ya se creó con el formato real del display: 10 bits en HDR,
-            // 8 en SDR. `auto` estaba resolviendo a 8 bits incluso con FBO rgba16f, cuantizando
-            // las sombras procesadas antes de entregarlas al swapchain.
-            init.set_property("dither-depth", dither_depth_for_display(want_hdr))?;
+            // Recuperar el valor original de mpv: la superficie final puede ser de 8 o 10 bits,
+            // y mpv decide el dithering según el destino real, igual que el mpv.exe del usuario.
+            init.set_property("dither-depth", "auto")?;
             // Anime4K ya genera una imagen determinista por fotograma. El dithering temporal de
             // mpv rota ocho patrones en cada frame; en una LCD esa rotación se percibe como
             // shimmer, especialmente en sombras y tras un segundo pase CNN.
             init.set_property("temporal-dither", "no")?;
+            // La shell presenta su propio swapchain. No conviene que libmpv bloquee el render
+            // esperando su reloj de audio: el vblank real se informa con report_swap() después
+            // de Present(1), evitando un frame que llega tarde y parece parpadeo/stutter.
+            init.set_property("video-timing-offset", "0")?;
             // Réplica del bloque HDR del mpv.conf del usuario. Solo tocan contenido HDR;
             // inofensivas para SDR.
             init.set_property("hdr-compute-peak", "yes")?;
@@ -805,7 +814,11 @@ impl Player {
             let d = t_draw.elapsed().as_micros() as u64;
             if d > self.max_draw_us.get() { self.max_draw_us.set(d); }
             let t_pres = Instant::now();
-            let _ = self.swapchain.Present(1, DXGI_PRESENT(0));
+            let presented = self.swapchain.Present(1, DXGI_PRESENT(0)).is_ok();
+            if presented {
+                // El Present ya ocurrió: libmpv puede ajustar su reloj a la presentación real.
+                self.render_ctx.report_swap();
+            }
             let p = t_pres.elapsed().as_micros() as u64;
             if p > self.max_present_us.get() { self.max_present_us.set(p); }
         }
@@ -879,12 +892,6 @@ impl Player {
         set_srgb_colorspace(&self.swapchain);
         let was_hdr_display = self.display_hdr.get();
         self.display_hdr.set(want_hdr);
-        // La ventana puede cambiar de monitor SDR a HDR (o al revés). El swapchain ya fue
-        // recreado con la profundidad nueva; mantener el valor anterior volvería a cuantizar
-        // la salida a 8 bits o a solicitar 10 bits sobre una superficie SDR.
-        let _ = self
-            .mpv
-            .set_property("dither-depth", dither_depth_for_display(want_hdr));
         let (phys_w, phys_h) = monitor_physical(&monitor_output_desc(&self.device, self.main_hwnd));
         log_line(&format!(
             "[resize] {}x{} -> {}x{}  display_hdr {} -> {}  monitor_fisico={phys_w}x{phys_h}",
@@ -998,15 +1005,17 @@ impl Player {
         self.needs_render.set(true); // reflejar sub-scale/sub-delay/etc. aunque esté en pausa
     }
 
-    /// Aplica un tier de Anime4K en vivo (una ruta por comando; NUNCA unir con ':'
-    /// porque el 'C:' del drive rompe la lista y no carga ningún shader).
+    /// Aplica un tier de Anime4K en vivo con un único cambio de lista. Hacer `clr` + ocho
+    /// `append` dejaba hasta ocho recompilaciones intermedias y exponía un pipeline incompleto
+    /// durante el cambio; `set` reemplaza la lista entera de forma atómica.
     pub fn set_shaders(&self, tier: &str) {
-        *self.tier.borrow_mut() = tier.to_string();
-        let _ = mpv_command_args(&self.mpv, &["change-list", "glsl-shaders", "clr", ""]);
-        for s in tier_shaders(tier) {
-            let path = format!("{SHADER_DIR}/{s}");
-            let _ = mpv_command_args(&self.mpv, &["change-list", "glsl-shaders", "append", &path]);
+        let paths = shader_paths(tier);
+        let rc = mpv_command_args(&self.mpv, &["change-list", "glsl-shaders", "set", &paths]);
+        if rc < 0 {
+            log_line(&format!("[shaders] no se pudo aplicar tier={tier} rc={rc}"));
+            return;
         }
+        *self.tier.borrow_mut() = tier.to_string();
         // (Sin shader de ganancia: distorsionaba el color tras Anime4K —rojo/saturado— y
         // metía un pase extra que lagueaba. El match de brillo con mpv es ahora automático
         // vía el colorspace correcto por contenido, ver apply_content_colorspace.)
