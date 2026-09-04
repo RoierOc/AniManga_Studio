@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { api } from '@/lib/api'
 import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
@@ -22,6 +22,7 @@ import { useTagsStore } from '@/stores/tags'
 import { opcionesGenero, generoActivo, conGenero } from '@/lib/generos'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { useGridKeyboard } from '@/lib/useGridKeyboard'
+import { onSSE } from '@/lib/sse'
 
 const ui = useUiStore()
 const manga = useMangaStore()
@@ -227,6 +228,8 @@ function openItem(m) {
 }
 
 const findingCovers = ref(false)
+let stopLibraryEvents = null
+let libraryReloadTimer = 0
 
 async function load() {
   loading.value = true; error.value = ''
@@ -283,7 +286,24 @@ async function findCovers() {
   } catch (_) { ui.toast('Error buscando portadas', 'error') }
   finally { findingCovers.value = false }
 }
-onMounted(() => { load(); if (!manga.updatesLoaded) manga.loadUpdates(); if (sort.value === 'size') ensureSizes(); manga.loadForYou() })
+function scheduleLibraryReload() {
+  if (libraryReloadTimer) return
+  libraryReloadTimer = window.setTimeout(() => {
+    libraryReloadTimer = 0
+    load()
+  }, 180)
+}
+
+onMounted(() => {
+  stopLibraryEvents = onSSE('library_changed', scheduleLibraryReload)
+  load(); if (!manga.updatesLoaded) manga.loadUpdates(); if (sort.value === 'size') ensureSizes(); manga.loadForYou()
+})
+onUnmounted(() => {
+  stopLibraryEvents?.()
+  stopLibraryEvents = null
+  if (libraryReloadTimer) window.clearTimeout(libraryReloadTimer)
+  libraryReloadTimer = 0
+})
 // Reload the grid after a manga is deleted from the modal.
 watch(() => manga.libraryDirty, () => load())
 </script>

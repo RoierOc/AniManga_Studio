@@ -16,6 +16,7 @@ from api.runtime import (manga_dir, get_library_mode, normalize_chapter,
                          cache_get, cache_set, write_json_atomic)
 from api.index_db import cached_measure, prune
 from api.library_cache import SnapshotCache
+from api.library_events import current_revision, mark_changed
 from api.observability import record_error
 
 
@@ -75,14 +76,10 @@ def _load_cover_cache() -> dict:
     return {}
 
 
-_library_snapshot_revision = 0
-
-
 def _save_cover_cache(cache: dict):
-    global _library_snapshot_revision
     try:
         write_json_atomic(_cover_cache_file(), cache, durable=False)
-        _library_snapshot_revision += 1
+        mark_changed()
     except Exception:
         pass
 
@@ -233,6 +230,7 @@ def _fetch_persist_cover(folder: Path) -> bool:
     out = _normalize_cover_bytes(raw) or raw
     try:
         (folder / 'cover.jpg').write_bytes(out)
+        mark_changed()
         return True
     except Exception:
         return False
@@ -254,14 +252,15 @@ def _library_snapshot_key(mode: str):
     """Identidad de la foto sin hacer un stat por obra.
 
     Las rutas y el modo forman parte de la clave para que cambiar de raíz o de Biblioteca no
-    reutilice datos ajenos. Los cambios dentro de una carpeta se detectan en el próximo ciclo de
-    10 s; comprobar cada carpeta en cada petición reintroduciría el coste DrvFS que evitamos.
+    reutilice datos ajenos. Las mutaciones de la aplicación cambian la revisión en O(1); los
+    cambios manuales externos se detectan en el próximo ciclo de 10 s. Comprobar cada carpeta en
+    cada petición reintroduciría el coste DrvFS que evitamos.
     """
     from api.roots import roots as _roots
 
     return (
         mode,
-        _library_snapshot_revision,
+        current_revision(),
         tuple((r.get('id'), r.get('manga'), r.get('upscaled')) for r in _roots()),
     )
 
@@ -398,7 +397,7 @@ def _scan_folders_fresh():
 
 
 def _scan_folders():
-    """Devuelve la instantánea de Biblioteca, con refresco SWR cada 10 segundos."""
+    """Devuelve la instantánea de Biblioteca, con SWR y revisión por mutación."""
     mode = get_library_mode()
     key = _library_snapshot_key(mode)
     return _library_snapshot.get(
@@ -800,6 +799,7 @@ def edit_metadata(title):
     if not all_folders:
         return jsonify({'error': 'not found'}), 404
     folder = series_dir(title)   # la portada nueva va al disco principal de la obra
+    changed = False
 
     # Update cover image — quita primero cualquier cover.* viejo para que la prioridad
     # jpg→png→webp del lector no deje una portada anterior "ensombreciendo" a la nueva.
@@ -815,6 +815,7 @@ def edit_metadata(title):
         data = _b64.b64decode(raw)
         _clear_covers()
         (folder / 'cover.jpg').write_bytes(_normalize_cover_bytes(data) or data)
+        changed = True
     elif cover_url and cover_url.startswith('http'):
         try:
             # NO mandar Referer: el CDN de MangaDex (uploads.mangadex.org) devuelve un
@@ -830,6 +831,7 @@ def edit_metadata(title):
                 else:
                     ext = 'webp' if 'webp' in ct else 'png' if 'png' in ct else 'jpg'
                     (folder / f'cover.{ext}').write_bytes(r.content)
+                changed = True
             else:
                 return jsonify({'error': f'no se pudo descargar la portada ({r.status_code})'}), 502
         except Exception as e:
@@ -858,8 +860,12 @@ def edit_metadata(title):
                 except OSError:
                     pass
             return jsonify({'error': f'No se pudo renombrar: {e}'}), 500
+        changed = True
+        mark_changed()
         return jsonify({'ok': True, 'new_title': new_title})
 
+    if changed:
+        mark_changed()
     return jsonify({'ok': True})
 
 
@@ -1129,6 +1135,8 @@ def download_covers_offline():
             except Exception:
                 _offline_cover_status["errors"] += 1
         _offline_cover_status["running"] = False
+        if _offline_cover_status["done"]:
+            mark_changed()
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"ok": True, "total": len(targets), "message": f"Descargando {len(targets)} portadas..."})

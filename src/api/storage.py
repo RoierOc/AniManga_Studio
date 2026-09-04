@@ -28,6 +28,7 @@ from api.runtime import manga_dir, upscaled_dir, get_library_mode, QA_DIR
 from api.index_db import cached_measure, drop, prune
 from api.observability import record_error
 from api.storage_cache import summary as cache_summary, purge as purge_cache
+from api.library_events import mark_changed
 
 storage_bp = Blueprint("storage", __name__)
 
@@ -538,8 +539,10 @@ def series_delete():
             targets.append(_safe_child(Path(_r["manga"]), title))
 
     freed = 0
+    deleted_any = False
     for d in targets:
         if d and d.is_dir():
+            deleted_any = True
             freed += _tree_bytes(str(d))
             shutil.rmtree(d, ignore_errors=True)
     # Invalidar la medición cacheada por mtime (index_db) para que summary/series reflejen el
@@ -557,6 +560,8 @@ def series_delete():
                 drop(_ns, f'{title}@{_r["id"]}')
             except Exception as e:
                 record_error("storage", e, op="drop_measure", title=title, root=_r["id"])
+    if deleted_any:
+        mark_changed()
     return jsonify({"ok": True, "freed": freed, "scope": scope})
 
 

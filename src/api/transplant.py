@@ -44,6 +44,7 @@ from api.download import _fetch_with_retry, _dl_semaphore, _chapter_file_prefix
 from api.anilist import title_variants, chapters_by_al_id
 from api.contracts import CoverageBody, VersionsBody, DownloadVersionBody, validate_and_log
 from api.observability import record_error  # "fuente caída ≠ sin capítulos" contable + SSE
+from api.library_events import mark_changed
 from api import versions_db
 from api import source_health  # histórico de aciertos → acota el fan-out del descubrimiento
 
@@ -586,6 +587,7 @@ def _resolve_pending_volumes(title: str, es_manga_id) -> dict:
     pending = _pending_volumes(title)
     if not pending:
         return {"resolved": [], "unresolved": []}
+    original_prefixes = [vol.get("prefix") for vol in pending]
     es_map = _chapters_map(int(es_manga_id))
     es_sorted = sorted(((k, v.get("pageCount")) for k, v in es_map.items()), key=lambda kv: _chnum(kv[0]))
 
@@ -639,6 +641,8 @@ def _resolve_pending_volumes(title: str, es_manga_id) -> dict:
         unresolved.append({**vol, **pending_info[original_prefix]})
 
     _write_pending_volumes(title, remaining)
+    if resolved or [vol.get("prefix") for vol in remaining] != original_prefixes:
+        mark_changed()
     return {"resolved": resolved, "unresolved": unresolved}
 
 
@@ -2013,7 +2017,8 @@ def _run_download_version(task_id: str, title: str, manga_id):
             try:
                 urls = _chapter_page_urls(info["id"])
                 if urls:
-                    _download_chapter_to(folder, urls, _chapter_file_prefix(chn))
+                    if _download_chapter_to(folder, urls, _chapter_file_prefix(chn)):
+                        mark_changed()
             except Exception:
                 pass
             done += 1
@@ -2365,6 +2370,7 @@ def resolve_volume_manual():
         _unstage_volume(title, staged[prefix], prefix)
         return jsonify({"error": res["error"]}), 400
     _write_pending_volumes(title, others)
+    mark_changed()
     return jsonify({"ok": True, "chapters": [c for c, _ in chapter_pages]})
 
 
@@ -2961,6 +2967,7 @@ def _run_chapters(task_id: str, title: str, chapters: list, art: dict, es: dict,
                 _replace_chapter_in_place(chapter_dir(title, prefix) or out_dir,
                                           prefix, stage, res["pages"])
                 _invalidate_upscaled(title, prefix)
+                mark_changed()
                 translated.add(chn)
                 done_ch.append({"chapter": chn, **{k: res[k] for k in
                                 ("trans", "fallback", "english", "en_pages", "es_pages", "rescued") if k in res}})

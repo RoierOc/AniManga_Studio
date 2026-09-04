@@ -27,6 +27,7 @@ from api.runtime import (
 )
 from api.observability import thread_guard
 from api.roots import series_dir, series_dirs, series_pages, series_up_dir
+from api.library_events import mark_changed
 
 
 def _folders_for(actual_folder):
@@ -861,6 +862,7 @@ def start_upscale_chapter(data):
         # as-is into output_folder so the resume-skip below treats them exactly
         # like already-upscaled pages — no change to the GPU worker/selection logic.
         exclude_pages = set(data.get('exclude_pages') or data.get('excludePages') or [])
+        excluded_written = False
         if exclude_pages:
             import shutil as _shutil
             from api.roots import up_dir_for
@@ -870,6 +872,9 @@ def start_upscale_chapter(data):
                     dst.mkdir(parents=True, exist_ok=True)
                     if not (dst / p.name).exists():
                         _shutil.copy2(p, dst / p.name)
+                        excluded_written = True
+        if excluded_written:
+            mark_changed()
 
         # Skip pages already upscaled (resume support). Ya escalado en cualquier disco cuenta.
         up_stems = {p.stem for p in _pages_for(actual_folder, ch_prefix, upscaled=True)}
@@ -1303,6 +1308,8 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
         for img_path in images:
             if upscale_id in _upscale_cancel_requested:
                 _upscale_cancel_requested.discard(upscale_id)
+                if processed:
+                    mark_changed()
                 set_upscale_status(upscale_id, {
                     'status': 'cancelled',
                     'current': processed,
@@ -1413,6 +1420,9 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
             ctypes.CDLL('libc.so.6').malloc_trim(0)
         except Exception:
             pass
+
+        if processed:
+            mark_changed()
 
         if processed == total:
             set_upscale_status(upscale_id, {

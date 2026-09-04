@@ -33,6 +33,7 @@ from api.runtime import (MANGA_DIR, UPSCALED_DIR, manga_dir, upscaled_dir, norma
                          write_json_atomic)
 from api.roots import series_dir, series_up_dir  # resuelve el DISCO de la obra
 from api.cbz import _list_entries, _extract, _ARCHIVE_EXTS, _MIME
+from api.library_events import mark_changed
 
 import_bp = Blueprint('import_cbz', __name__)
 
@@ -470,6 +471,7 @@ def commit():
     meta['imported'] = True
     meta['title'] = title
     _write_meta(folder, meta)
+    mark_changed()
 
     # limpiar staging
     try:

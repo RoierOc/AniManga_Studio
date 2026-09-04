@@ -30,6 +30,7 @@ from api.runtime import (
 # `series_dir(title, root_id)` decide EN QUÉ DISCO cae la descarga: el que pida la UI, o el
 # que ya tenga la obra. Ver `api/roots.py`.
 from api.roots import series_dir
+from api.library_events import mark_changed
 
 
 download_bp = Blueprint('download', __name__)
@@ -418,6 +419,7 @@ def download_manga():
 
 def _run_download_chapter(download_id, title, chapter_norm, chapter_id, manga_id, root_id=None):
     """Background thread: resolve chapter ID if needed, then download all pages."""
+    downloaded_count = 0
     with _dl_semaphore:
         folder = series_dir(title, root_id)
         folder.mkdir(parents=True, exist_ok=True)
@@ -481,10 +483,11 @@ def _run_download_chapter(download_id, title, chapter_norm, chapter_id, manga_id
                 'total': len(pages),
             })
 
-            downloaded_count = 0
             for i, page in enumerate(pages, 1):
                 if _download_cancel_flags.get(download_id):
                     _download_cancel_flags.pop(download_id, None)
+                    if downloaded_count:
+                        mark_changed()
                     set_download_status(download_id, {
                         'status': 'cancelled', 'title': title,
                         'chapter': chapter_norm, 'progress': i - 1, 'total': len(pages),
@@ -509,6 +512,7 @@ def _run_download_chapter(download_id, title, chapter_norm, chapter_id, manga_id
             _download_cancel_flags.pop(download_id, None)
 
             if downloaded_count > 0:
+                mark_changed()
                 set_download_status(download_id, {
                     'status': 'complete', 'title': title, 'chapter': chapter_norm,
                     'pages': downloaded_count, 'progress': len(pages), 'total': len(pages),
@@ -519,6 +523,8 @@ def _run_download_chapter(download_id, title, chapter_norm, chapter_id, manga_id
                 set_download_status(download_id, {'status': 'error', 'message': 'No se pudo descargar ninguna página'})
 
         except Exception as e:
+            if downloaded_count:
+                mark_changed()
             set_download_status(download_id, {'status': 'error', 'message': str(e)})
 
 
@@ -575,6 +581,7 @@ def download_cli():
             if "0 English chapters" in output:
                 set_download_status(download_id, {'status': 'no_chapters', 'message': 'No chapters available'})
             elif result.returncode == 0:
+                mark_changed()
                 set_download_status(download_id, {'status': 'complete', 'message': 'Download complete'})
             else:
                 set_download_status(download_id, {'status': 'error', 'message': result.stderr[:200]})
@@ -609,6 +616,7 @@ def delete_chapter():
                 deleted += 1
 
         if deleted > 0:
+            mark_changed()
             return jsonify({'status': 'ok', 'deleted': deleted})
         return jsonify({'error': 'Capítulo no encontrado'}), 404
 
@@ -656,6 +664,7 @@ def delete_manga():
             pass
 
         if deleted or purged:
+            mark_changed()
             return jsonify({'status': 'ok', 'deleted': deleted, 'purged': purged})
         return jsonify({'error': 'Manga no encontrado'}), 404
 
@@ -750,6 +759,8 @@ def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=
             for i, url in enumerate(page_urls, 1):
                 if _download_cancel_flags.get(download_id):
                     _download_cancel_flags.pop(download_id, None)
+                    if downloaded:
+                        mark_changed()
                     set_download_status(download_id, {
                         'status': 'cancelled',
                         'title': title,
@@ -790,6 +801,7 @@ def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=
             _download_cancel_flags.pop(download_id, None)
 
             if downloaded > 0:
+                mark_changed()
                 set_download_status(download_id, {
                     'status': 'complete',
                     'title': title,
@@ -808,10 +820,13 @@ def _run_source_download(download_id, title, chapter_norm, page_urls, source_id=
                 })
         except Exception as e:
             _download_cancel_flags.pop(download_id, None)
+            if downloaded:
+                mark_changed()
             set_download_status(download_id, {'status': 'error', 'message': str(e)})
 
 
 def run_download(download_id, manga_id, title, max_chapters, root_id=None):
+    downloaded_total = 0
     try:
         chapters_by_num = {}
         offset = 0
@@ -879,10 +894,15 @@ def run_download(download_id, manga_id, title, max_chapters, root_id=None):
                         filename = f"{_chapter_file_prefix(ch)}_{j:03d}.{ext}"
                         with open(folder / filename, 'wb') as f:
                             f.write(r.content)
+                        downloaded_total += 1
             except Exception as e:
                 print(f"Error downloading chapter {ch}: {e}")
 
+        if downloaded_total:
+            mark_changed()
         set_download_status(download_id, {'status': 'complete', 'title': title})
 
     except Exception as e:
+        if downloaded_total:
+            mark_changed()
         set_download_status(download_id, {'status': 'error', 'message': str(e)})
