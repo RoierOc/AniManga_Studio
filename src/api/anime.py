@@ -2445,6 +2445,48 @@ def _compact_library_result(result: list) -> list:
     return compact
 
 
+def _qbt_local_episodes(torrent: dict) -> dict:
+    """Indexa los ficheros locales de un torrent completado, una sola vez por hash.
+
+    La rama de qBittorrent conserva el enlace al torrent para poder administrarlo, pero también
+    debe exponer el mismo contrato local cuando el fichero ya está en disco y el `save_path` no
+    coincide con ninguna carpeta registrada de la serie. El escaneo es por carpeta y aprovecha su
+    caché: resolver la ruta con `_find_video` para cada episodio volvería a pagar un recorrido de
+    DrvFS por cada elemento de un batch.
+    """
+    raw_path = str(torrent.get('content_path') or torrent.get('save_path') or '').strip()
+    if not raw_path:
+        return {}
+
+    content_path = raw_path
+    if _is_wsl() and re.match(r'^[A-Za-z]:[/\\\\]', content_path):
+        content_path = _win_to_wsl(content_path)
+
+    try:
+        path = _Path(content_path)
+        if path.is_dir():
+            return {
+                (ep.get('ep_type', 'episode'), ep.get('num')): ep
+                for ep in _scan_local_episodes(str(path), {})
+            }
+        if path.is_file() and path.suffix.lower() in _VIDEO_EXTS:
+            video = _prefiere_a4k(str(path))
+            original = original_de(video) if video != str(path) else ''
+            return {
+                ('episode', -1): {
+                    'num': -1,
+                    'path': video,
+                    'original_path': original,
+                    'filename': path.name,
+                    'ep_type': 'episode',
+                    'a4k': video != str(path),
+                }
+            }
+    except OSError:
+        pass
+    return {}
+
+
 @anime_bp.route('/library')
 def anime_library_get():
     global _backfill_done
@@ -2512,6 +2554,7 @@ def anime_library_get():
             _qbt_files_cache.pop(h, None)
     result = []
     carpetas_nuevas: dict = {}
+    qbt_local_cache: dict = {}
     for anime_id, anime in lib.items():
         watched_map   = anime.get('watched', {})
         positions_map = anime.get('positions', {})
@@ -2658,6 +2701,23 @@ def anime_library_get():
                 or (ep_data.get('title', '') if not ep_data.get('from_batch') else '')
             )
 
+            # Un torrent completado puede seguir fuera de las carpetas registradas (por ejemplo,
+            # si qBittorrent conservó otro `save_path`). En ese caso no perder el contrato local:
+            # indexar el contenido una vez por hash y casar el episodio desde ese índice.
+            local_ep = None
+            if qbt and qbt.get('progress', 0) >= 1:
+                if ih not in qbt_local_cache:
+                    qbt_local_cache[ih] = _qbt_local_episodes(qbt)
+                local_map = qbt_local_cache[ih]
+                ep_type = ep_data.get('ep_type', 'episode')
+                local_ep = (local_map.get((ep_type, ep_num))
+                            or local_map.get(('episode', ep_num)))
+                # Single-file torrents se registran primero como -1 y se renombran a 1 más abajo.
+                if local_ep is None and ep_num in (-1, 0, 1):
+                    local_ep = local_map.get(('episode', -1))
+            local_path = local_ep.get('path', '') if local_ep else ''
+            original_path = local_ep.get('original_path', '') if local_ep else ''
+
             episodes_out.append({
                 'num': ep_num,
                 'title': actual_title,
@@ -2666,6 +2726,11 @@ def anime_library_get():
                 'state': state,
                 'size': qbt.get('size', 0) if qbt else 0,
                 'in_qbt':     in_qbt,
+                'in_local':   bool(local_path),
+                'local_path': local_path,
+                'original_path': original_path,
+                'a4k':         bool(local_ep and local_ep.get('a4k')),
+                'filename':    local_ep.get('filename', '') if local_ep else '',
                 'added_on':   ep_data.get('added_on', 0),
                 'watched':    bool(watched_map.get(ep_str)),
                 'resume_pos': positions_map.get(ep_str, 0),
@@ -2707,6 +2772,7 @@ def anime_library_get():
         if batch_ep:
             batch_ih   = batch_ep['info_hash']
             ep_files_b = files_map.get(batch_ih, {})
+            local_map_b = qbt_local_cache.get(batch_ih, {})
             for e in episodes_out:
                 if e['num'] > 0 and not e.get('in_qbt'):
                     e['in_qbt']    = True
@@ -2715,6 +2781,14 @@ def anime_library_get():
                     e['state']     = batch_ep.get('state', 'downloading')
                     if not e.get('title'):
                         e['title'] = ep_files_b.get(e['num'], '')
+                    local_ep = (local_map_b.get((e.get('ep_type', 'episode'), e['num']))
+                                or local_map_b.get(('episode', e['num'])))
+                    if local_ep:
+                        e['in_local'] = True
+                        e['local_path'] = local_ep.get('path', '')
+                        e['original_path'] = local_ep.get('original_path', '')
+                        e['a4k'] = bool(local_ep.get('a4k'))
+                        e['filename'] = local_ep.get('filename', '')
 
         for e in episodes_out:
             e['has_thumb'] = f'{anime_id}_{e["num"]}.jpg' in all_thumbs
