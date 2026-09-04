@@ -687,8 +687,7 @@ impl Player {
             // shimmer, especialmente en sombras y tras un segundo pase CNN.
             init.set_property("temporal-dither", "no")?;
             // La shell presenta su propio swapchain. No conviene que libmpv bloquee el render
-            // esperando su reloj de audio: el vblank real se informa con report_swap() después
-            // de Present(1), evitando un frame que llega tarde y parece parpadeo/stutter.
+            // esperando su reloj de audio; Present(1) de DirectComposition marca el ritmo real.
             init.set_property("video-timing-offset", "0")?;
             // Réplica del bloque HDR del mpv.conf del usuario. Solo tocan contenido HDR;
             // inofensivas para SDR.
@@ -814,11 +813,7 @@ impl Player {
             let d = t_draw.elapsed().as_micros() as u64;
             if d > self.max_draw_us.get() { self.max_draw_us.set(d); }
             let t_pres = Instant::now();
-            let presented = self.swapchain.Present(1, DXGI_PRESENT(0)).is_ok();
-            if presented {
-                // El Present ya ocurrió: libmpv puede ajustar su reloj a la presentación real.
-                self.render_ctx.report_swap();
-            }
+            let _presented = self.swapchain.Present(1, DXGI_PRESENT(0)).is_ok();
             let p = t_pres.elapsed().as_micros() as u64;
             if p > self.max_present_us.get() { self.max_present_us.set(p); }
         }
