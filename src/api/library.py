@@ -12,9 +12,11 @@ import os
 from api.resilient_http import http as _http  # retry + backoff + per-host rate limiting
 import threading
 
-from api.runtime import (manga_dir, upscaled_dir, get_library_mode, normalize_chapter,
+from api.runtime import (manga_dir, get_library_mode, normalize_chapter,
                          cache_get, cache_set, write_json_atomic)
 from api.index_db import cached_measure, prune
+from api.library_cache import SnapshotCache
+from api.observability import record_error
 
 
 def _count_pages(path):
@@ -73,9 +75,14 @@ def _load_cover_cache() -> dict:
     return {}
 
 
+_library_snapshot_revision = 0
+
+
 def _save_cover_cache(cache: dict):
+    global _library_snapshot_revision
     try:
         write_json_atomic(_cover_cache_file(), cache, durable=False)
+        _library_snapshot_revision += 1
     except Exception:
         pass
 
@@ -239,7 +246,42 @@ def _chapter_sort_key(value):
 
 library_bp = Blueprint('library', __name__)
 
-def _scan_folders():
+_LIBRARY_SNAPSHOT_TTL = 10.0
+_library_snapshot = SnapshotCache(ttl=_LIBRARY_SNAPSHOT_TTL)
+
+
+def _library_snapshot_key(mode: str):
+    """Identidad de la foto sin hacer un stat por obra.
+
+    Las rutas y el modo forman parte de la clave para que cambiar de raíz o de Biblioteca no
+    reutilice datos ajenos. Los cambios dentro de una carpeta se detectan en el próximo ciclo de
+    10 s; comprobar cada carpeta en cada petición reintroduciría el coste DrvFS que evitamos.
+    """
+    from api.roots import roots as _roots
+
+    return (
+        mode,
+        _library_snapshot_revision,
+        tuple((r.get('id'), r.get('manga'), r.get('upscaled')) for r in _roots()),
+    )
+
+
+def _scan_folders_in_mode(mode: str):
+    """Ejecuta un refresco fuera de la petición conservando su modo de biblioteca."""
+    from api.runtime import set_request_library_mode
+
+    set_request_library_mode(mode)
+    try:
+        return _scan_folders_fresh()
+    finally:
+        set_request_library_mode(None)
+
+
+def _on_library_refresh_error(error: Exception):
+    record_error('library', error, op='scan_refresh')
+
+
+def _scan_folders_fresh():
     # Build a title→cover lookup from local_library.json + disk cover cache
     lib_covers: dict = _load_cover_cache()
     lib_json = Path(manga_dir()) / 'local_library.json'
@@ -353,6 +395,18 @@ def _scan_folders():
     prune(_libup_key, _keys)
     folders.sort(key=lambda x: x['name'].lower())
     return folders
+
+
+def _scan_folders():
+    """Devuelve la instantánea de Biblioteca, con refresco SWR cada 10 segundos."""
+    mode = get_library_mode()
+    key = _library_snapshot_key(mode)
+    return _library_snapshot.get(
+        key,
+        _scan_folders_fresh,
+        refresh_loader=lambda: _scan_folders_in_mode(mode),
+        on_error=_on_library_refresh_error,
+    )
 
 
 @library_bp.route('')
@@ -472,7 +526,6 @@ def get_manga(title):
     if not folders:
         return jsonify({'error': 'Manga not found'}), 404
     name = folders[0].name
-    folder = folders[0]
 
     # Capítulos: la lista de cada disco, fundida por número (un capítulo con páginas en dos
     # discos suma sus páginas, no aparece dos veces).
@@ -896,7 +949,7 @@ def cover_options():
 @library_bp.route('/scan_corrupt/<path:title>')
 def scan_corrupt(title):
     """Check all downloaded images in a manga folder for corruption."""
-    from PIL import Image, UnidentifiedImageError
+    from PIL import Image
 
     from api.roots import series_pages
     # Todas las páginas de la obra, vivan en el disco que vivan: una revisión de integridad
@@ -1079,4 +1132,3 @@ def download_covers_offline():
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"ok": True, "total": len(targets), "message": f"Descargando {len(targets)} portadas..."})
-
