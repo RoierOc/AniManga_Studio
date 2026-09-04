@@ -16,6 +16,8 @@ from decimal import Decimal, InvalidOperation
 
 from api.runtime import (
     write_json_atomic,
+    read_json_safe,
+    DATA_ROOT,
     MANGA_DIR,
     manga_dir,
     upscaled_dir,
@@ -33,6 +35,8 @@ from api.roots import series_dir
 download_bp = Blueprint('download', __name__)
 
 _STATUS_FILE = Path(MANGA_DIR) / '.download_status.json'
+_CHAIN_FILE = Path(DATA_ROOT) / 'download_chains.json'
+_CHAIN_LOCK = threading.RLock()
 _IN_FLIGHT = {'downloading', 'started', 'starting'}
 
 
@@ -246,6 +250,118 @@ def _resume_chained_upscales():
 
 
 _resume_chained_upscales()
+
+
+# Cadenas que incluyen traducción: la descarga ya puede terminar mientras la interfaz está
+# cerrada, pero el paso traducir → 4K necesita conservar la intención y las fuentes confirmadas.
+# El fichero sólo guarda capítulos y estado de workflow; nunca rutas de disco ni credenciales.
+_CHAIN_STAGES = {'downloading', 'ready_to_translate', 'translating'}
+_CHAIN_MAX = 120
+_CHAIN_MAX_CHAPTERS = 500
+
+
+def _load_chains():
+    data = read_json_safe(_CHAIN_FILE, default={})
+    return data if isinstance(data, dict) else {}
+
+
+def _clean_chain(data):
+    if not isinstance(data, dict):
+        return None
+    title = str(data.get('title') or '').strip()[:300]
+    raw_chapters = data.get('chapters')
+    if not title or not isinstance(raw_chapters, list):
+        return None
+
+    chapters, seen = [], set()
+    for chapter in raw_chapters[:_CHAIN_MAX_CHAPTERS]:
+        if chapter is None:
+            continue
+        value = str(chapter).strip()[:100]
+        if value and value not in seen:
+            seen.add(value)
+            chapters.append(value)
+    if not chapters:
+        return None
+
+    def subset(name, fallback):
+        values = data.get(name, fallback)
+        if not isinstance(values, list):
+            values = fallback
+        clean = []
+        for value in values:
+            if value is None:
+                continue
+            value = str(value).strip()[:100]
+            if value and value in seen and value not in clean:
+                clean.append(value)
+        return clean
+
+    stage = str(data.get('stage') or 'downloading')
+    if stage not in _CHAIN_STAGES:
+        stage = 'downloading'
+    return {
+        'title': title,
+        'chapters': chapters,
+        'translatable': subset('translatable', chapters),
+        'waiting': subset('waiting', chapters),
+        'upscale': bool(data.get('upscale')),
+        'translate': bool(data.get('translate')),
+        'stage': stage,
+        'updated_at': time.time(),
+    }
+
+
+def _save_chain(job):
+    with _CHAIN_LOCK:
+        data = _load_chains()
+        data[job['title']] = job
+        if len(data) > _CHAIN_MAX:
+            old = sorted(data, key=lambda key: data[key].get('updated_at', 0))
+            for key in old[:-_CHAIN_MAX]:
+                data.pop(key, None)
+        write_json_atomic(_CHAIN_FILE, data, indent=2, keep_backup=True)
+
+
+def _delete_chain(title):
+    with _CHAIN_LOCK:
+        data = _load_chains()
+        if title not in data:
+            return False
+        data.pop(title, None)
+        write_json_atomic(_CHAIN_FILE, data, indent=2, keep_backup=True)
+        return True
+
+
+@download_bp.route('/chains', methods=['GET'])
+def get_chains():
+    with _CHAIN_LOCK:
+        return jsonify(_load_chains())
+
+
+@download_bp.route('/chains', methods=['POST'])
+def save_chain_route():
+    job = _clean_chain(request.get_json(silent=True) or {})
+    if not job:
+        return jsonify({'error': 'title y chapters son obligatorios'}), 400
+    try:
+        _save_chain(job)
+        return jsonify({'ok': True, 'chain': job})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
+
+
+@download_bp.route('/chains', methods=['DELETE'])
+def delete_chain_route():
+    body = request.get_json(silent=True) or {}
+    title = str(body.get('title') or request.args.get('title') or '').strip()
+    if not title:
+        return jsonify({'error': 'title requerido'}), 400
+    try:
+        _delete_chain(title)
+        return jsonify({'ok': True})
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
 
 def _chapter_file_prefix(chapter):
     chapter_norm = normalize_chapter(chapter)

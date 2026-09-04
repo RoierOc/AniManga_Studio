@@ -16,6 +16,7 @@ let upDoneSeen = new Set()   // upscale ids already refreshed-for (bounded, prun
 let firstStatusSeen = false  // primed on the first SSE snapshot so we never replay OLD terminal toasts
 let tpTermSeen = new Set()   // transplant task ids whose terminal side-effects (toasts/refresh) already fired
 let exportTermSeen = new Set() // export ids whose completion auto-download already fired (bounded, pruned each tick)
+const chainWriteQueue = new Map() // serializa POST/DELETE por obra para no resucitar una cadena
 
 // Preferred MangaDex chapter language (Spanish-first, then English), or the first
 // available — so a freshly opened manga shows one clean language, not all at once.
@@ -205,6 +206,37 @@ const CHAIN_DEFAULT = { upscale: true, translate: false }
 function _loadChain() {
   try { return { ...CHAIN_DEFAULT, ...JSON.parse(localStorage.getItem('manga-chain') || '{}') } }
   catch (_) { return { ...CHAIN_DEFAULT } }
+}
+
+function _serializeChainJob(job) {
+  const strings = (value) => [...new Set((value instanceof Set ? [...value] : (Array.isArray(value) ? value : []))
+    .flatMap(v => { if (v == null) return []; const text = String(v).trim(); return text ? [text] : [] }))]
+  const chapters = strings(job?.chapters)
+  const values = (value, fallback) => strings(value ?? fallback)
+  return {
+    title: String(job?.title || ''),
+    chapters,
+    translatable: values(job?.translatable, chapters).filter(ch => chapters.includes(ch)),
+    waiting: values(job?.waiting, chapters).filter(ch => chapters.includes(ch)),
+    upscale: !!job?.upscale,
+    translate: !!job?.translate,
+    stage: job?.stage || 'downloading',
+  }
+}
+
+function _hydrateChainJob(raw, key = '') {
+  const data = _serializeChainJob({ ...raw, title: raw?.title || key })
+  if (!data.title || !data.chapters.length) return null
+  return { ...data, waiting: new Set(data.waiting) }
+}
+
+function _queueChainWrite(title, operation) {
+  const previous = chainWriteQueue.get(title) || Promise.resolve()
+  const next = previous.catch(() => {}).then(operation)
+  chainWriteQueue.set(title, next)
+  next.finally(() => {
+    if (chainWriteQueue.get(title) === next) chainWriteQueue.delete(title)
+  }).catch(() => {})
 }
 
 export const useMangaStore = defineStore('manga', {
@@ -678,6 +710,9 @@ export const useMangaStore = defineStore('manga', {
       this._hydrateProgress()
       document.addEventListener('visibilitychange', () => { if (document.hidden) this._flushProgress() })
       window.addEventListener('beforeunload', () => this._flushProgress())
+      // La variante con traducción necesita conservar su intención aunque se recargue la UI.
+      // El backend sólo guarda el workflow; las fuentes siguen siendo las confirmadas por obra.
+      this._hydrateChainJobs()
       // Sync the eco toggle (default on) to the backend so MPV-friendly GPU
       // throttling applies from first load, not only after the user toggles it.
       api.post('/api/upscale/mode', { eco: this.eco }).catch(() => {})
@@ -764,10 +799,31 @@ export const useMangaStore = defineStore('manga', {
     // from the live `downloads` snapshot. Needed on page-refresh (dlTasks starts empty) and
     // modal re-open after navigating away mid-download (partial pages on disk hide the source
     // chapter in mergedChapters unless dlTasks is current).
+    async _hydrateChainJobs() {
+      try {
+        const saved = await api.get('/api/download/chains')
+        const jobs = {}
+        for (const [title, raw] of Object.entries(saved || {})) {
+          const job = _hydrateChainJob(raw, title)
+          if (job) jobs[job.title] = job
+        }
+        this.chainJobs = { ...jobs, ...this.chainJobs }
+        this._reconcileChain()
+      } catch (_) { /* el flujo normal no depende de este endpoint */ }
+    },
+    _persistChainJob(job) {
+      const payload = _serializeChainJob(job)
+      if (!payload.title || !payload.chapters.length) return
+      _queueChainWrite(payload.title, () => api.post('/api/download/chains', payload))
+    },
+    _removePersistedChain(title) {
+      if (!title) return
+      _queueChainWrite(title, () => api.del('/api/download/chains', { body: { title } }))
+    },
     // ── Cadena: qué pasa DESPUÉS de descargar ────────────────────────────────────────────
     // El flujo real del usuario es descargar+escalar; traducir es la excepción. Se arma al
-    // pulsar el botón y avanza sola con el snapshot SSE (mismo patrón que _reconcileExports:
-    // vive en el store, así que sigue aunque cierres el modal o te vayas de la vista).
+    // pulsar el botón y avanza sola con el snapshot SSE. La intención se guarda en el backend
+    // para que una recarga no convierta una descarga terminada en un capítulo olvidado.
     //
     // El ORDEN no es negociable: traducir reescribe el arte e invalida el 4K, así que si hay
     // traducción se escala DESPUÉS. Hacerlo al revés tira las horas de GPU (ver upscale_cost).
@@ -819,7 +875,11 @@ export const useMangaStore = defineStore('manga', {
           }
         }
       }
-      if (!upscale && !translate) { delete this.chainJobs[title]; return }
+      if (!upscale && !translate) {
+        delete this.chainJobs[title]
+        this._removePersistedChain(title)
+        return
+      }
 
       // FUSIÓN, no reemplazo. Una segunda tanda sobre el mismo manga amplía la cadena viva en vez
       // de tirarla. Sólo se fusiona si sigue en fase de descarga: si ya está traduciendo, sus
@@ -830,15 +890,18 @@ export const useMangaStore = defineStore('manga', {
         prev.translatable = [...new Set([...(prev.translatable || []), ...translatable])]
         prev.upscale = prev.upscale || upscale
         prev.translate = prev.translate || translate
+        this._persistChainJob(prev)
         return
       }
-      this.chainJobs[title] = {
+      const job = {
         title,
         chapters: list,
         translatable,
         waiting: new Set(list),
         upscale, translate, stage: 'downloading',
       }
+      this.chainJobs[title] = job
+      this._persistChainJob(job)
     },
 
     // Fases de un capítulo dentro de la cadena, para pintarlas. Devuelve null si no está en
@@ -864,8 +927,34 @@ export const useMangaStore = defineStore('manga', {
       for (const j of Object.values(this.chainJobs)) this._reconcileChainJob(j)
     },
 
+    _startChainTranslation(j, chapters) {
+      j.stage = 'translating'
+      this._persistChainJob(j)
+      Promise.resolve(this.tpRun(chapters)).then((ok) => {
+        if (ok === false && this.chainJobs[j.title] === j && j.stage === 'translating') {
+          j.stage = 'ready_to_translate'
+          this._persistChainJob(j)
+        }
+      }).catch(() => {
+        if (this.chainJobs[j.title] === j && j.stage === 'translating') {
+          j.stage = 'ready_to_translate'
+          this._persistChainJob(j)
+        }
+      })
+    },
+
     _reconcileChainJob(j) {
-      if (!j || j.stage !== 'downloading') return
+      if (!j) return
+      // Si todos los capítulos acabaron mientras la página estaba cerrada, no podemos ejecutar
+      // `tpRun` a ciegas: necesita el manga abierto y sus dos fuentes confirmadas. Se queda en
+      // este estado durable y se retoma al abrir la obra.
+      if (j.stage === 'ready_to_translate') {
+        if (this.current?.id !== j.title || !this.tp.artSel || !this.tp.esSel) return
+        this._startChainTranslation(j, (j.translatable || []).filter(c => j.chapters.includes(c)))
+        return
+      }
+      if (j.stage !== 'downloading') return
+      let changed = false
       for (const v of Object.values(this.downloads)) {
         if (v.title !== j.title) continue
         const ch = String(v.chapter || '')
@@ -875,22 +964,40 @@ export const useMangaStore = defineStore('manga', {
         // 'done' a pelo hace que la cadena no salte JAMÁS y, peor, que cada descarga buena
         // caiga en la rama de fallo. `_DONE_LIKE` es el criterio del repo para "acabó bien".
         j.waiting.delete(ch)
+        changed = true
         if (_DONE_LIKE.has(v.status)) {
           // Sin traducción de por medio se escala YA, capítulo a capítulo: la GPU trabaja
           // mientras el resto sigue bajando. El worker GPU es una cola única, así que
           // encolarlos según llegan no compite con nada.
-          if (!j.translate && j.upscale) this.upscaleChapter(ch, { silent: true })
+          if (!j.translate && j.upscale) {
+            const opts = { silent: true }
+            if (this.current?.id !== j.title) opts.title = j.title
+            this.upscaleChapter(ch, opts)
+          }
         } else {
           j.chapters = j.chapters.filter(x => x !== ch)   // lo que no bajó no se encadena
         }
       }
+      if (changed) this._persistChainJob(j)
       if (j.waiting.size) return
-      if (!j.chapters.length) { delete this.chainJobs[j.title]; return }
+      if (!j.chapters.length) { delete this.chainJobs[j.title]; this._removePersistedChain(j.title); return }
       // Sólo se manda a traducir lo que EXISTE en ambas fuentes y además se descargó.
       const tr = (j.translatable || []).filter(c => j.chapters.includes(c))
-      if (j.translate && tr.length) { j.stage = 'translating'; this.tpRun(tr) }
-      else if (j.translate && j.upscale) { this.upscaleChapters(j.chapters); delete this.chainJobs[j.title] }
-      else delete this.chainJobs[j.title]   // los escalados ya se lanzaron uno a uno
+      if (j.translate && tr.length) {
+        if (this.current?.id !== j.title || !this.tp.artSel || !this.tp.esSel) {
+          j.stage = 'ready_to_translate'
+          this._persistChainJob(j)
+          return
+        }
+        this._startChainTranslation(j, tr)
+      } else if (j.translate && j.upscale) {
+        this.upscaleChapters(j.chapters)
+        delete this.chainJobs[j.title]
+        this._removePersistedChain(j.title)
+      } else {
+        delete this.chainJobs[j.title]   // los escalados ya se lanzaron uno a uno
+        this._removePersistedChain(j.title)
+      }
     },
 
     _reconcileDownloads() {
@@ -935,6 +1042,7 @@ export const useMangaStore = defineStore('manga', {
       const j = this.chainJobs[st.title]
       if (j && j.stage === 'translating') {
         delete this.chainJobs[st.title]
+        this._removePersistedChain(st.title)
         if (j.upscale && st.status === 'done') this.upscaleChapters(j.chapters)
       }
       const n = (st.chapters || []).length
@@ -1073,6 +1181,9 @@ export const useMangaStore = defineStore('manga', {
         // Rebuild chapter download tracking so mid-download re-opens show the progress ring
         // instead of the partial pages.
         this._reconcileDownloads()
+        // Una cadena con traducción que terminó de descargar sin la pestaña abierta queda lista
+        // aquí, después de reconstruir las fuentes confirmadas del manga.
+        this._reconcileChain()
       }
     },
 
@@ -1346,8 +1457,8 @@ export const useMangaStore = defineStore('manga', {
 
     async tpRun(chapters) {
       const ui = useUiStore(); const t = this.tp
-      if (!t.artSel || !t.esSel) { ui.toast('Elige fuente de arte y de español', 'error'); return }
-      if (!await this._tpConfirmUpscaleLoss(chapters)) return
+      if (!t.artSel || !t.esSel) { ui.toast('Elige fuente de arte y de español', 'error'); return false }
+      if (!await this._tpConfirmUpscaleLoss(chapters)) return false
       await this._tpConfirm()
       try {
         const res = await api.post('/api/transplant/run', { title: this.current.id, chapters: chapters || 'all', qa: this.qaMode })
@@ -1356,8 +1467,10 @@ export const useMangaStore = defineStore('manga', {
         t.runStatus = { phase: 'start', chapterTotal: (res.chapters || []).length }
         ui.toast(`Traduciendo ${(res.chapters || []).length} capítulo(s)…`, 'info')
         // Progreso + terminación llegan por el snapshot SSE (_reconcileTransplant); sin polling.
+        return true
       } catch (e) {
         ui.toast(e?.body?.includes('no chapters') ? 'No hay capítulos comunes a ambas fuentes' : 'No se pudo iniciar', 'error')
+        return false
       }
     },
     async tpCancel() {
@@ -1656,11 +1769,13 @@ export const useMangaStore = defineStore('manga', {
     },
 
     async upscaleChapter(chapter, opts = {}) {
+      const title = opts.title || this.current?.id
+      if (!title) return false
       const chKey = String(chapter)
-      this.upTasks[chKey] = taskId(this.current.id, chKey, 'upscale')
+      if (this.current?.id === title) this.upTasks[chKey] = taskId(title, chKey, 'upscale')
       try {
         const res = await api.post('/api/upscale/upscale_chapter', {
-          title: this.current.id, chapter, eco: opts.eco ?? this.eco, fast: opts.fast ?? false,
+          title, chapter, eco: opts.eco ?? this.eco, fast: opts.fast ?? false,
           ...(opts.excludePages?.length ? { exclude_pages: opts.excludePages } : {}),
           // ⚠️ AQUÍ NO va la carpeta elegida. El selector dice dónde caen las DESCARGAS; el
           // escalado no descarga nada: lee páginas que ya existen y escribe el 4K al lado de
@@ -1669,12 +1784,12 @@ export const useMangaStore = defineStore('manga', {
         })
         // Use the backend's real task id so the progress ring matches SSE keys
         // even if the optimistic id normalization differs.
-        if (res?.task_id) this.upTasks[chKey] = res.task_id
+        if (res?.task_id && this.current?.id === title) this.upTasks[chKey] = res.task_id
         if (!opts.silent) useUiStore().toast(`Escalando 4K · cap. ${chapter}`, 'info')
         return true
       } catch (_) {
         if (!opts.silent) useUiStore().toast('No se pudo iniciar el escalado', 'error')
-        delete this.upTasks[chKey]
+        if (this.current?.id === title) delete this.upTasks[chKey]
         return false
       }
     },

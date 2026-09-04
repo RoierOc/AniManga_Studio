@@ -2,6 +2,8 @@
 import sys
 from pathlib import Path
 
+from flask import Flask
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
 
@@ -60,3 +62,27 @@ def test_la_cadena_invoca_el_mismo_lanzador_de_upscale(monkeypatch):
     }]
     assert d.download_status['t2']['chain_status'] == 'started'
     assert d.download_status['t2']['chain_task_id'] == 'up-2'
+
+
+def test_las_cadenas_se_guardan_y_se_eliminan_por_titulo(monkeypatch, tmp_path):
+    from api import download as d
+
+    app = Flask(__name__)
+    app.register_blueprint(d.download_bp, url_prefix='/api/download')
+    monkeypatch.setattr(d, '_CHAIN_FILE', tmp_path / 'download_chains.json')
+
+    client = app.test_client()
+    response = client.post('/api/download/chains', json={
+        'title': 'Obra', 'chapters': ['1', '1', '2'],
+        'waiting': ['2'], 'translatable': ['1'],
+        'upscale': True, 'translate': True, 'stage': 'downloading',
+    })
+
+    assert response.status_code == 200
+    saved = client.get('/api/download/chains').get_json()['Obra']
+    assert saved['chapters'] == ['1', '2']
+    assert saved['waiting'] == ['2']
+    assert saved['translatable'] == ['1']
+
+    assert client.delete('/api/download/chains', json={'title': 'Obra'}).status_code == 200
+    assert client.get('/api/download/chains').get_json() == {}
