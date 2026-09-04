@@ -163,9 +163,6 @@ const continueRail = computed(() => continueItems.value.map(m => ({
   progress: m._resume.pct || 0,
 })))
 
-const { selected: gridSelected, count: gridSelectionCount, clear: clearGridSelection, onKey: onGridKey } =
-  useGridKeyboard(() => filtered.value.map(m => m.id))
-
 /* Aquí vivía un `MediaHero` con el arte de tu propia colección. Retirado por decisión del
    usuario: el 33 % de la biblioteca no tiene `bannerImage` en AniList, así que caía a la PORTADA
    difuminada — y una portada tope 1000 px estirada a un marco de 1341 px de ancho se ve mal por
@@ -204,6 +201,9 @@ const filtered = computed(() => {
   }[sort.value]
   return cmp ? [...list].sort(cmp) : list
 })
+
+const { selected: gridSelected, count: gridSelectionCount, clear: clearGridSelection, onKey: onGridKey } =
+  useGridKeyboard(() => filtered.value.map(m => m.id))
 
 const totals = computed(() => ({
   series: items.value.length,

@@ -18,6 +18,7 @@ import Select from '@/components/ui/Select.vue'
 import { useTagsStore } from '@/stores/tags'
 import { opcionesGenero, generoActivo, conGenero } from '@/lib/generos'
 import DensityToggle from '@/components/ui/DensityToggle.vue'
+import { useGridKeyboard } from '@/lib/useGridKeyboard'
 
 const store = useAnimeStore()
 const tags = useTagsStore()
@@ -112,6 +113,9 @@ const filtered = computed(() => {
   })
   return list
 })
+
+const { selected: gridSelected, count: gridSelectionCount, clear: clearGridSelection, onKey: onGridKey } =
+  useGridKeyboard(() => filtered.value.map(a => a.id))
 
 // Lo que responde la pregunta de verdad: de esa temporada, qué terminaste y qué quedó a medias.
 // Se calcula sobre la lista ya filtrada, así que respeta también la búsqueda.
@@ -273,9 +277,20 @@ function openMenu(e, a) {
         </template>
       </template>
     </EmptyState>
-    <TransitionGroup v-else name="grid" tag="div" class="grid">
+    <p v-if="gridSelectionCount && !store.loading && !(store.loadError && !store.library.length) && filtered.length"
+       class="grid__selection" aria-live="polite">
+      <span>{{ gridSelectionCount }} marcada(s) · usa Espacio para alternar</span>
+      <button type="button" data-tip="Quitar marcas" @click="clearGridSelection">Limpiar</button>
+    </p>
+
+    <TransitionGroup v-if="!store.loading && !(store.loadError && !store.library.length) && filtered.length"
+                     name="grid" tag="div" class="grid" role="grid"
+                     aria-label="Biblioteca de anime" aria-multiselectable="true"
+                     @keydown="onGridKey">
       <AnimeCard v-for="a in filtered" :key="a.id" :anime="a" @open="store.openDetail($event)" @play="playFromCard"
-                 :class="{ 'is-returned': String(a.id) === ultimaTarjeta }"
+                 data-grid-item :data-grid-key="a.id" role="gridcell"
+                 :aria-selected="gridSelected.has(String(a.id))"
+                 :class="{ 'is-key-selected': gridSelected.has(String(a.id)), 'is-returned': String(a.id) === ultimaTarjeta }"
                  @contextmenu.prevent="openMenu($event, a)" />
     </TransitionGroup>
 
@@ -324,6 +339,10 @@ function openMenu(e, a) {
 .alib__foryou { margin-top: var(--s-8); padding-top: var(--s-6); border-top: 1px solid var(--line); }
 
 .alib { position: relative; --alib-pad: var(--s-6); padding: 0 var(--alib-pad); }
+.grid__selection { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin: calc(var(--s-4) * -1) 0 var(--s-4); padding: var(--s-2) var(--s-3); border: 1px solid color-mix(in srgb, var(--azure) 34%, transparent); border-radius: var(--r-md); background: var(--azure-haze); color: var(--azure-bright); font-size: var(--fs-xs); }
+.grid__selection button { color: var(--ink-soft); font-size: var(--fs-xs); text-decoration: underline; text-underline-offset: 2px; }
+.grid__selection button:hover { color: var(--ink); }
+.grid :deep(.mcard.is-key-selected .mcard__poster) { border-color: var(--azure); box-shadow: 0 0 0 2px var(--azure), 0 0 24px -8px var(--azure-glow); }
 /* El contenido va por encima del aura */
 .alib > * { position: relative; z-index: 1; }
 
