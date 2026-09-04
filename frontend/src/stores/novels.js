@@ -16,9 +16,11 @@ export const useNovelsStore = defineStore('novels', {
     tried: [],         // títulos con los que se buscó (original + variantes)
     counts: {},        // 'pluginId:path' -> nº de capítulos (llega después de la búsqueda)
     library: [],       // entradas kind:'novel' de local_library
+    libraryError: '',
     detail: null,      // ficha abierta: { novelId, title, pluginId, path, cover } | null
     novel: null,       // novela cargada: { title, pluginId, path, chapters:[…] }
     novelLoading: false,
+    novelError: '',
     _adding: {},
 
     // ── Catálogo (navegar una fuente nativa: SkyNovels) ──
@@ -37,6 +39,8 @@ export const useNovelsStore = defineStore('novels', {
     chapterWords: 0,
     chapterMinutes: 0,
     chapterLoading: false,
+    chapterError: '',
+    chapterErrorIndex: null,
     // Ajustes de lectura de TEXTO (nada que ver con los de imagen: aquí manda la tipografía).
     fontSize: parseFloat(localStorage.getItem('novel-fontsize') || '1.15') || 1.15,
     lineHeight: parseFloat(localStorage.getItem('novel-lineheight') || '1.8') || 1.8,
@@ -58,7 +62,9 @@ export const useNovelsStore = defineStore('novels', {
 
   actions: {
     async loadLibrary() {
-      try { this.library = await api.get('/api/novels/library') || [] } catch (_) { /* no bloquea */ }
+      this.libraryError = ''
+      try { this.library = await api.get('/api/novels/library') || [] }
+      catch (e) { this.libraryError = e?.message || 'No se pudo cargar la biblioteca de novelas' }
     },
 
     /** Busca el título en las fuentes curadas (EN+ES) y ofrece las versiones encontradas. */
@@ -154,11 +160,12 @@ export const useNovelsStore = defineStore('novels', {
 
     /** Ficha + lista de capítulos de una novela (para el lector, F4). */
     async openNovel(pluginId, path, title = '') {
-      this.novelLoading = true; this.novel = null
+      this.novelLoading = true; this.novelError = ''; this.novel = null
       try {
         const n = await api.post('/api/novels/novel', { pluginId, path })
         this.novel = { ...n, title: n.name || title, pluginId, path }
-      } catch (_) {
+      } catch (e) {
+        this.novelError = e?.message || 'No se pudo abrir la novela'
         useUiStore().toast('No se pudo abrir la novela', 'error')
       } finally { this.novelLoading = false }
     },
@@ -205,15 +212,17 @@ export const useNovelsStore = defineStore('novels', {
       const chapters = this.novel?.chapters || []
       const ch = chapters[index]
       if (!ch || !this.reader) return
-      this.chapterLoading = true; this.chapterHtml = ''
+      this.chapterLoading = true; this.chapterError = ''; this.chapterErrorIndex = index; this.chapterHtml = ''
       try {
         const r = await this.chapter(this.reader.pluginId, ch.path)
         this.chapterHtml = r.html || ''
         this.chapterWords = r.words || 0
         this.chapterMinutes = r.minutes || 0
         this.reader = { ...this.reader, chapterIndex: index, chapterName: ch.name || `Capítulo ${index + 1}` }
+        this.chapterErrorIndex = null
         this.saveProgress(scroll)
-      } catch (_) {
+      } catch (e) {
+        this.chapterError = e?.message || 'No se pudo cargar el capítulo'
         useUiStore().toast('No se pudo cargar el capítulo', 'error')
       } finally { this.chapterLoading = false }
       return scroll

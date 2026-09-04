@@ -9,6 +9,7 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useNovelsStore } from '@/stores/novels'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import { smoothBehavior } from '@/lib/motion'
 
 const novels = useNovelsStore()
@@ -74,6 +75,10 @@ async function go(i) {
   await nextTick()
   if (scroller.value) scroller.value.scrollTop = 0
   pct.value = 0
+}
+
+function retryChapter() {
+  novels.goChapter(novels.chapterErrorIndex ?? index.value, 0)
 }
 
 // Al cargar un capítulo, restaurar la posición guardada (si volvemos a donde lo dejamos).
@@ -182,6 +187,8 @@ const textStyle = computed(() => ({
         <!-- Texto -->
         <div ref="scroller" class="nr__scroll" @scroll="onScroll" @click="setOpen = false; tocOpen = false">
           <div v-if="novels.chapterLoading" class="nr__loading"><Spinner :size="22" /> Cargando capítulo…</div>
+          <ErrorState v-else-if="novels.chapterError" title="No se pudo cargar el capítulo"
+                      :detail="novels.chapterError" @retry="retryChapter" />
           <template v-else>
             <article class="nr__text" :style="textStyle" v-html="novels.chapterHtml"></article>
             <div class="nr__end">

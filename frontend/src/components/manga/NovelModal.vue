@@ -11,6 +11,7 @@ import { imgProxy } from '@/lib/img'
 import { coverRGB, vivid } from '@/lib/coverColor'
 import Icon from '@/components/ui/Icon.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
+import ErrorState from '@/components/ui/ErrorState.vue'
 import { useModal } from '@/lib/useModal'
 import { genero } from '@/lib/etiquetas'
 
@@ -143,6 +144,10 @@ useModal(() => !!d.value, () => novels.closeDetail(), modalEl)
             <div v-if="novels.novelLoading" class="sk">
               <Skeleton v-for="i in 7" :key="i" height="2.3rem" />
             </div>
+
+            <ErrorState v-else-if="novels.novelError" title="No se pudo cargar la novela"
+                        :detail="novels.novelError"
+                        @retry="novels.openNovel(d.pluginId, d.path, d.title)" />
 
             <p v-else-if="!chapters.length" class="empty">
               <Icon name="alert" :size="14" /> No se pudieron leer los capítulos de esta fuente.
