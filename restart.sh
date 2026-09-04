@@ -32,12 +32,14 @@ else
   "$SCRIPT_DIR/start_server.sh"
 fi
 
-# Sondeamos hasta ~40s a que el 5101 responda con PID distinto al anterior.
+# Sondeamos hasta ~40s a que el 5101 responda con PID distinto al anterior. `/api/library` no es
+# una sonda válida: puede disparar el escaneo de discos DrvFS y parecer caído aunque Flask ya esté
+# atendiendo. El retrato de tareas no recorre bibliotecas y sirve como readiness real.
 for i in $(seq 1 40); do
   sleep 1
   new="$(pgrep -f 'from app import app' | head -1)"
   if [ -n "$new" ] && [ "$new" != "$old" ] \
-     && curl -sf --connect-timeout 1 http://127.0.0.1:5101/api/library >/dev/null 2>&1; then
+     && curl -sf --connect-timeout 1 --max-time 3 http://127.0.0.1:5101/api/status >/dev/null 2>&1; then
     host="$(ss -tlnp 2>/dev/null | awk '/5101/{print $4}' | head -1)"
     echo "[restart] ✓ Flask reiniciado (PID $old → $new) — escuchando en $host"
     exit 0
