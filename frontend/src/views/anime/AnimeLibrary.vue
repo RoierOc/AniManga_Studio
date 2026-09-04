@@ -116,6 +116,12 @@ const filtered = computed(() => {
 
 const { selected: gridSelected, count: gridSelectionCount, clear: clearGridSelection, onKey: onGridKey } =
   useGridKeyboard(() => filtered.value.map(a => a.id))
+const selectedAnime = computed(() => filtered.value.filter(a => gridSelected.has(String(a.id))))
+
+async function clearSelectedAnime() {
+  const accepted = await store.clearEpisodesBatch(selectedAnime.value)
+  if (accepted) clearGridSelection()
+}
 
 // Lo que responde la pregunta de verdad: de esa temporada, qué terminaste y qué quedó a medias.
 // Se calcula sobre la lista ya filtrada, así que respeta también la búsqueda.
@@ -279,7 +285,10 @@ function openMenu(e, a) {
     </EmptyState>
     <p v-if="gridSelectionCount && !store.loading && !(store.loadError && !store.library.length) && filtered.length"
        class="grid__selection" aria-live="polite">
-      <span>{{ gridSelectionCount }} marcada(s) · usa Espacio para alternar</span>
+      <span>{{ gridSelectionCount }} marcada(s)</span>
+      <button type="button" class="grid__selection-action" @click="clearSelectedAnime">
+        Liberar espacio
+      </button>
       <button type="button" data-tip="Quitar marcas" @click="clearGridSelection">Limpiar</button>
     </p>
 
@@ -339,9 +348,12 @@ function openMenu(e, a) {
 .alib__foryou { margin-top: var(--s-8); padding-top: var(--s-6); border-top: 1px solid var(--line); }
 
 .alib { position: relative; --alib-pad: var(--s-6); padding: 0 var(--alib-pad); }
-.grid__selection { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin: calc(var(--s-4) * -1) 0 var(--s-4); padding: var(--s-2) var(--s-3); border: 1px solid color-mix(in srgb, var(--azure) 34%, transparent); border-radius: var(--r-md); background: var(--azure-haze); color: var(--azure-bright); font-size: var(--fs-xs); }
+.grid__selection { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--s-3); margin: calc(var(--s-4) * -1) 0 var(--s-4); padding: var(--s-2) var(--s-3); border: 1px solid color-mix(in srgb, var(--azure) 34%, transparent); border-radius: var(--r-md); background: var(--azure-haze); color: var(--azure-bright); font-size: var(--fs-xs); }
+.grid__selection-action { margin-left: auto; padding: var(--s-1) var(--s-2); border: 1px solid var(--amber); border-radius: var(--r-sm); color: var(--amber); font-size: var(--fs-xs); }
+.grid__selection-action:hover { background: color-mix(in srgb, var(--amber) 14%, transparent); }
 .grid__selection button { color: var(--ink-soft); font-size: var(--fs-xs); text-decoration: underline; text-underline-offset: 2px; }
 .grid__selection button:hover { color: var(--ink); }
+.grid__selection .grid__selection-action { color: var(--amber); text-decoration: none; }
 .grid :deep(.mcard.is-key-selected .mcard__poster) { border-color: var(--azure); box-shadow: 0 0 0 2px var(--azure), 0 0 24px -8px var(--azure-glow); }
 /* El contenido va por encima del aura */
 .alib > * { position: relative; z-index: 1; }

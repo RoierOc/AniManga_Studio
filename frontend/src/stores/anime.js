@@ -707,6 +707,45 @@ export const useAnimeStore = defineStore('anime', {
         await this.loadLibrary(true)
       } catch (_) { useUiStore().toast('No se pudo borrar', 'error') }
     },
+    // Libera episodios de varias series con una sola confirmación y una sola recarga de la
+    // biblioteca. Se mantiene secuencial porque cada petición actualiza la entrada persistente.
+    async clearEpisodesBatch(animes) {
+      const targets = [...new Map((animes || []).map((anime) => {
+        const id = String(anime?.id || '').trim()
+        return id ? [id, { id, title: String(anime.title || id) }] : [null, null]
+      }).filter(([id]) => id))].map(([, anime]) => anime)
+      if (!targets.length) return false
+
+      const ui = useUiStore()
+      const n = targets.length
+      if (!await ui.confirm({
+        title: `¿Liberar ${n} serie${n === 1 ? '' : 's'}?`,
+        body: `Se borrarán sus episodios descargados y torrents asociados.\n` +
+              'La serie, su portada, estado y progreso visto se conservarán para volver a descargarla.',
+        confirmLabel: 'Liberar espacio',
+        danger: true,
+      })) return false
+
+      const failed = []
+      for (const anime of targets) {
+        try {
+          await api.post(`/api/anime/library/${encodeURIComponent(anime.id)}/clear_episodes`, {
+            remove_from_qbt: true, delete_files: true,
+          })
+        } catch (_) {
+          failed.push(anime.title)
+        }
+      }
+      await this.loadLibrary(true)
+      if (failed.length) {
+        const shown = failed.slice(0, 2).join(', ')
+        const extra = failed.length > 2 ? ` y ${failed.length - 2} más` : ''
+        ui.toast(`No se pudo liberar: ${shown}${extra}`, 'error')
+      } else {
+        ui.toast(`${n} serie${n === 1 ? '' : 's'} liberada${n === 1 ? '' : 's'}`, 'ok')
+      }
+      return true
+    },
     // Quitar de la biblioteca NO borra los archivos: es reversible, así que no interrumpe con un
     // diálogo — actúa y ofrece deshacer. El diálogo se reserva para lo que borra bytes.
     async removeFromLibrary(animeId) {
