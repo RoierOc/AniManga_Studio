@@ -160,24 +160,92 @@ def _find_chapter_id_with_chapter_endpoint(manga_id, chapter_norm):
     return None
 
 _TERMINAL_DL = ('complete', 'done', 'error', 'cancelled', 'interrupted')
+_CHAIN_FIELDS = ('chain_upscale', 'chain_eco', 'chain_fast', 'chain_triggered',
+                 'chain_status', 'chain_task_id', 'chain_error')
+
+
+def _chain_options(data):
+    """Conserva sólo la intención explícita de encadenar el escalado."""
+    if not (data or {}).get('chain_upscale'):
+        return {}
+    return {
+        'chain_upscale': True,
+        'chain_eco': bool((data or {}).get('chain_eco', True)),
+        'chain_fast': bool((data or {}).get('chain_fast', False)),
+    }
+
+
+def _record_chain_result(task_id, result):
+    current = download_status.get(task_id)
+    if not current:
+        return
+    payload = dict(current)
+    payload['chain_status'] = result.get('status') if isinstance(result, dict) else 'error'
+    if isinstance(result, dict) and result.get('task_id'):
+        payload['chain_task_id'] = result['task_id']
+    if isinstance(result, dict) and result.get('status') == 'error':
+        payload['chain_error'] = result.get('message') or 'No se pudo iniciar el escalado encadenado'
+    download_status[task_id] = payload
+    _persist_download_status()
+
+
+def _launch_chained_upscale(task_id, download):
+    """Arranca el mismo escalado de capítulo que usa el botón de la interfaz."""
+    title = download.get('title')
+    chapter = download.get('chapter')
+    if not title or chapter is None:
+        _record_chain_result(task_id, {'status': 'skipped'})
+        return
+    try:
+        from api.upscale import start_upscale_chapter
+        result, _code = start_upscale_chapter({
+            'title': title,
+            'chapter': chapter,
+            'eco': download.get('chain_eco', True),
+            'fast': download.get('chain_fast', False),
+        })
+        _record_chain_result(task_id, result)
+    except Exception as exc:
+        _record_chain_result(task_id, {'status': 'error', 'message': str(exc)})
 
 def set_download_status(task_id, status):
     payload = dict(status)
     payload.setdefault('task_id', task_id)
     old = download_status.get(task_id, {})
     old_status = old.get('status')
+    # Los workers publican snapshots completos y no conocen metadatos opcionales de la tarea.
+    # Arrastrar la intención de cadena evita perderla al pasar de starting → downloading → complete.
+    for field in _CHAIN_FIELDS:
+        if field not in payload and field in old:
+            payload[field] = old[field]
     # Stamp completion time once, on entering a terminal state — feeds the Activity history
     # (ordered by recency). Preserve an existing stamp so re-writes don't bump it.
     if payload.get('status') in _TERMINAL_DL:
         payload.setdefault('ended_at', old.get('ended_at') or time.time())
+    chain_now = payload.get('status') == 'complete' and payload.get('chain_upscale')
+    should_chain = bool(chain_now and not old.get('chain_triggered'))
+    if should_chain:
+        payload['chain_triggered'] = True
     download_status[task_id] = payload
-    if payload.get('status') != old_status:
+    if payload.get('status') != old_status or any(payload.get(k) != old.get(k) for k in _CHAIN_FIELDS):
         _persist_download_status()
+    if should_chain:
+        _launch_chained_upscale(task_id, payload)
 
 def get_download_status(task_id=None):
     if task_id is None:
         return download_status.copy()
     return download_status.get(task_id, {'status': 'not_found', 'task_id': task_id})
+
+
+def _resume_chained_upscales():
+    """Recupera una cadena que quedó lista mientras el proceso se reiniciaba."""
+    for task_id, payload in list(download_status.items()):
+        if isinstance(payload, dict) and payload.get('status') == 'complete' and payload.get('chain_upscale'):
+            set_download_status(task_id, payload)
+
+
+_resume_chained_upscales()
 
 def _chapter_file_prefix(chapter):
     chapter_norm = normalize_chapter(chapter)
@@ -340,7 +408,7 @@ def _run_download_chapter(download_id, title, chapter_norm, chapter_id, manga_id
 
 @download_bp.route('/download_chapter', methods=['POST'])
 def download_chapter():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     chapter_id = data.get('chapterId')
     manga_id = data.get('mangaId')
     title = data.get('title')
@@ -353,6 +421,7 @@ def download_chapter():
     download_id = build_task_id(title, chapter_norm, 'download')
     set_download_status(download_id, {
         'status': 'starting', 'title': title, 'chapter': chapter_norm,
+        **_chain_options(data),
     })
 
     threading.Thread(
@@ -505,6 +574,7 @@ def download_source_chapter():
         'progress': 0,
         'total': len(page_urls),
         'source': 'external',
+        **_chain_options(data),
     })
 
     threading.Thread(
@@ -700,4 +770,3 @@ def run_download(download_id, manga_id, title, max_chapters, root_id=None):
 
     except Exception as e:
         set_download_status(download_id, {'status': 'error', 'message': str(e)})
-

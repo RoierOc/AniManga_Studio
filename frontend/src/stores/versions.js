@@ -202,7 +202,7 @@ export const useVersionsStore = defineStore('versions', {
     // única legada) — resuelve las páginas con el endpoint nuevo `chapter_urls` y reutiliza
     // el endpoint de descarga YA EXISTENTE (agnóstico de origen, ya enganchado al progreso
     // SSE que pinta el anillo en la pestaña Capítulos vía `_reconcileDownloads`).
-    async downloadChapterFrom(chapterNorm, source) {
+    async downloadChapterFrom(chapterNorm, source, opts = {}) {
       const ui = useUiStore()
       if (!this.title || !source) return
       try {
@@ -214,6 +214,11 @@ export const useVersionsStore = defineStore('versions', {
         await api.post('/api/download/download_source_chapter', {
           title: this.title, chapter: chapterNorm, pageUrls: d.urls,
           sourceId: source.sourceId, mangaId: source.mangaId, sourceName: source.sourceName, sourceLang: source.sourceLang,
+          ...(opts.chainUpscale ? {
+            chain_upscale: true,
+            chain_eco: opts.chainEco ?? true,
+            chain_fast: opts.chainFast ?? false,
+          } : {}),
         })
       } catch (e) {
         ui.toast(e?.status === 503 ? 'Suwayomi offline' : 'No se pudo descargar el capítulo', 'error')

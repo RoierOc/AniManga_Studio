@@ -808,24 +808,30 @@ def set_upscale_mode():
 
 @upscale_bp.route('/upscale_chapter', methods=['POST'])
 def upscale_chapter():
+    data = request.get_json(silent=True) or {}
+    payload, code = start_upscale_chapter(data)
+    return jsonify(payload), code
+
+
+def start_upscale_chapter(data):
+    """Valida y encola un capítulo sin depender del contexto de Flask."""
     try:
-        data = request.get_json()
         title = data.get('title')
         chapter = data.get('chapter')
         mode = _mode_from(data)
         fast_mode = _fast_from(data)
 
         if not title or chapter is None:
-            return jsonify({'status': 'error', 'message': 'title required'}), 400
+            return {'status': 'error', 'message': 'title required'}, 400
 
         cfg = MODEL_REGISTRY.get(_active_model_key[0], MODEL_REGISTRY['eula'])
         missing = [m['file'] for m in cfg['models'] if not Path(m['file']).exists()]
         if missing:
-            return jsonify({
+            return {
                 'status': 'error',
                 'message': f'Modelo no encontrado: {cfg["label"]}',
                 'missing_paths': missing,
-            }), 404
+            }, 404
 
         from api.library import find_manga_folder
         actual_folder = find_manga_folder(title)
@@ -833,7 +839,7 @@ def upscale_chapter():
         output_folder.mkdir(parents=True, exist_ok=True)
 
         if not series_dirs(actual_folder):
-            return jsonify({'status': 'error', 'message': 'Folder not found'}), 404
+            return {'status': 'error', 'message': 'Folder not found'}, 404
 
         chapter_norm = normalize_chapter(chapter)
         try:
@@ -849,7 +855,7 @@ def upscale_chapter():
         images = _pages_for(actual_folder, ch_prefix)
 
         if not images:
-            return jsonify({'status': 'error', 'message': 'No images found', 'task_id': build_task_id(actual_folder, chapter_norm, 'upscale')}), 404
+            return {'status': 'error', 'message': 'No images found', 'task_id': build_task_id(actual_folder, chapter_norm, 'upscale')}, 404
 
         # Manual page exclusion (e.g. color pages reviewed by the user): copy them
         # as-is into output_folder so the resume-skip below treats them exactly
@@ -871,7 +877,7 @@ def upscale_chapter():
 
         if not images_todo:
             upscale_id = build_task_id(actual_folder, chapter_norm, 'upscale')
-            return jsonify({'status': 'complete', 'message': 'Ya completamente escalado', 'task_id': upscale_id, 'total': len(images), 'resumed': True}), 200
+            return {'status': 'complete', 'message': 'Ya completamente escalado', 'task_id': upscale_id, 'total': len(images), 'resumed': True}, 200
 
         skipped_already = len(images) - len(images_todo)
         images = images_todo
@@ -880,14 +886,14 @@ def upscale_chapter():
 
         current_status = get_upscale_status(upscale_id)
         if current_status.get('status') in {'starting', 'started', 'upscaling'}:
-            return jsonify({
+            return {
                 'status': 'already_running',
                 'upscale_id': upscale_id,
                 'task_id': upscale_id,
                 'total': current_status.get('total', total),
                 'current': current_status.get('progress', current_status.get('current', 0)),
                 'percent': current_status.get('percent', 0),
-            }), 200
+            }, 200
 
         _clear_status_files(upscale_id)
 
@@ -919,9 +925,9 @@ def upscale_chapter():
             daemon=True,
         ).start()
 
-        return jsonify({'status': 'started', 'total': total, 'chapter': chapter_norm, 'upscale_id': upscale_id, 'task_id': upscale_id, 'async': True, 'mode': mode, 'resumed': skipped_already > 0, 'skipped_existing': skipped_already})
+        return {'status': 'started', 'total': total, 'chapter': chapter_norm, 'upscale_id': upscale_id, 'task_id': upscale_id, 'async': True, 'mode': mode, 'resumed': skipped_already > 0, 'skipped_existing': skipped_already}, 200
     except Exception as e:
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        return {'status': 'error', 'message': str(e)}, 500
 
 
 def _switch_model(key):

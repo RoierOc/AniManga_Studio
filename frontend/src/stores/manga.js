@@ -1572,7 +1572,7 @@ export const useMangaStore = defineStore('manga', {
       }
     },
 
-    async downloadSourceChapter(ch) {
+    async downloadSourceChapter(ch, opts = {}) {
       const ui = useUiStore()
       const src = this.effectiveSource
       const sid = ch._sourceId || ch.id
@@ -1591,6 +1591,11 @@ export const useMangaStore = defineStore('manga', {
           mangaId: src.mangaId,
           sourceName: src.sourceName,
           sourceLang: src.sourceLang,
+          ...(opts.chainUpscale ? {
+            chain_upscale: true,
+            chain_eco: opts.chainEco ?? this.eco,
+            chain_fast: opts.chainFast ?? false,
+          } : {}),
           ...(useRootsStore().target ? { root: useRootsStore().target } : {}),
         })
         // Use real task_id if different from estimated
@@ -1598,7 +1603,7 @@ export const useMangaStore = defineStore('manga', {
       } catch (_) { ui.toast('No se pudo descargar', 'error'); delete this.dlTasks[chKey] }
     },
 
-    async downloadMdChapter(ch) {
+    async downloadMdChapter(ch, opts = {}) {
       const ui = useUiStore()
       const cid = ch._mdChapterId
       if (!cid) return
@@ -1607,6 +1612,11 @@ export const useMangaStore = defineStore('manga', {
       try {
         const res = await api.post('/api/download/download_chapter', {
           title: this.current.id, chapter: ch.chapter, chapterId: cid, mangaId: this.mdId,
+          ...(opts.chainUpscale ? {
+            chain_upscale: true,
+            chain_eco: opts.chainEco ?? this.eco,
+            chain_fast: opts.chainFast ?? false,
+          } : {}),
           ...(useRootsStore().target ? { root: useRootsStore().target } : {}),
         })
         if (res.task_id) this.dlTasks[chKey] = res.task_id
@@ -2006,19 +2016,24 @@ export const useMangaStore = defineStore('manga', {
     // Descarga una lista EXPLÍCITA de capítulos resolviendo la fuente de cada uno igual que el
     // botón individual: fuente ASIGNADA (chapter_sources) primero, luego fuente Suwayomi, luego
     // MangaDex. Los capítulos ya locales se ignoran. Reutiliza los endpoints por capítulo.
-    async downloadChapters(chapters) {
+    async downloadChapters(chapters, opts = {}) {
       const ui = useUiStore()
       const vg = useVersionsStore()
       const wanted = new Set(chapters.map(String))
       const rows = this.collectionChapters.filter(c => wanted.has(String(c.chapter)))
       const started = []
+      const chainOpts = opts.chainUpscale ? {
+        chainUpscale: true,
+        chainEco: opts.chainEco ?? this.eco,
+        chainFast: opts.chainFast ?? false,
+      } : {}
       for (const c of rows) {
         // capítulo ya local (no es fila de fuente/MD/multi) → nada que descargar
         if (!c._sourceId && !c._mdChapterId && !c._covMulti) continue
         if (this.downloadByChapter[c.chapter] || this.dlTasks[String(c.chapter)]) continue
-        if (c._assignedSource) vg.downloadChapterFrom(c.chapter, c._assignedSource)
-        else if (c._sourceId) this.downloadSourceChapter(c)
-        else if (c._mdChapterId) this.downloadMdChapter(c)
+        if (c._assignedSource) vg.downloadChapterFrom(c.chapter, c._assignedSource, chainOpts)
+        else if (c._sourceId) this.downloadSourceChapter(c, chainOpts)
+        else if (c._mdChapterId) this.downloadMdChapter(c, chainOpts)
         else continue
         started.push(String(c.chapter))
       }

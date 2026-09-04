@@ -246,15 +246,19 @@ const batchStats = computed(() => {
   }
   return { local, remote }
 })
-// Descargar es sólo el primer paso: la cadena (escalar / traducir+escalar) se arma ANTES de
-// lanzar las descargas y avanza sola con el SSE, aunque cierres el modal.
+// Descargar es sólo el primer paso: el flujo normal se registra en el backend y la variante con
+// traducción conserva su cadena de dos fuentes; ambas avanzan con el SSE aunque cierres el modal.
 async function batchDownload() {
   const sel = [...batchSel.value]
   clearBatch()
   // La cadena se arma con lo que downloadChapters ARRANCÓ de verdad, no con lo marcado: los ya
   // locales o ya en curso no generan tarea, y esperarlos dejaría la cadena colgada.
-  const started = await store.downloadChapters(sel)
-  store.armChain(started || [])
+  // El flujo normal (descargar → 4K) se registra en el backend antes de arrancar: si se recarga
+  // la interfaz, el propio servidor dispara el escalado al terminar. Traducción conserva su
+  // cadena local porque necesita las dos fuentes seleccionadas y el orden traducir → 4K.
+  const durableUpscale = store.chain.upscale && !store.willTranslate
+  const started = await store.downloadChapters(sel, { chainUpscale: durableUpscale, chainEco: store.eco })
+  if (store.willTranslate) store.armChain(started || [])
 }
 // Traducir necesita fuentes elegidas (pestaña Traducir). Sin ellas el chip se deshabilita en vez
 // de dejarte armar una cadena que fallaría al llegar a ese paso. La condición vive en el store
