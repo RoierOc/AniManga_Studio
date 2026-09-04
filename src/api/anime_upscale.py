@@ -3,7 +3,7 @@
 Hornear anime con Anime4K — la otra mitad del escalador que esta app ya es.
 
 **Qué hace**: coge un episodio de la biblioteca y lo vuelve a codificar con la cadena de shaders
-`Mode A+B UL + Thin` aplicada, dejando un fichero HERMANO `<nombre>.a4k.mkv`. A partir de ahí ese
+`Mode B+B UL` aplicada, dejando un fichero HERMANO `<nombre>.a4k.mkv`. A partir de ahí ese
 fichero ES el episodio (lo resuelve `anime._find_video`), y el original se queda intacto al lado.
 
 **Por qué existe**: Anime4K en vivo es una red convolucional sobre cada fotograma; una tablet no la
@@ -16,14 +16,14 @@ gastar nada — y el reproductor del móvil puede apagar sus shaders del todo.
    el tamaño y el hash y rompe el torrent en silencio. Salida a fichero aparte, siempre.
 2. **Un trabajo a la vez, y no a la vez que el escalador de manga.** MEDIDO en la RTX 5070: con la
    cadena UL la GPU va al 70 % de media y 89 % de pico; lanzar 2 procesos en paralelo sólo da ×1,18
-   y 3 dan ×1,19. No hay paralelismo que rascar (los 8 shaders van encadenados, cada uno necesita el
+   y 3 dan ×1,19. No hay paralelismo que rascar (los shaders van encadenados, cada uno necesita el
    fotograma entero del anterior). Así que la cola es de uno y punto.
 3. **Vulkan sólo existe en Windows.** libplacebo desde esta WSL da `VK_ERROR_INCOMPATIBLE_DRIVER`,
    así que se lanza `ffmpeg.exe` por interop.
 
 ## Trampas del filtro (costaron un rato)
 
-- libplacebo acepta **UN SOLO** `custom_shader_path` → los 8 `.glsl` de la cadena se **concatenan**
+- libplacebo acepta **UN SOLO** `custom_shader_path` → las piezas `.glsl` de la cadena se **concatenan**
   en uno. El formato `//!HOOK` de mpv permite varios hooks por fichero, así que basta pegarlos.
 - En la cadena de filtros de ffmpeg, `\\` y `:` son separadores → una ruta Windows dentro del filtro
   no hay forma de escaparla bien. Solución: el proceso corre **con el cwd en la carpeta del shader**
@@ -95,18 +95,17 @@ PRESETS = {
     },
     'maxima': {
         'etiqueta': 'Máxima estable',
-        'detalle': 'Dos escalados con red UL y líneas afinadas; la segunda restauración es Soft '
-                   'para conservar detalle sin shimmer en negros.',
+        'detalle': 'Doble restauración Soft con red UL; conserva detalle sin shimmer en negros y '
+                   'sin realce de bordes agresivo.',
         'min_por_min': 28.0 / 60 * _CALIBRACION,
         'cadena': [
             'Anime4K_Clamp_Highlights',
-            'Anime4K_Restore_CNN_UL',
+            'Anime4K_Restore_CNN_Soft_UL',
             'Anime4K_Upscale_CNN_x2_UL',
             'Anime4K_AutoDownscalePre_x2',
             'Anime4K_AutoDownscalePre_x4',
             'Anime4K_Restore_CNN_Soft_M',
             'Anime4K_Upscale_CNN_x2_M',
-            'Anime4K_Thin_HQ',
         ],
     },
 }

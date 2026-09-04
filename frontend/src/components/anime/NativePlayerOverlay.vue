@@ -23,10 +23,10 @@ let hideTimer = null
 const A4K_MODES = [
   { id: 'off', label: 'Desactivado' },
   { id: 'high', label: 'Calidad · A HQ' },
-  { id: 'ultra', label: 'Muy alta · A HQ + Thin' },
-  { id: 'maximo', label: 'Máxima estable · A+B UL + Thin' },
+  { id: 'ultra', label: 'Muy alta · Doble CNN HQ' },
+  { id: 'maximo', label: 'Máxima estable · Doble CNN UL' },
 ]
-const A4K_TIER_LABEL = { high: 'A4K·HQ', ultra: 'A4K·Nítido', maximo: 'A4K·Máximo' }
+const A4K_TIER_LABEL = { high: 'A4K·HQ', ultra: 'A4K·Doble', maximo: 'A4K·Máximo' }
 // Imagen real (series/películas): Anime4K no aplica —está entrenado en line art—, así que el
 // menú ofrece los shaders genéricos. Los tiers los resuelve `tier_shaders()` en player.rs.
 const LIVE_MODES = [

@@ -74,35 +74,33 @@ const SHADERS_HIGH: &[&str] = &[
     "Anime4K_AutoDownscalePre_x4.glsl",
     "Anime4K_Upscale_CNN_x2_M.glsl",
 ];
-// "ultra" = Modo A (HQ) + Thin_HQ (bordes más nítidos). Igual que "high" (un solo restore,
-// sin doble pase que causaba el shimmer) más el thinning de líneas al final.
+// "ultra" = Modo B+B (HQ): dos restauraciones suaves, una antes y otra después del upscale.
+// Es una mejora real sobre high y conserva la estabilidad temporal de los modelos Soft.
 const SHADERS_ULTRA: &[&str] = &[
     "Anime4K_Clamp_Highlights.glsl",
-    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Restore_CNN_Soft_VL.glsl",
     "Anime4K_Upscale_CNN_x2_VL.glsl",
     "Anime4K_AutoDownscalePre_x2.glsl",
     "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_Soft_M.glsl",
     "Anime4K_Upscale_CNN_x2_M.glsl",
-    "Anime4K_Thin_HQ.glsl",
 ];
 
-/// **Máxima estable.** Conserva las dos etapas de upscale (UL → M) y `Thin_HQ`, pero la segunda
-/// restauración es `Soft_M`, no otra restauración agresiva. El A+A UL+M que se añadió aquí era
-/// exactamente la combinación descartada en vivo: dos `Restore` duros amplifican el ruido de
-/// compresión entre frames y producen shimmer de luminancia en negros con movimiento.
+/// **Máxima estable.** Es el Modo B+B con red UL: dos restauraciones suaves y dos escalas
+/// condicionales. `Thin_HQ` queda fuera de este tier porque su realce de bordes puede volver a
+/// hacer visibles las pequeñas variaciones de la CNN en movimiento; las dos restauraciones UL/M
+/// ya aportan el detalle adicional sin esa inestabilidad.
 ///
-/// El primer Restore UL conserva la reconstrucción de detalle fuerte; Soft_M aplica la segunda
-/// reparación con el modelo que Anime4K destina a reducir ringing/aliasing. Es A+B personalizado,
-/// no A+A: más detalle percibido que `ultra` sin inventar detalle que cambia de un frame a otro.
+/// No añadimos una tercera pasada: una CNN no recupera información nueva al recibir dos veces el
+/// resultado ya reconstruido; sólo amplifica halos, ruido y diferencias entre fotogramas.
 const SHADERS_MAXIMO: &[&str] = &[
     "Anime4K_Clamp_Highlights.glsl",
-    "Anime4K_Restore_CNN_UL.glsl",
+    "Anime4K_Restore_CNN_Soft_UL.glsl",
     "Anime4K_Upscale_CNN_x2_UL.glsl",
     "Anime4K_AutoDownscalePre_x2.glsl",
     "Anime4K_AutoDownscalePre_x4.glsl",
     "Anime4K_Restore_CNN_Soft_M.glsl",
     "Anime4K_Upscale_CNN_x2_M.glsl",
-    "Anime4K_Thin_HQ.glsl",
 ];
 
 // --- Imagen REAL (series y películas) ---------------------------------------------------
@@ -133,18 +131,31 @@ mod anime4k_tier_tests {
     use super::tier_shaders;
 
     #[test]
-    fn maximo_preserva_dos_escalados_sin_doble_restore_duro() {
+    fn ultra_es_una_doble_pasada_soft_en_hq() {
+        assert_eq!(tier_shaders("ultra"), [
+            "Anime4K_Clamp_Highlights.glsl",
+            "Anime4K_Restore_CNN_Soft_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_VL.glsl",
+            "Anime4K_AutoDownscalePre_x2.glsl",
+            "Anime4K_AutoDownscalePre_x4.glsl",
+            "Anime4K_Restore_CNN_Soft_M.glsl",
+            "Anime4K_Upscale_CNN_x2_M.glsl",
+        ]);
+    }
+
+    #[test]
+    fn maximo_es_una_doble_pasada_soft_ul_sin_thin() {
         assert_eq!(tier_shaders("maximo"), [
             "Anime4K_Clamp_Highlights.glsl",
-            "Anime4K_Restore_CNN_UL.glsl",
+            "Anime4K_Restore_CNN_Soft_UL.glsl",
             "Anime4K_Upscale_CNN_x2_UL.glsl",
             "Anime4K_AutoDownscalePre_x2.glsl",
             "Anime4K_AutoDownscalePre_x4.glsl",
             "Anime4K_Restore_CNN_Soft_M.glsl",
             "Anime4K_Upscale_CNN_x2_M.glsl",
-            "Anime4K_Thin_HQ.glsl",
         ]);
         assert!(!tier_shaders("maximo").contains(&"Anime4K_Restore_CNN_M.glsl"));
+        assert!(!tier_shaders("maximo").contains(&"Anime4K_Thin_HQ.glsl"));
     }
 }
 
@@ -646,6 +657,10 @@ impl Player {
             init.set_property("cscale", "ewa_lanczossoft")?;
             init.set_property("correct-downscaling", "yes")?;
             init.set_property("dither-depth", "auto")?;
+            // Anime4K ya genera una imagen determinista por fotograma. El dithering temporal de
+            // mpv rota ocho patrones en cada frame; en una LCD esa rotación se percibe como
+            // shimmer, especialmente en sombras y tras un segundo pase CNN.
+            init.set_property("temporal-dither", "no")?;
             // Réplica del bloque HDR del mpv.conf del usuario. Solo tocan contenido HDR;
             // inofensivas para SDR.
             init.set_property("hdr-compute-peak", "yes")?;
@@ -1099,6 +1114,7 @@ impl Player {
             "tone-mapping", "tone-mapping-param", "gamut-mapping-mode", "hdr-compute-peak",
             "icc-profile", "icc-profile-auto", "scale", "dscale", "cscale",
             "dither-depth", "gamma", "brightness", "contrast", "saturation", "hue",
+            "temporal-dither",
             "hwdec-current", "current-vo", "video-target-params/sig-peak",
         ] {
             log_line(&format!("  {k} = {}", g(k)));
