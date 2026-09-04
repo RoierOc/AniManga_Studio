@@ -27,6 +27,7 @@ from flask import Blueprint, jsonify, request
 from api.runtime import manga_dir, upscaled_dir, get_library_mode, QA_DIR
 from api.index_db import cached_measure, drop, prune
 from api.observability import record_error
+from api.storage_cache import summary as cache_summary, purge as purge_cache
 
 storage_bp = Blueprint("storage", __name__)
 
@@ -368,6 +369,7 @@ def _build_summary() -> dict:
     total_upscaled = sum(r["upscaled_bytes"] for r in rows)
     stream_cache = _tree_bytes(str(_stream_cache_root()))
     qa = _tree_bytes(str(QA_DIR))
+    caches = cache_summary()
 
     disk = {}
     try:
@@ -384,7 +386,11 @@ def _build_summary() -> dict:
             "anime": total_anime,
             "stream_cache": stream_cache,
             "qa": qa,
-            "total": total_original + total_upscaled + total_anime + stream_cache + qa,
+            "image_cache": caches["image_cache"],
+            "export_temp": caches["export_temp"],
+            "export_orphan": caches["export_orphan"],
+            "cache_total": stream_cache + qa + caches["total"],
+            "total": total_original + total_upscaled + total_anime + stream_cache + qa + caches["total"],
             **disk,
         },
     }
@@ -569,5 +575,14 @@ def purge():
             for child in root.iterdir():
                 shutil.rmtree(child, ignore_errors=True) if child.is_dir() else child.unlink(missing_ok=True)
         return jsonify({"ok": True, "freed": freed})
+
+    if target in ("image_cache", "export_temp"):
+        try:
+            return jsonify(purge_cache(target))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        except Exception as exc:
+            record_error("storage", exc, op="purge_cache", target=target)
+            return jsonify({"error": str(exc)}), 500
 
     return jsonify({"error": "target inválido"}), 400

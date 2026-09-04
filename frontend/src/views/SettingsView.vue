@@ -151,6 +151,23 @@ async function purgeStreamCache() {
   } catch (_) { ui.toast('No se pudo liberar espacio', 'error') }
   finally { storageBusy.value = '' }
 }
+async function purgeStorageCache(target, label) {
+  const bytes = target === 'image_cache' ? storage.value?.totals.image_cache : storage.value?.totals.export_orphan
+  if (!bytes) return
+  if (!await ui.confirm({
+    title: `Limpiar ${label}`,
+    danger: false,
+    body: `Se liberarán hasta ${formatBytes(bytes)}. El contenido se puede regenerar.`,
+    confirmLabel: 'Limpiar',
+  })) return
+  storageBusy.value = target
+  try {
+    const res = await api.post('/api/storage/purge', { target })
+    ui.toast(`Liberado ${formatBytes(res.freed || 0)}`, 'ok')
+    await loadStorage()
+  } catch (e) { ui.toast(e?.message || 'No se pudo liberar espacio', 'error') }
+  finally { storageBusy.value = '' }
+}
 
 onMounted(() => {
   if (!Object.keys(manga.models).length) manga.loadModels()
@@ -546,13 +563,13 @@ async function onImportFile(e) {
           <span class="stg__seg stg__seg--orig" :style="{ flexGrow: storage.totals.original || 0.0001 }" data-tip="Originales descargados" />
           <span class="stg__seg stg__seg--up" :style="{ flexGrow: storage.totals.upscaled || 0.0001 }" data-tip="Escalado 4K" />
           <span class="stg__seg stg__seg--anime" :style="{ flexGrow: storage.totals.anime || 0.0001 }" data-tip="Anime (vídeo)" />
-          <span class="stg__seg stg__seg--cache" :style="{ flexGrow: (storage.totals.stream_cache + storage.totals.qa) || 0.0001 }" data-tip="Cachés" />
+          <span class="stg__seg stg__seg--cache" :style="{ flexGrow: storage.totals.cache_total || 0.0001 }" data-tip="Cachés" />
         </div>
         <div class="stg__legend">
           <span><i class="stg__dot stg__dot--orig" /> Manga <b>{{ formatBytes(storage.totals.original) }}</b></span>
           <span><i class="stg__dot stg__dot--up" /> Escalado 4K <b>{{ formatBytes(storage.totals.upscaled) }}</b></span>
           <span v-if="storage.totals.anime"><i class="stg__dot stg__dot--anime" /> Anime <b>{{ formatBytes(storage.totals.anime) }}</b></span>
-          <span><i class="stg__dot stg__dot--cache" /> Cachés <b>{{ formatBytes(storage.totals.stream_cache + storage.totals.qa) }}</b></span>
+          <span><i class="stg__dot stg__dot--cache" /> Cachés <b>{{ formatBytes(storage.totals.cache_total) }}</b></span>
         </div>
 
         <!-- Espacio del disco -->
@@ -571,8 +588,16 @@ async function onImportFile(e) {
             <Icon name="close" :size="13" /> Vaciar caché de streaming
             <span class="stg__free">{{ formatBytes(storage.totals.stream_cache) }}</span>
           </button>
+          <button class="btn" :disabled="storageBusy === 'image_cache' || !storage.totals.image_cache" @click="purgeStorageCache('image_cache', 'la caché de imágenes')">
+            <Icon name="trash" :size="13" /> Limpiar caché de imágenes
+            <span class="stg__free">{{ formatBytes(storage.totals.image_cache) }}</span>
+          </button>
+          <button class="btn" :disabled="storageBusy === 'export_temp' || !storage.totals.export_orphan" @click="purgeStorageCache('export_temp', 'temporales huérfanos')">
+            <Icon name="trash" :size="13" /> Limpiar temporales huérfanos
+            <span class="stg__free">{{ formatBytes(storage.totals.export_orphan) }}</span>
+          </button>
         </div>
-        <p class="hint">El escalado 4K y los originales no se borran desde aquí: ambos son necesarios para el comparador original/4K del lector. Solo la caché de streaming es prescindible (se regenera al reproducir).</p>
+        <p class="hint">Las cachés se regeneran solas. Los temporales de exportación que aún pertenecen a una tarea —incluidos tomos terminados aún no guardados— se conservan; sólo se limpian huérfanos.</p>
 
         <!-- Series que más ocupan — con filtros por tipo (junto / por separado) -->
         <div v-if="storage.series.length" class="sep" />
