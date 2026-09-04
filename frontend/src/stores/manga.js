@@ -1957,6 +1957,76 @@ export const useMangaStore = defineStore('manga', {
       }, 6000)
     },
 
+    // Borra varias obras desde la rejilla sin abrir N modales ni hacer N recargas de la biblioteca.
+    // Las novelas no llegan aquí: tienen su propio catálogo y no comparten el endpoint de manga.
+    async deleteMangasBatch(items) {
+      const targets = [...new Map((items || []).map((item) => {
+        if (!item || item.kind === 'novel') return [null, null]
+        const title = String(item.id || item.name || '').trim()
+        if (!title) return [null, null]
+        return [title, {
+          title,
+          name: String(item.name || title),
+          trackedId: item.trackedId || item.mdId || null,
+        }]
+      }).filter(([title]) => title))].map(([, target]) => target)
+      if (!targets.length) return false
+
+      const ui = useUiStore()
+      const n = targets.length
+      if (!await ui.confirm({
+        title: `¿Quitar ${n} manga${n === 1 ? '' : 's'}?`,
+        body: `Se eliminarán sus archivos descargados y su seguimiento de la biblioteca.\n` +
+              'Las obras se ocultarán ahora y tendrás 6 segundos para deshacerlo.',
+        confirmLabel: `Quitar ${n === 1 ? 'manga' : 'mangas'}`,
+        danger: true,
+      })) return false
+
+      const titles = targets.map(({ title }) => title)
+      const withProgress = titles.filter(title => this.progress[title])
+      for (const title of withProgress) delete this.progress[title]
+      if (withProgress.length) {
+        this._persistProgress()
+        this._forgetRemote({ titles: withProgress })
+      }
+      this.pendingDelete = [...new Set([...this.pendingDelete, ...titles])]
+      this.libraryDirty++
+
+      let undone = false
+      ui.toast(`${n} manga${n === 1 ? '' : 's'} eliminado${n === 1 ? '' : 's'}`, 'info', 6000, {
+        label: 'Deshacer',
+        fn: () => {
+          undone = true
+          this.pendingDelete = this.pendingDelete.filter(title => !titles.includes(title))
+          this.libraryDirty++
+        },
+      })
+
+      setTimeout(async () => {
+        if (undone) return
+        const failed = []
+        // Secuencial a propósito: cada endpoint purga local_library.json y las escrituras deben
+        // conservar el resultado de la anterior. Sólo se evita la recarga repetida de la UI.
+        for (const target of targets) {
+          try {
+            await api.del('/api/download/delete_manga', {
+              body: { title: target.title, trackedId: target.trackedId },
+            })
+          } catch (_) {
+            failed.push(target.name)
+          }
+        }
+        this.pendingDelete = this.pendingDelete.filter(title => !titles.includes(title))
+        if (failed.length) {
+          const shown = failed.slice(0, 2).join(', ')
+          const extra = failed.length > 2 ? ` y ${failed.length - 2} más` : ''
+          ui.toast(`No se pudo quitar: ${shown}${extra}`, 'error')
+        }
+        this.libraryDirty++
+      }, 6000)
+      return true
+    },
+
     /* ── Task queue actions ─────────────────────────────────────────────── */
     async cancelTask(task) {
       // Hide it from the queue (and the modal ring if visible) right away.

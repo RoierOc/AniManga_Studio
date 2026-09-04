@@ -204,6 +204,10 @@ const filtered = computed(() => {
 
 const { selected: gridSelected, count: gridSelectionCount, clear: clearGridSelection, onKey: onGridKey } =
   useGridKeyboard(() => filtered.value.map(m => m.id))
+const selectedMangas = computed(() => filtered.value.filter(m =>
+  gridSelected.has(String(m.id)) && m.kind !== 'novel'))
+const selectedNovels = computed(() => filtered.value.filter(m =>
+  gridSelected.has(String(m.id)) && m.kind === 'novel'))
 
 const totals = computed(() => ({
   series: items.value.length,
@@ -239,6 +243,12 @@ async function load() {
   } finally {
     loading.value = false
   }
+}
+
+async function deleteSelectedMangas() {
+  if (!selectedMangas.value.length) return
+  const accepted = await manga.deleteMangasBatch(selectedMangas.value)
+  if (accepted) clearGridSelection()
 }
 
 /* Géneros de la tarjeta. Un solo POST para toda la biblioteca (el backend cachea 30 días por
@@ -341,7 +351,12 @@ watch(() => manga.libraryDirty, () => load())
     </EmptyState>
 
     <p v-if="gridSelectionCount && !loading && !error" class="grid__selection" aria-live="polite">
-      <span>{{ gridSelectionCount }} marcada(s) · usa Espacio para alternar</span>
+      <span>{{ gridSelectionCount }} marcada(s) · {{ selectedMangas.length }} manga(s)</span>
+      <span v-if="selectedNovels.length" class="grid__selection-note">
+        {{ selectedNovels.length }} novela(s) se gestionan desde SkyNovels
+      </span>
+      <button v-if="selectedMangas.length" type="button" class="grid__selection-action"
+              @click="deleteSelectedMangas">Quitar seleccionados</button>
       <button type="button" data-tip="Quitar marcas" @click="clearGridSelection">Limpiar</button>
     </p>
 
@@ -381,8 +396,12 @@ watch(() => manga.libraryDirty, () => load())
 
 <style scoped>
 .view { position: relative; padding: var(--s-4) var(--s-6) var(--s-8); max-width: var(--content-max); margin: 0 auto; }
-.grid__selection { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin: calc(var(--s-4) * -1) 0 var(--s-4); padding: var(--s-2) var(--s-3); border: 1px solid color-mix(in srgb, var(--azure) 34%, transparent); border-radius: var(--r-md); background: var(--azure-haze); color: var(--azure-bright); font-size: var(--fs-xs); }
+.grid__selection { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--s-3); margin: calc(var(--s-4) * -1) 0 var(--s-4); padding: var(--s-2) var(--s-3); border: 1px solid color-mix(in srgb, var(--azure) 34%, transparent); border-radius: var(--r-md); background: var(--azure-haze); color: var(--azure-bright); font-size: var(--fs-xs); }
+.grid__selection-note { color: var(--ink-faint); }
+.grid__selection-action { margin-left: auto; padding: var(--s-1) var(--s-2); border: 1px solid var(--coral); border-radius: var(--r-sm); color: var(--coral); font-size: var(--fs-xs); }
+.grid__selection-action:hover { background: color-mix(in srgb, var(--coral) 14%, transparent); }
 .grid__selection button { color: var(--ink-soft); font-size: var(--fs-xs); text-decoration: underline; text-underline-offset: 2px; }
+.grid__selection .grid__selection-action { color: var(--coral); text-decoration: none; }
 .grid__selection button:hover { color: var(--ink); }
 .grid :deep(.mcard.is-key-selected .mcard__poster) { border-color: var(--azure); box-shadow: 0 0 0 2px var(--azure), 0 0 24px -8px var(--azure-glow); }
 
