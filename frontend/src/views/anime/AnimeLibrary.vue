@@ -114,7 +114,7 @@ const filtered = computed(() => {
   return list
 })
 
-const { selected: gridSelected, count: gridSelectionCount, clear: clearGridSelection, onKey: onGridKey } =
+const { selected: gridSelected, count: gridSelectionCount, clear: clearGridSelection, onKey: onGridKey, onSelect: onGridSelect } =
   useGridKeyboard(() => filtered.value.map(a => a.id))
 const selectedAnime = computed(() => filtered.value.filter(a => gridSelected.has(String(a.id))))
 
@@ -296,10 +296,11 @@ function openMenu(e, a) {
                      name="grid" tag="div" class="grid" role="grid"
                      aria-label="Biblioteca de anime" aria-multiselectable="true"
                      @keydown="onGridKey">
-      <AnimeCard v-for="a in filtered" :key="a.id" :anime="a" @open="store.openDetail($event)" @play="playFromCard"
+      <AnimeCard v-for="a in filtered" :key="a.id" :anime="a" selectable @open="store.openDetail($event)" @play="playFromCard"
                  data-grid-item :data-grid-key="a.id" role="gridcell"
                  :aria-selected="gridSelected.has(String(a.id))"
                  :class="{ 'is-key-selected': gridSelected.has(String(a.id)), 'is-returned': String(a.id) === ultimaTarjeta }"
+                 @select="onGridSelect(a.id, $event)"
                  @contextmenu.prevent="openMenu($event, a)" />
     </TransitionGroup>
 

@@ -12,8 +12,12 @@ import { genero } from '@/lib/etiquetas'
 import { useMangaStore } from '@/stores/manga'
 import MediaCard from '@/components/media/MediaCard.vue'
 
-const props = defineProps({ manga: { type: Object, required: true }, updates: { type: Number, default: 0 } })
-const emit = defineEmits(['open', 'play'])
+const props = defineProps({
+  manga: { type: Object, required: true },
+  updates: { type: Number, default: 0 },
+  selectable: { type: Boolean, default: false },
+})
+const emit = defineEmits(['open', 'play', 'select'])
 
 const store = useMangaStore()
 
@@ -48,9 +52,11 @@ const tags = computed(() => [
     :flag="flag"
     :count="total ? { done: read, total } : null"
     :tags="tags"
+    :selectable="selectable"
     play-label="Continuar"
     alt-label=""
     @open="emit('open')"
     @play="emit('play')"
+    @select="emit('select', $event)"
   />
 </template>

@@ -12,6 +12,14 @@ export function gridMoveIndex(index, key, length, columns = 1) {
   return index
 }
 
+export function gridSelectionRange(keys, from, to) {
+  const visible = (keys || []).map(String)
+  const i = visible.indexOf(String(from))
+  const j = visible.indexOf(String(to))
+  if (i < 0 || j < 0) return []
+  return visible.slice(Math.min(i, j), Math.max(i, j) + 1)
+}
+
 function gridColumns(grid, items) {
   if (typeof getComputedStyle === 'function') {
     const template = getComputedStyle(grid).gridTemplateColumns
@@ -27,15 +35,34 @@ function gridColumns(grid, items) {
 
 export function useGridKeyboard(getVisibleKeys) {
   const selected = ref(new Set())
+  const anchor = ref(null)
   const count = computed(() => selected.value.size)
 
-  function clear() { selected.value = new Set() }
+  function clear() { selected.value = new Set(); anchor.value = null }
 
   function toggle(key) {
     const next = new Set(selected.value)
     const normalized = String(key)
     next.has(normalized) ? next.delete(normalized) : next.add(normalized)
     selected.value = next
+    anchor.value = normalized
+  }
+
+  // Ctrl/Cmd+clic alterna una tarjeta; Shift+clic añade el rango visible desde la última.
+  // El clic normal conserva la acción primaria de la tarjeta y por eso devuelve false.
+  function onSelect(key, e) {
+    if (!e || (!e.ctrlKey && !e.metaKey && !e.shiftKey)) return false
+    e.preventDefault()
+    const normalized = String(key)
+    const range = e.shiftKey && anchor.value != null
+      ? gridSelectionRange(getVisibleKeys() || [], anchor.value, normalized)
+      : []
+    if (range.length) {
+      selected.value = new Set([...selected.value, ...range])
+      anchor.value = normalized
+    } else toggle(normalized)
+    e.currentTarget?.focus?.()
+    return true
   }
 
   function onKey(e) {
@@ -69,7 +96,8 @@ export function useGridKeyboard(getVisibleKeys) {
     const visible = new Set((keys || []).map(String))
     const next = new Set([...selected.value].filter((key) => visible.has(key)))
     if (next.size !== selected.value.size) selected.value = next
+    if (anchor.value != null && !visible.has(String(anchor.value))) anchor.value = null
   }, { flush: 'post' })
 
-  return { selected, count, clear, onKey }
+  return { selected, count, clear, onKey, onSelect }
 }

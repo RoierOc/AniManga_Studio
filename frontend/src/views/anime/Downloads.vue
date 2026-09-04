@@ -87,7 +87,7 @@ const visibles = computed(() => {
   })
 })
 
-const { selected: selectedHashes, count: selectedCount, clear: clearSelection, onKey: onGridKey } =
+const { selected: selectedHashes, count: selectedCount, clear: clearSelection, onKey: onGridKey, onSelect: onGridSelect } =
   useGridKeyboard(() => visibles.value.map(({ t }) => t.hash))
 const selectedRows = computed(() => visibles.value.filter(({ t }) => selectedHashes.has(String(t.hash))))
 const selectedActive = computed(() => selectedRows.value.filter(({ t }) => !isDone(t) && !isPaused(t)))
@@ -97,6 +97,8 @@ async function batchQbtAction(action, rows) {
   const result = await store.qbtActionBatch(action, rows.map(({ t }) => t.hash))
   if (result?.successful) clearSelection()
 }
+
+function selectTorrent(hash, e) { return onGridSelect(hash, e) }
 
 // «T1 · Ep 3 · 1080p», sin las partes que no se saben (y sin el `·` huérfano de cada una).
 function detalle(r) {
@@ -205,7 +207,7 @@ const ajustes = ref(false)
         <div v-for="{ t, r, cover } in visibles" :key="t.hash" class="trow"
              :class="{ 'trow--done': isDone(t), 'trow--selected': selectedHashes.has(String(t.hash)) }"
              data-grid-item :data-grid-key="t.hash" role="option" tabindex="0"
-             :aria-selected="selectedHashes.has(String(t.hash))">
+             :aria-selected="selectedHashes.has(String(t.hash))" @click="selectTorrent(t.hash, $event)">
           <!-- Sin blur-up: la caja mide 44 px, así que el micro-thumb de 28 px no es un
                placeholder, es prácticamente la imagen final. Una petición por fila, no dos. -->
           <div class="trow__poster">

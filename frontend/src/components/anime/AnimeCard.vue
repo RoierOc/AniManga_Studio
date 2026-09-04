@@ -13,8 +13,11 @@ import { useAnimeStore } from '@/stores/anime'
 import { ANIME_STATUS, animeFormatLabel, fmtCountdown } from '@/lib/anime'
 import MediaCard from '@/components/media/MediaCard.vue'
 
-const props = defineProps({ anime: { type: Object, required: true } })
-const emit = defineEmits(['open', 'play'])
+const props = defineProps({
+  anime: { type: Object, required: true },
+  selectable: { type: Boolean, default: false },
+})
+const emit = defineEmits(['open', 'play', 'select'])
 
 const store = useAnimeStore()
 
@@ -79,7 +82,9 @@ const dots = computed(() =>
     :count="{ done, total }"
     :dots="dots"
     :tags="genres"
+    :selectable="selectable"
     @open="emit('open', anime)"
     @play="emit('play', anime)"
+    @select="emit('select', $event)"
   />
 </template>

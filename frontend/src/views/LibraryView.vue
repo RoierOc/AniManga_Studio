@@ -202,7 +202,7 @@ const filtered = computed(() => {
   return cmp ? [...list].sort(cmp) : list
 })
 
-const { selected: gridSelected, count: gridSelectionCount, clear: clearGridSelection, onKey: onGridKey } =
+const { selected: gridSelected, count: gridSelectionCount, clear: clearGridSelection, onKey: onGridKey, onSelect: onGridSelect } =
   useGridKeyboard(() => filtered.value.map(m => m.id))
 const selectedMangas = computed(() => filtered.value.filter(m =>
   gridSelected.has(String(m.id)) && m.kind !== 'novel'))
@@ -364,10 +364,12 @@ watch(() => manga.libraryDirty, () => load())
                      aria-label="Biblioteca de manga" aria-multiselectable="true"
                      @keydown="onGridKey">
       <MangaCard v-for="m in filtered" :key="m.id" :manga="m" :updates="manga.updatesByTitle[m.name]?.new_count || 0"
+                 selectable
                  data-grid-item :data-grid-key="m.id" role="gridcell"
                  :aria-selected="gridSelected.has(String(m.id))"
                  :class="{ 'is-key-selected': gridSelected.has(String(m.id)) }"
                  @open="openItem(m)" @play="m.kind === 'novel' ? openItem(m) : manga.resumeManga(m)"
+                 @select="onGridSelect(m.id, $event)"
                  @contextmenu.prevent="openMenu($event, m)" />
     </TransitionGroup>
 

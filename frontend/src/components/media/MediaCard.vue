@@ -42,10 +42,17 @@ const props = defineProps({
   // Buscar/Descubrir "Info". Si `altLabel` es '', solo se pinta el botón principal.
   altLabel: { type: String, default: 'Info' },
   altIcon: { type: String, default: 'spark' },
+  // Las rejillas de biblioteca activan Ctrl/Cmd+clic y Shift+clic sin cambiar el clic normal.
+  selectable: { type: Boolean, default: false },
 })
-const emit = defineEmits(['open', 'play', 'alt'])
+const emit = defineEmits(['open', 'play', 'alt', 'select'])
 
 function openCard(ev) {
+  if (props.selectable && (ev.ctrlKey || ev.metaKey || ev.shiftKey)) {
+    ev.preventDefault()
+    emit('select', ev)
+    return
+  }
   // El póster clickeado "vuela" hasta el hero del detalle (View Transition).
   vtTag(ev.currentTarget?.closest?.('.mcard') || ev.currentTarget, '.mcard__img')
   emit('open')
