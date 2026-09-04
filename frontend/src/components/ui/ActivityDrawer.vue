@@ -6,12 +6,14 @@ import Icon from './Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import { etaTarea as eta } from '@/lib/eta'
 import { imgProxy } from '@/lib/img'
+import { retrySse, sseState } from '@/lib/sse'
 
 // Slide-over "glance" panel: everything processing right now, grouped by manga. Reads the
 // same store getters as the in-modal progress and the full Activity view → all in lockstep.
 const ui = useUiStore()
 const store = useMangaStore()
 const groups = computed(() => store.processingGroups)
+const connectionDown = computed(() => sseState.value === 'down')
 
 const KIND = {
   download:  { icon: 'download', color: 'var(--azure)',  label: 'Descarga' },
@@ -25,6 +27,7 @@ const monogram = (t) => (t || '?').trim().charAt(0).toUpperCase()
 
 function close() { ui.activityOpen = false }
 function viewAll() { ui.activityTab = 'active'; ui.goto('activity') }   // goto() also closes the drawer
+function retryActivity() { retrySse() }
 function onKey(e) { if (e.key === 'Escape' && ui.activityOpen) close() }
 
 onMounted(() => window.addEventListener('keydown', onKey))
@@ -47,6 +50,12 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
             <button class="adr__link" @click="viewAll">Ver todo <Icon name="chevron" :size="13" /></button>
             <button class="adr__x" @click="close" data-tip="Cerrar"><Icon name="close" :size="16" /></button>
           </header>
+
+          <div v-if="connectionDown" class="adr__warn" role="status">
+            <Icon name="alert" :size="13" />
+            <span>Actividad desconectada; los datos pueden estar desactualizados.</span>
+            <button @click="retryActivity">Reintentar</button>
+          </div>
 
           <div class="adr__body">
             <template v-if="groups.length">
@@ -120,6 +129,10 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
 .adr__link:hover { color: #fff; }
 .adr__x { width: 1.75rem; height: 1.75rem; display: grid; place-items: center; border-radius: var(--r-sm); color: var(--ink-faint); }
 .adr__x:hover { color: var(--ink); }
+.adr__warn { display: flex; align-items: center; gap: var(--s-2); padding: var(--s-2) var(--s-3); color: var(--warn); background: color-mix(in srgb, var(--warn) 8%, transparent); border-bottom: 1px solid color-mix(in srgb, var(--warn) 22%, transparent); font-size: var(--fs-2xs); }
+.adr__warn span { flex: 1; min-width: 0; }
+.adr__warn button { flex-shrink: 0; color: var(--warn); font-weight: 700; font-size: var(--fs-2xs); }
+.adr__warn button:hover { color: var(--ink); text-decoration: underline; }
 
 .adr__body { flex: 1; overflow-y: auto; padding: var(--s-3); display: flex; flex-direction: column; gap: var(--s-3); }
 
