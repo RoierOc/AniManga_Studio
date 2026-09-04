@@ -5,6 +5,7 @@ import { useMangaStore } from '@/stores/manga'
 import Icon from './Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import { etaTarea as eta } from '@/lib/eta'
+import { imgProxy } from '@/lib/img'
 
 // Slide-over "glance" panel: everything processing right now, grouped by manga. Reads the
 // same store getters as the in-modal progress and the full Activity view → all in lockstep.
@@ -53,7 +54,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKey))
                 <div class="grp__head">
                   <span class="grp__cover">
                     <span class="grp__mono">{{ monogram(g.title) }}</span>
-                    <img v-if="g.cover" :src="g.cover" alt="" loading="lazy" decoding="async"
+                    <img v-if="g.cover" :src="imgProxy(g.cover, 96)" alt="" loading="lazy" decoding="async"
                          @error="$event.target.classList.add('is-fail')"
                          @load="$event.target.classList.remove('is-fail')" />
                   </span>
