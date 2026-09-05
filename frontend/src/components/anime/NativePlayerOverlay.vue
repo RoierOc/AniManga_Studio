@@ -24,7 +24,7 @@ const A4K_MODES = [
   { id: 'off', label: 'Desactivado' },
   { id: 'high', label: 'Calidad · A HQ' },
   { id: 'ultra', label: 'Muy alta · Doble CNN HQ' },
-  { id: 'maximo', label: 'Máxima calidad · UL + Thin estable' },
+  { id: 'maximo', label: 'Máxima calidad · UL + Soft M + Thin' },
 ]
 const A4K_TIER_LABEL = { high: 'A4K·HQ', ultra: 'A4K·Doble', maximo: 'A4K·Máximo' }
 // Imagen real (series/películas): Anime4K no aplica —está entrenado en line art—, así que el
