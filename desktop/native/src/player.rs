@@ -86,20 +86,19 @@ const SHADERS_ULTRA: &[&str] = &[
     "Anime4K_Upscale_CNN_x2_M.glsl",
 ];
 
-/// **Máxima calidad.** Es exactamente el CTRL+9 de mpv: A+A con red UL, `Thin_HQ` y las mismas
-/// etapas condicionales. La primera restauración reconstruye antes del upscale y `Restore_CNN_M`
-/// vuelve a restaurar después de él; `Thin_HQ` devuelve el trazo fino que el perfil B+B suaviza.
+/// **Máxima calidad estable.** Recupera el perfil previo que ya estaba validado sin parpadeo:
+/// `Restore_CNN_VL` → `Upscale_CNN_x2_VL` → `AutoDownscalePre_x2/x4` → `Upscale_CNN_x2_M` →
+/// `Thin_HQ`. El antiguo selector lo llamaba “A+A UL + Thin”, pero el historial demuestra que
+/// llevaba una sola restauración VL; conservar la receta real es más importante que el nombre.
 ///
-/// No añadimos una tercera restauración: una CNN no recupera información nueva al recibir dos veces
-/// el resultado ya reconstruido; sólo amplifica halos, ruido y diferencias entre fotogramas. El
-/// parpadeo se investigará sin degradar esta línea base de calidad.
+/// No añadimos `Restore_CNN_M`: en el máximo experimental fue la etapa que reintrodujo el shimmer
+/// en sombras con movimiento. La investigación de una doble pasada queda separada de este perfil.
 const SHADERS_MAXIMO: &[&str] = &[
     "Anime4K_Clamp_Highlights.glsl",
-    "Anime4K_Restore_CNN_UL.glsl",
-    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_VL.glsl",
     "Anime4K_AutoDownscalePre_x2.glsl",
     "Anime4K_AutoDownscalePre_x4.glsl",
-    "Anime4K_Restore_CNN_M.glsl",
     "Anime4K_Upscale_CNN_x2_M.glsl",
     "Anime4K_Thin_HQ.glsl",
 ];
@@ -156,26 +155,25 @@ mod anime4k_tier_tests {
     }
 
     #[test]
-    fn maximo_es_exactamente_a_a_ul_con_thin() {
+    fn maximo_reproduce_el_perfil_previo_ul_con_thin() {
         assert_eq!(tier_shaders("maximo"), [
             "Anime4K_Clamp_Highlights.glsl",
-            "Anime4K_Restore_CNN_UL.glsl",
-            "Anime4K_Upscale_CNN_x2_UL.glsl",
+            "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_VL.glsl",
             "Anime4K_AutoDownscalePre_x2.glsl",
             "Anime4K_AutoDownscalePre_x4.glsl",
-            "Anime4K_Restore_CNN_M.glsl",
             "Anime4K_Upscale_CNN_x2_M.glsl",
             "Anime4K_Thin_HQ.glsl",
         ]);
         assert_eq!(tier_shaders("maximo").iter()
             .filter(|s| s.starts_with("Anime4K_Restore_CNN_"))
-            .count(), 2);
+            .count(), 1);
     }
 
     #[test]
     fn la_cadena_se_envia_como_una_lista_atomica_de_rutas_windows() {
         let paths = shader_paths("maximo");
-        assert_eq!(paths.matches(';').count(), 7);
+        assert_eq!(paths.matches(';').count(), 6);
         assert!(paths.starts_with("C:/Program Files (x86)/mpv/mpv/shaders/"));
         assert!(paths.ends_with("Anime4K_Thin_HQ.glsl"));
     }
