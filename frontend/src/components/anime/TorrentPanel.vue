@@ -46,12 +46,17 @@ function toggle(ep) {
 const isOpen = (ep) => expanded.value.has(ep)
 const epLoading = (ep) => store.epFetch[ep] === 'loading'
 
-// Al entrar en cualquier vista de torrents (episodio único o todos) los grupos arrancan
-// COLAPSADOS — el usuario despliega el que quiera. El deep-fetch por episodio ocurre en toggle()
-// al expandir, así que colapsar además evita peticiones a Nyaa que no se van a mirar.
-watch(() => store.groupedEpisodes, () => {
+// Un deep-fetch modifica `groupedEpisodes` cuando llegan los resultados. No podemos reiniciar
+// aquí `expanded`: hacerlo cerraba el episodio justo al terminar la búsqueda y obligaba a
+// pulsarlo una segunda vez para ver los torrents. Sólo se reinicia al cambiar de contexto;
+// durante una actualización se conservan las expansiones que aún existen.
+watch(() => [store.torrentAnime?.id, store.targetEp], () => {
   expanded.value = new Set()
 }, { immediate: true })
+watch(() => store.groupedEpisodes.map(g => g.episode), (episodes) => {
+  const available = new Set(episodes)
+  expanded.value = new Set([...expanded.value].filter(ep => available.has(ep)))
+})
 const epLabel = (n) => n === 0 ? 'Batch / Completo' : n === -1 ? 'Sin clasificar' : `Episodio ${n}`
 const keyOf = (t) => t.info_hash || t.torrent_url
 </script>

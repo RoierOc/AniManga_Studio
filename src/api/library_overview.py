@@ -15,29 +15,35 @@ def _key(title: str) -> str:
     return (title or '').lower().strip()
 
 
-def _identity_al_id(folder: str):
-    """al_id de `<carpeta>/.identity.json`, o None.
+def _identity(folder: str) -> dict:
+    """La identidad canónica de `<carpeta>/.identity.json`, o `{}`.
 
+    Devuelve el fichero entero y no sólo el `al_id` porque ahí dentro está también el `md_uuid`
+    VERIFICADO (`manga_identity.resolve_identity`), que es la respuesta a «qué obra es ésta» para
+    todo lo que cuelga de MangaDex. Medido en la biblioteca real: 23 de las 26 carpetas lo tienen y
+    la vista no lo contaba, así que una obra descargada llegaba a la ficha sin identidad de MangaDex
+    aunque estuviera resuelta y guardada al lado de sus páginas.
     Una lectura por carpeta y sólo de un fichero minúsculo, sobre el disco de la biblioteca; el
     coste está en el mismo orden que el `listdir` que ya hace el barrido. Ausente = esa obra aún
-    no se ha resuelto contra AniList (vacío legítimo, no se registra); ILEGIBLE sí se registra,
-    que es la diferencia que este repo cobra cara.
+    no se ha resuelto (vacío legítimo, no se registra); ILEGIBLE sí se registra, que es la
+    diferencia que este repo cobra cara.
     """
     if not folder:
-        return None
+        return {}
     from api.roots import series_dirs
     # En cualquiera de sus discos: la identidad se escribió junto a las páginas, y si la obra
     # vive sólo en el segundo disco, mirar el principal la daría por no identificada.
     p = next((d / '.identity.json' for d in series_dirs(folder)
               if (d / '.identity.json').exists()), None)
     if p is None:
-        return None
+        return {}
     try:
         import json
-        return json.loads(p.read_text(encoding='utf-8')).get('al_id') or None
+        data = json.loads(p.read_text(encoding='utf-8'))
+        return data if isinstance(data, dict) else {}
     except Exception as e:
-        record_error('library_overview', e, op='identity_al_id', folder=folder)
-        return None
+        record_error('library_overview', e, op='identity', folder=folder)
+        return {}
 
 
 def build_overview(folders: list, tracked: list) -> list:
@@ -78,16 +84,19 @@ def build_overview(folders: list, tracked: list) -> list:
         if t:
             matched.add(t.get('id'))
         kind = (t or {}).get('kind') or 'mangadex'
+        ident = _identity(m.get('name'))
         out.append({
             **m,
-            'mdId': t.get('id') if (t and kind == 'mangadex') else None,
+            # El uuid de la entrada seguida manda; si no la hay, el VERIFICADO de la carpeta. Al
+            # revés no: lo seguido es lo que el usuario eligió, la identidad es lo que dedujimos.
+            'mdId': (t.get('id') if (t and kind == 'mangadex') else None) or ident.get('md_uuid'),
             'trackedId': (t or {}).get('id'),
             'status': (t or {}).get('status') or '',
             # El al_id (AniList) sale de la entrada seguida si la hay y, si no, de la identidad
             # canónica que ya vive en la carpeta (`.identity.json`). Sin esto, una obra DESCARGADA
             # llegaba a la ficha sin al_id — y todo lo que cuelga de él (puente manga⇄anime,
             # frescura de versiones) quedaba mudo justo en las obras que más usas.
-            'al_id': (t or {}).get('al_id') or _identity_al_id(m.get('name')),
+            'al_id': (t or {}).get('al_id') or ident.get('al_id'),
         })
 
     for t in (tracked or []):

@@ -1,12 +1,17 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useSourcesStore } from '@/stores/sources'
+import { useMangaStore } from '@/stores/manga'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import ChapterProgress from '@/components/ui/ChapterProgress.vue'
 import { useModal } from '@/lib/useModal'
+import { tareaActiva } from '@/lib/manga'
 import { genero } from '@/lib/etiquetas'
 
 const store = useSourcesStore()
+const manga = useMangaStore()   // el progreso en vivo vive en su mapa `downloads` (SSE)
+const bajando = (ch) => !!tareaActiva(manga.downloads, store.dlTask[ch.id])
 const d = computed(() => store.detail)
 const isInLib = computed(() => store.inLibrary(d.value?.sourceId, d.value?.id))
 const genres = computed(() => {
@@ -56,7 +61,8 @@ useModal(() => !!d.value, () => store.closeDetail(), modalEl)
                   <span class="chap__name">{{ ch.name }}</span>
                   <span class="chap__sub">{{ ch.scanlator || '' }}<template v-if="ch.pageCount && ch.pageCount > 0"> · {{ ch.pageCount }} pág.</template></span>
                 </div>
-                <div v-if="store.downloading[ch.id]" class="chap__prog"><Spinner :size="13" /></div>
+                <ChapterProgress v-if="bajando(ch)" :task-id="store.dlTask[ch.id]" class="chap__prog" />
+                <div v-else-if="store.downloading[ch.id]" class="chap__prog"><Spinner :size="13" /></div>
                 <template v-else>
                   <button class="chap__dl chap__dl--ghost" :disabled="store.reading[ch.id]" @click="store.readChapter(ch)">
                     <Spinner v-if="store.reading[ch.id]" :size="13" /><Icon v-else name="library" :size="14" /> Leer

@@ -13,7 +13,7 @@
 //     cmd: 'stop'                      → descargar el archivo (al cerrar)
 //     cmd: 'pause'     { value:bool }  → pausar/reanudar
 //     cmd: 'seek'      { pos:number }  → buscar (segundos absolutos)
-//     cmd: 'shaders'   { tier:string } → tier Anime4K en vivo ('off' | 'high')
+//     cmd: 'shaders'   { tier:string } → tier Anime4K en vivo (incluye variantes de laboratorio)
 //     cmd: 'track'     { aid?, sid? }  → pista audio/subs (id numérico | 'no' | 'auto')
 //     cmd: 'subadd'    { path }        → añade un sidecar (.srt/.ass) como pista mpv
 //     cmd: 'volume'    { value:0..100 }→ volumen
@@ -96,6 +96,37 @@ if (typeof window !== 'undefined' && wv) {
     'Anime4K_Clamp_Highlights', 'Anime4K_Restore_CNN_UL', 'Anime4K_Upscale_CNN_x2_UL',
     'Anime4K_AutoDownscalePre_x2', 'Anime4K_AutoDownscalePre_x4',
     'Anime4K_Restore_CNN_M', 'Anime4K_Upscale_CNN_x2_M'))
+
+  // ── A/B del tier "máximo": quitarle el shimmer SIN quitarle las dos rondas ──
+  //
+  // El objetivo de ese tier es dar EN VIVO, sin hornear, lo que se ve al reproducir un horneado con
+  // el CTRL+9: por eso lleva el A+A dentro (dos rondas de restaurar+escalar). Las dos rondas NO se
+  // negocian; lo que se prueba es con qué se restaura.
+  //
+  // Restaurar es afilar y quitar ruido, y la red no sabe nada del fotograma anterior: hacerlo dos
+  // veces amplifica diferencias minúsculas entre fotogramas casi idénticos, y en un plano LENTO el
+  // ojo se queda quieto sobre una zona plana y lo ve. Anime4K trae variantes `Soft` justo para eso.
+  const _max = (r1, r2) => _list(
+    'Anime4K_Clamp_Highlights', r1, 'Anime4K_Upscale_CNN_x2_UL',
+    'Anime4K_AutoDownscalePre_x2', 'Anime4K_AutoDownscalePre_x4',
+    ...(r2 ? [r2] : []), 'Anime4K_Upscale_CNN_x2_M', 'Anime4K_Thin_HQ')
+
+  // 1) Tal cual está hoy — la referencia contra la que se juzga todo.
+  window.__mpvDiag.maxActual = () =>
+    window.__mpvDiag.set('glsl-shaders', _max('Anime4K_Restore_CNN_UL', 'Anime4K_Restore_CNN_M'))
+  // 2) Sólo la SEGUNDA restauración en suave. La primera sigue mordiendo igual, así que la
+  //    definición de la primera ronda se conserva entera.
+  window.__mpvDiag.maxSoft2 = () =>
+    window.__mpvDiag.set('glsl-shaders', _max('Anime4K_Restore_CNN_UL', 'Anime4K_Restore_CNN_Soft_M'))
+  // 3) Las DOS en suave: es el Modo B+B oficial de Anime4K con la red UL. Mantiene las dos rondas
+  //    enteras y es el preset que existe precisamente para no sobre-procesar.
+  window.__mpvDiag.maxBB = () =>
+    window.__mpvDiag.set('glsl-shaders', _max('Anime4K_Restore_CNN_Soft_UL', 'Anime4K_Restore_CNN_Soft_M'))
+  // 4) Sin segunda restauración (Modo A con red UL). El que seguro no parpadea, y el suelo contra
+  //    el que se mide si las dos rondas están aportando algo de verdad. OJO: sigue teniendo los
+  //    DOS escalados; lo único que se cae es la segunda reparación.
+  window.__mpvDiag.maxSinDoble = () =>
+    window.__mpvDiag.set('glsl-shaders', _max('Anime4K_Restore_CNN_UL', null))
 }
 
 /** Suscríbete a los mensajes de Rust. Devuelve una función para desuscribirse. */

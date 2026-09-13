@@ -5,7 +5,7 @@
  * through untouched — the backend only ever fetches/caches these same
  * hosts, so keeping the check here too avoids ever sending an unrelated
  * URL to our own /api/img endpoint. */
-const ALLOWED_HOSTS = new Set(['image.tmdb.org', 's4.anilist.co', 'uploads.mangadex.org', 'images.mangabaka.dev', 'cdn.mangabaka.dev', 'artworks.thetvdb.com'])
+const ALLOWED_HOSTS = new Set(['image.tmdb.org', 's4.anilist.co', 'uploads.mangadex.org', 'images.mangabaka.dev', 'cdn.mangabaka.dev', 'artworks.thetvdb.com', 'cdn.myanimelist.net'])
 
 /* `w` = ancho CSS al que se va a PINTAR la imagen (no el del archivo). El backend sirve una
  * rendición a ese tamaño desde su caché en disco; sin `w` manda el original entero.
@@ -44,6 +44,22 @@ function dpx(cssWidth) {
   const dpr = Math.min(2, (typeof window !== 'undefined' && window.devicePixelRatio) || 1)
   const real = Math.round(cssWidth * dpr)
   return LADDER.find(w => real <= w) || LADDER[LADDER.length - 1]
+}
+
+/* Ancho al que el PC extrae el fotograma de un episodio. Espejo de `_THUMB_W` en `api/anime.py`:
+ * tiene que estar aquí porque **viaja en la URL**, y ésa es justo la razón de que exista este
+ * helper. El endpoint responde con `max-age` de 7 días, así que al subir el ancho de 480 a 960 el
+ * fichero del disco cambió pero la URL no: cada navegador siguió pintando el de 480 que ya tenía
+ * guardado, y desde fuera parecía que el arreglo no había servido de nada.
+ *
+ * Con el ancho dentro, subirlo invalida a todo el mundo solo. Y va en UN sitio porque la URL se
+ * armaba a mano en OCHO componentes: mientras estuviera repetida, este parámetro se habría quedado
+ * en unos y no en otros, que es peor que no ponerlo. */
+export const THUMB_W = 960
+
+export function animeThumb(animeId, num, epType) {
+  const esp = epType === 'special' ? 'special=1&' : ''
+  return `/api/anime/thumb/${animeId}/${num}?${esp}v=${THUMB_W}`
 }
 
 /* Blur-up placeholder: ~28px thumb (~1 KB) served from the proxy's disk cache,

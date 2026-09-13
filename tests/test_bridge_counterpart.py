@@ -94,6 +94,34 @@ def test_anilist_caido_es_502_no_una_lista_vacia(client, monkeypatch):
     assert d['counterparts'] == [] and d['verdict'] == ''
 
 
+def test_anilist_temporalmente_desactivado_es_503_con_mensaje_accionable(client, monkeypatch):
+    """El 403 especial de AniList es una caída temporal, no un permiso inválido del usuario."""
+    import requests
+    import api.bridge as B
+
+    class R:
+        status_code = 403
+
+        def json(self):
+            return {'errors': [{
+                'message': 'The AniList API has been temporarily disabled due to severe stability issues.',
+                'status': 403,
+            }], 'data': None}
+
+        def raise_for_status(self):
+            raise requests.HTTPError('403 Client Error: Forbidden for url: https://graphql.anilist.co/', response=self)
+
+    monkeypatch.setattr(B.http_requests, 'post', lambda *a, **k: R())
+    r = client.get('/api/bridge/counterpart?al_id=21&from=anime')
+
+    assert r.status_code == 503
+    assert r.get_json() == {
+        'code': 'anilist_unavailable',
+        'error': 'AniList está temporalmente no disponible por problemas de estabilidad. Inténtalo de nuevo más tarde.',
+        'retryable': True,
+    }
+
+
 def test_biblioteca_ilegible_no_dice_no_la_tienes(client, monkeypatch):
     """`in_library` viaja sólo si se pudo preguntar. Ausente ≠ False."""
     import api.bridge as B

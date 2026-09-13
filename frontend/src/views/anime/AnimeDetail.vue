@@ -15,6 +15,7 @@ import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
+import FolderPicker from '@/components/ui/FolderPicker.vue'
 
 import { useSubBatchStore } from '@/stores/subbatch'
 import { useAnimeUpscaleStore } from '@/stores/animeUpscale'
@@ -257,6 +258,7 @@ function pickStatus(k) { store.setStatus(anime.value, k); statusOpen.value = fal
 // las acciones que sí usas a diario, con lo destructivo a un pixel de lo cosmético.
 const mgmtOpen = ref(false)
 const mgmtRef = ref(null)
+const localFolderPicker = ref(false)
 function mgmt(fn) { mgmtOpen.value = false; fn() }
 function onDocClick(e) {
   if (statusRef.value && !statusRef.value.contains(e.target)) statusOpen.value = false
@@ -381,6 +383,9 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
                         @click.stop="mgmtOpen = !mgmtOpen">⋯</button>
                 <Transition name="dstatus-pop">
                   <ul v-if="mgmtOpen" class="dmgmt__menu" role="menu">
+                    <li v-if="anime.al_id" role="menuitem" @click="mgmt(() => localFolderPicker = true)">
+                      <Icon name="folder" :size="14" /> Añadir carpeta local
+                    </li>
                     <li role="menuitem" @click="mgmt(() => store.openCoverPicker(anime))">
                       <Icon name="library" :size="14" /> Cambiar portada o fondo
                     </li>
@@ -651,7 +656,9 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
             <button v-for="(o, i) in activeTab.options" :key="i" class="coveropt"
                     :class="{ 'is-current': o.url === activeTab.current }"
                     :disabled="store.coverSaving" @click="store.pickCover(o)">
-              <img :src="o.url" :alt="o.label" loading="lazy" decoding="async" />
+              <!-- Las opciones de AniList/TMDB/MAL pasan por la caché común; las fuentes no
+                   permitidas siguen intactas porque imgProxy() las deja pasar sin abrir el proxy. -->
+              <img :src="imgProxy(o.url, store.coverPicker.tab === 'cover' ? 160 : 320)" :alt="o.label" loading="lazy" decoding="async" />
               <span class="coveropt__label">{{ o.label }}</span>
               <span v-if="o.url === activeTab.current" class="coveropt__current"><Icon name="check" :size="12" /></span>
             </button>
@@ -659,6 +666,10 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
         </div>
       </div>
     </Teleport>
+
+    <FolderPicker v-model:open="localFolderPicker"
+                  :title="`Añadir carpeta local a ${anime.title}`"
+                  @pick="p => store.attachLocalFolder(anime, p.path || p.win)" />
   </div>
 </template>
 

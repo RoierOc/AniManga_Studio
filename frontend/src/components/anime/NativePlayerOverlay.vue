@@ -1,4 +1,5 @@
 <script setup>
+import { animeThumb } from '@/lib/img'
 // Overlay del reproductor NATIVO embebido (libmpv en la shell). El vídeo lo pinta
 // mpv por DEBAJO del WebView2 transparente (ver desktop/native): aquí va SOLO la UI,
 // con la MISMA estética/funcionalidad que PlayerOverlay.vue (clases wp__*). "Airspace":
@@ -22,11 +23,18 @@ let hideTimer = null
 
 const A4K_MODES = [
   { id: 'off', label: 'Desactivado' },
-  { id: 'high', label: 'Calidad · A HQ' },
-  { id: 'ultra', label: 'Muy alta · Doble CNN HQ' },
-  { id: 'maximo', label: 'Máxima calidad · VL + Thin estable' },
+  { id: 'max_h_triple_ul', label: 'Máxima calidad' },
+  { id: 'max_ref_ul_ul', label: 'Máxima calidad · H' },
+  { id: 'max_vl_ul_vl_m', label: 'Referencia visual' },
+  { id: 'maximo', label: 'Máxima calidad estable' },
+  { id: 'ultra', label: 'Muy alta · Doble CNN suave' },
+  { id: 'high', label: 'Alta · A HQ' },
 ]
-const A4K_TIER_LABEL = { high: 'A4K·HQ', ultra: 'A4K·Doble', maximo: 'A4K·Máximo' }
+const A4K_TIER_LABEL = {
+  high: 'A4K·Alta', ultra: 'A4K·Muy alta', maximo: 'A4K·Estable',
+  max_vl_ul_vl_m: 'A4K·Referencia', max_ref_ul_ul: 'A4K·Máxima H',
+  max_h_triple_ul: 'A4K·Máxima',
+}
 // Imagen real (series/películas): Anime4K no aplica —está entrenado en line art—, así que el
 // menú ofrece los shaders genéricos. Los tiers los resuelve `tier_shaders()` en player.rs.
 const LIVE_MODES = [
@@ -79,7 +87,7 @@ function isPlayable(e) {
 }
 // Miniatura: la del episodio si la trae (series, vía Sonarr), si no la ruta de anime.
 function epThumb(e) {
-  return e.thumb || (np.value?.anime?.id ? `/api/anime/thumb/${np.value.anime.id}/${e.num}` : '')
+  return e.thumb || (np.value?.anime?.id ? animeThumb(np.value.anime.id, e.num) : '')
 }
 
 function fmt(s) {
@@ -266,7 +274,7 @@ let cueTimer = null
 
 // Miniatura del siguiente episodio para la tarjeta (misma fuente que el panel).
 const nextThumb = computed(() =>
-  (np.value && nextEp.value) ? `/api/anime/thumb/${np.value.anime.id}/${nextEp.value.num}` : '')
+  (np.value && nextEp.value) ? animeThumb(np.value.anime.id, nextEp.value.num) : '')
 
 function armCueTimer(ms) {
   clearTimeout(cueTimer)

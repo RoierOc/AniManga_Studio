@@ -20,7 +20,7 @@ const store = useAnimeStore()
 
 const EYEBROW = {
   new: 'NUEVO EPISODIO', downloaded: 'LISTO PARA VER', continue: 'SIGUE VIENDO',
-  seasonal: 'TEMPORADA', recommendation: 'RECOMENDADO',
+  seasonal: 'TEMPORADA', recommendation: 'RECOMENDADO', library: 'DE TU BIBLIOTECA',
 }
 
 function epLabel(it) {

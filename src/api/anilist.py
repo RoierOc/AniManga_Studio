@@ -19,6 +19,24 @@ _genres_ts: float = 0.0
 _top_cache: dict = {}
 _TOP_TTL = 300   # 5 min
 _GENRES_TTL = 3600
+def graphql_error_message(response) -> str:
+    """Extrae el mensaje que AniList devuelve dentro de un error HTTP GraphQL."""
+    try:
+        return next(
+            (str(item.get('message')).strip() for item in (response.json().get('errors') or [])
+             if item.get('message')),
+            '',
+        )
+    except Exception:
+        return ''
+
+
+def anilist_temporarily_unavailable(response) -> bool:
+    """AniList usa 403, no 503, cuando desactiva temporalmente su API."""
+    return (
+        getattr(response, 'status_code', None) == 403
+        and 'temporarily disabled' in graphql_error_message(response).lower()
+    )
 
 
 # Los tres tamaños de AniList son ficheros distintos, no recortes: `medium` 100x150, `large`

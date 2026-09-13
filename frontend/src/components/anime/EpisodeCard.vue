@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { useAnimeUpscaleStore } from '@/stores/animeUpscale'
 import { animeEpLabel, isEpisodePlayable } from '@/lib/anime'
-import { imgProxy } from '@/lib/img'
+import { imgProxy, animeThumb } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -61,9 +61,11 @@ const hasES = computed(() => props.ep.es_injected || subTask.value?.status === '
  * Idea traída del móvil, donde se probó primero. */
 const thumbSrc = computed(() => {
   if (playable.value || props.ep.has_thumb) {
-    return `/api/anime/thumb/${props.anime.id}/${props.ep.num}${props.ep.ep_type === 'special' ? '?special=1' : ''}`
+    return animeThumb(props.anime.id, props.ep.num, props.ep.ep_type)
   }
-  return meta.value?.still ? imgProxy(meta.value.still, 400) : ''
+  // 400 se quedaba corto: la tarjeta mide ~495 px CSS, así que pedía el peldaño 640 y lo pintaba
+  // a 742 físicos. Con el ancho real cae en el 900 y deja de verse blando.
+  return meta.value?.still ? imgProxy(meta.value.still, 500) : ''
 })
 
 // Título real del episodio (TMDB/MAL) si lo tenemos; si no, la etiqueta derivada del archivo.

@@ -94,9 +94,32 @@ def _clear_thumb_cache():
             try: f.unlink()
             except Exception: pass
 
-# NOTE: thumbnails are intentionally NOT cleared on startup — they persist so that an
-# anime whose episodes were freed (clear_episodes) still shows its episode thumbnails
-# when you revisit it, which looks organic and survives restarts. They're small JPGs.
+
+def _borrar_thumbs(anime_id, ep_num=None) -> int:
+    """El fotograma es un DERIVADO del vídeo: si se borra el fichero, se borra el fotograma.
+
+    Sin esto la miniatura sobrevivía al episodio para siempre (`has_thumb` sale de un glob de esta
+    carpeta, no del disco de vídeo), así que un episodio borrado seguía enseñando su fotograma —
+    y si ese fotograma había salido mal, no había forma humana de quitarlo. Se pasa por el ancho
+    con comodín (`_w*`) para llevarse también los huérfanos de anchos anteriores.
+    """
+    if not _THUMBS_DIR.exists():
+        return 0
+    patrones = [f'{anime_id}_*.jpg'] if ep_num is None else \
+               [f'{anime_id}_{ep_num}_w*.jpg', f'{anime_id}_sp{ep_num}_w*.jpg']
+    n = 0
+    for pat in patrones:
+        for f in _THUMBS_DIR.glob(pat):
+            try:
+                f.unlink()
+                n += 1
+            except Exception:
+                pass
+    return n
+
+# NOTE: los fotogramas NO se limpian al arrancar — sobreviven a los reinicios y a que se suelte
+# el torrent, que es lo que hace que la ficha siga viéndose entera. Lo que SÍ se borra es el
+# fotograma de un vídeo que se ha borrado de verdad (`_borrar_thumbs`).
 
 # ── Anime library persistence ──────────────────────────────────────────────────
 
@@ -182,6 +205,24 @@ def _anadir_carpeta(anime: dict, carpeta: str) -> bool:
     return True
 
 
+def _quitar_carpeta(anime: dict, carpeta: str) -> bool:
+    """Quita una carpeta sin perder las restantes ni cambiar su orden."""
+    carpetas = _carpetas_de(anime)
+    if carpeta not in carpetas:
+        return False
+    restantes = [p for p in carpetas if p != carpeta]
+    if restantes:
+        anime['local_path'] = restantes[0]
+        if len(restantes) > 1:
+            anime['local_paths'] = restantes[1:]
+        else:
+            anime.pop('local_paths', None)
+    else:
+        anime.pop('local_path', None)
+        anime.pop('local_paths', None)
+    return True
+
+
 def _escanear_carpetas(anime: dict) -> list:
     """Episodios locales de TODAS sus carpetas. Gana la primera carpeta en los empates."""
     carpetas = _carpetas_de(anime)
@@ -195,11 +236,26 @@ def _escanear_carpetas(anime: dict) -> list:
 
 
 def _buscar_video(anime: dict, episode: int, subpath: str = '') -> str:
-    """El fichero de un episodio, mire donde mire la serie."""
-    for carpeta in _carpetas_de(anime):
-        video = _find_video(carpeta, episode, subpath)
+    """El fichero de un episodio, mire donde mire la serie.
+
+    Primero se busca la coincidencia EXACTA por número en TODAS las carpetas, y sólo después se
+    permite adivinar. El orden importa cuando una serie vive en dos discos: NIPPON SANGOKU tenía
+    el ep 1 en `C:/…/Downloads` y los eps 2 y 3 en `D:/…`, y como la primera carpeta contenía un
+    único fichero, la regla «un solo vídeo vale para cualquier episodio» —que existe para las
+    películas— se disparaba ahí y devolvía el ep 1 para TODOS. Se veía como tres miniaturas
+    clonadas, pero lo que estaba roto de verdad es que darle a reproducir el 2 ponía el 1.
+
+    Una conjetura en la primera carpeta no puede ganarle a una coincidencia exacta en la segunda.
+    """
+    carpetas = _carpetas_de(anime)
+    for carpeta in carpetas:
+        video = _find_video(carpeta, episode, subpath, adivinar=False)
         if video:
             return video
+    # Nadie lo tiene por número. Adivinar sólo vale con UNA carpeta: con varias, «aquí hay un solo
+    # fichero» no dice nada de la serie entera — es justo la lectura que causó el clonado.
+    if len(carpetas) == 1:
+        return _find_video(carpetas[0], episode, subpath)
     return ''
 
 
@@ -1380,7 +1436,13 @@ def _es_a4k(f) -> bool:
     return _Path(f).stem.endswith(_A4K_SUF)
 
 
-def _find_video(content_path: str, episode: int, subpath: str = '') -> str:
+def _find_video(content_path: str, episode: int, subpath: str = '', adivinar: bool = True) -> str:
+    """El vídeo de un episodio dentro de `content_path`.
+
+    `adivinar=False` deja SÓLO la coincidencia por número: sin el respaldo de «un único fichero»
+    ni el posicional. Lo usa `_buscar_video` para barrer todas las carpetas de una serie antes de
+    permitir ninguna conjetura (ver allí por qué).
+    """
     # Windows path from qBittorrent → convert to WSL path first
     if _is_wsl() and re.match(r'^[A-Za-z]:[/\\\\]', content_path):
         content_path = _win_to_wsl(content_path)
@@ -1399,7 +1461,7 @@ def _find_video(content_path: str, episode: int, subpath: str = '') -> str:
                             if f.is_file() and f.suffix.lower() in _VIDEO_EXTS and not _es_a4k(f))
         if not candidates:
             return ''
-        if episode <= 0 or len(candidates) == 1:
+        if episode <= 0 or (adivinar and len(candidates) == 1):
             return _prefiere_a4k(str(candidates[0]))
         # Use _parse_episode for accurate matching (avoids false positives from hex hashes)
         for f in candidates:
@@ -1412,7 +1474,7 @@ def _find_video(content_path: str, episode: int, subpath: str = '') -> str:
         # El único caso legítimo del respaldo es una carpeta cuyos ficheros NO llevan número
         # (medido sobre la biblioteca real: 2 carpetas de 85, y son partes en numeral romano —
         # Kizumonogatari I/II/III). Ahí el orden alfabético SÍ es el orden de los episodios.
-        if all(_parse_episode(f.stem) <= 0 for f in candidates):
+        if adivinar and all(_parse_episode(f.stem) <= 0 for f in candidates):
             return _prefiere_a4k(str(candidates[episode - 1])) if episode <= len(candidates) else ''
         return ''
     return ''
@@ -1718,6 +1780,29 @@ def _is_watched(position, duration):
             and (duration - position) <= _WATCHED_TAIL_SECS)
 
 
+def _guardar_posicion(entrada: dict, ep_str: str, save_pos: int) -> None:
+    """La posición de un episodio — y la regla que faltaba: **retomarlo lo DESMARCA**.
+
+    Los tres caminos que escriben progreso (MPV externo, reproductor nativo y player web)
+    guardaban la posición pero dejaban intacto un `watched` anterior. Reabrir un episodio ya
+    visto y salir a la mitad dejaba las dos cosas escritas a la vez, y como el parche optimista
+    del store SÍ desmarca, la contradicción no se veía hasta recargar: barra al 60 % antes de
+    recargar, «visto» después. Medido en la biblioteca real: **14 series** con esa contradicción
+    en el disco (BOCCHI ep 1, 853 s de 1420, y «visto»).
+
+    ⚠️ **Sólo desmarca a partir de dos minutos**, el mismo umbral con el que [_is_watched] decide
+    que un final cuenta como final. Asomarse un minuto a un episodio que ya viste no es volver a
+    verlo, y desmarcarlo por eso reabriría en tu biblioteca algo que ya habías terminado — que es
+    el error contrario y se nota más.
+    """
+    if save_pos > 30:
+        entrada.setdefault('positions', {})[ep_str] = save_pos
+        if save_pos > _WATCHED_TAIL_SECS:
+            entrada.get('watched', {}).pop(ep_str, None)
+    else:
+        entrada.get('positions', {}).pop(ep_str, None)
+
+
 def _read_wl_position(wl_dir: str) -> float:
     """Read saved playback position from MPV watch-later dir. Returns 0 if not found."""
     files = glob.glob(os.path.join(wl_dir, '*'))
@@ -1822,10 +1907,7 @@ def _track_mpv_session(proc, wl_dir: str, anime_id: str, ep_str: str, duration: 
         if duration > 0:
             lib[anime_id].setdefault('durations', {})[ep_str] = int(duration)
 
-        if save_pos > 30:
-            lib[anime_id].setdefault('positions', {})[ep_str] = save_pos
-        else:
-            lib[anime_id].get('positions', {}).pop(ep_str, None)
+        _guardar_posicion(lib[anime_id], ep_str, save_pos)
 
         # QUÉ episodio tocaste el último. Sin este dato la UI tenía que ADIVINARLO, y adivinaba
         # mal: «Seguir viendo» buscaba el primer episodio con posición guardada, así que asomarse
@@ -1930,6 +2012,13 @@ def _parse_episode(title: str) -> int:
     """Episode number >0, 0=batch, -1=unknown."""
     if re.search(r'\b(batch|complete|BD ?[Pp]ack|全話|COMPLETE|Pack)\b', title, re.I):
         return 0
+    # Una carpeta local puede tener sus capítulos como `1.mkv`, `2.mkv`... El nombre completo
+    # ya es el episodio; no lo confundimos con números sueltos dentro de títulos de releases.
+    bare = title.strip()
+    if re.fullmatch(r'\d{1,3}', bare):
+        number = int(bare)
+        if number > 0:
+            return number
     # "Season N Complete/Pack/Full", "Complete Series/Collection" → batch
     if re.search(
         r'\bSeason\s*\d+\s*(?:Complete|Full|Pack)\b'
@@ -2632,8 +2721,7 @@ def anime_library_get():
                 episodes_out.sort(key=lambda e: (e.get('ep_type', 'episode') != 'episode', e['num']))
 
             for e in episodes_out:
-                _tk = f'{anime_id}_sp{e["num"]}.jpg' if e.get('ep_type') == 'special' else f'{anime_id}_{e["num"]}.jpg'
-                e['has_thumb'] = _tk in all_thumbs
+                e['has_thumb'] = _thumb_key(anime_id, e['num'], e.get('ep_type') == 'special') in all_thumbs
 
             result.append({
                 'id': anime_id,
@@ -2791,7 +2879,7 @@ def anime_library_get():
                         e['filename'] = local_ep.get('filename', '')
 
         for e in episodes_out:
-            e['has_thumb'] = f'{anime_id}_{e["num"]}.jpg' in all_thumbs
+            e['has_thumb'] = _thumb_key(anime_id, e['num'], e.get('ep_type') == 'special') in all_thumbs
 
         done_count = sum(1 for e in episodes_out if e.get('in_qbt') and e.get('num', 0) > 0)
         # Espacio en disco de la serie: sumar el tamaño de cada torrent UNA sola vez
@@ -2963,6 +3051,7 @@ def anime_library_remove(anime_id):
                         _q('post', '/torrents/delete', data={'hashes': ih, 'deleteFiles': 'true'})
                     except Exception:
                         pass
+            _borrar_thumbs(anime_id)
         del lib[anime_id]
         _lib_write(lib)
     return jsonify({'ok': True})
@@ -2994,6 +3083,7 @@ def anime_episode_remove(anime_id, ep_num):
                     _Path(video).unlink(missing_ok=True)
             except Exception as e:
                 record_error('anime', e, op='episode_remove_local', anime=anime_id, ep=ep_str)
+        _borrar_thumbs(anime_id, ep_num)
     lib[anime_id].get('episodes', {}).pop(ep_str, None)
     _lib_write(lib)
     return jsonify({'ok': True})
@@ -3261,6 +3351,9 @@ def anime_clear_episodes(anime_id):
                 except Exception:
                     pass
 
+    if delete_files:
+        _borrar_thumbs(anime_id)
+
     entry['episodes'] = {}
     _lib_write(lib)
     return jsonify({'ok': True})
@@ -3370,7 +3463,10 @@ def anime_scan_folders():
         for folder in _list_anime_folders(root):
             folder_name = _Path(folder).name
             mapped_id = mappings.get(folder)
-            matched = lib.get(mapped_id) if mapped_id else None
+            if mapped_id is None:
+                mapped_id = next((value for saved_folder, value in mappings.items()
+                                  if _norm_scan_root(saved_folder) == _norm_scan_root(folder)), None)
+            matched = lib.get(_lib_key(lib, al_id=mapped_id)) if mapped_id else None
             result.append({
                 'folder': folder,
                 'name': folder_name,
@@ -3542,14 +3638,30 @@ def anime_browse():
 @anime_bp.route('/scan/match', methods=['POST'])
 def anime_scan_match():
     body = request.get_json(silent=True) or {}
-    folder     = (body.get('folder') or '').strip()
+    folder     = _norm_scan_root(body.get('folder') or '')
     anilist_id = str(body.get('anilist_id', '')).strip()
     title      = (body.get('title') or '').strip()
     cover      = (body.get('cover') or '').strip()
     if not folder or not anilist_id:
         return jsonify({'error': 'folder and anilist_id required'}), 400
+    try:
+        anilist_num = int(anilist_id)
+    except (TypeError, ValueError):
+        return jsonify({'error': 'anilist_id must be numeric'}), 400
+    if anilist_num <= 0:
+        return jsonify({'error': 'anilist_id must be positive'}), 400
+    if not _Path(folder).is_dir():
+        return jsonify({'error': f'No existe la carpeta: {folder}'}), 400
+
     data = _scanpaths_read()
-    data.setdefault('mappings', {})[folder] = anilist_id
+    mappings = data.setdefault('mappings', {})
+    saved_folder = next((saved for saved in mappings
+                         if saved == folder or _norm_scan_root(saved) == folder), None)
+    if saved_folder is not None and str(mappings[saved_folder]) != anilist_id:
+        return jsonify({'error': 'La carpeta ya esta enlazada a otra serie'}), 409
+    if saved_folder is not None and saved_folder != folder:
+        del mappings[saved_folder]
+    mappings[folder] = anilist_id
     _scanpaths_write(data)
 
     # Fetch full AniList metadata so we store episodes/format/romaji
@@ -3560,7 +3672,7 @@ def anime_scan_match():
             title{romaji english native}
             coverImage{ extraLarge large medium }
         }}'''
-        r = _rhttp.post(_ANILIST, json={'query': q, 'variables': {'id': int(anilist_id)}}, timeout=8)
+        r = _rhttp.post(_ANILIST, json={'query': q, 'variables': {'id': anilist_num}}, timeout=8)
         al_media = (r.json().get('data') or {}).get('Media') or {}
         if al_media:
             t = al_media.get('title') or {}
@@ -3576,41 +3688,46 @@ def anime_scan_match():
                 # marcaba como vista toda serie terminada nada más enlazar la carpeta.
                 'airing_status': al_media.get('status') or '',
             }
-    except Exception:
-        pass
+    except Exception as e:
+        record_error('anime', e, op='scan_match_metadata', anilist_id=anilist_id)
 
     lib = _lib_read()
-    if anilist_id not in lib:
-        lib[anilist_id] = {'title': title, 'cover': cover, 'episodes': {}}
-    lib[anilist_id]['local_path'] = folder
-    lib[anilist_id]['al_id'] = int(anilist_id)
+    library_id = _lib_key(lib, al_id=anilist_num, title=title)
+    if library_id not in lib:
+        lib[library_id] = {'title': title, 'cover': cover, 'episodes': {}}
+    _anadir_carpeta(lib[library_id], folder)
+    lib[library_id]['al_id'] = anilist_num
     for k, v in al_meta.items():
-        if v and (not lib[anilist_id].get(k)):
-            lib[anilist_id][k] = v
+        if v and (not lib[library_id].get(k)):
+            lib[library_id][k] = v
     # Always update total_episodes and format from AniList (they may improve)
     if al_meta.get('total_episodes'):
-        lib[anilist_id]['total_episodes'] = al_meta['total_episodes']
+        lib[library_id]['total_episodes'] = al_meta['total_episodes']
     if al_meta.get('format'):
-        lib[anilist_id]['format'] = al_meta['format']
+        lib[library_id]['format'] = al_meta['format']
     _lib_write(lib)
-    return jsonify({'ok': True})
+    return jsonify({'ok': True, 'id': library_id})
 
 
 @anime_bp.route('/scan/unmatch', methods=['POST'])
 def anime_scan_unmatch():
     body = request.get_json(silent=True) or {}
-    folder = (body.get('folder') or '').strip()
+    folder = _norm_scan_root(body.get('folder') or '')
     if not folder:
         return jsonify({'error': 'folder required'}), 400
     data = _scanpaths_read()
-    anilist_id = data.get('mappings', {}).pop(folder, None)
+    mappings = data.get('mappings', {})
+    saved_folder = next((saved for saved in mappings
+                         if saved == folder or _norm_scan_root(saved) == folder), None)
+    anilist_id = mappings.pop(saved_folder, None) if saved_folder is not None else None
     _scanpaths_write(data)
     if anilist_id:
         lib = _lib_read()
-        if anilist_id in lib and lib[anilist_id].get('local_path') == folder:
-            lib[anilist_id].pop('local_path', None)
-            if not lib[anilist_id].get('episodes'):
-                lib.pop(anilist_id, None)
+        library_id = _lib_key(lib, al_id=anilist_id)
+        if library_id in lib:
+            _quitar_carpeta(lib[library_id], folder)
+            if not _carpetas_de(lib[library_id]) and not lib[library_id].get('episodes'):
+                lib.pop(library_id, None)
         _lib_write(lib)
     return jsonify({'ok': True})
 
@@ -4059,10 +4176,7 @@ def anime_native_progress():
             return jsonify({'ok': True})
         if duration > 0:
             lib[anime_id].setdefault('durations', {})[ep_str] = int(duration)
-        if save_pos > 30:
-            lib[anime_id].setdefault('positions', {})[ep_str] = save_pos
-        else:
-            lib[anime_id].get('positions', {}).pop(ep_str, None)
+        _guardar_posicion(lib[anime_id], ep_str, save_pos)
 
         lib[anime_id]['last_ep'] = ep_str   # ver el comentario en _track: la UI no puede adivinarlo
 
@@ -4280,12 +4394,142 @@ def _secs_to_hms(secs: float) -> str:
     return f'{h:02d}:{m:02d}:{s:02d}'
 
 
+# Ancho del fotograma de episodio. La tarjeta lo pinta a ~742 px FÍSICOS (2560x1440 a dpr 1,5):
+# a los 480 de antes el estirón era ×1,55 y los planos con detalle fino (una carrera, multitud)
+# salían borrosos mientras los planos quietos aguantaban. El ancho va en el NOMBRE del caché para
+# que subirlo re-extraiga solo; los ficheros viejos quedan huérfanos y se pueden borrar a mano.
+_THUMB_W = 960
+
+
+def _thumb_key(anime_id, episode, is_special: bool) -> str:
+    sp = 'sp' if is_special else ''
+    return f'{anime_id}_{sp}{episode}_w{_THUMB_W}.jpg'
+
+
+def _extraer_fotograma(video: str, dest, seek_secs: float) -> None:
+    """Un fotograma a `_THUMB_W`. Doble seek: rápido hasta el keyframe anterior + fino exacto
+    (sólo `-ss` antes de `-i` cae en un B/P-frame sin sus referencias → borroso).
+
+    Un fallo DURO (fichero truncado, ruta que no existe) ya sale por el código de retorno — medido:
+    un .mkv cortado a la mitad da `rc=234` y no escribe nada. Lo que no se ve aquí es el fotograma
+    EMBADURNADO de un vídeo a medio descargar: ffmpeg oculta el error, devuelve 0 y escribe el
+    churro. Eso lo juzga `_extraer_fotograma_util` MIRANDO el resultado.
+    """
+    fine_margin = min(6.0, seek_secs)
+    r = subprocess.run(
+        ['ffmpeg', '-y',
+         '-ss', _secs_to_hms(max(0.0, seek_secs - fine_margin)), '-i', video,
+         '-ss', _secs_to_hms(fine_margin),
+         '-vframes', '1', '-vf', f'scale={_THUMB_W}:-2', '-q:v', '2', str(dest)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
+    )
+    if r.returncode != 0:
+        _Path(dest).unlink(missing_ok=True)
+        raise RuntimeError(f'ffmpeg no pudo sacar un fotograma limpio de {video} (rc={r.returncode})')
+
+
+# Momentos del episodio, en orden de preferencia. El primero es el de siempre (la mitad).
+_MOMENTOS_THUMB = (0.50, 0.35, 0.65, 0.20)
+
+
+# Cuánto puede saltar el brillo en los filos de macrobloque frente al resto antes de considerar
+# que el fotograma está embadurnado. CALIBRADO con dos muestras reales del mismo anime, extraídas
+# con un minuto de diferencia: la buena da 1,17 y la podrida 3,07. Sobre el caché entero (1099
+# fotogramas) la mediana es 1,38 y el percentil 95, 2,47.
+_MAX_BLOQUEO = 2.5
+
+# Desviación típica del gris por debajo de la cual el fotograma no enseña NADA (negro, fundido,
+# cartel en blanco). BAJO a propósito: una escena nocturna real ronda 6-9 y es utilizable.
+_MIN_CONTRASTE = 5.0
+
+# Relleno del decodificador: cuando h264 se queda sin referencias, el hueco queda en el color del
+# YUV a cero, que en RGB es VERDE PURO. Se mide qué parte del fotograma es ese verde.
+#
+# Se probó primero con «el color dominante ocupa más del 60 %» y NO vale: la basura suele traer dos
+# verdes distintos y ninguno domina por separado. Y se probó con «saturación alta» a secas: un
+# cartel amarillo legítimo de Monogatari da 0,80 y se colaba entre la basura. El tono sí separa —
+# medido sobre los 1091 del caché: la basura va de 0,60 a 1,00 y el siguiente fotograma legítimo
+# (un bosque) se queda en 0,15. El umbral tiene margen ×2 por los dos lados.
+_MAX_VERDE_RELLENO = 0.30
+
+
+def _juzgar_fotograma(dest) -> str:
+    """`'ok'`, `'plano'` o `'sucio'`. Se juzga la IMAGEN, no el proceso.
+
+    Se probó primero con `-xerror` (que ffmpeg aborte al primer error de decodificación) y hay que
+    no repetirlo: **hay series enteras con errores esporádicos que se ocultan solos y cuyos
+    fotogramas salen perfectos** — Welcome to the Ballroom da 2-3 «error while decoding MB» en
+    TODOS sus episodios y la mayoría de sus miniaturas se ven bien. Con `-xerror` esa serie se
+    quedaba sin una sola miniatura. Lo que hay que rechazar es el resultado feo, no el camino feo.
+    """
+    try:
+        import numpy as np
+        from PIL import Image
+        with Image.open(dest) as im:
+            rgb = np.asarray(im.convert('RGB'), dtype=np.uint8)
+        g = np.asarray(Image.fromarray(rgb).convert('L'), dtype=np.float32)
+        if g.std() < _MIN_CONTRASTE:
+            return 'plano'
+
+        # Medio fotograma del verde imposible: h264 rellenando lo que no pudo decodificar.
+        f = rgb.astype(np.float32)
+        verde = f[:, :, 1]
+        otros = np.maximum(f[:, :, 0], f[:, :, 2])
+        if float(((verde > 60) & (verde - otros > 0.55 * verde)).mean()) > _MAX_VERDE_RELLENO:
+            return 'sucio'
+        # Filos de macrobloque: el salto medio en las filas/columnas múltiplo de k contra el resto.
+        # k varía con el reescalado (1080p→960 deja los de 16 en 8), así que se prueban tres.
+        peor = 0.0
+        for eje in (1, 0):
+            d = np.abs(np.diff(g, axis=eje))
+            idx = np.arange(d.shape[eje])
+            for k in (8, 12, 16):
+                rejilla = (idx + 1) % k == 0
+                a = d[:, rejilla].mean() if eje else d[rejilla, :].mean()
+                b = d[:, ~rejilla].mean() if eje else d[~rejilla, :].mean()
+                # Sin textura fuera de la rejilla el cociente se dispara por el divisor, no por los
+                # filos: un cartel de color plano daría «embadurnado». No se juzga.
+                if b < 1.0:
+                    continue
+                peor = max(peor, a / b)
+        return 'sucio' if peor >= _MAX_BLOQUEO else 'ok'
+    except Exception:
+        return 'ok'   # si no se puede mirar, se da por bueno: peor es quedarse sin fotograma
+
+
+def _es_plano(dest) -> bool:
+    return _juzgar_fotograma(dest) == 'plano'
+
+
+def _extraer_fotograma_util(video: str, dest, duration: float) -> None:
+    """El fotograma del episodio, mirando que sirva para algo.
+
+    Sacarlo siempre del minuto central es una lotería: ahí está a menudo el corte del eyecatch, un
+    fundido o el cartel del título, y la tarjeta se quedaba en un rectángulo negro **para siempre**
+    (este caché no caduca). Y si el vídeo estaba a medio descargar, en un churro de macrobloques.
+    Medido sobre los 1099 del caché real: 27 negros o blancos enteros y 34 embadurnados.
+
+    Si lo que sale no sirve se prueba otro momento; si no sirve ninguno, se levanta y no se cachea
+    nada — la tarjeta cae al still de TMDB, que es mejor que una mancha permanente.
+
+    El coste normal sigue siendo UNA llamada a ffmpeg: sólo los malos pagan las demás.
+    """
+    if duration <= 0:
+        _extraer_fotograma(video, dest, 30.0)
+        return
+    for frac in _MOMENTOS_THUMB:
+        _extraer_fotograma(video, dest, duration * frac)
+        if _juzgar_fotograma(dest) == 'ok':
+            return
+    _Path(dest).unlink(missing_ok=True)
+    raise RuntimeError(f'ningún momento de {video} da un fotograma utilizable')
+
+
 @anime_bp.route('/thumb/<anime_id>/<int:episode>')
 def anime_thumb(anime_id, episode):
     _THUMBS_DIR.mkdir(parents=True, exist_ok=True)
     is_special = request.args.get('special') == '1'
-    cache_key   = f'{anime_id}_sp{episode}.jpg' if is_special else f'{anime_id}_{episode}.jpg'
-    cache_path  = _THUMBS_DIR / cache_key
+    cache_path  = _THUMBS_DIR / _thumb_key(anime_id, episode, is_special)
 
     # Serve cached thumb if it exists (no expiry — video files don't change)
     if cache_path.exists() and cache_path.stat().st_size > 0:
@@ -4327,6 +4571,10 @@ def anime_thumb(anime_id, episode):
                     pass
         if not torrents:
             return ('', 404)
+        # Descargando todavía: el punto medio del vídeo son piezas que aún no han llegado. Ni se
+        # intenta — el fotograma saldría embadurnado y se quedaría cacheado para siempre.
+        if (torrents[0].get('progress') or 0) < 1:
+            return ('', 404)
         content_path = torrents[0].get('content_path') or torrents[0].get('save_path', '')
         if not content_path:
             return ('', 404)
@@ -4336,24 +4584,8 @@ def anime_thumb(anime_id, episode):
 
     # Get duration and seek to 50% (midpoint)
     duration = _ffprobe_duration(video)
-    seek_secs = duration * 0.50 if duration > 0 else 30.0
-
-    # Two-pass seek: fast pre-seek (keyframe) + short accurate post-seek.
-    # Using only -ss before -i lands on a B/P-frame without its references → blurry.
-    fine_margin = min(6.0, seek_secs)
-    pre_ts  = _secs_to_hms(max(0.0, seek_secs - fine_margin))
-    fine_ts = _secs_to_hms(fine_margin)
-
     try:
-        subprocess.run(
-            ['ffmpeg', '-y',
-             '-ss', pre_ts, '-i', video,   # fast seek to near-target keyframe
-             '-ss', fine_ts,               # accurate fine-seek post-input (short, cheap)
-             '-vframes', '1', '-vf', 'scale=480:-2',
-             '-q:v', '2', str(cache_path)],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            timeout=30,
-        )
+        _extraer_fotograma_util(video, cache_path, duration)
     except Exception:
         return ('', 500)
 
@@ -4381,22 +4613,12 @@ def _pregen_thumbs():
         for ep in episodes:
             ep_type = ep.get('ep_type', 'episode')
             ep_num  = ep['num']
-            cache_key  = f'{anime_id}_sp{ep_num}.jpg' if ep_type == 'special' else f'{anime_id}_{ep_num}.jpg'
-            cache_path = _THUMBS_DIR / cache_key
+            cache_path = _THUMBS_DIR / _thumb_key(anime_id, ep_num, ep_type == 'special')
             if cache_path.exists() and cache_path.stat().st_size > 0:
                 continue
             video = ep['path']
             try:
-                duration   = _video_duration(video)
-                seek_secs  = duration * 0.50 if duration > 0 else 30.0
-                fine_margin = min(6.0, seek_secs)
-                pre_ts  = _secs_to_hms(max(0.0, seek_secs - fine_margin))
-                fine_ts = _secs_to_hms(fine_margin)
-                subprocess.run(
-                    ['ffmpeg', '-y', '-ss', pre_ts, '-i', video, '-ss', fine_ts,
-                     '-vframes', '1', '-vf', 'scale=480:-2', '-q:v', '2', str(cache_path)],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30,
-                )
+                _extraer_fotograma_util(video, cache_path, _video_duration(video))
             except Exception:
                 pass
             time.sleep(2.0)  # throttle to avoid CPU saturation while server is running
@@ -4528,7 +4750,11 @@ def _tmdb_season_episodes(tmdb_id, season, lang):
         out[str(num)] = {
             'title':    (e.get('name') or '').strip(),
             'overview': (e.get('overview') or '').strip(),
-            'still':    f'https://image.tmdb.org/t/p/w300{still}' if still else '',
+            # `original`, no `w300`: la tarjeta pinta ~742 px FÍSICOS, así que 300 se estiraba ×2,5
+            # y salía blando. TMDB sólo ofrece w92/w185/w300/original para los stills — no hay
+            # peldaño intermedio. El proxy (`imgProxy`) lo baja al tamaño real y lo cachea en disco,
+            # así que el original se descarga UNA vez.
+            'still':    f'https://image.tmdb.org/t/p/original{still}' if still else '',
             'aired':    (e.get('air_date') or '').strip(),
         }
     return out
@@ -4552,7 +4778,7 @@ def anime_episode_meta(anime_id):
         return jsonify({'source': None, 'meta': {}})
 
     season = _tmdb_season_by_year(tmdb_id, year)[0] or 1
-    ck = f'{tmdb_id}_s{season}_v3'   # _v3: consistencia de idioma (ES completo o todo EN)
+    ck = f'{tmdb_id}_s{season}_v4'   # _v3: idioma consistente · _v4: still `original` en vez de w300
     # Los títulos de episodio son prácticamente inmutables una vez emitidos → caché larga
     # (180 días) y sin desalojo por tamaño (max_entries alto), para que no se re-descarguen
     # de TMDB una y otra vez con una biblioteca grande.

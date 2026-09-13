@@ -34,6 +34,9 @@ export const useSourcesStore = defineStore('sources', {
     chapters: [],
     detailLoading: false,
     downloading: {},
+    // id de capítulo -> task_id que DEVUELVE el backend. Es lo que permite pintar el progreso
+    // real (ChapterProgress) en vez de una ruedecita que sólo dura lo que tarda el POST.
+    dlTask: {},
     reading: {},
 
     // Track which manga (by sourceId + mangaId) are already in the library
@@ -337,7 +340,7 @@ export const useSourcesStore = defineStore('sources', {
         const pg = await api.get(`/api/sources/chapter/${ch.id}/pages`)
         const pageUrls = pg.pages || []
         if (!pageUrls.length) { ui.toast('Capítulo sin páginas', 'error'); return }
-        await api.post('/api/download/download_source_chapter', {
+        const res = await api.post('/api/download/download_source_chapter', {
           title: this.detail.title,
           chapter: ch.chapterNumber || ch.name,
           pageUrls,
@@ -346,6 +349,7 @@ export const useSourcesStore = defineStore('sources', {
           sourceName: this.detail.sourceName,
           sourceLang: this.detail.sourceLang,
         })
+        if (res?.task_id) this.dlTask[ch.id] = res.task_id
         ui.toast(`Descargando: ${ch.name}`, 'info')
       } catch (_) { ui.toast('No se pudo descargar', 'error') }
       finally { delete this.downloading[ch.id] }

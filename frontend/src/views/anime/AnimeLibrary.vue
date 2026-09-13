@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { ANIME_STATUS, STATUS_ORDER, nextUnwatchedEp, currentSeason, isCurrentSeason, shiftSeason, SEASON_ES } from '@/lib/anime'
-import { imgProxy } from '@/lib/img'
+import { imgProxy, animeThumb } from '@/lib/img'
 import { ultimaTarjeta } from '@/lib/vt'
 import AnimeCard from '@/components/anime/AnimeCard.vue'
 import AnimeRail from '@/components/anime/AnimeRail.vue'
@@ -32,6 +32,8 @@ const heroTint = ref('rgb(77, 141, 255)')
 let sync = null
 const reloads = []
 onMounted(() => {
+  // El hero: 4 de cada 10 entradas enseña tu biblioteca al azar en vez de la cadena de siempre.
+  store.tirarDadoHero()
   sync = setInterval(() => { if (store.hasActiveQbt()) store.loadLibrary(true, true) }, 15000)
   if (!store.seasonal.length) store.loadSeasonal()
   store.loadForYou()   // recomendaciones sobre tu biblioteca (cacheadas 24 h en el backend)
@@ -49,7 +51,7 @@ const cwItems = computed(() => store.continueWatching.map(cw => ({
   id: cw.anime.id,
   raw: cw,
   thumb: (cw.ep.in_local || (cw.ep.in_qbt && cw.ep.progress >= 100))
-    ? `/api/anime/thumb/${cw.anime.id}/${cw.ep.num}`
+    ? animeThumb(cw.anime.id, cw.ep.num)
     : (cw.anime.cover ? imgProxy(cw.anime.cover, RAIL_W) : ''),
   title: cw.anime.title,
   subtitle: `Episodio ${cw.ep.num}`,

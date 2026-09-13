@@ -100,11 +100,26 @@ def thread_guard(component: str) -> Callable[[Callable], Callable]:
     si el target revienta hasta arriba.
 
         threading.Thread(target=thread_guard('download')(run), ...).start()
+
+    **Y lleva la BIBLIOTECA al hilo.** El modo (normal / oculta) es por hilo, así que un hilo de
+    trabajo nacía siempre en la normal: pedir desde el móvil que se baje o se escale un capítulo de
+    la biblioteca oculta escribía el resultado en la de siempre — con 200 OK y sin una línea de log,
+    que es la peor forma de fallar. Aquí es donde se arregla una vez: este envoltorio se construye
+    en el hilo de la PETICIÓN (nunca como decorador de import), así que puede leer el modo bueno,
+    y lo aplica dentro del hilo nuevo.
+
+    Se fija SIEMPRE, también cuando es la normal: un hilo que lo herede de nadie es un hilo que
+    depende de en qué estado estuviera el proceso al arrancar.
     """
     def deco(fn: Callable) -> Callable:
+        from api.runtime import get_library_mode
+        modo = get_library_mode()
+
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             try:
+                from api.runtime import set_request_library_mode
+                set_request_library_mode(modo)
                 return fn(*args, **kwargs)
             except Exception as e:
                 record_error(component, e, target=getattr(fn, "__name__", str(fn)))

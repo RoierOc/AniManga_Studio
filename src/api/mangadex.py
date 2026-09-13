@@ -733,6 +733,47 @@ def add_to_local_library():
     
     return jsonify({"success": True, "library": lib})
 
+@auth_bp.route('/local_library/add_many', methods=['POST'])
+def add_many_to_local_library():
+    """Añadir VARIAS obras de golpe, sin pisar nada.
+
+    Lo usa el móvil: lo que añades allí tiene que aparecer aquí. En vez de una cola de pendientes
+    —que hay que persistir, reintentar y purgar— el móvil manda su biblioteca entera cada vez que
+    sincroniza y esto la funde. Es idempotente, así que repetirla no cuesta nada y un añadido hecho
+    sin cobertura llega solo en el siguiente intento.
+
+    **Sólo AÑADE.** Una obra que ya está aquí se deja intacta (su portada resuelta, su `added_at`),
+    y lo que no venga en la lista no se borra: un cliente con la biblioteca a medio cargar no puede
+    vaciar la del PC.
+    """
+    data = request.get_json(silent=True) or {}
+    entradas = data.get('mangas')
+    if not isinstance(entradas, list):
+        return jsonify({'error': 'mangas must be a list'}), 400
+
+    lib = load_local_library()
+    conocidos = {str(m.get('id')) for m in lib}
+    nuevas = 0
+    hoy = time.strftime('%Y-%m-%d')
+
+    for m in entradas:
+        if not isinstance(m, dict):
+            continue
+        mid = m.get('id') or m.get('mangaId')
+        if not mid or str(mid) in conocidos:
+            continue
+        entrada = dict(m)
+        entrada['id'] = str(mid)
+        entrada.setdefault('added_at', hoy)
+        lib.append(entrada)
+        conocidos.add(entrada['id'])
+        nuevas += 1
+
+    if nuevas:
+        save_local_library(lib)
+    return jsonify({'success': True, 'añadidas': nuevas, 'total': len(lib)})
+
+
 @auth_bp.route('/local_library/remove/<manga_id>', methods=['DELETE'])
 def remove_from_local_library(manga_id):
     """Remove manga from local library"""

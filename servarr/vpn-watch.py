@@ -30,10 +30,14 @@ import urllib.parse
 import urllib.request
 
 QBT = "http://localhost:8080"
-# Por el PROTOCOLO, no por la marca: "Norton VPN WireGuard" y "AVG Secure VPN WireGuard" son el
-# mismo adaptador con otro nombre, y buscar la marca dejó a qBittorrent atado a un adaptador
-# fantasma sin que nadie se enterara (el vigilante lo leía como "VPN caída").
-VPN_HINT = "wireguard"
+# Ni por la marca ni por el protocolo: por VARIAS pistas. Ancla nº1 "norton" → murió al pasar a AVG;
+# ancla nº2 "wireguard" → murió el día que el usuario cambió el protocolo a Mimic, que levanta OTRO
+# adaptador ("AVG Secure VPN Wintun"). Las dos veces el vigilante leyó "no lo encuentro" como
+# "VPN caída" — el estado en que su trabajo es NO hacer nada — y qBittorrent se quedó mudo.
+VPN_HINTS = ("vpn", "wireguard", "wintun")
+# Túneles que NO son la VPN de salida. Tailscale es una red privada, no una ruta a Internet: atar
+# qBittorrent a ella sería tan inútil como atarlo a un adaptador fantasma, y encima silencioso.
+NO_VPN = ("tailscale",)
 INTERVAL = 20          # s. La reconexión de una VPN tarda segundos: sondear más rápido no gana nada.
 
 
@@ -52,7 +56,8 @@ def log(msg):
 def vpn_adapter():
     """(nombre, valor_interno) del adaptador de la VPN, o None si no está."""
     for i in api("app/networkInterfaceList"):
-        if VPN_HINT in i["name"].lower():
+        n = i["name"].lower()
+        if any(h in n for h in VPN_HINTS) and not any(x in n for x in NO_VPN):
             return i["name"], i["value"]
     return None
 
@@ -74,6 +79,26 @@ def rebind(name, value):
         # perseguirla en cada reconexión, que es justo el fallo que esto arregla.
         "current_interface_address": "",
     })})
+    _forzar_relisten()
+
+
+def _forzar_relisten():
+    """Guardar el binding NO basta para que libtorrent vuelva a abrir el socket.
+
+    AVG reutiliza el MISMO GUID de adaptador para WireGuard y para Wintun (Mimic), así que al
+    cambiar de protocolo el valor no cambia y qBittorrent concluye que no hay nada que rehacer:
+    se queda escuchando en la IP del túnel anterior, que ya no existe. Medido: `disconnected` y
+    DHT 0 durante minutos, con las preferencias correctas guardadas y ni una queja en el log.
+
+    Cambiar el puerto y devolverlo sí lo obliga a reabrir. Es un rodeo, pero el único que no pasa
+    por desatar el binding — y desatarlo, aunque sea un instante, es exactamente la ventana por la
+    que qBittorrent saldría por la conexión real.
+    """
+    port = api("app/preferences")["listen_port"]
+    otro = port + 1 if port < 65000 else port - 1
+    for p in (otro, port):
+        api("app/setPreferences", {"json": json.dumps({"listen_port": p})})
+        time.sleep(3)
 
 
 def tick(state):
@@ -107,13 +132,22 @@ def tick(state):
     # de qBittorrent, un reset de preferencias, un `--unbind` olvidado), qBittorrent podría salir
     # por la conexión real. Aquí sí importa la seguridad, no la disponibilidad: se restaura y se
     # deja constancia, porque un binding que se cae en silencio es justo lo que no se puede tolerar.
+    #
+    # Se comparan las DOS mitades del binding. El valor (`iftype53_NNNNN`) es una RANURA que se
+    # recicla: al cambiar de protocolo, el `iftype53_32769` de WireGuard pasó a ser el del Wintun
+    # y el valor casaba solo. Pero libtorrent ata por NOMBRE, que seguía diciendo "…WireGuard" →
+    # `disconnected`, DHT 0, cero descargas, sin una sola línea de queja. Mirar solo el valor
+    # habría dado el binding por bueno. (Mismo patrón que el mangaId efímero de Suwayomi.)
     try:
-        bound = api("app/preferences").get("current_network_interface", "")
+        prefs = api("app/preferences")
+        bound, bound_name = (prefs.get("current_network_interface", ""),
+                             prefs.get("current_interface_name", ""))
     except (urllib.error.URLError, OSError):
         return state
-    if bound != value:
+    if bound != value or bound_name != name:
         rebind(name, value)
-        log(f"!! BINDING PERDIDO (estaba en {bound or '(cualquier interfaz)'}) — restaurado a {name}")
+        log(f"!! BINDING PERDIDO (estaba en {bound_name or '(cualquier interfaz)'}"
+            f"/{bound or '-'}) — restaurado a {name}/{value}")
         return {**state, "ip": ip}
 
     if ip != state.get("ip"):
@@ -136,7 +170,8 @@ def main():
         log(f"estado: {s}")
         return 0
 
-    log(f"vigilando la VPN cada {INTERVAL}s (adaptador que contenga {VPN_HINT!r})")
+    log(f"vigilando la VPN cada {INTERVAL}s "
+        f"(adaptador que contenga {'/'.join(VPN_HINTS)} y no {'/'.join(NO_VPN)})")
     state = {}
     while True:
         try:

@@ -24,7 +24,7 @@ from pathlib import Path
 
 from flask import Blueprint, jsonify, request
 
-from api.runtime import DATA_ROOT, PROJECT_ROOT, get_library_mode, set_library_mode
+from api.runtime import DATA_ROOT, PROJECT_ROOT, get_library_mode, set_library_mode, set_request_library_mode
 
 config_bp = Blueprint('config', __name__)
 
@@ -311,6 +311,30 @@ def _hidden_register_success():
     with _hidden_fail_lock:
         _hidden_fail_count = 0
         _hidden_fail_until = 0.0
+
+
+def modo_por_peticion():
+    """`before_request`: **una petición puede pedir la biblioteca oculta sin encender la del PC.**
+
+    Nació con el móvil. Allí el modo oculto es del móvil, y hacerle llamar a `/hidden/toggle`
+    tendría dos efectos que nadie pidió: el navegador del PC pasaría también a modo oculto (el modo
+    es del PROCESO), y si el móvil se cierra sin apagarlo, el PC se queda en oculto hasta que se
+    reinicie el servidor. Un cliente no puede cambiarle la biblioteca a otro.
+
+    Se registra DESPUÉS de `guardia`, así que aquí ya hay token: esto no es la puerta, es qué raíz
+    se sirve una vez dentro.
+
+    ⚠️ **Se asigna SIEMPRE, también cuando no viene código.** El servidor reutiliza los hilos y
+    `set_request_library_mode` guarda en un `threading.local`: si sólo se pusiera al acertar, un
+    hilo que atendió una petición oculta serviría la biblioteca oculta a la siguiente petición
+    normal que le tocara. Limpiar al empezar es más robusto que confiar en limpiar al terminar.
+    """
+    codigo = (request.headers.get('X-Hidden-Code') or '').strip()
+    guardado = get_secret(_HIDDEN_CODE_KEY)
+    if codigo and guardado and hmac.compare_digest(_hash_code(codigo), guardado):
+        set_request_library_mode('hidden')
+    else:
+        set_request_library_mode(None)
 
 
 @config_bp.route('/hidden/status')

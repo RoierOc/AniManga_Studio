@@ -529,7 +529,7 @@ def stream_progress():
     guarda posición para reanudar; al terminar (ended o ≥85%) marca visto.
     Body: {anime_id, episode, position, duration, ended?}"""
     from api.anime import (_lib_read, _lib_write, _history_append,
-                           _WATCHED_THRESHOLD)
+                           _WATCHED_THRESHOLD, _guardar_posicion)
     from api.runtime import push_sse_event
     data = request.get_json(silent=True) or {}
     anime_id = data.get('anime_id', '')
@@ -548,10 +548,7 @@ def stream_progress():
         return jsonify({'ok': False, 'error': 'anime no está en la biblioteca'}), 404
     if duration > 0:
         lib[anime_id].setdefault('durations', {})[ep_str] = int(duration)
-    if save_pos > 30:
-        lib[anime_id].setdefault('positions', {})[ep_str] = save_pos
-    else:
-        lib[anime_id].get('positions', {}).pop(ep_str, None)
+    _guardar_posicion(lib[anime_id], ep_str, save_pos)
     if watched and not lib[anime_id].get('watched', {}).get(ep_str):
         lib[anime_id].setdefault('watched', {})[ep_str] = True
         now = int(time.time())

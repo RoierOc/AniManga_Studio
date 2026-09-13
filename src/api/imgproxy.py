@@ -34,6 +34,7 @@ _ALLOWED_HOSTS = {
     'images.mangabaka.dev',   # Manga Hub: portadas raw del agregador
     'cdn.mangabaka.dev',      # Manga Hub: variantes dimensionadas (x350@2 ≈ 700px) — las que se usan
     'artworks.thetvdb.com',   # Series/pelis: es lo que devuelve Sonarr en `remoteUrl`
+    'cdn.myanimelist.net',    # Jikan/MAL: portadas alternativas del selector de anime
 }
 
 

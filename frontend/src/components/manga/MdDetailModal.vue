@@ -2,10 +2,11 @@
 import { computed, ref } from 'vue'
 import { useMangadexStore } from '@/stores/mangadex'
 import { useMangaStore } from '@/stores/manga'
-import { taskId } from '@/lib/manga'
+import { taskId, tareaActiva } from '@/lib/manga'
 import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import ChapterProgress from '@/components/ui/ChapterProgress.vue'
 import Select from '@/components/ui/Select.vue'
 import { useModal } from '@/lib/useModal'
 import { idioma } from '@/lib/etiquetas'
@@ -18,10 +19,10 @@ const inLib = computed(() => d.value?.id ? store.localIds.includes(d.value.id) :
 const LANG_FLAG = { en: '🇬🇧', es: '🇪🇸', 'es-la': '🌎', ja: '🇯🇵', 'pt-br': '🇧🇷', fr: '🇫🇷', ko: '🇰🇷', zh: '🇨🇳', 'zh-hk': '🇭🇰', it: '🇮🇹', de: '🇩🇪', ru: '🇷🇺' }
 const flag = (l) => LANG_FLAG[l] || l
 
-function dlState(ch) {
-  const t = manga.downloads[taskId(d.value.title, ch.chapter, 'download')]
-  return t && !['done', 'error', 'cancelled'].includes(t.status) ? t : null
-}
+// El id preferido es el que DEVOLVIÓ el POST (`store.dlTask`); el armado a mano queda como
+// respaldo para las descargas que ya estaban en marcha antes de abrir el modal.
+const idTarea = (ch) => store.dlTask[ch.id] || taskId(d.value.title, ch.chapter, 'download')
+const dlState = (ch) => tareaActiva(manga.downloads, idTarea(ch))
 
 // Escape cierra, el foco no se escapa por detrás y el fondo no scrollea.
 const modalEl = ref(null)
@@ -77,9 +78,7 @@ useModal(() => !!d.value, () => store.closeDetail(), modalEl)
                   <span v-if="ch.title" class="chap__title">{{ ch.title }}</span>
                   <span class="chap__grp">{{ (ch.groups || []).join(', ') }}<template v-if="ch.pages"> · {{ ch.pages }} pág.</template></span>
                 </div>
-                <div v-if="dlState(ch)" class="chap__prog">
-                  <Spinner :size="13" /><span>{{ dlState(ch).progress || dlState(ch).status }}</span>
-                </div>
+                <ChapterProgress v-if="dlState(ch)" :task-id="idTarea(ch)" class="chap__prog" />
                 <template v-else>
                   <button class="chap__dl chap__dl--ghost" :disabled="store.reading[ch.id]" @click="store.readChapter(ch)">
                     <Spinner v-if="store.reading[ch.id]" :size="13" /><Icon v-else name="library" :size="14" /> Leer

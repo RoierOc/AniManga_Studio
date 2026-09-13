@@ -31,6 +31,7 @@ export const useMangadexStore = defineStore('mangadex', {
     detailLoading: false,
     detailLang: '',             // language filter in detail
     reading: {},                // chapter id -> true while "Leer" is resolving pages
+    dlTask: {},                 // chapter id -> task_id devuelto por el POST (progreso en vivo)
 
     followed: [],               // mangadex /library
     followedLoaded: false,
@@ -207,9 +208,10 @@ export const useMangadexStore = defineStore('mangadex', {
 
     async downloadChapter(ch) {
       try {
-        await api.post('/api/download/download_chapter', {
+        const res = await api.post('/api/download/download_chapter', {
           title: this.detail.title, chapter: ch.chapter, chapterId: ch.id, mangaId: this.detail.id,
         })
+        if (res?.task_id) this.dlTask[ch.id] = res.task_id
         useUiStore().toast(`Descargando cap. ${ch.chapter}`, 'info')
       } catch (_) { useUiStore().toast('No se pudo iniciar la descarga', 'error') }
     },

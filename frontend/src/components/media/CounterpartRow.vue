@@ -45,7 +45,7 @@ async function load() {
     data.value = await api.get(`/api/bridge/counterpart?al_id=${props.alId}&from=${props.from}`)
   } catch (e) {
     // Un fallo de AniList NO puede pintarse como «no tiene adaptación»: son cosas distintas.
-    err.value = e?.body || e?.message || 'No se pudo consultar AniList.'
+    err.value = e?.message || e?.body || 'No se pudo consultar AniList.'
   } finally { loading.value = false }
 }
 watch(() => [props.alId, props.from], load, { immediate: true })

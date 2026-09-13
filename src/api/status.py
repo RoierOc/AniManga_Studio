@@ -136,6 +136,125 @@ def get_all_status_route():
     return jsonify(_all_status())
 
 
+"""── Tareas APLANADAS (para el móvil) ────────────────────────────────────────────────────────
+
+El snapshot de arriba son SIETE familias con siete formas distintas: unas cuentan páginas
+(`progress`/`total`), otras ya vienen en tanto por ciento, otras cuentan capítulos. La web sabe
+aplanarlas (`normalizeTask` en `stores/manga.js`), pero esa sabiduría está en JavaScript y el
+móvil no puede leerla.
+
+Así que se aplana AQUÍ, del lado que es dueño de las formas, y el móvil sólo pinta. La
+alternativa era una segunda copia en Kotlin, que es como se empieza a divergir: el día que una
+familia cambie de campo, se arregla en un sitio y se olvida el otro.
+
+Es una VISTA, no un camino de decisión: nada de la app depende de esto para actuar.
+"""
+
+# Un estado que no conocemos se trata como VIVO. Al revés —listar los vivos y dar por terminado
+# todo lo demás— un estado nuevo saldría como «hecho» y la tarea desaparecería de la pantalla
+# mientras sigue corriendo. Espejo de los conjuntos de `stores/manga.js`.
+_DONE_LIKE = {'done', 'complete', 'ok', 'nothing_to_repair', 'already_running', 'downloaded', 'no_changes'}
+_ERROR_LIKE = {'error', 'not_found', 'no_chapters', 'failed'}
+_CANCEL_LIKE = {'cancelled', 'canceled', 'interrupted', 'cancelling', 'cancel_requested'}
+
+
+def _map_status(raw):
+    raw = raw or ''
+    if raw in _ERROR_LIKE:
+        return 'error'
+    if raw in _CANCEL_LIKE:
+        return 'cancelled'
+    if raw in _DONE_LIKE:
+        return 'done'
+    if raw in ('starting', 'queued'):
+        return 'queued'
+    return 'running'
+
+
+def _pct(hechas, total):
+    try:
+        if total:
+            return max(0, min(100, round(float(hechas or 0) * 100.0 / float(total))))
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+    return 0
+
+
+def _por_ciento(v):
+    """Familias que YA reportan 0-100 (subtítulos, horneado Anime4K)."""
+    try:
+        return max(0, min(100, round(float(v or 0))))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _aplanar(familia, tid, v):
+    if not isinstance(v, dict):
+        return None
+    estado = _map_status(v.get('status'))
+    titulo = v.get('title') or v.get('volume_name') or ''
+
+    if familia == 'downloads':
+        pct, etiqueta = _pct(v.get('progress'), v.get('total')), 'Descargando'
+    elif familia == 'upscale':
+        pct = _pct(v.get('progress', v.get('current')), v.get('total'))
+        etiqueta = 'Escalando a 4K'
+    elif familia == 'exports':
+        pct, etiqueta = _pct(v.get('progress'), v.get('total')), 'Exportando tomo'
+    elif familia == 'transplant':
+        pct = _pct(v.get('chapterDone'), v.get('chapterTotal'))
+        etiqueta = 'Descargando versión' if tid.endswith('_transplant_chdlversion') else 'Traduciendo'
+    elif familia == 'subtitles':
+        # Las de un LOTE no viajan sueltas: el agregado ya las cuenta y saldrían dos veces.
+        if v.get('batch_id'):
+            return None
+        pct, etiqueta = _por_ciento(v.get('progress')), 'Subtítulos'
+    elif familia == 'subtitle_batches':
+        pct, etiqueta = _pct(v.get('done'), v.get('total')), 'Subtítulos (lote)'
+    elif familia == 'anime_upscale':
+        pct, etiqueta = _por_ciento(v.get('progress')), 'Horneando Anime4K'
+    else:
+        return None
+
+    # Terminada = 100. Una barra al 87 % con el sello de acabada se lee como colgada.
+    if estado == 'done':
+        pct = 100
+
+    detalle = v.get('chapter')
+    if detalle is not None:
+        detalle = f'Cap. {detalle}'
+    elif v.get('episode') is not None:
+        detalle = f'Ep. {v["episode"]}'
+
+    return {
+        'id': tid,
+        'familia': familia,
+        'titulo': titulo,
+        'etiqueta': etiqueta,
+        'detalle': detalle or '',
+        'pct': pct,
+        'estado': estado,
+        'mensaje': v.get('note') or v.get('message') or v.get('error') or '',
+        'ts': v.get('ended_at') or v.get('_ts') or 0,
+    }
+
+
+@status_bp.route('/tareas')
+def tareas_aplanadas():
+    """Todo lo que el PC está haciendo, en UNA lista y con UNA forma.
+
+    `?vivas=1` deja sólo lo que está en marcha, que es lo que pide atención."""
+    solo_vivas = request.args.get('vivas') in ('1', 'true', 'yes')
+    fuera = []
+    for familia, tareas in _all_status().items():
+        for tid, v in (tareas or {}).items():
+            t = _aplanar(familia, tid, v)
+            if t and (not solo_vivas or t['estado'] in ('running', 'queued')):
+                fuera.append(t)
+    fuera.sort(key=lambda t: (t['estado'] not in ('running', 'queued'), -(t['ts'] or 0)))
+    return jsonify({'tareas': fuera})
+
+
 @status_bp.route('/errors')
 def get_error_counts_route():
     """Diagnóstico: cuántos errores ha registrado cada costura desde el arranque

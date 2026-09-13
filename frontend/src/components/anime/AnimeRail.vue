@@ -1,6 +1,6 @@
 <script setup>
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { imgProxy, imgThumb } from '@/lib/img'
+import { imgProxy, imgThumb, animeThumb } from '@/lib/img'
 import { animeFormatLabel } from '@/lib/anime'
 import Icon from '@/components/ui/Icon.vue'
 import { smoothBehavior } from '@/lib/motion'
@@ -17,7 +17,7 @@ const props = defineProps({
 })
 defineEmits(['select'])
 
-const epThumb = (it) => `/api/anime/thumb/${it.anime.id}/${it.ep?.num}`
+const epThumb = (it) => animeThumb(it.anime.id, it.ep?.num)
 const scoreOf = (a) => (a?.score && a.score > 0 ? Math.round(a.score) : null)
 
 /* ── flechas de paginación (estilo Crunchyroll) ── */

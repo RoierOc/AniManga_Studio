@@ -10,24 +10,39 @@
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
-import { useAnimeStore } from './anime'
 
 vi.mock('@/lib/api', () => ({
   api: { get: vi.fn(), post: vi.fn().mockResolvedValue({}), del: vi.fn().mockResolvedValue({}) },
 }))
 vi.mock('@/lib/sse', () => ({ onSSE: vi.fn() }))
 
-if (typeof globalThis.localStorage === 'undefined') {
-  const m = new Map()
+vi.hoisted(() => {
+  const values = new Map()
   globalThis.localStorage = {
-    getItem: (k) => (m.has(k) ? m.get(k) : null),
-    setItem: (k, v) => m.set(k, String(v)),
-    removeItem: (k) => m.delete(k), clear: () => m.clear(),
+    getItem: (k) => (values.has(k) ? values.get(k) : null),
+    setItem: (k, v) => values.set(k, String(v)),
+    removeItem: (k) => values.delete(k),
+    clear: () => values.clear(),
   }
-}
+})
+
+import { useAnimeStore } from './anime'
 
 describe('búsqueda manual de serie para una carpeta local', () => {
   beforeEach(() => { setActivePinia(createPinia()); vi.clearAllMocks() })
+
+  it('añade una carpeta desde la ficha y conserva la biblioteca actualizada', async () => {
+    const store = useAnimeStore()
+    api.get.mockResolvedValue([])
+    const anime = { id: '110277', al_id: 110277, title: 'Attack on Titan Final Season', cover: 'cover.jpg' }
+
+    await expect(store.attachLocalFolder(anime, '/mnt/d/Attack on Titan')).resolves.toBe(true)
+    expect(api.post).toHaveBeenCalledWith('/api/anime/scan/match', {
+      folder: '/mnt/d/Attack on Titan', anilist_id: 110277,
+      title: 'Attack on Titan Final Season', cover: 'cover.jpg',
+    })
+    expect(api.get).toHaveBeenCalledWith('/api/anime/library')
+  })
 
   it('usa el al_id de AniList al enlazar, no el id interno', async () => {
     const store = useAnimeStore()

@@ -112,7 +112,13 @@ fi
 # tres .NET no puede retrasar el arranque de la app. SERVARR_SKIP=1 lo desactiva.
 if [[ "${SERVARR_SKIP:-}" != "1" && -x "$SCRIPT_DIR/servarr/start.sh" ]]; then
     echo "[start] Iniciando Servarr en segundo plano (Prowlarr/Sonarr/Radarr)..." >&2
-    bash "$SCRIPT_DIR/servarr/start.sh" >>"$SCRIPT_DIR/servarr/logs/start.log" 2>&1 &
+    # No heredar el fd 9: es el lock singleton de ESTE watchdog. Prowlarr vive más que Flask y,
+    # si conserva el descriptor, un reinicio posterior ve «otra instancia» aunque el servidor haya
+    # muerto. El subshell cierra sólo la copia heredada antes de lanzar Servarr.
+    (
+        exec 9>&-
+        bash "$SCRIPT_DIR/servarr/start.sh" >>"$SCRIPT_DIR/servarr/logs/start.log" 2>&1
+    ) &
 fi
 
 # ── qBittorrent ────────────────────────────────────────────────────────────

@@ -25,8 +25,20 @@ let nowTimer = null
 let sseBound = false
 let dlPoll = null       // interval para refrescar el progreso de descarga de qBittorrent en vivo
 const subPollers = {}   // subKey -> interval handle
+const HERO_TARGET = 10  // cuántas obras entran en el carrusel del hero
 
 const DETAIL_EPISODE_FIELDS = ['local_path', 'filename', 'original_path']
+const NATIVE_4K_VISIBLE = ['off', 'high', 'ultra', 'maximo', 'max_vl_ul_vl_m', 'max_ref_ul_ul', 'max_h_triple_ul']
+const NATIVE_4K_LAB = new Set([
+  'max_aa', 'max_aa_soft2', 'max_aa_soft1', 'max_aa_soft',
+  'max_ref_late_ul', 'max_ref_early_ul', 'max_ref_late_soft_ul',
+  'max_h_late_ul', 'max_h_late_soft_ul', 'max_h_triple_soft_vl',
+])
+const savedNative4k = globalThis.localStorage?.getItem('anime-native-4k')
+// Los perfiles de laboratorio siguen existiendo en Rust para no romper binarios/configuraciones,
+// pero ya no ensucian el menú: una preferencia antigua cae en H, la referencia visual elegida.
+const initialNative4k = NATIVE_4K_VISIBLE.includes(savedNative4k)
+  ? savedNative4k : (NATIVE_4K_LAB.has(savedNative4k) ? 'max_ref_ul_ul' : 'high')
 
 function episodeKey(ep) {
   return `${ep?.ep_type || 'episode'}:${ep?.num}`
@@ -82,6 +94,17 @@ export const useAnimeStore = defineStore('anime', {
     previewAnime: null,        // non-library anime open in detail (recommendations)
     enrichedPreviews: {},      // al_id → {cover_xl, banner, logo} fetched from /enrich
     recSeed: Math.floor(Math.random() * 100),  // rotates which 2 recs show — random per session
+    /* El 40 % de las aperturas el hero se llena con TU biblioteca, al azar, en vez de con la
+       cadena de siempre (estrenos → descargados → continuar → temporada). Las series que ya
+       tienes y no estás viendo ahora mismo no salían NUNCA: el hero sólo miraba lo recién
+       emitido y lo de temporada.
+       El dado se tira **cada vez que se entra en Mi Anime** (`tirarDadoHero`, desde el
+       `onMounted` de `AnimeLibrary`), que es lo que se pidió: de cada diez entradas, cuatro
+       enseñan tu biblioteca.
+       ⚠️ Lo que NO puede hacerse es tirarlo dentro del getter: `heroItems` se recalcula con cada
+       carga de biblioteca y de airing, y el hero cambiaría de contenido delante del usuario a
+       los dos segundos de entrar. */
+    heroBiblioteca: Math.random() < 0.4,
     libSort: localStorage.getItem('anime-libsort') || 'last_watched',  // recently-watched first by default
     libFilter: 'all',
     forYou: [],              // recomendaciones agregadas sobre la biblioteca (B2)
@@ -191,11 +214,11 @@ export const useAnimeStore = defineStore('anime', {
     player: null,                // {anime, ep, sess, loading, error} — overlay abierto si != null
     // Reproductor NATIVO embebido (libmpv en la shell Windows, vía nativeBridge).
     nativePlayer: null,          // {anime, ep, pos, duration, paused, tier} — abierto si != null
-    // 'off' | 'high' | 'ultra' (los tiers 'fast'/'medium'/'artcnn'/'fsrcnnx' se retiraron → migran a 'high')
-    // ⚠️ Un tier que falte en esta lista se guarda bien y al RECARGAR vuelve a 'high' en silencio.
-    // Añadir aquí cualquier id nuevo de A4K_MODES, o el ajuste no sobrevive a cerrar la app.
-    native4kTier: ['off', 'high', 'ultra', 'maximo'].includes(localStorage.getItem('anime-native-4k'))
-      ? localStorage.getItem('anime-native-4k') : 'high',
+    // 'off' | 'high' | 'ultra' | perfiles finales Anime4K. Los tiers antiguos
+    // ('fast'/'medium'/'artcnn'/'fsrcnnx') se retiraron → migran a 'high'.
+    // Los perfiles de laboratorio ocultos migran a H; así una preferencia vieja no deja el menú
+    // sin selección ni activa una cadena que ya no se ofrece.
+    native4kTier: initialNative4k,
     // Tier para IMAGEN REAL (series/películas). Aparte del de anime a propósito: Anime4K está
     // entrenado en line art y sobre imagen real deja halos, así que cada dominio guarda el suyo
     // y ver anime no arrastra nunca el coste del otro (ni al revés).
@@ -275,10 +298,35 @@ export const useAnimeStore = defineStore('anime', {
         .slice(0, 20)
     },
 
+    /* Una ventana AL AZAR de tu propia biblioteca, para el hero.
+       Rotación por `recSeed` y no `sort(() => Math.random())`: la rotación es estable dentro de
+       la sesión —el carrusel no puede reordenarse bajo el cursor mientras lo miras— y cambia al
+       volver a entrar, que es justo lo que se pedía.
+       ⚠️ Sólo entran las que tienen arte: sin banner ni portada el hero es un rectángulo gris
+       con el título encima, y sorteando eso saldría tarde o temprano. */
+    libraryHeroItems() {
+      const pool = this.library.filter(a => a.banner || a.cover_xl || a.cover)
+      const n = pool.length
+      if (!n) return []
+      const start = this.recSeed % n
+      return [...pool.slice(start), ...pool.slice(0, start)].slice(0, HERO_TARGET).map((a) => {
+        const ep = nextUnwatchedEp(a) || (a.episodes || [])[0] || null
+        const hasFile = !!(ep && (ep.in_local || (ep.in_qbt && ep.progress >= 100)))
+        return { anime: a, ep: ep || { num: 1 }, kind: 'library', ts: 0, hasFile }
+      })
+    },
+
     heroItems() {
       const now = Date.now() / 1000
       const RECENT = 12 * 86400
-      const TARGET = 10   // el hero aspira a llenarse (estilo Crunchyroll) aunque la biblioteca sea chica
+      const TARGET = HERO_TARGET   // el hero aspira a llenarse (estilo Crunchyroll) aunque la biblioteca sea chica
+
+      // 0 — el 40 % de las sesiones (ver `heroBiblioteca`), tu biblioteca al azar. Si no hay
+      // biblioteca con arte, sigue la cadena de siempre: nunca deja el hero vacío.
+      if (this.heroBiblioteca) {
+        const mios = this.libraryHeroItems
+        if (mios.length) return mios
+      }
 
       // Rec pool compartido (mismo que el riel "Recomendados") para RELLENAR cualquier nivel
       // hasta TARGET, así el carrusel nunca se ve vacío ni con "sólo 2".
@@ -428,6 +476,17 @@ export const useAnimeStore = defineStore('anime', {
   },
 
   actions: {
+    /* Cada ENTRADA en Mi Anime vuelve a tirar el dado del hero: 4 de cada 10 veces sale tu
+       biblioteca, las otras 6 la cadena de siempre. Se llama desde `AnimeLibrary.onMounted` (la
+       vista se monta y desmonta con `v-if` al cambiar de sub-pestaña, así que «entrar» es
+       exactamente eso).
+       `recSeed` se re-tira con él para que la ventana de obras tampoco sea la misma dos veces
+       seguidas — si no, salir y entrar daría las mismas diez. */
+    tirarDadoHero() {
+      this.heroBiblioteca = Math.random() < 0.4
+      this.recSeed = Math.floor(Math.random() * 100)
+    },
+
     init() {
       this.reportCaps()
       if (!nowTimer) nowTimer = setInterval(() => { this.nowSec = Math.floor(Date.now() / 1000) }, 30000)
@@ -1246,7 +1305,11 @@ export const useAnimeStore = defineStore('anime', {
           // ≤2 min. Mismo criterio (y guarda) que el backend en anime.py::_is_watched. En cualquier
           // otro caso se CONSERVA el episodio y su minuto exacto (resume_pos), pase lo que pase.
           const watched = np.duration > 120 && pos > 0 && (np.duration - np.pos) <= 120
-          ep.watched = watched
+          // Retomar un episodio ya visto y dejarlo a medias lo DESMARCA, pero sólo a partir de
+          // dos minutos: asomarse un momento a algo que ya viste no es volver a verlo. Misma
+          // regla y mismo umbral que `_guardar_posicion` en anime.py — cuando las dos no
+          // coincidían, el episodio salía a medias hasta que recargabas y entonces «se veía solo».
+          if (watched || pos > 120) ep.watched = watched
           // Espeja al backend: la posición solo se guarda a partir de 30 s (evita micro-resumes).
           ep.resume_pos = watched ? 0 : (pos > 30 ? pos : 0)
           // Recencia al instante: completado O con posición guardable → "Continuar viendo"
@@ -2053,6 +2116,26 @@ export const useAnimeStore = defineStore('anime', {
     },
 
     /* ── Local scan paths ───────────────────────────────────────────────── */
+    async attachLocalFolder(anime, path) {
+      const folder = (path || '').trim()
+      const ui = useUiStore()
+      if (!folder) return false
+      if (!anime?.al_id) {
+        ui.toast('Esta serie no tiene un ID de AniList', 'error')
+        return false
+      }
+      try {
+        await api.post('/api/anime/scan/match', {
+          folder, anilist_id: anime.al_id, title: anime.title || '', cover: anime.cover || '',
+        })
+        await this.loadLibrary(true)
+        ui.toast(`Carpeta añadida a "${anime.title}"`, 'ok')
+        return true
+      } catch (e) {
+        ui.toast(e?.message || e?.body || 'No se pudo añadir la carpeta', 'error')
+        return false
+      }
+    },
     async openScan() {
       this.scan.show = true
       await this.loadScanFolders()

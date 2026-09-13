@@ -24,6 +24,12 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 def app_client(monkeypatch):
     import api.sources as S
 
+    # Este test prueba el contrato de eventos, no el ciclo de vida de la JVM. El `before_request`
+    # del blueprint intenta arrancar Suwayomi antes de llegar a los dobles de `_gql`/HTTP; sin este
+    # doble espera 45 s y devuelve 503, haciendo que el resultado dependa de si otra prueba dejó el
+    # proceso real encendido.
+    monkeypatch.setattr(S, "ensure_suwayomi", lambda: True)
+
     # Dos fuentes: una revienta, la otra responde bien pero sin resultados.
     monkeypatch.setattr(S, "_gql", lambda *a, **k: {
         "sources": {"nodes": [

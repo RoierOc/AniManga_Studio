@@ -71,7 +71,38 @@ _library_mode = "normal"
 _library_mode_lock = threading.Lock()
 
 
+# Modo POR PETICIÓN, para clientes que piden la biblioteca oculta sin encender
+# la del proceso entero. Nació con el móvil: ahí el modo oculto es del móvil, y
+# encenderlo con `set_library_mode` pondría también en oculto el navegador del
+# PC — un cliente no puede cambiarle la biblioteca a otro.
+#
+# `threading.local` y no una variable global: cada petición se atiende en su
+# hilo, así que el modo no puede filtrarse a la petición que se atiende a la
+# vez en el hilo de al lado.
+#
+# ⚠️ Y por eso mismo **un hilo de trabajo lanzado desde una petición NO lo
+# hereda**: descargar y escalar siguen mirando el modo del proceso. Es
+# deliberado y es el límite de esto — el móvil lo usa para VER y LEER, que es
+# lo único que ocurre dentro de la petición.
+_request_mode = threading.local()
+
+
+def set_request_library_mode(mode):
+    """`None` limpia. ⚠️ Hay que limpiarlo SIEMPRE al terminar la petición: el
+    servidor reutiliza los hilos, y uno que se quede marcado serviría la
+    biblioteca oculta a la siguiente petición que caiga en él."""
+    if mode is None:
+        _request_mode.mode = None
+    elif mode in ("normal", "hidden"):
+        _request_mode.mode = mode
+    else:
+        raise ValueError("mode must be 'normal' or 'hidden'")
+
+
 def get_library_mode() -> str:
+    por_peticion = getattr(_request_mode, "mode", None)
+    if por_peticion:
+        return por_peticion
     with _library_mode_lock:
         return _library_mode
 

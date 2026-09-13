@@ -26,7 +26,11 @@ from flask import Blueprint, jsonify, request
 from api.resilient_http import http as http_requests
 from api.roots import glob_series
 from api.observability import record_error
-from api.anilist import _cover as _al_cover  # AniList: extraLarge (460x650) antes que large (230x325)
+from api.anilist import (
+    _cover as _al_cover,
+    anilist_temporarily_unavailable,
+    graphql_error_message,
+)
 from api.runtime import cache_get, cache_set, manga_dir
 
 bridge_bp = Blueprint("bridge", __name__)
@@ -227,7 +231,14 @@ def counterpart():
         except Exception as e:
             record_error("bridge", e, op="counterpart", al_id=al_id, origen=origen)
             # 502 y no una lista vacía: «no pude preguntar» no puede leerse como «no tiene anime».
-            return jsonify({"error": str(e)[:200]}), 502
+            response = getattr(e, 'response', None)
+            if anilist_temporarily_unavailable(response):
+                return jsonify({
+                    "code": "anilist_unavailable",
+                    "error": "AniList está temporalmente no disponible por problemas de estabilidad. Inténtalo de nuevo más tarde.",
+                    "retryable": True,
+                }), 503
+            return jsonify({"error": graphql_error_message(response) or str(e)[:200]}), 502
 
         # Del otro dominio: pidiendo un manga queremos ANIME, y al revés.
         quiero = "ANIME" if origen == "manga" else "MANGA"

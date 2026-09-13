@@ -13,6 +13,7 @@ import { useTagsStore } from '@/stores/tags'
 import { useUiStore } from '@/stores/ui'
 import Icon, { ICON_NAMES } from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import ChapterProgress from '@/components/ui/ChapterProgress.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
@@ -141,6 +142,13 @@ async function demoConfirm(danger) {
         <Skeleton variant="line" width="60%" height="1rem" />
         <Skeleton variant="line" width="35%" height="0.9rem" />
         <div class="kit__skels"><Skeleton v-for="n in 4" :key="n" ratio="2 / 3" /></div>
+      </div>
+      <!-- Progreso de capítulo. Los casos límite son los dos de abajo: el backend NO sabe cuántas
+           páginas hay hasta que resuelve el capítulo, y una fuente puede traer 300. -->
+      <div class="kit__box kit__row">
+        <ChapterProgress :task="{ status: 'downloading', progress: 7, total: 20 }" />
+        <ChapterProgress :task="{ status: 'starting' }" />
+        <ChapterProgress :task="{ status: 'downloading', progress: 288, total: 312 }" />
       </div>
     </section>
 

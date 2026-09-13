@@ -100,6 +100,151 @@ const SHADERS_MAXIMO: &[&str] = &[
     "Anime4K_Thin_HQ.glsl",
 ];
 
+// Referencia visual elegida por el usuario. Se conserva aunque repita Restore_VL: sirve para A/B
+// de calidad y estabilidad, no se presenta como la receta técnica definitiva.
+const SHADERS_MAX_VL_UL_VL_M: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+
+// Ronda A+A: dos pares Restore + Upscale, como el CTRL+9. Las variantes cambian sólo una
+// restauración para aislar cuál de las dos redes provoca el shimmer en la ruta nativa.
+const SHADERS_MAX_AA: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_UL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_M.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+const SHADERS_MAX_AA_SOFT2: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_UL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_Soft_M.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+const SHADERS_MAX_AA_SOFT1: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_Soft_UL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_M.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+const SHADERS_MAX_AA_SOFT: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_Soft_UL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_Soft_M.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+
+// Ronda relativa a la referencia visual 8. Sólo se refuerza un punto cada vez: así se puede
+// distinguir si la mejora viene de la restauración inicial, de la final o del segundo upscale.
+const SHADERS_MAX_REF_LATE_UL: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_UL.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+const SHADERS_MAX_REF_EARLY_UL: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_UL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+const SHADERS_MAX_REF_LATE_SOFT_UL: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_Soft_UL.glsl",
+    "Anime4K_Upscale_CNN_x2_M.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+const SHADERS_MAX_REF_UL_UL: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+
+// Ronda sobre H: mantiene su segundo upscale UL y cambia únicamente la salida. La tercera
+// variante añade una restauración suave al final para comprobar si una tercera pasada aporta
+// detalle útil sin volver a introducir el shimmer.
+const SHADERS_MAX_H_LATE_UL: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_UL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+const SHADERS_MAX_H_LATE_SOFT_UL: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_Soft_UL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+const SHADERS_MAX_H_TRIPLE_SOFT_VL: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_Restore_CNN_Soft_VL.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+const SHADERS_MAX_H_TRIPLE_UL: &[&str] = &[
+    "Anime4K_Clamp_Highlights.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_AutoDownscalePre_x2.glsl",
+    "Anime4K_AutoDownscalePre_x4.glsl",
+    "Anime4K_Restore_CNN_VL.glsl",
+    "Anime4K_Upscale_CNN_x2_UL.glsl",
+    "Anime4K_Restore_CNN_UL.glsl",
+    "Anime4K_Thin_HQ.glsl",
+];
+
 // --- Imagen REAL (series y películas) ---------------------------------------------------
 // Anime4K está entrenado en line art: sobre imagen real deja halos y piel de plástico. Estos
 // dos SÍ son genéricos:
@@ -117,6 +262,19 @@ fn tier_shaders(tier: &str) -> &'static [&'static str] {
         "high" => SHADERS_HIGH,
         "ultra" => SHADERS_ULTRA,
         "maximo" => SHADERS_MAXIMO,
+        "max_vl_ul_vl_m" => SHADERS_MAX_VL_UL_VL_M,
+        "max_aa" => SHADERS_MAX_AA,
+        "max_aa_soft2" => SHADERS_MAX_AA_SOFT2,
+        "max_aa_soft1" => SHADERS_MAX_AA_SOFT1,
+        "max_aa_soft" => SHADERS_MAX_AA_SOFT,
+        "max_ref_late_ul" => SHADERS_MAX_REF_LATE_UL,
+        "max_ref_early_ul" => SHADERS_MAX_REF_EARLY_UL,
+        "max_ref_late_soft_ul" => SHADERS_MAX_REF_LATE_SOFT_UL,
+        "max_ref_ul_ul" => SHADERS_MAX_REF_UL_UL,
+        "max_h_late_ul" => SHADERS_MAX_H_LATE_UL,
+        "max_h_late_soft_ul" => SHADERS_MAX_H_LATE_SOFT_UL,
+        "max_h_triple_soft_vl" => SHADERS_MAX_H_TRIPLE_SOFT_VL,
+        "max_h_triple_ul" => SHADERS_MAX_H_TRIPLE_UL,
         "live" => SHADERS_LIVE,
         "live_lite" => SHADERS_LIVE_LITE,
         _ => &[], // off / none / desconocido
@@ -165,6 +323,98 @@ mod anime4k_tier_tests {
         assert_eq!(tier_shaders("maximo").iter()
             .filter(|s| s.starts_with("Anime4K_Restore_CNN_"))
             .count(), 1);
+    }
+
+    #[test]
+    fn referencia_visual_es_la_prueba_8() {
+        assert_eq!(tier_shaders("max_vl_ul_vl_m"), [
+            "Anime4K_Clamp_Highlights.glsl", "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_AutoDownscalePre_x2.glsl",
+            "Anime4K_AutoDownscalePre_x4.glsl", "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_M.glsl", "Anime4K_Thin_HQ.glsl",
+        ]);
+    }
+
+    #[test]
+    fn variantes_aa_reproducen_ctrl9_y_no_reutilizan_archivos() {
+        for tier in ["max_aa", "max_aa_soft2", "max_aa_soft1", "max_aa_soft"] {
+            let shaders = tier_shaders(tier);
+            assert_eq!(shaders.len(), 8);
+            assert_eq!(shaders.iter().filter(|s| s.contains("Restore_CNN")).count(), 2);
+            for i in 0..shaders.len() {
+                for j in (i + 1)..shaders.len() {
+                    assert_ne!(shaders[i], shaders[j], "{tier} repite {}", shaders[i]);
+                }
+            }
+        }
+        assert_eq!(tier_shaders("max_aa"), [
+            "Anime4K_Clamp_Highlights.glsl", "Anime4K_Restore_CNN_UL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_AutoDownscalePre_x2.glsl",
+            "Anime4K_AutoDownscalePre_x4.glsl", "Anime4K_Restore_CNN_M.glsl",
+            "Anime4K_Upscale_CNN_x2_M.glsl", "Anime4K_Thin_HQ.glsl",
+        ]);
+        assert_eq!(tier_shaders("max_aa_soft2")[5], "Anime4K_Restore_CNN_Soft_M.glsl");
+        assert_eq!(tier_shaders("max_aa_soft1")[1], "Anime4K_Restore_CNN_Soft_UL.glsl");
+        assert_eq!(tier_shaders("max_aa_soft")[1], "Anime4K_Restore_CNN_Soft_UL.glsl");
+        assert_eq!(tier_shaders("max_aa_soft")[5], "Anime4K_Restore_CNN_Soft_M.glsl");
+    }
+
+    #[test]
+    fn ronda_refuerzo_partiendo_de_la_referencia_visual() {
+        assert_eq!(tier_shaders("max_ref_late_ul"), [
+            "Anime4K_Clamp_Highlights.glsl", "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_AutoDownscalePre_x2.glsl",
+            "Anime4K_AutoDownscalePre_x4.glsl", "Anime4K_Restore_CNN_UL.glsl",
+            "Anime4K_Upscale_CNN_x2_M.glsl", "Anime4K_Thin_HQ.glsl",
+        ]);
+        assert_eq!(tier_shaders("max_ref_early_ul"), [
+            "Anime4K_Clamp_Highlights.glsl", "Anime4K_Restore_CNN_UL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_AutoDownscalePre_x2.glsl",
+            "Anime4K_AutoDownscalePre_x4.glsl", "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_M.glsl", "Anime4K_Thin_HQ.glsl",
+        ]);
+        assert_eq!(tier_shaders("max_ref_late_soft_ul"), [
+            "Anime4K_Clamp_Highlights.glsl", "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_AutoDownscalePre_x2.glsl",
+            "Anime4K_AutoDownscalePre_x4.glsl", "Anime4K_Restore_CNN_Soft_UL.glsl",
+            "Anime4K_Upscale_CNN_x2_M.glsl", "Anime4K_Thin_HQ.glsl",
+        ]);
+        assert_eq!(tier_shaders("max_ref_ul_ul"), [
+            "Anime4K_Clamp_Highlights.glsl", "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_AutoDownscalePre_x2.glsl",
+            "Anime4K_AutoDownscalePre_x4.glsl", "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_Thin_HQ.glsl",
+        ]);
+    }
+
+    #[test]
+    fn ronda_sobre_h_refuerza_solo_la_salida() {
+        assert_eq!(tier_shaders("max_h_late_ul"), [
+            "Anime4K_Clamp_Highlights.glsl", "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_AutoDownscalePre_x2.glsl",
+            "Anime4K_AutoDownscalePre_x4.glsl", "Anime4K_Restore_CNN_UL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_Thin_HQ.glsl",
+        ]);
+        assert_eq!(tier_shaders("max_h_late_soft_ul"), [
+            "Anime4K_Clamp_Highlights.glsl", "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_AutoDownscalePre_x2.glsl",
+            "Anime4K_AutoDownscalePre_x4.glsl", "Anime4K_Restore_CNN_Soft_UL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_Thin_HQ.glsl",
+        ]);
+        assert_eq!(tier_shaders("max_h_triple_soft_vl"), [
+            "Anime4K_Clamp_Highlights.glsl", "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_AutoDownscalePre_x2.glsl",
+            "Anime4K_AutoDownscalePre_x4.glsl", "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_Restore_CNN_Soft_VL.glsl",
+            "Anime4K_Thin_HQ.glsl",
+        ]);
+        assert_eq!(tier_shaders("max_h_triple_ul"), [
+            "Anime4K_Clamp_Highlights.glsl", "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_AutoDownscalePre_x2.glsl",
+            "Anime4K_AutoDownscalePre_x4.glsl", "Anime4K_Restore_CNN_VL.glsl",
+            "Anime4K_Upscale_CNN_x2_UL.glsl", "Anime4K_Restore_CNN_UL.glsl",
+            "Anime4K_Thin_HQ.glsl",
+        ]);
     }
 
     #[test]

@@ -121,6 +121,9 @@ app.register_blueprint(roots_bp, url_prefix='/api/roots')
 from api.auth import auth_remote_bp, guardia
 app.register_blueprint(auth_remote_bp)
 app.before_request(guardia)
+# DESPUÉS de la guardia: decide qué RAÍZ se sirve, no si se atiende. Ver `modo_por_peticion`.
+from api.config_store import modo_por_peticion
+app.before_request(modo_por_peticion)
 from api.library_health import health_bp
 app.register_blueprint(health_bp, url_prefix='/api/health')
 from api.bridge import bridge_bp
@@ -153,6 +156,9 @@ app.register_blueprint(for_you_bp, url_prefix='/api/for_you')
 # Retrospectiva («tu mes» / «tu año»): agrega el historial archivado por `history_store`.
 from api.retrospective import retro_bp
 app.register_blueprint(retro_bp, url_prefix='/api/retrospective')
+# Apagar el PC desde el móvil. Módulo propio: es lo ÚNICO de la API que apaga la máquina.
+from api.power import power_bp
+app.register_blueprint(power_bp, url_prefix='/api/power')
 
 
 # Suwayomi es on-demand (ver sources.py: ensure_suwayomi + reaper de inactividad).

@@ -10,6 +10,15 @@ export function sanitizeTitleId(title) {
 export const taskId = (title, chapter, type) =>
   `${sanitizeTitleId(title)}_${type}_ch${chapter}`
 
+/* Estados en los que una tarea ya NO está en marcha. Vive aquí y no en cada componente porque
+ * quien decide si pintar el progreso y quien decide si pintar los botones tienen que estar de
+ * acuerdo: si discrepan, la fila del capítulo se queda sin progreso Y sin botones. */
+const TAREA_TERMINADA = ['complete', 'done', 'error', 'cancelled', 'interrupted', 'not_found']
+export const tareaActiva = (tareas, id) => {
+  const t = id ? (tareas || {})[id] : null
+  return t && !TAREA_TERMINADA.includes(t.status) ? t : null
+}
+
 // Canonical title for matching (lowercase, alphanumeric only)
 export const canonicalTitle = (t) => (t || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 

@@ -88,6 +88,38 @@ def test_un_solo_fichero_sigue_valiendo_para_cualquier_episodio(tmp_path):
     assert _find_video(d, 1).endswith('Pelicula Sin Numero.mkv')
 
 
+def test_una_carpeta_con_un_solo_fichero_no_se_come_los_demas_episodios(tmp_path):
+    """NIPPON SANGOKU: ep 1 en un disco, eps 2 y 3 en otro.
+
+    La regla «un solo vídeo vale para cualquier episodio» existe para las PELÍCULAS, pero se
+    evaluaba por CARPETA: la primera tenía un único fichero, se disparaba ahí y devolvía el ep 1
+    para todos. Se veía como miniaturas clonadas; lo grave es que reproducir el 2 ponía el 1.
+    """
+    from api.anime import _buscar_video
+    uno, dos = tmp_path / 'C', tmp_path / 'D'
+    uno.mkdir(); dos.mkdir()
+    (uno / '[Erai] Serie - 01 [1080p].mkv').write_bytes(b'x')
+    for n in (2, 3):
+        (dos / f'[Erai] Serie - {n:02d} [1080p].mkv').write_bytes(b'x')
+
+    anime = {'local_path': str(uno)}
+    _anadir_carpeta(anime, str(dos))
+
+    assert _buscar_video(anime, 1).endswith('- 01 [1080p].mkv')
+    assert _buscar_video(anime, 2).endswith('- 02 [1080p].mkv'), 'devolvió el episodio de la otra carpeta'
+    assert _buscar_video(anime, 3).endswith('- 03 [1080p].mkv')
+    assert _buscar_video(anime, 4) == '', 'un episodio que no está no puede devolver otro'
+
+
+def test_una_pelicula_en_UNA_carpeta_sigue_valiendo(tmp_path):
+    """El respaldo no se pierde: con una sola carpeta, un vídeo sin número sigue sirviendo."""
+    from api.anime import _buscar_video
+    d = tmp_path / 'Peli'
+    d.mkdir()
+    (d / 'Pelicula Sin Numero.mkv').write_bytes(b'x')
+    assert _buscar_video({'local_path': str(d)}, 1).endswith('Pelicula Sin Numero.mkv')
+
+
 def test_partes_en_numeral_romano_van_por_posicion(tmp_path):
     """Kizumonogatari I/II/III: ningún nombre lleva número, el orden alfabético ES el orden."""
     from api.anime import _find_video
