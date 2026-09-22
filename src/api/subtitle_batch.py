@@ -46,6 +46,8 @@ def _resolve_item_path(item: dict):
     resolución por info_hash/local_path/anime (anime de la biblioteca). None si no se encuentra."""
     p = (item.get("path") or "").strip()
     if p:
+        if not item.get("_trusted_direct_path"):
+            return None
         return p if os.path.exists(p) else None
     return _resolve_video_path(
         item.get("info_hash", "") or "",
@@ -55,6 +57,25 @@ def _resolve_item_path(item: dict):
         item.get("relative_path", "") or "",
         item.get("episode_key", "") or "",
     )
+
+
+def _prepare_request_items(raw_items):
+    """Marca rutas directas locales y bloquea fuentes de archivo enviadas desde la red."""
+    from api.auth import peticion_local
+    local = peticion_local()
+    prepared = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            return None, ("cada item debe ser un objeto", 400)
+        item = dict(raw)
+        if item.get("path"):
+            if not local:
+                return None, ("un cliente remoto no puede mandar rutas", 403)
+            item["_trusted_direct_path"] = True
+        elif item.get("local_path") and not item.get("anime_id") and not local:
+            return None, ("un cliente remoto necesita anime_id", 403)
+        prepared.append(item)
+    return prepared, None
 
 
 def _classify(path: str) -> dict:
@@ -137,6 +158,9 @@ def scan():
     if not isinstance(items, list) or not items:
         return jsonify({"error": "items es obligatorio (lista no vacía)"}), 400
     items = items[:500]     # cota defensiva
+    items, error = _prepare_request_items(items)
+    if error:
+        return jsonify({"error": error[0]}), error[1]
 
     with ThreadPoolExecutor(max_workers=_SCAN_WORKERS) as ex:
         episodes = list(ex.map(_scan_one, items))
@@ -376,6 +400,9 @@ def start():
     items = body.get("items") or []
     if not items:
         return jsonify({"error": "items es obligatorio"}), 400
+    items, error = _prepare_request_items(items)
+    if error:
+        return jsonify({"error": error[0]}), error[1]
     policy = body.get("policy") or "buscar_o_traducir"
     if policy not in ("buscar_o_traducir", "solo_buscar", "solo_ia"):
         return jsonify({"error": "policy inválida"}), 400

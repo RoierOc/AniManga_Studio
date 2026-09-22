@@ -18,7 +18,7 @@ from pathlib import Path
 from flask import Blueprint, after_this_request, jsonify, request, send_file
 
 from api.platform import is_wsl as _is_wsl2, first_windows_user_dir
-from api.runtime import write_json_atomic
+from api.runtime import safe_child, write_json_atomic
 
 _SETTINGS_FILE = Path(__file__).resolve().parents[2] / "library_settings.json"
 
@@ -50,6 +50,15 @@ def get_export_dir() -> Path:
         if p.exists():
             return p
     return _default_export_dir()
+
+
+def _archive_files(directory: Path) -> list[Path]:
+    """Archivos exportados reales; no sigue enlaces simbólicos del árbol compartido."""
+    return sorted(
+        [f for f in directory.iterdir()
+         if not f.is_symlink() and f.is_file() and f.suffix.lower() in (".cbz", ".cbr")],
+        key=lambda f: f.name.lower(),
+    )
 
 def _get_server_ip() -> str:
     if _is_wsl2():
@@ -93,11 +102,10 @@ def _list_items(directory: Path) -> dict:
     files = []
 
     for item in sorted(directory.iterdir(), key=lambda x: x.name.lower()):
+        if item.is_symlink():
+            continue
         if item.is_dir() and not item.name.startswith("."):
-            cbz = sorted(
-                [f for f in item.iterdir() if f.is_file() and f.suffix.lower() in (".cbz", ".cbr")],
-                key=lambda f: f.name.lower(),
-            )
+            cbz = _archive_files(item)
             if cbz:
                 total_mb = round(sum(f.stat().st_size for f in cbz) / 1_048_576, 1)
                 folders.append({
@@ -157,10 +165,7 @@ def download_folder(foldername):
     if not folder.is_dir():
         return "Not found", 404
 
-    cbz_files = sorted(
-        [f for f in folder.iterdir() if f.is_file() and f.suffix.lower() in (".cbz", ".cbr")],
-        key=lambda f: f.name.lower(),
-    )
+    cbz_files = _archive_files(folder)
     if not cbz_files:
         return "Empty folder", 404
 
@@ -185,11 +190,10 @@ def download_all():
     all_files: list[tuple[Path, str]] = []
 
     for item in sorted(export_dir.iterdir(), key=lambda x: x.name.lower()):
+        if item.is_symlink():
+            continue
         if item.is_dir() and not item.name.startswith("."):
-            cbz = sorted(
-                [f for f in item.iterdir() if f.is_file() and f.suffix.lower() in (".cbz", ".cbr")],
-                key=lambda f: f.name.lower(),
-            )
+            cbz = _archive_files(item)
             for f in cbz:
                 all_files.append((f, item.name + "/" + f.name))
         elif item.is_file() and item.suffix.lower() in (".cbz", ".cbr"):
@@ -235,19 +239,24 @@ def save_to_library():
     if not task:
         return jsonify({"error": "not found"}), 404
     tmp_path = task.get("tmp_path")
-    filename = task.get("filename", "export.cbz")
+    filename = str(task.get("filename") or "export.cbz")
     if not tmp_path or not Path(tmp_path).exists():
         return jsonify({"error": "file missing"}), 404
 
     # Save inside a subfolder named after the manga title
-    title = task.get("title", "").strip() or Path(filename).stem
-    export_dir = get_export_dir()
-    dest_dir = export_dir / title
+    title = str(task.get("title") or "").strip() or Path(filename).stem
+    export_dir = Path(get_export_dir()).resolve()
+    dest_dir = safe_child(export_dir, title)
+    dest = safe_child(dest_dir, filename) if dest_dir else None
+    if not dest_dir or not dest:
+        return jsonify({"error": "invalid destination"}), 400
     dest_dir.mkdir(parents=True, exist_ok=True)
-    dest = dest_dir / filename
     counter = 1
     while dest.exists():
-        dest = dest_dir / f"{Path(filename).stem}_{counter}{Path(filename).suffix}"
+        candidate = safe_child(dest_dir, f"{Path(filename).stem}_{counter}{Path(filename).suffix}")
+        if not candidate:
+            return jsonify({"error": "invalid destination"}), 400
+        dest = candidate
         counter += 1
     shutil.move(tmp_path, dest)
     return jsonify({"saved": True, "filename": dest.name, "path": str(dest)})

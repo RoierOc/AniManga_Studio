@@ -172,6 +172,7 @@ def test_dur_cache_save_failure_is_logged_not_raised(tmp_path, monkeypatch):
     import api.anime as A
     monkeypatch.setattr(A, "_DUR_CACHE_PATH", _unwritable(tmp_path))
     monkeypatch.setattr(A, "_dur_cache_dirty", True)
+    monkeypatch.setattr(A, "_dur_save_active", False)
     A._save_dur_cache()
     assert obs.error_counts().get("anime") == 1
 

@@ -1413,7 +1413,7 @@ def _resolve_video_path(info_hash: str, episode: int, anime_id: str, local_path:
     for legacy callers.
     """
     try:
-        from api.anime import _q, _find_video, _lib_read, resolve_episode_video
+        from api.anime import _lib_read, resolve_episode_video
         body = {}
         if has_request_context():
             body = request.get_json(silent=True) if request.is_json else {}
@@ -1422,7 +1422,7 @@ def _resolve_video_path(info_hash: str, episode: int, anime_id: str, local_path:
             episode_key = episode_key or request.values.get('episode_key', '')
         relative_path = (relative_path or body.get('relative_path', '')).strip()
         episode_key = (episode_key or body.get('episode_key', '')).strip()
-        if anime_id and (relative_path or episode_key):
+        if local_path or anime_id or info_hash:
             video, error = resolve_episode_video({
                 'anime_id': anime_id, 'episode': episode, 'episode_key': episode_key,
                 'info_hash': info_hash, 'relative_path': relative_path,
@@ -1430,24 +1430,22 @@ def _resolve_video_path(info_hash: str, episode: int, anime_id: str, local_path:
             })
             if video:
                 return video
-        if local_path:
-            return _find_video(local_path, episode)
+            if error and error[1] == 403:
+                return None
         # Fallback: check library for local_path
         if anime_id:
             lib = _lib_read()
             lp = (lib.get(anime_id) or {}).get('local_path', '')
             if lp:
-                return _find_video(lp, episode)
-        torrents = _q('get', '/torrents/info', params={'hashes': info_hash}).json()
-        if not torrents and anime_id:
-            lib = _lib_read()
-            episodes = (lib.get(anime_id) or {}).get('episodes', {})
-            batch_hash = (episodes.get(episode_key) or episodes.get('0') or {}).get('info_hash', '')
-            if batch_hash and batch_hash != info_hash:
-                torrents = _q('get', '/torrents/info', params={'hashes': batch_hash}).json()
-        if not torrents:
-            return None
-        return _find_video(torrents[0].get('content_path', ''), episode)
+                video, error = resolve_episode_video({
+                    'anime_id': anime_id, 'episode': episode, 'episode_key': episode_key,
+                    'info_hash': info_hash, 'local_path': lp,
+                })
+                if video:
+                    return video
+                if error and error[1] == 403:
+                    return None
+        return None
     except Exception as e:
         print(f'[subtitle] resolve path error: {e}')
         return None

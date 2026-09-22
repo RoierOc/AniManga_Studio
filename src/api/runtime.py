@@ -43,6 +43,28 @@ def get_current_seq() -> int:
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+
+def safe_child(root, name):
+    """Devuelve ``root/name`` solo si la ruta resuelta queda dentro de ``root``.
+
+    Las rutas llegan de clientes que pueden estar en Windows aunque el backend corra en WSL;
+    por eso ``\\`` también cuenta como separador y se rechazan rutas absolutas de ambos formatos.
+    Los symlinks se resuelven antes del containment check.
+    """
+    try:
+        root_path = Path(root).expanduser().resolve()
+        raw = os.fspath(name)
+        if isinstance(raw, bytes):
+            raw = os.fsdecode(raw)
+        raw = str(raw).replace('\\', '/')
+        if not raw or raw.startswith('/') or re.match(r'^[A-Za-z]:/', raw):
+            return None
+        target = (root_path / raw).resolve()
+        target.relative_to(root_path)
+        return None if target == root_path else target
+    except (OSError, ValueError, TypeError):
+        return None
+
 # All user data (downloaded/upscaled manga) defaults under the repo itself so a
 # fresh clone works with zero configuration. Override via env vars to point
 # at any other location (e.g. a bigger disk) exactly like before.

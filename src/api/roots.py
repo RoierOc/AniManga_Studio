@@ -46,7 +46,8 @@ from flask import Blueprint, jsonify, request
 from api.observability import record_error
 from api.platform import is_wsl
 from api.runtime import (DATA_ROOT, MANGA_DIR, UPSCALED_DIR, get_library_mode,
-                         manga_dir, read_json_safe, upscaled_dir, write_json_atomic)
+                         manga_dir, read_json_safe, safe_child, upscaled_dir,
+                         write_json_atomic)
 
 roots_bp = Blueprint('roots', __name__)
 
@@ -306,13 +307,12 @@ def find_file(rel: str, prefer_upscaled: bool = True) -> Path | None:
 
     Lo usa el servidor de imágenes: la URL de una página no lleva (ni debe llevar) el disco.
     """
-    rel = str(rel).lstrip('/')
     order = roots()
     for r in order:
         keys = ('upscaled', 'manga') if prefer_upscaled else ('manga', 'upscaled')
         for k in keys:
-            p = Path(r[k]) / rel
-            if p.exists():
+            p = safe_child(r[k], rel)
+            if p and p.is_file():
                 return p
     return None
 

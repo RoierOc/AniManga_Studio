@@ -21,7 +21,7 @@ from urllib.parse import urlencode, quote
 
 import requests as _http
 from api.resilient_http import http as _rhttp  # retry + backoff + per-host rate limiting (AniList/Jikan)
-from flask import Blueprint, jsonify, request, send_file
+from flask import Blueprint, has_request_context, jsonify, request, send_file
 
 from api.imgproxy import warm as _warm_img
 from api.platform import is_wsl as _is_wsl, is_macos as _is_macos
@@ -1512,7 +1512,8 @@ def _local_relative_file(anime: dict, relative_path: str) -> str:
         candidate = (base / rel).resolve()
         try:
             if base.resolve() in candidate.parents and candidate.is_file():
-                return _prefiere_a4k(str(candidate))
+                video = _prefiere_a4k(str(candidate))
+                return video if _path_is_within(video, str(base)) else ''
         except OSError:
             continue
     return ''
@@ -3947,6 +3948,110 @@ def anime_scan_unmatch():
     return jsonify({'ok': True})
 
 
+def _runtime_fs_path(raw: str) -> str:
+    raw = str(raw or '').strip()
+    if _is_wsl() and re.match(r'^[A-Za-z]:[/\\]', raw):
+        return _win_to_wsl(raw)
+    return raw
+
+
+def _path_is_within(path: str, root: str) -> bool:
+    try:
+        target = _Path(_runtime_fs_path(path)).expanduser().resolve()
+        base = _Path(_runtime_fs_path(root)).expanduser().resolve()
+        if base.is_file():
+            return target == base
+        target.relative_to(base)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _path_registered_for_anime(anime_id: str, local_path: str) -> bool:
+    """Comprueba que ``local_path`` pertenece a una carpeta ya vinculada a la serie."""
+    anime = (_lib_read() or {}).get(str(anime_id))
+    if not anime:
+        return False
+    return any(_path_is_within(local_path, folder) for folder in _carpetas_de(anime))
+
+
+def _path_matches_torrent(local_path: str, info_hash: str) -> bool | None:
+    """Permite un fichero local de un torrent completado aunque aún no esté vinculado como carpeta."""
+    if not info_hash:
+        return False
+    try:
+        torrents = _q('get', '/torrents/info', params={'hashes': info_hash}).json()
+    except Exception:
+        return None
+    if not isinstance(torrents, list):
+        return False
+    for torrent in torrents or []:
+        content = torrent.get('content_path') or ''
+        if content and _path_is_within(local_path, content):
+            return True
+        # A single-file torrent reports the file as content_path; its .a4k sibling
+        # legitimately lives beside it. Do not widen this to all of save_path:
+        # qBittorrent's save_path can contain unrelated downloads.
+        if content and _single_file_derivative(content, local_path):
+            return True
+        if not content and torrent.get('save_path') and _path_is_within(local_path, torrent['save_path']):
+            return True
+    return False
+
+
+def _single_file_derivative(original: str, candidate: str) -> bool:
+    try:
+        source = _Path(_runtime_fs_path(original)).expanduser().resolve()
+        target = _Path(_runtime_fs_path(candidate)).expanduser()
+        return (source.is_file() and not target.is_symlink()
+                and target.name == f'{source.stem}{_A4K_SUF}{source.suffix}'
+                and target.parent.resolve() == source.parent)
+    except (OSError, ValueError):
+        return False
+
+
+def _torrent_result_is_safe(video: str, torrent: dict) -> bool:
+    """Comprueba también la ruta que `_find_video` eligió dentro de qBittorrent."""
+    content = torrent.get('content_path') or ''
+    if content and _path_is_within(video, content):
+        return True
+    if content and _single_file_derivative(content, video):
+        return True
+    return bool(not content and torrent.get('save_path')
+                and _path_is_within(video, torrent['save_path']))
+
+
+def _local_result_is_safe(local_path: str, video: str) -> bool:
+    """Evita que `_find_video` devuelva un symlink/a4k que salga del árbol pedido."""
+    raw = _runtime_fs_path(local_path)
+    try:
+        base = _Path(raw).expanduser().resolve()
+        root = base if base.is_dir() else str(base.parent)
+    except (OSError, ValueError):
+        return False
+    return _path_is_within(video, root)
+
+
+def _local_result_matches_torrent(anime_id: str, local_path: str,
+                                  video: str, info_hash: str) -> bool | None:
+    """Mantiene la misma autorización al pasar del original al resultado `.a4k`."""
+    if not anime_id or _path_registered_for_anime(anime_id, local_path):
+        return True
+    if not info_hash or _Path(_runtime_fs_path(video)).is_symlink():
+        return False
+    return _path_matches_torrent(video, info_hash)
+
+
+def _local_path_allowed(anime_id: str, local_path: str, data: dict | None = None) -> bool | None:
+    if anime_id:
+        return (_path_registered_for_anime(anime_id, local_path)
+                or _path_matches_torrent(local_path, str((data or {}).get('info_hash') or '').lower()))
+    if has_request_context():
+        from api.auth import peticion_local
+        return peticion_local()
+    return True
+
+
 def resolve_episode_video(data: dict):
     """Resuelve la ruta del archivo de vídeo de un episodio (carpeta local o
     qBittorrent) — lógica compartida entre el lanzador de MPV (anime_play) y el
@@ -3957,9 +4062,22 @@ def resolve_episode_video(data: dict):
     ep_str     = str(data.get('episode_key') or episode)
 
     if local_path:
+        allowed = _local_path_allowed(anime_id, local_path, data)
+        if allowed is None:
+            return None, ('qBittorrent unavailable while validating local path', 502)
+        if not allowed:
+            return None, ('local path is not registered', 403)
         video = _find_video(local_path, int(episode))
         if not video:
             return None, (f'no video found in: {local_path}', 404)
+        if not _local_result_is_safe(local_path, video):
+            return None, ('local path is not registered', 403)
+        result_allowed = _local_result_matches_torrent(
+            anime_id, local_path, video, str(data.get('info_hash') or '').lower())
+        if result_allowed is None:
+            return None, ('qBittorrent unavailable while validating local path', 502)
+        if not result_allowed:
+            return None, ('local path is not registered', 403)
         return video, None
 
     info_hash = (data.get('info_hash') or '').lower()
@@ -4018,6 +4136,8 @@ def resolve_episode_video(data: dict):
         video = _find_video(content_path, int(episode), ep_subpath)
     if not video:
         return None, (f'no video file found in: {content_path}', 404)
+    if not _torrent_result_is_safe(video, torrents[0]):
+        return None, ('video path is outside torrent content', 403)
     return video, None
 
 
@@ -4257,6 +4377,8 @@ def video_de_biblioteca(anime_id: str, episode: int, episode_key: str = ''):
         video, error = resolve_episode_video(datos)
         if video:
             return video, None
+        if error and error[1] == 403:
+            return None, error
         local = _local_relative_file(anime, ep.get('relative_path', ''))
         if local:
             return local, None
@@ -4265,7 +4387,9 @@ def video_de_biblioteca(anime_id: str, episode: int, episode_key: str = ''):
         if not ep.get('from_batch_selection'):
             local = _buscar_video(anime, episode)
             if local:
-                return local, None
+                if any(_path_is_within(local, folder) for folder in _carpetas_de(anime)):
+                    return local, None
+                return None, ('video path is outside library', 403)
         return video, error
 
     # Local-only legacy records may not have a torrent identity. Prefer the

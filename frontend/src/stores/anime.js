@@ -889,7 +889,8 @@ export const useAnimeStore = defineStore('anime', {
         return this.openPlayer(anime, ep, startPos)
       }
       const base = ep.in_local
-        ? { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), local_path: ep.local_path, sub_file: subFile }
+        ? { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), local_path: ep.local_path,
+            info_hash: ep.info_hash || '', relative_path: ep.relative_path || '', sub_file: subFile }
         : { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), info_hash: ep.info_hash, file_index: ep.file_index, relative_path: ep.relative_path, sub_file: subFile }
       const body = startPos > 0 ? { ...base, start_pos: startPos } : base
       try {
@@ -952,7 +953,8 @@ export const useAnimeStore = defineStore('anime', {
       this._ensureNativeSub()
 
       const base = ep.in_local
-        ? { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), local_path: ep.local_path }
+        ? { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), local_path: ep.local_path,
+            info_hash: ep.info_hash || '', relative_path: ep.relative_path || '' }
         : { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), info_hash: ep.info_hash, file_index: ep.file_index, relative_path: ep.relative_path }
       const body = startPos > 0 ? { ...base, start_pos: startPos } : base
       let res
@@ -1187,8 +1189,9 @@ export const useAnimeStore = defineStore('anime', {
         anime_id: String(np.anime?.id ?? ''),
         episode: String(np.ep.num ?? 1),
         episode_key: animeEpisodeKey(np.ep),
+        info_hash: np.ep.info_hash || '',
         relative_path: np.ep.relative_path || '',
-        ...(np.ep.in_local ? { local_path: np.ep.local_path || '' } : { info_hash: np.ep.info_hash || '' }),
+        ...(np.ep.in_local ? { local_path: np.ep.local_path || '' } : {}),
         font: s.font || '', size: s.size || '', bold: s.bold || '',
         outline: s.outline || '', shadow: s.shadow || '',
       })
@@ -1336,7 +1339,8 @@ export const useAnimeStore = defineStore('anime', {
       }
       this.player = { anime, ep, sess: null, loading: true, error: '', startPos, audio, forceTranscode }
       const base = ep.in_local
-        ? { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), local_path: ep.local_path }
+        ? { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), local_path: ep.local_path,
+            info_hash: ep.info_hash || '', relative_path: ep.relative_path || '' }
         : { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), info_hash: ep.info_hash, file_index: ep.file_index, relative_path: ep.relative_path }
       // ¿Puede este navegador decodificar HEVC (Main10)? Si sí, el backend COPIA
       // el stream sin recodificar (cero pérdida) en vez de transcodificar.

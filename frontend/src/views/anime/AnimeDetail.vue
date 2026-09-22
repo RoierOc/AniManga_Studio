@@ -227,7 +227,8 @@ async function loadHeroPreview() {
     && (x.in_local || (x.in_qbt && x.progress >= 100)))
   if (!a || !e) return
   const base = e.in_local
-    ? { anime_id: a.id, episode: e.num, local_path: e.local_path }
+    ? { anime_id: a.id, episode: e.num, local_path: e.local_path,
+        info_hash: e.info_hash || '', relative_path: e.relative_path || '' }
     : { anime_id: a.id, episode: e.num, info_hash: e.info_hash }
   try {
     const d = await api.post('/api/anime/preview', base)
@@ -318,8 +319,8 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
               <span v-if="diskSize" class="dhero__disk"><Icon name="folder" :size="12" /> {{ formatBytes(diskSize) }}</span>
             </span>
             <div class="dhero__bar" :data-tip="`${vistos} vistos · ${done} descargados de ${total || '?'}`">
-              <span class="dhero__bar-down" :style="{ width: pct + '%' }" />
-              <span class="dhero__bar-seen" :style="{ width: pctVistos + '%' }" />
+              <span class="dhero__bar-down" :style="{ '--bar-scale': pct / 100 }" />
+              <span class="dhero__bar-seen" :style="{ '--bar-scale': pctVistos / 100 }" />
             </div>
           </div>
 
@@ -738,7 +739,8 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
    solo, como la parte apagada de la barra. */
 .dhero__bar { position: relative; height: 4px; border-radius: var(--r-pill);
   background: rgba(255,255,255,.22); overflow: hidden; }
-.dhero__bar span { position: absolute; left: 0; top: 0; height: 100%; transition: width .5s var(--ease-silk); }
+.dhero__bar span { position: absolute; left: 0; top: 0; width: 100%; height: 100%;
+  transform: scaleX(var(--bar-scale, 0)); transform-origin: left; transition: transform .5s var(--ease-silk); }
 .dhero__bar-down { background: rgba(255,255,255,.3); }
 .dhero__bar-seen { background: linear-gradient(90deg, var(--azure-deep), var(--azure));
   box-shadow: 0 0 8px var(--azure-glow); }

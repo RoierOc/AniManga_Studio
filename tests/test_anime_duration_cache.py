@@ -1,6 +1,22 @@
 import threading
 
+import pytest
+
 from api import anime
+
+
+@pytest.fixture(autouse=True)
+def _isolated_duration_state(monkeypatch, tmp_path):
+    previous = (anime._dur_cache, anime._dur_cache_dirty,
+                anime._dur_save_active, anime._dur_generation)
+    monkeypatch.setattr(anime, "_DUR_CACHE_PATH", tmp_path / "durations.json")
+    anime._dur_cache = {}
+    anime._dur_cache_dirty = False
+    anime._dur_save_active = False
+    anime._dur_generation = 0
+    yield
+    (anime._dur_cache, anime._dur_cache_dirty,
+     anime._dur_save_active, anime._dur_generation) = previous
 
 
 def test_duration_cache_coalesces_concurrent_writers(monkeypatch):

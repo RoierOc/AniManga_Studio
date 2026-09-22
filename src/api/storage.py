@@ -24,7 +24,7 @@ _CH_RE = re.compile(r"ch(\d+)_\d+", re.IGNORECASE)
 
 from flask import Blueprint, jsonify, request
 
-from api.runtime import manga_dir, upscaled_dir, get_library_mode, QA_DIR
+from api.runtime import manga_dir, upscaled_dir, get_library_mode, QA_DIR, safe_child
 from api.index_db import cached_measure, drop, prune
 from api.observability import record_error
 from api.storage_cache import summary as cache_summary, purge as purge_cache
@@ -179,20 +179,6 @@ def _stream_cache_root() -> Path:
     except Exception:
         from api.runtime import DATA_ROOT
         return Path(DATA_ROOT) / "_stream_cache"
-
-
-def _safe_child(root: Path, name: str):
-    """Resuelve root/name y confirma que queda DENTRO de root (anti path-traversal).
-    Devuelve el Path o None si el nombre escapa del árbol."""
-    root = root.resolve()
-    try:
-        target = (root / name).resolve()
-        target.relative_to(root)
-    except (ValueError, OSError):
-        return None
-    if target == root:
-        return None
-    return target
 
 
 # ── Integridad: ¿lo que hay en disco sigue siendo lo que el torrent dice? ─────────────────────
@@ -497,8 +483,8 @@ def series_size():
     from api.roots import roots as _roots
     ob = oc = ub = uc = 0
     for _r in _roots():
-        o = _safe_child(Path(_r["manga"]), title)
-        u = _safe_child(Path(_r["upscaled"]), title)
+        o = safe_child(Path(_r["manga"]), title)
+        u = safe_child(Path(_r["upscaled"]), title)
         if o and o.is_dir():
             b, c = _measure_series(o); ob += b; oc += c
         if u and u.is_dir():
@@ -534,9 +520,9 @@ def series_delete():
     targets = []
     for _r in _roots():
         if scope in ("upscaled", "all"):
-            targets.append(_safe_child(Path(_r["upscaled"]), title))
+            targets.append(safe_child(Path(_r["upscaled"]), title))
         if scope in ("original", "all"):
-            targets.append(_safe_child(Path(_r["manga"]), title))
+            targets.append(safe_child(Path(_r["manga"]), title))
 
     freed = 0
     deleted_any = False

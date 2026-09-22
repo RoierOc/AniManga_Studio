@@ -13,6 +13,7 @@ import zipfile
 import subprocess
 
 from api.platform import first_windows_user_dir
+from api.runtime import safe_child
 
 cbz_bp = Blueprint("cbz", __name__)
 
@@ -38,7 +39,7 @@ def _is_image(name: str) -> bool:
 
 
 def _is_archive(p: Path) -> bool:
-    return p.suffix.lower() in _ARCHIVE_EXTS and p.is_file()
+    return not p.is_symlink() and p.suffix.lower() in _ARCHIVE_EXTS and p.is_file()
 
 
 def _list_entries(arc: Path) -> list[str]:
@@ -66,11 +67,28 @@ def _extract(arc: Path, entry: str) -> bytes:
     return result.stdout
 
 
-def _safe_arc(manga: str, volume: str) -> Path | None:
-    if not manga or not volume or '..' in manga or '..' in volume or '/' in manga:
+def _safe_component(value: str) -> str | None:
+    raw = str(value or '').strip()
+    normalized = raw.replace('\\', '/')
+    if not raw or normalized.startswith('/') or '/' in normalized or raw in ('.', '..'):
         return None
-    p = DOCS_MANGA_DIR / manga / volume
-    return p if p.exists() and _is_archive(p) else None
+    return raw
+
+
+def _safe_manga_dir(manga: str) -> Path | None:
+    component = _safe_component(manga)
+    if not component:
+        return None
+    return safe_child(DOCS_MANGA_DIR, component)
+
+
+def _safe_arc(manga: str, volume: str) -> Path | None:
+    manga_dir = _safe_manga_dir(manga)
+    volume = _safe_component(volume)
+    if not manga_dir or not manga_dir.is_dir() or not volume:
+        return None
+    archive = safe_child(manga_dir, volume)
+    return archive if archive and archive.exists() and _is_archive(archive) else None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -97,9 +115,9 @@ def list_manga():
 @cbz_bp.route("/volumes")
 def list_volumes():
     manga = (request.args.get("manga") or "").strip()
-    if not manga or '..' in manga:
+    d = _safe_manga_dir(manga)
+    if not d:
         return jsonify({"error": "invalid manga"}), 400
-    d = DOCS_MANGA_DIR / manga
     if not d.is_dir():
         return jsonify({"error": "not found"}), 404
     vols = sorted([f for f in d.iterdir() if _is_archive(f)], key=lambda f: f.name)
@@ -152,9 +170,9 @@ def get_page():
 @cbz_bp.route("/cover")
 def get_cover():
     manga = (request.args.get("manga") or "").strip()
-    if not manga or '..' in manga:
+    d = _safe_manga_dir(manga)
+    if not d:
         return "invalid", 400
-    d = DOCS_MANGA_DIR / manga
     if not d.is_dir():
         return "not found", 404
     vols = sorted([f for f in d.iterdir() if _is_archive(f)], key=lambda f: f.name)

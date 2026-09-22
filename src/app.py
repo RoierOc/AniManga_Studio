@@ -375,12 +375,13 @@ def _find_page(filename: str, prefer_upscaled: bool):
 def _find_page_in(filename: str, key: str):
     """Igual, pero forzando originales o escalados (modo comparar)."""
     from api.roots import roots as _roots
+    from api.runtime import safe_child
     base = Path(filename)
     for ext in ('',) + ('.jpg', '.png', '.webp', '.jpeg'):
         cand = base if not ext else base.with_suffix(ext)
         for r in _roots():
-            p = Path(r[key]) / cand
-            if p.exists():
+            p = safe_child(r[key], cand)
+            if p and p.is_file():
                 return p
     return None
 
