@@ -15,7 +15,7 @@ from flask import Flask, jsonify
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 
-from api.auth import PUERTO_REMOTO, auth_remote_bp, es_local, guardia, token_actual
+from api.auth import PUERTO_REMOTO, auth_remote_bp, es_local, guardia, guardia_origen, token_actual
 
 
 @pytest.fixture()
@@ -23,8 +23,9 @@ def cliente():
     app = Flask(__name__)
     app.register_blueprint(auth_remote_bp)
     app.before_request(guardia)
+    app.before_request(guardia_origen)
 
-    @app.route('/api/loquesea')
+    @app.route('/api/loquesea', methods=['GET', 'POST'])
     def loquesea():
         return jsonify({'ok': True})
 
@@ -69,6 +70,54 @@ def test_un_prefijo_del_token_no_cuela(cliente):
     medio = token_actual()[:10]
     r = cliente.get('/api/loquesea', **_remoto(headers={'Authorization': f'Bearer {medio}'}))
     assert r.status_code == 401
+
+
+def test_post_local_desde_origen_externo_no_pasa(cliente):
+    r = cliente.post('/api/loquesea', headers={'Origin': 'https://evil.example'})
+    assert r.status_code == 403
+
+
+def test_post_local_desde_loopback_si_pasa(cliente):
+    r = cliente.post('/api/loquesea', headers={'Origin': 'http://127.0.0.1:5101'})
+    assert r.status_code == 200
+
+
+def test_post_local_desde_vite_si_pasa(cliente):
+    r = cliente.post('/api/loquesea', headers={'Origin': 'http://localhost:5173'})
+    assert r.status_code == 200
+
+
+def test_post_remoto_con_token_y_origen_externo_si_pasa(cliente):
+    r = cliente.post('/api/loquesea', **_remoto(
+        headers={
+            'Authorization': f'Bearer {token_actual()}',
+            'Origin': 'https://evil.example',
+        }))
+    assert r.status_code == 200
+
+
+def test_post_local_con_origin_null_no_pasa(cliente):
+    r = cliente.post('/api/loquesea', headers={'Origin': 'null'})
+    assert r.status_code == 403
+
+
+def test_get_local_desde_origen_externo_no_se_bloquea(cliente):
+    r = cliente.get('/api/loquesea', headers={'Origin': 'https://evil.example'})
+    assert r.status_code == 200
+
+
+def test_post_local_sin_cabeceras_conserva_compatibilidad(cliente):
+    assert cliente.post('/api/loquesea').status_code == 200
+
+
+def test_post_local_con_referer_externo_no_pasa(cliente):
+    r = cliente.post('/api/loquesea', headers={'Referer': 'https://evil.example/form'})
+    assert r.status_code == 403
+
+
+def test_post_local_con_referer_loopback_si_pasa(cliente):
+    r = cliente.post('/api/loquesea', headers={'Referer': 'http://localhost:5101/app'})
+    assert r.status_code == 200
 
 
 def test_hello_esta_abierto_porque_es_como_se_descubre_el_servidor(cliente):

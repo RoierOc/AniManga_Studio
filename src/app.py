@@ -120,9 +120,10 @@ app.register_blueprint(md_updates_bp, url_prefix='/api/md_updates')
 app.register_blueprint(roots_bp, url_prefix='/api/roots')
 # Acceso remoto. Sin prefijo: `guardia` tiene que ver TODAS las rutas, no un subárbol, y
 # /api/hello es la tarjeta de presentación que el móvil pide antes de tener token.
-from api.auth import auth_remote_bp, guardia
+from api.auth import auth_remote_bp, guardia, guardia_origen
 app.register_blueprint(auth_remote_bp)
 app.before_request(guardia)
+app.before_request(guardia_origen)
 # DESPUÉS de la guardia: decide qué RAÍZ se sirve, no si se atiende. Ver `modo_por_peticion`.
 from api.config_store import modo_por_peticion
 app.before_request(modo_por_peticion)

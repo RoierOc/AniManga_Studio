@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import hmac
 import secrets
+from urllib.parse import urlsplit
 
 from flask import Blueprint, jsonify, request
 
@@ -47,6 +48,8 @@ TOKEN_KEY = 'REMOTE_TOKEN'
 # Direcciones que se consideran "esta misma máquina". `::ffff:127.0.0.1` es la forma en que un
 # socket IPv6 ve una conexión IPv4: omitirla dejaría fuera a la propia app según cómo arranque.
 _LOCAL = frozenset({'127.0.0.1', '::1', '::ffff:127.0.0.1'})
+_LOCAL_ORIGIN_HOSTS = frozenset({'localhost', '127.0.0.1', '::1', '::ffff:127.0.0.1'})
+_MUTATING_METHODS = frozenset({'POST', 'PUT', 'PATCH', 'DELETE'})
 
 # La BOCA REMOTA. Todo lo que entra por este puerto se trata como remoto y necesita token, diga lo
 # que diga `remote_addr`.
@@ -129,6 +132,36 @@ def guardia():
         'detalle': 'Este equipo sólo atiende peticiones remotas con token. '
                    'Ajustes → Acceso remoto, en la aplicación de escritorio.',
     }), 401
+
+
+def _origen_loopback(value: str) -> bool:
+    """Acepta solo orígenes HTTP(S) servidos desde la propia máquina."""
+    try:
+        parsed = urlsplit(value)
+        host = (parsed.hostname or '').lower().rstrip('.')
+    except ValueError:
+        return False
+    return parsed.scheme.lower() in ('http', 'https') and host in _LOCAL_ORIGIN_HOSTS
+
+
+def guardia_origen():
+    """Bloquea CSRF de navegador contra acciones locales, sin romper clientes directos.
+
+    Las peticiones remotas ya pasaron por ``guardia`` y llevan el token explícito. Los clientes
+    locales antiguos o nativos pueden no mandar Origin/Referer, así que ese caso conserva el
+    contrato anterior; si un navegador sí declara origen, solo se permite loopback.
+    """
+    if request.method not in _MUTATING_METHODS or not peticion_local():
+        return None
+    origin = request.headers.get('Origin', '').strip()
+    referer = request.headers.get('Referer', '').strip()
+    declared = origin or referer
+    if not declared or _origen_loopback(declared):
+        return None
+    return jsonify({
+        'error': 'origen no permitido',
+        'detalle': 'Las acciones locales solo aceptan peticiones de la aplicación.',
+    }), 403
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
