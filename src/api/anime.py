@@ -1160,6 +1160,9 @@ _SHORT_VIDEO_SECS = 600  # < 10 min → auto-special
 _dur_cache: dict = {}
 _DUR_CACHE_PATH = _Path.home() / '.animanga_dur_cache.json'
 _dur_cache_dirty = False
+_dur_lock = threading.RLock()
+_dur_save_active = False
+_dur_generation = 0
 
 
 def _load_dur_cache():
@@ -1177,13 +1180,32 @@ def _load_dur_cache():
         _dur_cache = {}
 
 
-def _save_dur_cache():
-    global _dur_cache_dirty
-    if not _dur_cache_dirty:
-        return
-    with swallow('anime', 'dur_cache_save', path=str(_DUR_CACHE_PATH)):
-        write_json_atomic(_DUR_CACHE_PATH, {k: list(v) for k, v in _dur_cache.items()}, durable=False)
-        _dur_cache_dirty = False
+def _save_dur_cache(_claimed=False):
+    """Persist duration measurements with one writer and a stable snapshot."""
+    global _dur_cache_dirty, _dur_save_active
+    if not _claimed:
+        with _dur_lock:
+            if _dur_save_active or not _dur_cache_dirty:
+                return
+            _dur_save_active = True
+    while True:
+        with _dur_lock:
+            if not _dur_cache_dirty:
+                _dur_save_active = False
+                return
+            generation = _dur_generation
+            payload = {k: list(v) for k, v in _dur_cache.items()}
+            path = _DUR_CACHE_PATH
+        saved = False
+        with swallow('anime', 'dur_cache_save', path=str(path)):
+            write_json_atomic(path, payload, durable=False)
+            saved = True
+        with _dur_lock:
+            if saved and generation == _dur_generation:
+                _dur_cache_dirty = False
+            if not saved or not _dur_cache_dirty:
+                _dur_save_active = False
+                return
 
 
 _load_dur_cache()
@@ -1191,12 +1213,13 @@ _load_dur_cache()
 
 def _video_duration(path: str) -> float:
     """Return video duration in seconds via ffprobe, cached by file mtime (persisted to disk)."""
-    global _dur_cache_dirty
+    global _dur_cache_dirty, _dur_generation, _dur_save_active
     try:
         mtime = _Path(path).stat().st_mtime
     except Exception:
         return 0.0
-    cached = _dur_cache.get(path)
+    with _dur_lock:
+        cached = _dur_cache.get(path)
     if cached and cached[0] == mtime:
         return cached[1]
     try:
@@ -1208,10 +1231,21 @@ def _video_duration(path: str) -> float:
         dur = float(out)
     except Exception:
         dur = 0.0
-    _dur_cache[path] = (mtime, dur)
-    _dur_cache_dirty = True
-    # Flush cache in background to avoid blocking the request thread
-    threading.Thread(target=_save_dur_cache, daemon=True).start()
+    with _dur_lock:
+        _dur_cache[path] = (mtime, dur)
+        _dur_cache_dirty = True
+        _dur_generation += 1
+        schedule = not _dur_save_active
+        if schedule:
+            _dur_save_active = True
+    # Flush cache in background to avoid blocking the request thread. One active writer drains
+    # updates that arrive while it is writing; a read-only cache remains dirty for a later retry.
+    if schedule:
+        try:
+            threading.Thread(target=_save_dur_cache, args=(True,), daemon=True).start()
+        except Exception:
+            with _dur_lock:
+                _dur_save_active = False
     return dur
 
 
@@ -3913,7 +3947,6 @@ def anime_scan_unmatch():
     return jsonify({'ok': True})
 
 
-@anime_bp.route('/play', methods=['POST'])
 def resolve_episode_video(data: dict):
     """Resuelve la ruta del archivo de vídeo de un episodio (carpeta local o
     qBittorrent) — lógica compartida entre el lanzador de MPV (anime_play) y el
@@ -3988,6 +4021,7 @@ def resolve_episode_video(data: dict):
     return video, None
 
 
+@anime_bp.route('/play', methods=['POST'])
 def anime_play():
     try:
         data = request.get_json(silent=True) or {}

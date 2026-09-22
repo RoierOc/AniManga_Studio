@@ -30,19 +30,28 @@ def anime_client():
 
 
 def test_files_metadata_pending_is_not_empty_success(monkeypatch):
+    calls = []
+
     def fake_q(method, path, **kwargs):
         if path == '/torrents/info':
             return Reply([{'hash': 'a' * 40, 'name': 'Batch', 'state': 'metaDL'}])
         if path == '/torrents/files':
             return Reply([])
+        if path == '/torrents/start':
+            calls.append((path, kwargs['data']))
+            return Reply(status=200)
         raise AssertionError(path)
 
     monkeypatch.setattr(anime_batch.anime, '_q', fake_q)
-    response = client().get('/api/anime/batch/files?hash=' + 'a' * 40)
+    try:
+        response = client().get('/api/anime/batch/files?hash=' + 'a' * 40)
+    finally:
+        anime_batch._METADATA_PROBES.discard('a' * 40)
 
     assert response.status_code == 202
     assert response.get_json()['metadata_pending'] is True
     assert response.get_json()['files'] == []
+    assert calls == [('/torrents/start', {'hashes': 'a' * 40})]
 
 
 def test_files_keep_season_and_index_and_mark_local(monkeypatch, tmp_path):
