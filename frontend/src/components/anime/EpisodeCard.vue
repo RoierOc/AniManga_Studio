@@ -2,7 +2,7 @@
 import { computed, ref } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { useAnimeUpscaleStore } from '@/stores/animeUpscale'
-import { animeEpLabel, isEpisodePlayable } from '@/lib/anime'
+import { animeEpLabel, animeEpisodeKey, isEpisodePlayable } from '@/lib/anime'
 import { imgProxy, animeThumb } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
@@ -23,20 +23,26 @@ const rutaOriginal = computed(() => props.ep.original_path || props.ep.local_pat
 const horneando = computed(() => a4k.trabajoDe(rutaOriginal.value))
 
 const playable = computed(() => isEpisodePlayable(props.ep, props.batch))
-const downloading = computed(() =>
-  (props.ep.in_qbt && props.ep.progress < 100 && !props.batch.hasBatch) ||
-  (props.ep.num > 0 && props.batch.hasBatch && !props.batch.batchDone)
-)
-const dlPct = computed(() => props.batch.hasBatch ? (props.batch.batchEp?.progress || 0) : props.ep.progress)
+const downloading = computed(() => {
+  if (props.ep.file_index !== undefined && props.ep.file_index !== null) {
+    return !!props.ep.in_qbt && props.ep.progress < 100
+  }
+  return (props.ep.in_qbt && props.ep.progress < 100 && !props.batch.hasBatch) ||
+    (!props.batch.hasSelection && props.ep.num > 0 && props.batch.hasBatch && !props.batch.batchDone)
+})
+const dlPct = computed(() => {
+  if (props.ep.file_index !== undefined && props.ep.file_index !== null) return props.ep.progress
+  return props.batch.hasBatch ? (props.batch.batchEp?.progress || 0) : props.ep.progress
+})
 const resumePct = computed(() => {
   if (props.ep.watched || !props.ep.resume_pos || !props.ep.duration || downloading.value) return 0
   return Math.min(100, (props.ep.resume_pos / props.ep.duration) * 100)
 })
 
 // Metadatos del episodio (TMDB o MAL de reserva) cargados en bloque al abrir el detalle.
-const meta = computed(() => store.epMeta[props.anime.id]?.[props.ep.num] || null)
-const infoOpen = computed(() => store.epInfoOpen === `${props.anime.id}_${props.ep.num}`)
-const jikanInfo = computed(() => store.epInfo[`${props.anime.mal_id}_${props.ep.num}`])
+const meta = computed(() => store.epMeta[props.anime.id]?.[animeEpisodeKey(props.ep)] || store.epMeta[props.anime.id]?.[props.ep.num] || null)
+const infoOpen = computed(() => store.epInfoOpen === `${props.anime.id}_${animeEpisodeKey(props.ep)}`)
+const jikanInfo = computed(() => store.epInfo[`${props.anime.mal_id}_${animeEpisodeKey(props.ep)}`])
 // Descripción: la de TMDB si la hay; si no, la sinopsis de MAL (epInfo).
 const info = computed(() => {
   if (meta.value?.overview) return { title: meta.value.title, synopsis: meta.value.overview, aired: meta.value.aired }
@@ -61,7 +67,7 @@ const hasES = computed(() => props.ep.es_injected || subTask.value?.status === '
  * Idea traída del móvil, donde se probó primero. */
 const thumbSrc = computed(() => {
   if (playable.value || props.ep.has_thumb) {
-    return animeThumb(props.anime.id, props.ep.num, props.ep.ep_type)
+    return animeThumb(props.anime.id, props.ep.num, props.ep.ep_type, animeEpisodeKey(props.ep))
   }
   // 400 se quedaba corto: la tarjeta mide ~495 px CSS, así que pedía el peldaño 640 y lo pintaba
   // a 742 físicos. Con el ancho real cae en el 900 y deja de verse blando.
@@ -174,9 +180,9 @@ function openMenu(ev) {
       </div>
 
       <!-- resume progress bar (partially watched) — como YouTube -->
-      <div v-if="resumePct" class="ep__resumebar"><span :style="{ width: resumePct + '%' }" /></div>
+      <div v-if="resumePct" class="ep__resumebar"><span :style="{ '--progress': resumePct / 100 }" /></div>
       <!-- downloading -->
-      <div v-if="downloading" class="ep__dlbar"><span :style="{ width: dlPct + '%' }" /></div>
+      <div v-if="downloading" class="ep__dlbar"><span :style="{ '--progress': dlPct / 100 }" /></div>
 
       <div v-if="playable" class="ep__play"><span class="ep__play-c"><Icon name="play" :size="26" /></span></div>
       <span v-if="subFetching" class="ep__subtag ep__subtag--load"><Spinner :size="10" tone="light" /> Buscando ES…</span>
@@ -245,9 +251,9 @@ function openMenu(ev) {
 .ep--watched .ep__num-v { opacity: .82; }
 
 .ep__resumebar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 3px; background: rgba(0,0,0,.4); }
-.ep__resumebar span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--azure-bright); box-shadow: 0 0 8px var(--azure-glow); transition: width .6s var(--ease-silk); }
+.ep__resumebar span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--azure-bright); box-shadow: 0 0 8px var(--azure-glow); width: 100%; transform: scaleX(var(--progress, 0)); transform-origin: left; transition: transform .6s var(--ease-silk); }
 .ep__dlbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 3px; background: rgba(7,10,18,.5); }
-.ep__dlbar span { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, var(--cyan), var(--azure)); box-shadow: 0 0 8px var(--azure-glow); transition: width .5s var(--ease-silk); }
+.ep__dlbar span { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(90deg, var(--cyan), var(--azure)); box-shadow: 0 0 8px var(--azure-glow); width: 100%; transform: scaleX(var(--progress, 0)); transform-origin: left; transition: transform .5s var(--ease-silk); }
 
 .ep__play { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; opacity: 0; transition: opacity var(--t-base); }
 .ep__play-c { display: grid; place-items: center; width: 3rem; height: 3rem; border-radius: 50%; color: #fff;

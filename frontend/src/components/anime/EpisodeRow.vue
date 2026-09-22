@@ -1,7 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
-import { animeEpLabel, isEpisodePlayable } from '@/lib/anime'
+import { animeEpLabel, animeEpisodeKey, isEpisodePlayable } from '@/lib/anime'
 import { imgProxy, animeThumb } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -28,21 +28,27 @@ const selectable = computed(() => !!props.sel && !!props.ep.in_local)
 let skipLoaded = false
 function onEnter() {
   if (!skipLoaded) { skipLoaded = true; store.loadSkip(props.anime, props.ep) }
-  if (selectable.value) props.sel.over(props.ep.num)
+  if (selectable.value) props.sel.over(animeEpisodeKey(props.ep))
 }
-const downloading = computed(() =>
-  (props.ep.in_qbt && props.ep.progress < 100 && !props.batch.hasBatch) ||
-  (props.ep.num > 0 && props.batch.hasBatch && !props.batch.batchDone)
-)
-const dlPct = computed(() => props.batch.hasBatch ? (props.batch.batchEp?.progress || 0) : props.ep.progress)
+const downloading = computed(() => {
+  if (props.ep.file_index !== undefined && props.ep.file_index !== null) {
+    return !!props.ep.in_qbt && props.ep.progress < 100
+  }
+  return (props.ep.in_qbt && props.ep.progress < 100 && !props.batch.hasBatch) ||
+    (!props.batch.hasSelection && props.ep.num > 0 && props.batch.hasBatch && !props.batch.batchDone)
+})
+const dlPct = computed(() => {
+  if (props.ep.file_index !== undefined && props.ep.file_index !== null) return props.ep.progress
+  return props.batch.hasBatch ? (props.batch.batchEp?.progress || 0) : props.ep.progress
+})
 const resumePct = computed(() => {
   if (props.ep.watched || !props.ep.resume_pos || !props.ep.duration || downloading.value) return 0
   return Math.min(100, (props.ep.resume_pos / props.ep.duration) * 100)
 })
 
-const meta = computed(() => store.epMeta[props.anime.id]?.[props.ep.num] || null)
-const infoOpen = computed(() => store.epInfoOpen === `${props.anime.id}_${props.ep.num}`)
-const jikanInfo = computed(() => store.epInfo[`${props.anime.mal_id}_${props.ep.num}`])
+const meta = computed(() => store.epMeta[props.anime.id]?.[animeEpisodeKey(props.ep)] || store.epMeta[props.anime.id]?.[props.ep.num] || null)
+const infoOpen = computed(() => store.epInfoOpen === `${props.anime.id}_${animeEpisodeKey(props.ep)}`)
+const jikanInfo = computed(() => store.epInfo[`${props.anime.mal_id}_${animeEpisodeKey(props.ep)}`])
 const info = computed(() => {
   if (meta.value?.overview) return { title: meta.value.title, synopsis: meta.value.overview, aired: meta.value.aired }
   return jikanInfo.value
@@ -63,24 +69,24 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 </script>
 
 <template>
-  <div class="eprow" :class="{ 'eprow--watched': ep.watched, 'eprow--dl': downloading, 'eprow--missing': !playable && !downloading, 'eprow--current': current, 'eprow--sel': selectable && sel.has(ep.num) }"
+  <div class="eprow" :class="{ 'eprow--watched': ep.watched, 'eprow--dl': downloading, 'eprow--missing': !playable && !downloading, 'eprow--current': current, 'eprow--sel': selectable && sel.has(animeEpisodeKey(ep)) }"
        @mouseenter="onEnter">
     <!-- Casilla de lote: oculta hasta el hover mientras no haya nada marcado, para no meter ruido
          en la lista cuando no estás seleccionando (mismo criterio que las acciones del capítulo). -->
-    <button v-if="selectable" class="eprow__check" :class="{ 'is-on': sel.has(ep.num) }"
-            @mousedown.stop.left="sel.down(ep.num, $event)" @click.stop
-            :data-tip="sel.has(ep.num) ? 'Quitar de la selección' : 'Añadir · shift+clic marca hasta aquí · arrastra para marcar varios'">
-      <span class="eprow__box"><Icon v-if="sel.has(ep.num)" name="check" :size="11" /></span>
+    <button v-if="selectable" class="eprow__check" :class="{ 'is-on': sel.has(animeEpisodeKey(ep)) }"
+            @mousedown.stop.left="sel.down(animeEpisodeKey(ep), $event)" @click.stop
+            :data-tip="sel.has(animeEpisodeKey(ep)) ? 'Quitar de la selección' : 'Añadir · shift+clic marca hasta aquí · arrastra para marcar varios'">
+      <span class="eprow__box"><Icon v-if="sel.has(animeEpisodeKey(ep))" name="check" :size="11" /></span>
     </button>
     <div class="eprow__main">
       <div class="eprow__thumb" @click="onPlay">
         <div class="eprow__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 120)}')` : ''" />
-        <img v-if="playable || ep.has_thumb" class="eprow__img" :src="animeThumb(anime.id, ep.num, ep.ep_type)"
+        <img v-if="playable || ep.has_thumb" class="eprow__img" :src="animeThumb(anime.id, ep.num, ep.ep_type, animeEpisodeKey(ep))"
              loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
         <div class="eprow__num"><span class="eprow__num-k">{{ ep.ep_type === 'special' ? 'SP' : 'EP' }}</span><span class="eprow__num-v">{{ String(ep.num).padStart(2, '0') }}</span></div>
         <!-- resume / download / finished bar -->
-        <div v-if="resumePct" class="eprow__bar eprow__bar--resume"><span :style="{ width: resumePct + '%' }" /></div>
-        <div v-else-if="downloading" class="eprow__bar eprow__bar--dl"><span :style="{ width: dlPct + '%' }" /></div>
+        <div v-if="resumePct" class="eprow__bar eprow__bar--resume"><span :style="{ '--progress': resumePct / 100 }" /></div>
+        <div v-else-if="downloading" class="eprow__bar eprow__bar--dl"><span :style="{ '--progress': dlPct / 100 }" /></div>
         <div v-if="playable" class="eprow__play"><Icon name="play" :size="24" /></div>
       </div>
 
@@ -94,7 +100,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
         <div v-if="playable && (subRunning || subTask?.status === 'done')" class="eprow__sub" :class="{ 'is-done': subTask?.status === 'done' }">
           <template v-if="subTask?.status === 'done'"><Icon name="check" :size="12" /> ESP ✓</template>
           <template v-else>
-            <span class="eprow__sub-bar"><span :style="{ width: (subTask?.progress || 0) + '%' }" /></span>
+            <span class="eprow__sub-bar"><span :style="{ '--progress': (subTask?.progress || 0) / 100 }" /></span>
             <span class="eprow__sub-msg">{{ subTask?.engine === 'ollama' ? '🦙' : '✨' }} {{ subTask?.progress || 0 }}%</span>
             <button class="eprow__sub-x" @click.stop="store.cancelTranslate(anime, ep)"><Icon name="close" :size="11" /></button>
           </template>
@@ -197,7 +203,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 .eprow__num-k { font-family: var(--font-mono); font-size: 0.5rem; font-weight: 600; color: var(--ice); letter-spacing: .14em; line-height: 1; }
 .eprow__num-v { font-family: var(--font-display); font-weight: 700; font-size: 1.5rem; line-height: 1; text-shadow: 0 2px 12px rgba(0,0,0,.95); }
 .eprow__bar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 3; height: 3px; background: rgba(0,0,0,.4); }
-.eprow__bar span { position: absolute; left: 0; top: 0; bottom: 0; transition: width .5s var(--ease-silk); }
+.eprow__bar span { position: absolute; left: 0; top: 0; bottom: 0; width: 100%; transform: scaleX(var(--progress, 0)); transform-origin: left; transition: transform .5s var(--ease-silk); }
 .eprow__bar--resume span { background: var(--azure-bright); box-shadow: 0 0 8px var(--azure-glow); }
 .eprow__bar--dl span { background: linear-gradient(90deg, var(--cyan), var(--azure)); box-shadow: 0 0 8px var(--azure-glow); }
 .eprow__play { position: absolute; inset: 0; z-index: 4; display: grid; place-items: center; color: #fff; opacity: 0; transition: opacity var(--t-base); }
@@ -234,7 +240,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 .eprow__sub { display: flex; align-items: center; gap: 0.375rem; font-size: var(--fs-2xs); color: var(--jade); }
 .eprow__sub.is-done { font-weight: 700; }
 .eprow__sub-bar { width: 7.5rem; height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
-.eprow__sub-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--jade), var(--cyan)); transition: width var(--t-base); }
+.eprow__sub-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--jade), var(--cyan)); width: 100%; transform: scaleX(var(--progress, 0)); transform-origin: left; transition: transform var(--t-base); }
 .eprow__sub-msg { font-family: var(--font-mono); color: var(--ink-soft); flex-shrink: 0; }
 .eprow__sub-x { width: 1.125rem; height: 1.125rem; display: grid; place-items: center; border-radius: var(--r-xs); color: var(--ink-faint); flex-shrink: 0; }
 .eprow__sub-x:hover { color: var(--coral); }

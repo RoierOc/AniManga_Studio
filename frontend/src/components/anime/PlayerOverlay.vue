@@ -17,7 +17,7 @@ import jassubModernWasmUrl from 'jassub/dist/wasm/jassub-worker-modern.wasm?url'
 import { useAnimeStore } from '@/stores/anime'
 import { useUiStore } from '@/stores/ui'
 import { Anime4KRenderer, A4K_MODES } from '@/lib/anime4k'
-import { animeEpLabel } from '@/lib/anime'
+import { animeEpLabel, animeEpisodeKey } from '@/lib/anime'
 import { imgProxy, animeThumb } from '@/lib/img'
 import { api } from '@/lib/api'
 import Icon from '@/components/ui/Icon.vue'
@@ -522,7 +522,7 @@ function sendProgress(ended, flush = false, beacon = false) {
   if (!ended && !flush && Math.abs(pos - lastSentPos) < 5) return
   lastSentPos = pos
   const body = {
-    anime_id: p.value.anime.id, episode: p.value.ep.num,
+    anime_id: p.value.anime.id, episode: p.value.ep.num, episode_key: animeEpisodeKey(p.value.ep),
     position: pos, duration: duration.value || 0, ended,
   }
   // Al descargar la página (cerrar pestaña/ventana) fetch se cancela; sendBeacon
@@ -888,7 +888,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
       <div v-if="nextCd > 0 && nextEp" class="wp__next">
         <span class="wp__next-eyebrow">Siguiente episodio</span>
         <div class="wp__next-thumb" @click="goNext">
-          <img v-if="!nextThumbFailed" :src="animeThumb(nextEp.anime.id, nextEp.ep.num)"
+          <img v-if="!nextThumbFailed" :src="animeThumb(nextEp.anime.id, nextEp.ep.num, nextEp.ep.ep_type, animeEpisodeKey(nextEp.ep))"
                alt="" @error="nextThumbFailed = true" />
           <img v-else-if="nextEp.anime.cover" :src="imgProxy(nextEp.anime.cover)" alt="" />
           <div class="wp__next-scrim" />
@@ -1040,7 +1040,7 @@ const trackLabel = (t, i) => t.title || t.lang || `Pista ${i + 1}`
                     :class="{ 'is-cur': e.num === p.ep.num, 'is-off': !isPlayable(e) }"
                     @click="playFromPanel(e)">
               <div class="wp__ep-th">
-                <img v-if="isPlayable(e)" :src="animeThumb(p.anime.id, e.num)"
+                <img v-if="isPlayable(e)" :src="animeThumb(p.anime.id, e.num, e.ep_type, animeEpisodeKey(e))"
                      alt="" loading="lazy" decoding="async" @error="$event.target.style.display = 'none'" />
                 <span v-if="e.num === p.ep.num" class="wp__ep-now"><Icon name="play" :size="12" /></span>
                 <span v-if="e.resume_pos > 0 && e.duration" class="wp__ep-pr">

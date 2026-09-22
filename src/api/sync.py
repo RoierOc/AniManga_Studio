@@ -273,7 +273,7 @@ _backend = GitBackend()
 
 # ── copia automática ─────────────────────────────────────────────────────────
 # Un respaldo que hay que acordarse de pulsar no es un respaldo. Este hilo hace el mismo
-# `save()` que el botón cuando ha pasado una semana desde el ÚLTIMO COMMIT del perfil.
+# `save()` que el botón cuando ha pasado un día desde el ÚLTIMO COMMIT del perfil.
 #
 # La fecha del último guardado NO se guarda aparte: se lee del propio historial de git
 # (`status()['last_saved_at']`). Así no hay un segundo estado que pueda desincronizarse —
@@ -283,7 +283,7 @@ _backend = GitBackend()
 # Fallar es normal (sin red, VPN caída, token caducado): se registra y se reintenta en el
 # siguiente latido, nunca tumba el proceso ni bloquea nada del camino del usuario.
 
-_AUTO_EVERY = int(os.environ.get('SYNC_AUTO_EVERY', 7 * 86400))   # cada cuánto toca copia
+_AUTO_EVERY = int(os.environ.get('SYNC_AUTO_EVERY', 86400))       # copia diaria por defecto
 _AUTO_CHECK = 6 * 3600                                            # cada cuánto se comprueba
 _AUTO_FIRST = 120                                                 # margen tras arrancar
 _auto_state = {'error': None, 'thread': None}
@@ -313,7 +313,7 @@ def _auto_loop():
         try:
             if _auto_tick() == 'saved':
                 _auto_state['error'] = None
-                print('[sync] copia semanal automática subida', flush=True)
+                print('[sync] copia diaria automática subida', flush=True)
         except Exception as e:
             # Que falle es esperable (sin red, token caducado). Lo que NO puede ser es
             # que falle en silencio y el usuario crea que tiene copias al día.
@@ -368,7 +368,7 @@ def restore():
 
 @sync_bp.route('/auto', methods=['POST'])
 def set_auto():
-    """Enciende/apaga la copia semanal automática."""
+    """Enciende/apaga la copia diaria automática."""
     body = request.get_json(silent=True) or {}
     set_prefs({'sync_auto': bool(body.get('enabled', True))})
     return jsonify(_backend.status())

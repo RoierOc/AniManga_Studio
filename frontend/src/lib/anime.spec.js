@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { currentSeason, isCurrentSeason, shiftSeason } from './anime'
+import { currentSeason, isCurrentSeason, shiftSeason, batchInfo, isEpisodePlayable, animeEpLabel } from './anime'
 
 describe('shiftSeason', () => {
   it('retrocede y avanza dentro del mismo año', () => {
@@ -25,5 +25,24 @@ describe('shiftSeason', () => {
     const a = { season: 'FALL', season_year: 2025 }
     expect(isCurrentSeason(a, pasada)).toBe(true)
     expect(isCurrentSeason(a, currentSeason(new Date('2026-08-04')))).toBe(false)
+  })
+})
+
+
+describe('batch granular', () => {
+  it('no propaga un batch parcial a episodios sin archivo seleccionado', () => {
+    const episodes = [
+      { num: 0, in_qbt: true, progress: 50 },
+      { num: 1, season: 2, file_index: 8, in_qbt: true, progress: 100 },
+      { num: 2, in_qbt: false, progress: 0 },
+    ]
+    const batch = batchInfo(episodes)
+    expect(batch.hasSelection).toBe(true)
+    expect(isEpisodePlayable(episodes[1], batch)).toBe(true)
+    expect(isEpisodePlayable(episodes[2], batch)).toBe(false)
+  })
+
+  it('identifica visualmente la temporada cuando se repite el episodio', () => {
+    expect(animeEpLabel({}, { num: 1, season: 2 })).toBe('T2 · Episodio 1')
   })
 })

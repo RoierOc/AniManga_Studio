@@ -1,5 +1,6 @@
 <script setup>
 import { animeThumb } from '@/lib/img'
+import { animeEpisodeKey } from '@/lib/anime'
 // Overlay del reproductor NATIVO embebido (libmpv en la shell). El vídeo lo pinta
 // mpv por DEBAJO del WebView2 transparente (ver desktop/native): aquí va SOLO la UI,
 // con la MISMA estética/funcionalidad que PlayerOverlay.vue (clases wp__*). "Airspace":
@@ -87,7 +88,7 @@ function isPlayable(e) {
 }
 // Miniatura: la del episodio si la trae (series, vía Sonarr), si no la ruta de anime.
 function epThumb(e) {
-  return e.thumb || (np.value?.anime?.id ? animeThumb(np.value.anime.id, e.num) : '')
+  return e.thumb || (np.value?.anime?.id ? animeThumb(np.value.anime.id, e.num, e.ep_type, animeEpisodeKey(e)) : '')
 }
 
 function fmt(s) {
@@ -274,7 +275,7 @@ let cueTimer = null
 
 // Miniatura del siguiente episodio para la tarjeta (misma fuente que el panel).
 const nextThumb = computed(() =>
-  (np.value && nextEp.value) ? animeThumb(np.value.anime.id, nextEp.value.num) : '')
+  (np.value && nextEp.value) ? animeThumb(np.value.anime.id, nextEp.value.num, nextEp.value.ep_type, animeEpisodeKey(nextEp.value)) : '')
 
 function armCueTimer(ms) {
   clearTimeout(cueTimer)

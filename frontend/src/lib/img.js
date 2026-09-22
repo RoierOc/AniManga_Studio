@@ -57,9 +57,11 @@ function dpx(cssWidth) {
  * en unos y no en otros, que es peor que no ponerlo. */
 export const THUMB_W = 960
 
-export function animeThumb(animeId, num, epType) {
-  const esp = epType === 'special' ? 'special=1&' : ''
-  return `/api/anime/thumb/${animeId}/${num}?${esp}v=${THUMB_W}`
+export function animeThumb(animeId, num, epType, episodeKey = '') {
+  const params = new URLSearchParams({ v: THUMB_W })
+  if (epType === 'special') params.set('special', '1')
+  if (episodeKey) params.set('episode_key', episodeKey)
+  return `/api/anime/thumb/${animeId}/${num}?${params}`
 }
 
 /* Blur-up placeholder: ~28px thumb (~1 KB) served from the proxy's disk cache,

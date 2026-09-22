@@ -52,6 +52,8 @@ def _resolve_item_path(item: dict):
         int(item.get("episode", 1) or 1),
         item.get("anime_id", "") or "",
         item.get("local_path", "") or "",
+        item.get("relative_path", "") or "",
+        item.get("episode_key", "") or "",
     )
 
 

@@ -41,12 +41,21 @@ const FORMAT_LABEL = {
 }
 export const animeFormatLabel = (f) => FORMAT_LABEL[f] || f || 'TV'
 
+export function animeEpisodeKey(ep = {}) {
+  if (ep.episode_key) return String(ep.episode_key)
+  if (ep.season != null && ep.num != null) {
+    return `s${String(ep.season).padStart(2, '0')}e${String(ep.num).padStart(3, '0')}`
+  }
+  return String(ep.num ?? '')
+}
+
 export function animeEpLabel(anime, ep) {
   const fmt = anime?.format
+  const seasonPrefix = ep.season ? `T${ep.season} · ` : ''
   if (fmt === 'MOVIE') return 'Película'
   if (fmt === 'MUSIC') return 'Video Musical'
-  if (ep.ep_type === 'special') return ep.title || `Especial ${ep.num}`
-  return ep.title && ep.in_local ? cleanEpTitle(ep.title, ep.num) : `Episodio ${ep.num}`
+  if (ep.ep_type === 'special') return ep.title || `${seasonPrefix}Especial ${ep.num}`
+  return ep.title && ep.in_local ? `${seasonPrefix}${cleanEpTitle(ep.title, ep.num)}` : `${seasonPrefix}Episodio ${ep.num}`
 }
 
 // Strip release-group noise from a filename to a readable episode title.
@@ -62,12 +71,13 @@ function cleanEpTitle(raw, num) {
 export function batchInfo(episodes = []) {
   const batchEp = episodes.find(e => e.num === 0)
   const hasBatch = !!(batchEp && batchEp.in_qbt)
-  const batchDone = !!(batchEp && batchEp.progress >= 100)
-  return { batchEp, hasBatch, batchDone }
+  const hasSelection = episodes.some(e => e.file_index !== undefined && e.file_index !== null)
+  const batchDone = !hasSelection && !!(batchEp && batchEp.progress >= 100)
+  return { batchEp, hasBatch, hasSelection, batchDone }
 }
 
 export function isEpisodePlayable(ep, batch) {
-  return (ep.in_qbt && ep.progress >= 100) || ep.in_local || (ep.num > 0 && batch.batchDone)
+  return (ep.in_qbt && ep.progress >= 100) || ep.in_local || (!batch.hasSelection && ep.num > 0 && batch.batchDone)
 }
 
 export function nextUnwatchedEp(anime) {

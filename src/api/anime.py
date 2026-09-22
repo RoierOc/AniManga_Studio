@@ -84,6 +84,7 @@ _seasonal_cache: dict = {}
 _seasonal_refreshing: set = set()   # claves con refresh en background en vuelo
 _SEASONAL_DISK_TTL = 6 * 3600       # tolerancia del stale servido desde disco
 _qbt_files_cache: dict = {}   # info_hash → {ep_num: stem}; immutable per torrent, pruned to live hashes
+_qbt_file_details_cache: dict = {}  # info_hash → {file_index: raw qBittorrent file}
 _SEASONAL_TTL = 600  # 10 min
 
 _THUMBS_DIR = _Path.home() / '.cache' / 'manga-upscaler' / 'thumbs'
@@ -260,7 +261,7 @@ def _buscar_video(anime: dict, episode: int, subpath: str = '') -> str:
 
 
 # Los campos de ESTADO del usuario: al fundir dos entradas se unen, nunca se pisan.
-_LIB_DICTS = ('episodes', 'watched', 'positions', 'durations', 'episode_overrides')
+_LIB_DICTS = ('episodes', 'watched', 'positions', 'durations', 'episode_overrides', 'batch_files')
 
 
 def _fundir_entradas(base: dict, otra: dict) -> dict:
@@ -1436,6 +1437,67 @@ def _es_a4k(f) -> bool:
     return _Path(f).stem.endswith(_A4K_SUF)
 
 
+def _qbt_file_path(torrent: dict, relative_path: str) -> str:
+    """Resolve a qBittorrent file name relative to its save_path safely.
+
+    qBittorrent's `/torrents/files` names include the torrent root directory,
+    while `content_path` already points inside that directory. Prefer save_path
+    so a multi-file torrent does not duplicate the root folder.
+    """
+    rel = str(relative_path or '').replace('\\', '/')
+    if not rel or rel.startswith('/') or re.match(r'^[A-Za-z]:/', rel):
+        return ''
+    base_raw = str(torrent.get('save_path') or torrent.get('content_path') or '').strip()
+    if not base_raw:
+        return ''
+    if _is_wsl() and re.match(r'^[A-Za-z]:[/\\]', base_raw):
+        base_raw = _win_to_wsl(base_raw)
+    base = _Path(base_raw)
+    if base.is_file():
+        return _prefiere_a4k(str(base)) if base.name == _Path(rel).name else ''
+    if not base.is_dir():
+        return ''
+    candidate = (base / rel).resolve()
+    try:
+        if base.resolve() not in candidate.parents or not candidate.is_file():
+            return ''
+    except OSError:
+        return ''
+    return _prefiere_a4k(str(candidate))
+
+
+def _local_relative_file(anime: dict, relative_path: str) -> str:
+    """Find a persisted torrent-relative file in registered local folders."""
+    rel = str(relative_path or '').replace('\\', '/')
+    if not rel or rel.startswith('/') or re.match(r'^[A-Za-z]:/', rel):
+        return ''
+    for folder in _carpetas_de(anime):
+        base = _Path(folder)
+        if not base.is_dir():
+            continue
+        candidate = (base / rel).resolve()
+        try:
+            if base.resolve() in candidate.parents and candidate.is_file():
+                return _prefiere_a4k(str(candidate))
+        except OSError:
+            continue
+    return ''
+
+
+def _local_episode_identity(ep: dict) -> tuple[str, int | None]:
+    """Infer a stable season-aware key for an unregistered local scan item."""
+    raw = str(ep.get('original_path') or ep.get('path') or '').replace('\\', '/')
+    match = re.search(r'(?<![A-Za-z0-9])S(\d{1,2})E(\d{1,4})(?!\d)', raw, re.I)
+    if match:
+        season, number = int(match.group(1)), int(match.group(2))
+        return f's{season:02d}e{number:03d}', season
+    folder = re.search(r'(?:season|temporada)[ _.-]*(\d{1,2})', raw, re.I)
+    if folder:
+        season = int(folder.group(1))
+        return f's{season:02d}e{int(ep["num"]):03d}', season
+    return str(ep['num']), None
+
+
 def _find_video(content_path: str, episode: int, subpath: str = '', adivinar: bool = True) -> str:
     """El vídeo de un episodio dentro de `content_path`.
 
@@ -1925,7 +1987,7 @@ def _track_mpv_session(proc, wl_dir: str, anime_id: str, ep_str: str, duration: 
             _lib_write(lib)
             if not was_watched:   # solo la PRIMERA vez que pasa a visto (evita duplicados)
                 _history_append(anime_id, lib[anime_id].get('title', anime_id),
-                                int(ep_str), lib[anime_id].get('cover', ''))
+                                _episode_number(ep_str), lib[anime_id].get('cover', ''))
             print(f'[mpv] marked watched: anime={anime_id} ep={ep_str}', flush=True)
             push_sse_event('watched', anime_id=anime_id, ep_str=ep_str,
                            last_watched_at=now, watched=True,
@@ -2604,43 +2666,50 @@ def anime_library_get():
         if (ep_data.get('info_hash') or '').lower() in hash_map
     }
 
-    # files_map: info_hash → {episode_num: stem_filename}
-    # A torrent's file list is immutable once its metadata is known, so cache it per hash
-    # (keyed by info_hash) and only hit qBittorrent for hashes we haven't parsed yet.
-    # This avoids one /torrents/files request per torrent on every library refresh.
+    # Legacy map keeps the old numeric lookup. The detail map is the new lossless
+    # index keyed by qBittorrent's file index, so S01E01 and S02E01 never collide.
     files_map: dict = {}
+    file_details_map: dict = {}
     for ih in unique_hashes:
         cached = _qbt_files_cache.get(ih)
-        if cached is not None:
+        details = _qbt_file_details_cache.get(ih)
+        if cached is not None and details is not None:
             files_map[ih] = cached
+            file_details_map[ih] = details
             continue
         try:
             raw_files = _q('get', '/torrents/files', params={'hash': ih}).json()
+            details = {}
             ep_files: dict = {}
             for f in raw_files:
+                try:
+                    details[int(f.get('index'))] = f
+                except (TypeError, ValueError):
+                    continue
                 stem = _Path(f.get('name', '')).stem  # basename without extension
                 if not stem:
                     continue
                 ep_num = _parse_episode(stem)
                 if ep_num > 0 and ep_num not in ep_files:
-                    # First-match wins: for multi-season batches sorted alphabetically,
-                    # S01 files come before S02, so Season 1 title names are preferred.
+                    # Legacy fallback only; new selected records use file_index.
                     ep_files[ep_num] = stem
-            # If only one video file exists, store it under key -1 (single-file torrent)
             if not ep_files and len(raw_files) == 1:
                 ep_files[-1] = _Path(raw_files[0].get('name', '')).stem
             files_map[ih] = ep_files
-            # Only cache once we actually have files (a magnet still fetching metadata
-            # returns none — leave it uncached so we retry next time).
+            file_details_map[ih] = details
             if ep_files:
                 _qbt_files_cache[ih] = ep_files
+            if details:
+                _qbt_file_details_cache[ih] = details
         except Exception:
             files_map[ih] = {}
+            file_details_map[ih] = {}
     # Bound memory: forget cached hashes that are no longer in qBittorrent.
     if _qbt_files_cache:
         live = set(hash_map.keys())
         for h in [h for h in _qbt_files_cache if h not in live]:
             _qbt_files_cache.pop(h, None)
+            _qbt_file_details_cache.pop(h, None)
     result = []
     carpetas_nuevas: dict = {}
     qbt_local_cache: dict = {}
@@ -2665,11 +2734,17 @@ def anime_library_get():
         # NO debe ensombrecer el enlace por TORRENT: si no hay archivos locales reales,
         # caemos a la rama qBittorrent y el episodio queda enlazado/reproducible igual.
         local_eps = _escanear_carpetas(anime)
-        if local_eps:
+        has_granular = any(
+            e.get('from_batch_selection') and e.get('relative_path')
+            for e in (anime.get('episodes') or {}).values()
+        )
+        if local_eps and not has_granular:
             regular_count = sum(1 for ep in local_eps if ep.get('ep_type', 'episode') == 'episode')
             episodes_out = [
                 {
                     'num':        ep['num'],
+                    'episode_key': (f"s{int(ep.get('season') or 0):02d}e{ep['num']:03d}"
+                                    if ep.get('season') else str(ep['num'])),
                     # ⚠️ El título sale del ORIGINAL: el stem de una horneada acaba en `.a4k` y
                     # se colaba en el nombre visible del episodio.
                     'title':      _local_ep_title(_Path(ep.get('original_path') or ep['path']).stem,
@@ -2721,7 +2796,9 @@ def anime_library_get():
                 episodes_out.sort(key=lambda e: (e.get('ep_type', 'episode') != 'episode', e['num']))
 
             for e in episodes_out:
-                e['has_thumb'] = _thumb_key(anime_id, e['num'], e.get('ep_type') == 'special') in all_thumbs
+                e['has_thumb'] = _thumb_key(
+                    anime_id, e['num'], e.get('ep_type') == 'special', e.get('episode_key', '')
+                ) in all_thumbs
 
             result.append({
                 'id': anime_id,
@@ -2755,7 +2832,7 @@ def anime_library_get():
                 'last_watched_at': anime.get('last_watched_at', 0),
                 # El último episodio que tocaste. Va como número (0 = no hay dato, entradas
                 # anteriores a este campo) para que el front no tenga que parsear.
-                'last_ep': int(anime.get('last_ep') or 0),
+                'last_ep': _episode_number(anime.get('last_ep') or 0),
             })
             continue
 
@@ -2764,14 +2841,28 @@ def anime_library_get():
         ep_map = anime.get('episodes', {})
         episodes_out = []
         for ep_str, ep_data in ep_map.items():
-            try:
-                ep_num = int(ep_str)
-            except ValueError:
-                ep_num = -1
+            season = ep_data.get('season')
+            episode_key = str(ep_str)
+            key_match = re.fullmatch(r'[sS](\d{1,2})[eE](\d{1,4})', episode_key)
+            if key_match:
+                season = int(key_match.group(1)) if season is None else season
+                ep_num = int(key_match.group(2))
+            else:
+                try:
+                    ep_num = int(ep_str)
+                except (TypeError, ValueError):
+                    ep_num = int(ep_data.get('episode') or -1)
             ih = (ep_data.get('info_hash') or '').lower()
             qbt = hash_map.get(ih, {})
+            file_detail = None
+            if ep_data.get('file_index') is not None:
+                try:
+                    file_detail = file_details_map.get(ih, {}).get(int(ep_data['file_index']))
+                except (TypeError, ValueError):
+                    file_detail = None
             if qbt:
-                progress = round(qbt.get('progress', 0) * 100, 1)
+                file_progress = file_detail.get('progress') if file_detail else None
+                progress = round((file_progress if file_progress is not None else qbt.get('progress', 0)) * 100, 1)
                 state = qbt.get('state', 'unknown')
                 in_qbt = True
             else:
@@ -2779,13 +2870,15 @@ def anime_library_get():
                 state = 'missing'
                 in_qbt = False
 
-            # Prefer the actual filename from qBittorrent over the stored torrent title.
-            # For batch-pre-filled episodes don't fall back to the batch torrent name —
-            # it would show "[SubsPlease] Anime (01-12) [Batch]" for every episode.
+            # Selected batch records carry their exact relative path. Legacy records
+            # retain the numeric filename fallback for compatibility.
             ep_files = files_map.get(ih, {})
+            exact_title = _Path(ep_data.get('relative_path', '')).stem if ep_data.get('relative_path') else ''
             actual_title = (
-                ep_files.get(ep_num)          # exact episode match from qBt file list
-                or ep_files.get(-1)           # single-file torrent fallback
+                exact_title
+                or (file_detail and _Path(file_detail.get('name', '')).stem)
+                or ep_files.get(ep_num)
+                or ep_files.get(-1)
                 or (ep_data.get('title', '') if not ep_data.get('from_batch') else '')
             )
 
@@ -2793,26 +2886,45 @@ def anime_library_get():
             # si qBittorrent conservó otro `save_path`). En ese caso no perder el contrato local:
             # indexar el contenido una vez por hash y casar el episodio desde ese índice.
             local_ep = None
-            if qbt and qbt.get('progress', 0) >= 1:
+            # New selections resolve by the exact torrent path, not by episode number.
+            if qbt and ep_data.get('relative_path'):
+                video = _qbt_file_path(qbt, ep_data['relative_path'])
+                if video:
+                    original = original_de(video) if _es_a4k(video) else video
+                    local_ep = {'path': video, 'original_path': original,
+                                'filename': _Path(original).name, 'a4k': video != original}
+            if local_ep is None and ep_data.get('relative_path'):
+                video = _local_relative_file(anime, ep_data['relative_path'])
+                if video:
+                    original = original_de(video) if _es_a4k(video) else video
+                    local_ep = {'path': video, 'original_path': original,
+                                'filename': _Path(original).name, 'a4k': video != original}
+            if (local_ep is None and qbt and qbt.get('progress', 0) >= 1
+                    and not ep_data.get('from_batch_selection')):
                 if ih not in qbt_local_cache:
                     qbt_local_cache[ih] = _qbt_local_episodes(qbt)
                 local_map = qbt_local_cache[ih]
                 ep_type = ep_data.get('ep_type', 'episode')
                 local_ep = (local_map.get((ep_type, ep_num))
                             or local_map.get(('episode', ep_num)))
-                # Single-file torrents se registran primero como -1 y se renombran a 1 más abajo.
                 if local_ep is None and ep_num in (-1, 0, 1):
                     local_ep = local_map.get(('episode', -1))
             local_path = local_ep.get('path', '') if local_ep else ''
             original_path = local_ep.get('original_path', '') if local_ep else ''
 
+            identity_key = episode_key
             episodes_out.append({
                 'num': ep_num,
+                'season': season,
+                'episode_key': identity_key,
                 'title': actual_title,
                 'info_hash': ih,
+                'file_index': ep_data.get('file_index'),
+                'relative_path': ep_data.get('relative_path', ''),
+                'from_batch_selection': bool(ep_data.get('from_batch_selection')),
                 'progress': progress,
                 'state': state,
-                'size': qbt.get('size', 0) if qbt else 0,
+                'size': (file_detail.get('size', 0) if file_detail else (qbt.get('size', 0) if qbt else 0)),
                 'in_qbt':     in_qbt,
                 'in_local':   bool(local_path),
                 'local_path': local_path,
@@ -2820,12 +2932,41 @@ def anime_library_get():
                 'a4k':         bool(local_ep and local_ep.get('a4k')),
                 'filename':    local_ep.get('filename', '') if local_ep else '',
                 'added_on':   ep_data.get('added_on', 0),
-                'watched':    bool(watched_map.get(ep_str)),
-                'resume_pos': positions_map.get(ep_str, 0),
-                'duration':   durations_map.get(ep_str, 0),
+                'watched':    bool(watched_map.get(identity_key)),
+                'resume_pos': positions_map.get(identity_key, 0),
+                'duration':   durations_map.get(identity_key, 0),
             })
 
-        episodes_out.sort(key=lambda e: (e['num'] < 0, e['num']))
+        # A granular batch must not hide unrelated local episodes. Merge only
+        # scan results whose exact path was not already claimed by a selected slot.
+        claimed_local = {str(e.get('local_path') or '') for e in episodes_out if e.get('local_path')}
+        claimed_keys = {str(e.get('episode_key') or '') for e in episodes_out}
+        for local in local_eps:
+            path = str(local.get('path') or '')
+            if not path or path in claimed_local:
+                continue
+            local_key, local_season = _local_episode_identity(local)
+            if local_key in claimed_keys:
+                continue
+            num = int(local.get('num') or 0)
+            episodes_out.append({
+                'num': num, 'season': local_season, 'episode_key': local_key,
+                'title': _local_ep_title(_Path(local.get('original_path') or path).stem,
+                                         local.get('ep_type', 'episode')),
+                'info_hash': '', 'file_index': None, 'relative_path': '',
+                'from_batch_selection': False, 'progress': 100, 'state': 'local',
+                'size': local.get('size', 0), 'in_qbt': False, 'in_local': True,
+                'local_path': path, 'original_path': local.get('original_path', ''),
+                'a4k': bool(local.get('a4k')), 'filename': local.get('filename', ''),
+                'added_on': 0, 'watched': bool(watched_map.get(local_key)),
+                'resume_pos': positions_map.get(local_key, 0),
+                'duration': durations_map.get(local_key, 0),
+                'ep_type': local.get('ep_type', 'episode'),
+            })
+            claimed_local.add(path)
+            claimed_keys.add(local_key)
+
+        episodes_out.sort(key=lambda e: (e['num'] < 0, e.get('season') or 0, e['num']))
 
         # Movies / single-episode entries: a single-file torrent is registered under
         # episode -1 (unknown). Treat the downloaded file as episode 1 so the detail
@@ -2842,13 +2983,14 @@ def anime_library_get():
                 episodes_out = [e for e in episodes_out if e['num'] > 0]
 
         if total > 0:
-            known = {e['num'] for e in episodes_out}
+            known_ep_nums = {e['num'] for e in episodes_out
+                             if e.get('ep_type', 'episode') == 'episode'}
             for n in range(1, total + 1):
-                if n not in known:
+                if n not in known_ep_nums:
                     episodes_out.append({'num': n, 'title': '', 'info_hash': '', 'progress': 0,
                                          'state': 'missing', 'size': 0, 'in_qbt': False, 'added_on': 0,
-                                         'watched': False})
-            episodes_out.sort(key=lambda e: (e['num'] < 0, e['num']))
+                                         'watched': False, 'episode_key': str(n)})
+            episodes_out.sort(key=lambda e: (e['num'] < 0, e.get('season') or 0, e['num']))
 
         # Propagate batch (ep 0) state to individual placeholder episodes so that
         # card dots and the eplist show the correct download/done state even when
@@ -2857,7 +2999,7 @@ def anime_library_get():
             (e for e in episodes_out if e['num'] == 0 and e.get('in_qbt')),
             None
         )
-        if batch_ep:
+        if batch_ep and not batch_ep.get('from_batch_selection'):
             batch_ih   = batch_ep['info_hash']
             ep_files_b = files_map.get(batch_ih, {})
             local_map_b = qbt_local_cache.get(batch_ih, {})
@@ -2879,18 +3021,27 @@ def anime_library_get():
                         e['filename'] = local_ep.get('filename', '')
 
         for e in episodes_out:
-            e['has_thumb'] = _thumb_key(anime_id, e['num'], e.get('ep_type') == 'special') in all_thumbs
+            e['has_thumb'] = _thumb_key(
+                anime_id, e['num'], e.get('ep_type') == 'special', e.get('episode_key', '')
+            ) in all_thumbs
 
-        done_count = sum(1 for e in episodes_out if e.get('in_qbt') and e.get('num', 0) > 0)
+        done_count = sum(1 for e in episodes_out if e.get('num', 0) > 0
+                         and (e.get('in_local') or (e.get('in_qbt') and e.get('progress', 0) >= 100)))
         # Espacio en disco de la serie: sumar el tamaño de cada torrent UNA sola vez
         # (dedup por info_hash) — un batch comparte hash entre todos sus episodios, así
         # que sumarlo por episodio inflaría el total.
         _sizes = {}
+        disk_size = 0
         for e in episodes_out:
+            if e.get('in_local') and e.get('file_index') is not None:
+                disk_size += e.get('size') or 0
+                continue
             _ih = e.get('info_hash')
             if _ih and e.get('in_qbt') and e.get('size'):
                 _sizes[_ih] = e['size']
-        disk_size = sum(_sizes.values())
+            elif e.get('in_local') and not _ih:
+                disk_size += e.get('size') or 0
+        disk_size += sum(_sizes.values())
         # added_at fallback: earliest episode added_on (for entries created before this field existed)
         ep_times = [ep.get('added_on', 0) for ep in ep_map.values() if ep.get('added_on', 0) > 0]
         added_at_fallback = min(ep_times) if ep_times else 0
@@ -2920,7 +3071,7 @@ def anime_library_get():
             'disk_size': disk_size,
             'added_at': anime.get('added_at', added_at_fallback),
             'last_watched_at': anime.get('last_watched_at', 0),
-            'last_ep': int(anime.get('last_ep') or 0),
+            'last_ep': _episode_number(anime.get('last_ep') or 0),
         })
     if carpetas_nuevas:
         # ⚠️ Se persiste el DELTA sobre una relectura, nunca el `lib` de arriba: esta carga
@@ -3058,32 +3209,61 @@ def anime_library_remove(anime_id):
 
 
 @anime_bp.route('/library/<anime_id>/episode/<int:ep_num>', methods=['DELETE'])
-def anime_episode_remove(anime_id, ep_num):
+@anime_bp.route('/library/<anime_id>/episode/<path:episode_key>', methods=['DELETE'])
+def anime_episode_remove(anime_id, ep_num=None, episode_key=None):
     lib = _lib_read()
     data = request.get_json(silent=True) or {}
     if anime_id not in lib:
         return jsonify({'error': 'not found'}), 404
-    ep_str = str(ep_num)
+    ep_str = str(episode_key if episode_key is not None else ep_num)
     ep_data = lib[anime_id].get('episodes', {}).get(ep_str, {})
+    episode_num = _episode_number(ep_str)
     if data.get('delete_files'):
-        ih = (ep_data or {}).get('info_hash', '')
-        if ih:
+        granular = bool(ep_data.get('from_batch_selection') and ep_data.get('file_index') is not None)
+        refs = [value for key, value in lib[anime_id].get('episodes', {}).items()
+                if key != ep_str and value.get('info_hash') == ep_data.get('info_hash')]
+        if granular:
+            # Never delete a multi-file torrent for one selected episode. Lower
+            # only this file's priority, remove its exact local file, and leave
+            # every sibling episode and the torrent itself intact.
             try:
-                _q('post', '/torrents/delete', data={'hashes': ih, 'deleteFiles': 'true'})
-            except Exception:
-                pass
-        # Y el fichero LOCAL, que puede existir sin torrent: al quitar el torrent conservando
-        # los datos (lo normal para dejar de sembrar) ya no hay info_hash por el que borrarlo.
-        # Sin esto, "borrar episodio" quitaba la ficha y dejaba el vídeo ocupando disco EN
-        # SILENCIO — el usuario cree que ha liberado espacio y no.
-        if _carpetas_de(lib[anime_id]):
+                ih = (ep_data.get('info_hash') or '').lower()
+                if ih:
+                    _q('post', '/torrents/filePrio', data={
+                        'hash': ih, 'id': str(int(ep_data['file_index'])), 'priority': '0'})
+                    rows = _q('get', '/torrents/info', params={'hashes': ih}).json()
+                    row = rows[0] if rows else {}
+                    video = _qbt_file_path(row, ep_data.get('relative_path', ''))
+                else:
+                    video = ''
+                if not video:
+                    video = _local_relative_file(lib[anime_id], ep_data.get('relative_path', ''))
+                if video:
+                    _Path(video).unlink(missing_ok=True)
+            except Exception as e:
+                record_error('anime', e, op='episode_remove_granular', anime=anime_id, ep=ep_str)
+            batch_hash = (ep_data.get('info_hash') or '').lower()
+            batch_files = lib[anime_id].get('batch_files', {}).get(batch_hash, {})
+            batch_files.get('files', {}).pop(str(ep_data['file_index']), None)
+        else:
+            # Legacy behavior is retained only when this is the last library
+            # reference to the torrent. Shared hashes must never be deleted as
+            # a side effect of removing one episode.
+            ih = (ep_data.get('info_hash') or '').lower()
+            if ih and not refs:
+                try:
+                    _q('post', '/torrents/delete', data={'hashes': ih, 'deleteFiles': 'true'})
+                except Exception as e:
+                    record_error('anime', e, op='episode_remove_torrent', anime=anime_id, ep=ep_str)
             try:
-                video = _buscar_video(lib[anime_id], int(ep_num))
+                video = _local_relative_file(lib[anime_id], ep_data.get('relative_path', ''))
+                if not video:
+                    video = _buscar_video(lib[anime_id], episode_num)
                 if video:
                     _Path(video).unlink(missing_ok=True)
             except Exception as e:
                 record_error('anime', e, op='episode_remove_local', anime=anime_id, ep=ep_str)
-        _borrar_thumbs(anime_id, ep_num)
+        _borrar_thumbs(anime_id, ep_str)
     lib[anime_id].get('episodes', {}).pop(ep_str, None)
     _lib_write(lib)
     return jsonify({'ok': True})
@@ -3355,6 +3535,7 @@ def anime_clear_episodes(anime_id):
         _borrar_thumbs(anime_id)
 
     entry['episodes'] = {}
+    entry.pop('batch_files', None)
     _lib_write(lib)
     return jsonify({'ok': True})
 
@@ -3740,7 +3921,7 @@ def resolve_episode_video(data: dict):
     episode    = data.get('episode', -1)
     local_path = (data.get('local_path') or '').strip()
     anime_id   = data.get('anime_id', '')
-    ep_str     = str(episode)
+    ep_str     = str(data.get('episode_key') or episode)
 
     if local_path:
         video = _find_video(local_path, int(episode))
@@ -3769,12 +3950,39 @@ def resolve_episode_video(data: dict):
     if not content_path:
         return None, ('no content path from qBittorrent', 404)
     ep_subpath = ''
+    lib_ep = {}
     if anime_id:
-        lib_ep = (_lib_read().get(anime_id) or {}).get('episodes', {}).get(ep_str, {})
+        entry = (_lib_read().get(anime_id) or {})
+        episode_map = entry.get('episodes') or {}
+        lib_ep = episode_map.get(ep_str) or episode_map.get(str(episode), {})
+        # A multi-season selected slot is stored as s02e001 while the UI keeps
+        # num=1 for episode controls. Match the exact relative path first, then
+        # the season+episode identity, never merely the first episode 1.
+        wanted_rel = (data.get('relative_path') or '').replace('\\', '/')
+        if wanted_rel:
+            lib_ep = next((value for value in episode_map.values()
+                           if value.get('relative_path', '').replace('\\', '/') == wanted_rel), lib_ep)
+        if not lib_ep and data.get('episode') is not None:
+            try:
+                wanted_num = int(data['episode'])
+                lib_ep = next((value for key, value in episode_map.items()
+                               if int(value.get('episode', -1)) == wanted_num
+                               and value.get('from_batch_selection')), {})
+            except (TypeError, ValueError):
+                pass
         if not lib_ep:
-            lib_ep = (_lib_read().get(anime_id) or {}).get('episodes', {}).get('0', {})
+            lib_ep = episode_map.get('0', {})
         ep_subpath = lib_ep.get('subpath', '')
-    video = _find_video(content_path, int(episode), ep_subpath)
+    relative_path = (data.get('relative_path') or lib_ep.get('relative_path') or '').strip()
+    if relative_path:
+        video = _qbt_file_path(torrents[0], relative_path)
+        # A legacy qBittorrent record may not expose save_path. Keep the old
+        # content_path/episode fallback, but never let a missing exact path
+        # silently resolve to another episode when the exact file is present.
+        if not video:
+            video = _find_video(content_path, int(episode), ep_subpath)
+    else:
+        video = _find_video(content_path, int(episode), ep_subpath)
     if not video:
         return None, (f'no video file found in: {content_path}', 404)
     return video, None
@@ -3968,7 +4176,11 @@ def anime_scrub_info(anime_id, episode):
     Generar es idempotente y va en un hilo: la primera vez el móvil pedirá miniaturas que aún no
     existen y recibirá 404, que es exactamente lo que el cliente ya sabe tratar.
     """
-    video, err = video_de_biblioteca(anime_id, episode)
+    episode_key = request.args.get('episode_key', '')
+    season = request.args.get('season', '').strip()
+    if not episode_key and season.isdigit():
+        episode_key = f's{int(season):02d}e{episode:03d}'
+    video, err = video_de_biblioteca(anime_id, episode, episode_key)
     if err:
         return jsonify({'error': err[0]}), err[1]
     key = _scrub_key(video)
@@ -3988,30 +4200,51 @@ def anime_native_scrub(key, idx):
     return ('', 404)
 
 
-def video_de_biblioteca(anime_id: str, episode: int):
-    """Ruta del vídeo de un episodio SIN que el cliente diga ninguna ruta.
+def video_de_biblioteca(anime_id: str, episode: int, episode_key: str = ''):
+    """Resolve a library episode without accepting arbitrary client paths.
 
-    `resolve_episode_video` acepta `local_path` del cuerpo de la petición, y eso está bien para el
-    front del PC (que ya corre en la máquina) pero NO para un cliente de la red: servir bytes de
-    una ruta que elige quien llama es leer cualquier fichero del PC por HTTP. Aquí la ruta sale de
-    la biblioteca del servidor, así que lo único que el móvil controla es *qué episodio de qué
-    serie que ya existe*. Devuelve (ruta|None, (msg, status)|None).
+    `episode_key` is optional for legacy/mobile callers. Granular callers send
+    `sXXeYYY`, which prevents two seasons' episode 1 from collapsing together.
     """
     anime = (_lib_read() or {}).get(str(anime_id))
     if not anime:
         return None, ('anime not in library', 404)
-    ep_str = str(episode)
-    ep = (anime.get('episodes') or {}).get(ep_str) or {}
-    datos = {'anime_id': str(anime_id), 'episode': episode}
-    # La carpeta que de verdad contiene ESTE episodio: la serie puede estar repartida.
+    ep_map = anime.get('episodes') or {}
+    key = str(episode_key or '').strip() or str(episode)
+    ep = ep_map.get(key) or ep_map.get(str(episode)) or {}
+    datos = {'anime_id': str(anime_id), 'episode': episode, 'episode_key': key}
+
+    if ep.get('info_hash'):
+        datos.update({
+            'info_hash': ep['info_hash'],
+            'file_index': ep.get('file_index'),
+            'relative_path': ep.get('relative_path', ''),
+        })
+        video, error = resolve_episode_video(datos)
+        if video:
+            return video, None
+        local = _local_relative_file(anime, ep.get('relative_path', ''))
+        if local:
+            return local, None
+        # qBittorrent is optional after a file is safely in the library. For
+        # legacy records, retain the established folder scan as a final fallback.
+        if not ep.get('from_batch_selection'):
+            local = _buscar_video(anime, episode)
+            if local:
+                return local, None
+        return video, error
+
+    # Local-only legacy records may not have a torrent identity. Prefer the
+    # exact file path stored by the scanner; otherwise retain numeric fallback.
+    local_file = ep.get('local_path', '')
+    if local_file and _Path(local_file).is_file():
+        datos['local_path'] = local_file
+        return resolve_episode_video(datos)
     carpeta = next((c for c in _carpetas_de(anime) if _find_video(c, episode)), '')
     if carpeta:
         datos['local_path'] = carpeta
-    elif ep.get('info_hash'):
-        datos['info_hash'] = ep['info_hash']
-    else:
-        return None, ('episode has no source', 404)
-    return resolve_episode_video(datos)
+        return resolve_episode_video(datos)
+    return None, ('episode has no source', 404)
 
 
 @anime_bp.route('/stream/<anime_id>/<int:episode>')
@@ -4022,7 +4255,11 @@ def anime_stream(anime_id, episode):
     activa las peticiones por rango, y sin rangos no hay saltar al minuto 12 — mpv tendría que
     tragarse el MKV entero desde el principio.
     """
-    video, err = video_de_biblioteca(anime_id, episode)
+    episode_key = request.args.get('episode_key', '')
+    season = request.args.get('season', '').strip()
+    if not episode_key and season.isdigit():
+        episode_key = f's{int(season):02d}e{episode:03d}'
+    video, err = video_de_biblioteca(anime_id, episode, episode_key)
     if err:
         return jsonify({'error': err[0]}), err[1]
     return send_file(video, conditional=True)
@@ -4119,7 +4356,7 @@ def anime_native_resolve():
         if err:
             return jsonify({'error': err[0]}), err[1]
         anime_id = data.get('anime_id', '')
-        ep_str   = str(data.get('episode', -1))
+        ep_str   = str(data.get('episode_key') or data.get('episode', -1))
         if data.get('start_pos') is not None:
             resume = float(data['start_pos'])
         elif anime_id:
@@ -4154,7 +4391,7 @@ def anime_native_progress():
         data = request.get_json(silent=True) or {}
         validate_and_log(NativeProgressBody, data, "anime/native/progress")
         anime_id = data.get('anime_id', '')
-        ep_str   = str(data.get('episode', -1))
+        ep_str   = str(data.get('episode_key') or data.get('episode', -1))
         position = float(data.get('position', 0))
         duration = float(data.get('duration', 0))
         ended    = bool(data.get('ended', False))
@@ -4188,7 +4425,7 @@ def anime_native_progress():
             _lib_write(lib)
             if not was_watched:   # solo la PRIMERA vez que pasa a visto (evita duplicados)
                 _history_append(anime_id, lib[anime_id].get('title', anime_id),
-                                int(ep_str), lib[anime_id].get('cover', ''))
+                                _episode_number(ep_str), lib[anime_id].get('cover', ''))
             push_sse_event('watched', anime_id=anime_id, ep_str=ep_str,
                            last_watched_at=now, watched=True,
                            duration=int(duration), from_mpv=True)
@@ -4358,10 +4595,20 @@ def _fetch_seasonal(season, year, sort_by, gql_sort):
     return {'season': season, 'year': year, 'sort': sort_by, 'results': results}
 
 
+def _episode_number(value) -> int:
+    match = re.fullmatch(r'[sS]\d{1,2}[eE](\d{1,4})', str(value or ''))
+    if match:
+        return int(match.group(1))
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 @anime_bp.route('/library/<anime_id>/watched', methods=['POST'])
 def anime_watched_toggle(anime_id):
     data = request.get_json(silent=True) or {}
-    episode = str(data.get('episode', -1))
+    episode = str(data.get('episode_key') or data.get('episode', -1))
     lib = _lib_read()
     if anime_id not in lib:
         return jsonify({'error': 'anime not found'}), 404
@@ -4373,7 +4620,7 @@ def anime_watched_toggle(anime_id):
         watched[episode] = True
         lib[anime_id]['last_watched_at'] = int(time.time())
         _history_append(anime_id, lib[anime_id].get('title', anime_id),
-                        int(episode), lib[anime_id].get('cover', ''))
+                        _episode_number(episode), lib[anime_id].get('cover', ''))
         state = True
     _lib_write(lib)
     from api.runtime import push_sse_event
@@ -4401,9 +4648,10 @@ def _secs_to_hms(secs: float) -> str:
 _THUMB_W = 960
 
 
-def _thumb_key(anime_id, episode, is_special: bool) -> str:
+def _thumb_key(anime_id, episode, is_special: bool, episode_key: str = '') -> str:
+    identity = str(episode_key or episode).replace('/', '_')
     sp = 'sp' if is_special else ''
-    return f'{anime_id}_{sp}{episode}_w{_THUMB_W}.jpg'
+    return f'{anime_id}_{sp}{identity}_w{_THUMB_W}.jpg'
 
 
 def _extraer_fotograma(video: str, dest, seek_secs: float) -> None:
@@ -4529,60 +4777,48 @@ def _extraer_fotograma_util(video: str, dest, duration: float) -> None:
 def anime_thumb(anime_id, episode):
     _THUMBS_DIR.mkdir(parents=True, exist_ok=True)
     is_special = request.args.get('special') == '1'
-    cache_path  = _THUMBS_DIR / _thumb_key(anime_id, episode, is_special)
+    episode_key = request.args.get('episode_key', '').strip()
+    season = request.args.get('season', '').strip()
+    if not episode_key and season.isdigit():
+        episode_key = f's{int(season):02d}e{episode:03d}'
+    cache_path = _THUMBS_DIR / _thumb_key(anime_id, episode, is_special, episode_key)
 
-    # Serve cached thumb if it exists (no expiry — video files don't change)
     if cache_path.exists() and cache_path.stat().st_size > 0:
-        return send_file(str(cache_path), mimetype='image/jpeg',
-                         max_age=604800)  # 7 days
+        return send_file(str(cache_path), mimetype='image/jpeg', max_age=604800)
 
     lib = _lib_read()
     anime = lib.get(anime_id)
     if not anime:
         return ('', 404)
 
-    # Local-path anime: find video directly from folder
-    if _carpetas_de(anime):
-        if is_special:
-            scanned  = _escanear_carpetas(anime)
-            specials = [e for e in scanned if e.get('ep_type') == 'special']
-            matched  = next((e for e in specials if e['num'] == episode), None)
-            video    = matched['path'] if matched else ''
-        else:
-            video = _buscar_video(anime, episode)
-        if not video:
-            return ('', 404)
-    else:
-        ep_map = anime.get('episodes', {})
-        ep_data = ep_map.get(str(episode)) or ep_map.get('0') or {}
-        info_hash = (ep_data.get('info_hash') or '').lower()
-        if not info_hash:
-            return ('', 404)
-        try:
-            torrents = _q('get', '/torrents/info', params={'hashes': info_hash}).json()
-        except Exception:
-            return ('', 502)
-        if not torrents:
-            batch_hash = (ep_map.get('0') or {}).get('info_hash', '').lower()
-            if batch_hash and batch_hash != info_hash:
-                try:
-                    torrents = _q('get', '/torrents/info', params={'hashes': batch_hash}).json()
-                except Exception:
-                    pass
-        if not torrents:
-            return ('', 404)
-        # Descargando todavía: el punto medio del vídeo son piezas que aún no han llegado. Ni se
-        # intenta — el fotograma saldría embadurnado y se quedaría cacheado para siempre.
-        if (torrents[0].get('progress') or 0) < 1:
-            return ('', 404)
-        content_path = torrents[0].get('content_path') or torrents[0].get('save_path', '')
-        if not content_path:
-            return ('', 404)
-        video = _find_video(content_path, episode)
-        if not video:
-            return ('', 404)
+    ep_data = (anime.get('episodes') or {}).get(episode_key)
+    if not ep_data:
+        ep_data = (anime.get('episodes') or {}).get(str(episode)) or {}
 
-    # Get duration and seek to 50% (midpoint)
+    if is_special and _carpetas_de(anime):
+        scanned = _escanear_carpetas(anime)
+        matched = next((e for e in scanned
+                        if e.get('ep_type') == 'special' and e['num'] == episode), None)
+        video = matched['path'] if matched else ''
+    elif ep_data.get('info_hash') or ep_data.get('relative_path'):
+        video, err = resolve_episode_video({
+            'anime_id': anime_id, 'episode': episode, 'episode_key': episode_key,
+            'info_hash': ep_data.get('info_hash', ''),
+            'file_index': ep_data.get('file_index'),
+            'relative_path': ep_data.get('relative_path', ''),
+        })
+        if err:
+            video = _local_relative_file(anime, ep_data.get('relative_path', ''))
+            if not video and not ep_data.get('from_batch_selection'):
+                video = _buscar_video(anime, episode)
+    elif _carpetas_de(anime):
+        video = _buscar_video(anime, episode)
+    else:
+        video = ''
+
+    if not video:
+        return ('', 404)
+
     duration = _ffprobe_duration(video)
     try:
         _extraer_fotograma_util(video, cache_path, duration)
@@ -4591,7 +4827,6 @@ def anime_thumb(anime_id, episode):
 
     if not cache_path.exists() or cache_path.stat().st_size == 0:
         return ('', 500)
-
     return send_file(str(cache_path), mimetype='image/jpeg', max_age=604800)
 
 
@@ -4834,23 +5069,12 @@ def anime_subtitles(anime_id, episode):
     if not anime:
         return jsonify([])
 
-    video = _buscar_video(anime, episode)
-    if not video:
-        ep_map = anime.get('episodes', {})
-        ep_data = ep_map.get(str(episode)) or {}
-        ih = (ep_data.get('info_hash') or '').lower()
-        if not ih:
-            return jsonify([])
-        try:
-            torrents = _q('get', '/torrents/info', params={'hashes': ih}).json()
-        except Exception:
-            return jsonify([])
-        if not torrents:
-            return jsonify([])
-        content_path = torrents[0].get('content_path') or torrents[0].get('save_path', '')
-        video = _find_video(content_path, episode)
-
-    if not video:
+    episode_key = request.args.get('episode_key', '')
+    season = request.args.get('season', '').strip()
+    if not episode_key and season.isdigit():
+        episode_key = f's{int(season):02d}e{episode:03d}'
+    video, err = video_de_biblioteca(anime_id, episode, episode_key)
+    if err or not video:
         return jsonify([])
     return jsonify(_find_subtitles(video))
 

@@ -10,7 +10,7 @@ import zipfile
 import urllib.request as _ur
 import urllib.parse as _up
 from pathlib import Path
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, has_request_context, request, jsonify
 
 from api.config_store import get_secret  # runtime-editable API keys (Ajustes)
 from api import sub_lang  # detección robusta ES/LAT (código + título), fuente única de verdad
@@ -1404,10 +1404,32 @@ def _rebuild_ass(header: list, events: list, translated: list) -> str:
 
 # ── Main worker ───────────────────────────────────────────────────────────────
 
-def _resolve_video_path(info_hash: str, episode: int, anime_id: str, local_path: str = '') -> str | None:
-    """Resolve MKV path via local_path or qBittorrent."""
+def _resolve_video_path(info_hash: str, episode: int, anime_id: str, local_path: str = '',
+                        relative_path: str = '', episode_key: str = '') -> str | None:
+    """Resolve MKV path, preserving granular season/file identity.
+
+    Batch workers call this outside Flask's request context, so all identity
+    fields are explicit parameters; HTTP handlers may still obtain them below
+    for legacy callers.
+    """
     try:
-        from api.anime import _q, _find_video, _lib_read
+        from api.anime import _q, _find_video, _lib_read, resolve_episode_video
+        body = {}
+        if has_request_context():
+            body = request.get_json(silent=True) if request.is_json else {}
+            body = body or {}
+            relative_path = relative_path or request.values.get('relative_path', '')
+            episode_key = episode_key or request.values.get('episode_key', '')
+        relative_path = (relative_path or body.get('relative_path', '')).strip()
+        episode_key = (episode_key or body.get('episode_key', '')).strip()
+        if anime_id and (relative_path or episode_key):
+            video, error = resolve_episode_video({
+                'anime_id': anime_id, 'episode': episode, 'episode_key': episode_key,
+                'info_hash': info_hash, 'relative_path': relative_path,
+                'local_path': local_path,
+            })
+            if video:
+                return video
         if local_path:
             return _find_video(local_path, episode)
         # Fallback: check library for local_path
@@ -1419,7 +1441,8 @@ def _resolve_video_path(info_hash: str, episode: int, anime_id: str, local_path:
         torrents = _q('get', '/torrents/info', params={'hashes': info_hash}).json()
         if not torrents and anime_id:
             lib = _lib_read()
-            batch_hash = (lib.get(anime_id) or {}).get('episodes', {}).get('0', {}).get('info_hash', '')
+            episodes = (lib.get(anime_id) or {}).get('episodes', {})
+            batch_hash = (episodes.get(episode_key) or episodes.get('0') or {}).get('info_hash', '')
             if batch_hash and batch_hash != info_hash:
                 torrents = _q('get', '/torrents/info', params={'hashes': batch_hash}).json()
         if not torrents:

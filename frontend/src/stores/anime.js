@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { onSSE } from '@/lib/sse'
 import { useUiStore } from './ui'
-import { nextUnwatchedEp, isSpanishOrMulti, isEnglishSub } from '@/lib/anime'
+import { nextUnwatchedEp, animeEpisodeKey, isSpanishOrMulti, isEnglishSub } from '@/lib/anime'
 import { vtGo, marcarTarjeta } from '@/lib/vt'
 import { isNative, send as nativeSend, onMessage as onNativeMessage } from '@/lib/nativeBridge'
 
@@ -208,6 +208,7 @@ export const useAnimeStore = defineStore('anime', {
     epFetch: {},                 // per-episode deep-fetch state: epNum → 'loading' | 'done'
     addingHashes: [],            // keys currently being added to qbt
     addedHashes: [],             // keys just added (transient ✓)
+    batchSelector: null,          // { torrent, animeId, hash, status, files, error }
 
     // ── Player web embebido (estilo Crunchyroll) ─────────────────────────
     playerMode: localStorage.getItem('anime-player-mode') || 'web', // 'web' | 'mpv' | 'native'
@@ -888,8 +889,8 @@ export const useAnimeStore = defineStore('anime', {
         return this.openPlayer(anime, ep, startPos)
       }
       const base = ep.in_local
-        ? { anime_id: anime.id, episode: ep.num, local_path: ep.local_path, sub_file: subFile }
-        : { anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash, sub_file: subFile }
+        ? { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), local_path: ep.local_path, sub_file: subFile }
+        : { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), info_hash: ep.info_hash, file_index: ep.file_index, relative_path: ep.relative_path, sub_file: subFile }
       const body = startPos > 0 ? { ...base, start_pos: startPos } : base
       try {
         await api.post('/api/anime/play', body)
@@ -951,8 +952,8 @@ export const useAnimeStore = defineStore('anime', {
       this._ensureNativeSub()
 
       const base = ep.in_local
-        ? { anime_id: anime.id, episode: ep.num, local_path: ep.local_path }
-        : { anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash }
+        ? { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), local_path: ep.local_path }
+        : { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), info_hash: ep.info_hash, file_index: ep.file_index, relative_path: ep.relative_path }
       const body = startPos > 0 ? { ...base, start_pos: startPos } : base
       let res
       try {
@@ -1108,6 +1109,7 @@ export const useAnimeStore = defineStore('anime', {
       api.post('/api/anime/native/progress', {
         anime_id: np.anime.id,
         episode: np.ep.num,
+        episode_key: animeEpisodeKey(np.ep),
         position: np.pos,
         duration: np.duration,
         ended,
@@ -1184,6 +1186,8 @@ export const useAnimeStore = defineStore('anime', {
       const p = new URLSearchParams({
         anime_id: String(np.anime?.id ?? ''),
         episode: String(np.ep.num ?? 1),
+        episode_key: animeEpisodeKey(np.ep),
+        relative_path: np.ep.relative_path || '',
         ...(np.ep.in_local ? { local_path: np.ep.local_path || '' } : { info_hash: np.ep.info_hash || '' }),
         font: s.font || '', size: s.size || '', bold: s.bold || '',
         outline: s.outline || '', shadow: s.shadow || '',
@@ -1298,7 +1302,8 @@ export const useAnimeStore = defineStore('anime', {
         // una copia con distinto identificador) para que la mutación sea reactiva en TODA la app.
         const anime = this.library.find(a => a.id === np.anime.id || a.id === np.anime.al_id
                                           || a.al_id === np.anime.id || a.al_id === np.anime.al_id)
-        const ep = anime && (anime.episodes || []).find(e => String(e.num) === String(np.ep.num))
+        const epKey = animeEpisodeKey(np.ep)
+        const ep = anime && (anime.episodes || []).find(e => animeEpisodeKey(e) === epKey)
         if (ep) {
           const pos = Math.floor(np.pos || 0)
           // Visto SOLO si realmente llegó al final: duración creíble (>2 min) y abandonó faltando
@@ -1331,8 +1336,8 @@ export const useAnimeStore = defineStore('anime', {
       }
       this.player = { anime, ep, sess: null, loading: true, error: '', startPos, audio, forceTranscode }
       const base = ep.in_local
-        ? { anime_id: anime.id, episode: ep.num, local_path: ep.local_path }
-        : { anime_id: anime.id, episode: ep.num, info_hash: ep.info_hash }
+        ? { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), local_path: ep.local_path }
+        : { anime_id: anime.id, episode: ep.num, episode_key: animeEpisodeKey(ep), info_hash: ep.info_hash, file_index: ep.file_index, relative_path: ep.relative_path }
       // ¿Puede este navegador decodificar HEVC (Main10)? Si sí, el backend COPIA
       // el stream sin recodificar (cero pérdida) en vez de transcodificar.
       const hevcOk = typeof MediaSource !== 'undefined'
@@ -1376,10 +1381,11 @@ export const useAnimeStore = defineStore('anime', {
       ep.watched = !was
       if (!was) ep.resume_pos = 0
       const libAnime = this.library.find(a => a.id === anime.id)
-      const libEp = libAnime?.episodes?.find(e => e.num === ep.num)
+      const key = animeEpisodeKey(ep)
+      const libEp = libAnime?.episodes?.find(e => animeEpisodeKey(e) === key)
       if (libEp) { libEp.watched = !was; if (!was) libEp.resume_pos = 0 }
       try {
-        await api.post(`/api/anime/library/${anime.id}/watched`, { episode: ep.num })
+        await api.post(`/api/anime/library/${anime.id}/watched`, { episode: ep.num, episode_key: key })
       } catch (_) {
         ep.watched = was; if (libEp) libEp.watched = was
         useUiStore().toast('No se pudo actualizar', 'error')
@@ -1388,7 +1394,7 @@ export const useAnimeStore = defineStore('anime', {
 
     async deleteEpisode(anime, ep) {
       try {
-        await api.del(`/api/anime/library/${anime.id}/episode/${ep.num}`, { body: { delete_files: true } })
+        await api.del(`/api/anime/library/${anime.id}/episode/${encodeURIComponent(animeEpisodeKey(ep))}`, { body: { delete_files: true } })
         await this.loadLibrary(true)
       } catch (_) { useUiStore().toast('No se pudo borrar', 'error') }
     },
@@ -1404,7 +1410,7 @@ export const useAnimeStore = defineStore('anime', {
       let deleted = 0, failed = 0
       for (const ep of eps) {
         try {
-          await api.del(`/api/anime/library/${anime.id}/episode/${ep.num}`, { body: { delete_files: true } })
+          await api.del(`/api/anime/library/${anime.id}/episode/${encodeURIComponent(animeEpisodeKey(ep))}`, { body: { delete_files: true } })
           deleted++
         } catch (_) { failed++ }
       }
@@ -1434,13 +1440,14 @@ export const useAnimeStore = defineStore('anime', {
     async loadEpInfo(anime, ep) {
       // Solo alterna el panel; la descripción sale de epMeta (TMDB). Se conserva epInfo como
       // reserva (filler/recap y sinopsis de MAL) para animes sin match TMDB.
-      const key = `${anime.id}_${ep.num}`
+      const epKey = animeEpisodeKey(ep)
+      const key = `${anime.id}_${epKey}`
       this.epInfoOpen = this.epInfoOpen === key ? null : key
       // Si TMDB ya nos dio descripción para este episodio, no pedimos nada a MAL.
-      if (this.epMeta[anime.id]?.[ep.num]?.overview) return
+      if (this.epMeta[anime.id]?.[epKey]?.overview || this.epMeta[anime.id]?.[ep.num]?.overview) return
       const malId = anime?.mal_id
       if (!malId) return
-      const jkey = `${malId}_${ep.num}`
+      const jkey = `${malId}_${epKey}`
       if (this.epInfo[jkey] !== undefined) return
       this.epInfo[jkey] = null
       try { this.epInfo[jkey] = await api.get(`/api/anime/episode_info/${malId}/${ep.num}`) || {} }
@@ -1502,7 +1509,9 @@ export const useAnimeStore = defineStore('anime', {
     _onWatched(ev) {
       const anime = this.library.find(a => a.id === ev.anime_id)
       if (!anime) return
-      const ep = (anime.episodes || []).find(e => String(e.num) === String(ev.ep_str))
+      const ep = (anime.episodes || []).find(e =>
+        animeEpisodeKey(e) === String(ev.ep_str) ||
+        (!String(ev.ep_str).startsWith('s') && String(e.num) === String(ev.ep_str)))
       if (ep) {
         ep.watched = ev.watched !== undefined ? !!ev.watched : true
         ep.resume_pos = 0
@@ -1524,7 +1533,9 @@ export const useAnimeStore = defineStore('anime', {
     _onPosition(ev) {
       const anime = this.library.find(a => a.id === ev.anime_id)
       if (!anime) return
-      const ep = (anime.episodes || []).find(e => String(e.num) === String(ev.ep_str))
+      const ep = (anime.episodes || []).find(e =>
+        animeEpisodeKey(e) === String(ev.ep_str) ||
+        (!String(ev.ep_str).startsWith('s') && String(e.num) === String(ev.ep_str)))
       if (ep) {
         ep.resume_pos = ev.position || 0
         if (ev.duration) ep.duration = ev.duration
@@ -1553,6 +1564,12 @@ export const useAnimeStore = defineStore('anime', {
           const h = (e.info_hash || '').toLowerCase()
           const t = h && byHash[h]
           if (!t) continue
+          // A selected batch episode has file-level progress. The global torrent
+          // percentage must never paint every S01E01/S02E01 alike.
+          if (e.file_index !== undefined && e.file_index !== null) {
+            if (e.in_qbt && e.progress < 100) active = true
+            continue
+          }
           if ((e.progress ?? 0) < 100 && t.progress >= 100) justDone = true
           e.progress = t.progress; e.in_qbt = true
           if (t.progress < 100) active = true
@@ -1566,6 +1583,14 @@ export const useAnimeStore = defineStore('anime', {
         let torrents = []
         try { torrents = await api.get('/api/anime/qbt/list') || [] } catch (_) { return }
         this.qbtTorrents = torrents
+        const granular = this.library.some(a => (a.episodes || []).some(e => e.file_index !== undefined && e.file_index !== null && e.in_qbt))
+        if (granular) {
+          // /qbt/list only has torrent-level progress. Reload the compact library
+          // so the backend can read /torrents/files for the selected file indices.
+          await this.loadLibrary(true)
+          if (!this.hasActiveQbt()) { clearInterval(dlPoll); dlPoll = null }
+          return
+        }
         const { active, justDone } = this._patchDlProgress(torrents)
         if (justDone) await this.loadLibrary(true)   // recoge in_local + estado final
         if (!active && !this.hasActiveQbt()) { clearInterval(dlPoll); dlPoll = null }
@@ -1748,7 +1773,84 @@ export const useAnimeStore = defineStore('anime', {
     },
     submitSearch() { clearTimeout(this._searchTimer); this.searchAnime() },
 
-    closeTorrents() { this.torrentAnime = null },
+    closeTorrents() { this.torrentAnime = null; this.batchSelector = null },
+    closeBatchSelector() { this.batchSelector = null },
+    async _ensureAnimeLibrary(anime) {
+      const current = this.library.find(a =>
+        (anime.al_id && a.al_id === anime.al_id) ||
+        (anime.mal_id && a.mal_id === anime.mal_id) ||
+        (anime.title && a.title === anime.title))
+      if (current) return current
+      const d = await api.post('/api/anime/library/add', {
+        al_id: anime.al_id, mal_id: anime.mal_id, title: anime.title,
+        title_romaji: anime.title_romaji || '', cover: anime.cover || '', banner: anime.banner || '',
+        total_episodes: typeof anime.episodes === 'number' ? anime.episodes : (anime.total_episodes || null),
+        format: anime.format || '', track_only: true,
+      })
+      await this.loadLibrary(true)
+      return this.library.find(a => d.id ? a.id === d.id :
+        ((anime.al_id && a.al_id === anime.al_id) || (anime.mal_id && a.mal_id === anime.mal_id)))
+    },
+    async openBatchSelector(torrent) {
+      const ui = useUiStore()
+      if (!this.qbt.connected) { ui.toast('qBittorrent no conectado — ve a Descargas para configurarlo', 'error'); return }
+      if (this.batchSelector) return
+      const anime = this.torrentAnime
+      this.batchSelector = { torrent, animeId: '', hash: (torrent.info_hash || '').toLowerCase(), status: 'adding', files: [], error: '' }
+      let selectorHash = this.batchSelector.hash
+      try {
+        const entry = await this._ensureAnimeLibrary(anime)
+        if (!entry?.id) throw new Error('No se pudo identificar la ficha del anime')
+        this.batchSelector.animeId = entry.id
+        const added = await api.post('/api/anime/batch/add', {
+          magnet: torrent.magnet || '', torrent_url: torrent.torrent_url || '',
+          info_hash: torrent.info_hash || '', anime_id: entry.id,
+        })
+        if (added.hash) this.batchSelector.hash = added.hash
+        if (!this.batchSelector.hash) throw new Error('Nyaa no devolvió el hash del torrent')
+        selectorHash = this.batchSelector.hash
+        this.batchSelector.status = 'waiting_metadata'
+        const batchHash = this.batchSelector.hash
+        for (let attempt = 0; attempt < 30; attempt++) {
+          if (this.batchSelector?.hash !== batchHash) return
+          let files
+          try {
+            files = await api.get(`/api/anime/batch/files?hash=${encodeURIComponent(batchHash)}`)
+          } catch (e) {
+            if (e?.status !== 404) throw e
+            files = { metadata_pending: true, files: [] }
+          }
+          if (!files.metadata_pending && files.files?.length) {
+            if (this.batchSelector?.hash !== batchHash) return
+            this.batchSelector = { ...this.batchSelector, status: 'ready', files: files.files, groups: files.groups || [], error: '' }
+            return
+          }
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
+        throw new Error('qBittorrent aún no ha entregado la metadata del torrent')
+      } catch (e) {
+        if (this.batchSelector?.hash !== selectorHash) return
+        this.batchSelector = { ...this.batchSelector, status: 'error', error: e?.message || 'No se pudo leer el batch' }
+      }
+    },
+    async applyBatchSelection(fileIds) {
+      const selector = this.batchSelector
+      if (!selector || selector.status !== 'ready') return
+      const ui = useUiStore()
+      this.batchSelector = { ...selector, status: 'applying', error: '' }
+      try {
+        await api.post('/api/anime/batch/apply', {
+          hash: selector.hash, anime_id: selector.animeId, selected_file_ids: fileIds,
+        })
+        const key = selector.torrent.info_hash || selector.torrent.torrent_url
+        if (key && !this.addedHashes.includes(key)) this.addedHashes.push(key)
+        ui.toast('Batch configurado ✓', 'ok')
+        this.batchSelector = null
+        await this.loadLibrary(true)
+      } catch (e) {
+        this.batchSelector = { ...selector, status: 'error', error: e?.message || 'No se pudieron aplicar las prioridades' }
+      }
+    },
 
     // extraQueries are fetched with category '1_0' (all anime) to also surface Spanish/Non-English
     // group releases that the user's selected category (1_2 = English-translated) would miss.
@@ -1945,6 +2047,7 @@ export const useAnimeStore = defineStore('anime', {
       return !!(lib?.episodes || []).find(e => e.info_hash === key && e.in_qbt)
     },
     async addToQbt(torrent) {
+      if (torrent.episode === 0) return this.openBatchSelector(torrent)
       const ui = useUiStore()
       if (!this.qbt.connected) { ui.toast('qBittorrent no conectado — ve a Descargas para configurarlo', 'error'); return }
       const key = torrent.info_hash || torrent.torrent_url
@@ -1977,7 +2080,7 @@ export const useAnimeStore = defineStore('anime', {
     },
 
     /* ── Subtitles ──────────────────────────────────────────────────────── */
-    subKey(anime, ep) { return `${anime.id}_${ep.ep_type === 'special' ? 'sp' : 'ep'}${ep.num}` },
+    subKey(anime, ep) { return `${anime.id}_${ep.ep_type === 'special' ? 'sp' : 'ep'}${animeEpisodeKey(ep)}` },
 
     /* `opts.onPick(choice)` convierte el modal en un SELECTOR: en vez de lanzar la traducción al
      * instante, devuelve la fuente elegida a quien lo abrió (lo usa el lote para dejar que elijas
@@ -1988,7 +2091,7 @@ export const useAnimeStore = defineStore('anime', {
       this.subFetching = key
       const loadId = ui.toast('Buscando subtítulos en español…', 'loading', 0)
       const p = new URLSearchParams({
-        info_hash: ep.info_hash || '', episode: ep.num, anime_id: anime.id || '',
+        info_hash: ep.info_hash || '', episode: ep.num, episode_key: animeEpisodeKey(ep), relative_path: ep.relative_path || '', anime_id: anime.id || '',
         ep_type: ep.ep_type || 'episode', ...(ep.local_path ? { local_path: ep.local_path } : {}),
       })
       // Series/películas occidentales no están en la biblioteca de anime: mandan su propia
@@ -2028,7 +2131,7 @@ export const useAnimeStore = defineStore('anime', {
       this.subTasks[key] = { status: 'injecting', progress: 50, message: 'Descargando subtítulo…' }
       try {
         const d = await api.post('/api/subtitle/inject_direct', {
-          info_hash: ep.info_hash || '', episode: ep.num, anime_id: anime.id,
+          info_hash: ep.info_hash || '', episode: ep.num, episode_key: animeEpisodeKey(ep), relative_path: ep.relative_path || '', anime_id: anime.id,
           ...(ep.local_path ? { local_path: ep.local_path } : {}), external_sub: subInfo,
         })
         if (d.error) { this.subTasks[key] = { status: 'error', progress: 0, message: d.error }; ui.toast(d.error, 'error'); return }
@@ -2047,7 +2150,7 @@ export const useAnimeStore = defineStore('anime', {
       this.subTrackModal = null
       this.subTasks[key] = { status: 'starting', progress: 0, message: 'Iniciando…' }
       const body = {
-        info_hash: ep.info_hash || '', episode: ep.num, ep_type: ep.ep_type || 'episode',
+        info_hash: ep.info_hash || '', episode: ep.num, episode_key: animeEpisodeKey(ep), relative_path: ep.relative_path || '', ep_type: ep.ep_type || 'episode',
         anime_id: anime.id, sub_index: subIndex, force,
         ...(ep.local_path ? { local_path: ep.local_path } : {}),
         ...(externalSub ? { external_sub: externalSub } : {}),
@@ -2099,7 +2202,7 @@ export const useAnimeStore = defineStore('anime', {
       this.subTasks[key] = { status: 'injecting', progress: 50, message: 'Re-inyectando…' }
       try {
         await api.post('/api/subtitle/reinject', {
-          info_hash: ep.info_hash || '', episode: ep.num, anime_id: anime.id,
+          info_hash: ep.info_hash || '', episode: ep.num, episode_key: animeEpisodeKey(ep), relative_path: ep.relative_path || '', anime_id: anime.id,
           ...(ep.local_path ? { local_path: ep.local_path } : {}), force: true,
         })
         this.subTasks[key] = { status: 'done', progress: 100, message: 'Re-inyectado ✓' }

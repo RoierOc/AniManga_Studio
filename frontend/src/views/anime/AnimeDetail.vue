@@ -3,7 +3,7 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { useUiStore } from '@/stores/ui'
 import { api } from '@/lib/api'
-import { ANIME_STATUS, animeFormatLabel, animeEpLabel, batchInfo, fmtCountdown, nextUnwatchedEp } from '@/lib/anime'
+import { ANIME_STATUS, animeFormatLabel, animeEpLabel, batchInfo, fmtCountdown, nextUnwatchedEp, animeEpisodeKey } from '@/lib/anime'
 import { imgProxy, imgThumb } from '@/lib/img'
 import { coverRGB, vivid } from '@/lib/coverColor'
 import { formatBytes } from '@/lib/format'
@@ -53,6 +53,7 @@ function openSubBatch() {
   const items = eps.map(e => ({
     episode: e.num, season: e.season || 1, title: e.title || '',
     anime_id: a.id, info_hash: e.info_hash || '', local_path: e.local_path || '',
+    relative_path: e.relative_path || '', episode_key: animeEpisodeKey(e),
     ep_type: e.ep_type || 'episode', titles,
   }))
   subbatch.openFor({ title: a.title, items })
@@ -127,8 +128,8 @@ const specials = computed(() => (anime.value?.episodes || []).filter(e => e.ep_t
  * acción de lote borra archivos, y marcar algo que no se puede borrar sería mentir. */
 const selectableEps = computed(() =>
   [...mainEps.value, ...specials.value].filter(e => e.in_local))
-const epSel = useMultiSelect(() => selectableEps.value.map(e => String(e.num)))
-const selectedEps = computed(() => selectableEps.value.filter(e => epSel.has(e.num)))
+const epSel = useMultiSelect(() => selectableEps.value.map(e => animeEpisodeKey(e)))
+const selectedEps = computed(() => selectableEps.value.filter(e => epSel.has(animeEpisodeKey(e))))
 const selectedBytes = computed(() => selectedEps.value.reduce((n, e) => n + (e.size || 0), 0))
 // Cambiar de serie no debe arrastrar la selección de la anterior.
 watch(() => anime.value?.id, () => epSel.clear())
@@ -176,7 +177,7 @@ const resumePct = computed(() => {
 // Vista de episodios: cuadrícula (actual) ⇄ lista. Persiste la preferencia.
 const epView = ref(localStorage.getItem('anime-epview') || 'grid')
 function setEpView(v) { epView.value = v; localStorage.setItem('anime-epview', v) }
-const isCurrent = (ep) => !!resumeEp.value && ep.num === resumeEp.value.num && ep.ep_type !== 'special'
+const isCurrent = (ep) => !!resumeEp.value && animeEpisodeKey(ep) === animeEpisodeKey(resumeEp.value) && ep.ep_type !== 'special'
 
 const countdown = computed(() => {
   const na = store.nextAiring[anime.value?.al_id]
@@ -452,19 +453,19 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
     </div>
 
     <div v-if="epView === 'list'" class="eplist">
-      <EpisodeRow v-for="ep in mainEps" :key="ep.num" :anime="anime" :ep="ep" :batch="batch" :current="isCurrent(ep)" :sel="epSel" />
+      <EpisodeRow v-for="ep in mainEps" :key="animeEpisodeKey(ep)" :anime="anime" :ep="ep" :batch="batch" :current="isCurrent(ep)" :sel="epSel" />
     </div>
     <div v-else class="epgrid">
-      <EpisodeCard v-for="ep in mainEps" :key="ep.num" :anime="anime" :ep="ep" :batch="batch" />
+      <EpisodeCard v-for="ep in mainEps" :key="animeEpisodeKey(ep)" :anime="anime" :ep="ep" :batch="batch" />
     </div>
 
     <template v-if="specials.length">
       <div class="epgrid__sep"><Icon name="spark" :size="14" /> Especiales / Extras</div>
       <div v-if="epView === 'list'" class="eplist">
-        <EpisodeRow v-for="ep in specials" :key="'sp-' + ep.num" :anime="anime" :ep="ep" :batch="batch" :sel="epSel" />
+        <EpisodeRow v-for="ep in specials" :key="'sp-' + animeEpisodeKey(ep)" :anime="anime" :ep="ep" :batch="batch" :sel="epSel" />
       </div>
       <div v-else class="epgrid">
-        <EpisodeCard v-for="ep in specials" :key="'sp-' + ep.num" :anime="anime" :ep="ep" :batch="batch" />
+        <EpisodeCard v-for="ep in specials" :key="'sp-' + animeEpisodeKey(ep)" :anime="anime" :ep="ep" :batch="batch" />
       </div>
     </template>
     <!-- Barra de lote: sólo existe mientras hay algo marcado. Flotante para que no empuje la

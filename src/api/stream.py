@@ -305,7 +305,7 @@ def stream_open():
     # el resume guardado. Se trocea directamente desde ahí para que reanudar sea
     # instantáneo aunque el archivo sea enorme (no hay que remuxar hasta ese punto).
     anime_id = data.get('anime_id', '')
-    ep_str = str(data.get('episode', ''))
+    ep_str = str(data.get('episode_key') or data.get('episode', ''))
     resume = 0.0
     if anime_id:
         resume = float((_lib_read().get(anime_id) or {})
@@ -529,11 +529,11 @@ def stream_progress():
     guarda posición para reanudar; al terminar (ended o ≥85%) marca visto.
     Body: {anime_id, episode, position, duration, ended?}"""
     from api.anime import (_lib_read, _lib_write, _history_append,
-                           _WATCHED_THRESHOLD, _guardar_posicion)
+                           _WATCHED_THRESHOLD, _guardar_posicion, _episode_number)
     from api.runtime import push_sse_event
     data = request.get_json(silent=True) or {}
     anime_id = data.get('anime_id', '')
-    ep_str = str(data.get('episode', ''))
+    ep_str = str(data.get('episode_key') or data.get('episode', ''))
     position = float(data.get('position', 0))
     duration = float(data.get('duration', 0))
     ended = bool(data.get('ended'))
@@ -555,7 +555,7 @@ def stream_progress():
         lib[anime_id]['last_watched_at'] = now
         _lib_write(lib)
         _history_append(anime_id, lib[anime_id].get('title', anime_id),
-                        int(float(ep_str)), lib[anime_id].get('cover', ''))
+                        _episode_number(ep_str), lib[anime_id].get('cover', ''))
         push_sse_event('watched', anime_id=anime_id, ep_str=ep_str,
                        last_watched_at=now, watched=True,
                        duration=int(duration), from_mpv=False)

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
-import { ANIME_STATUS, STATUS_ORDER, nextUnwatchedEp, currentSeason, isCurrentSeason, shiftSeason, SEASON_ES } from '@/lib/anime'
+import { ANIME_STATUS, STATUS_ORDER, nextUnwatchedEp, animeEpisodeKey, currentSeason, isCurrentSeason, shiftSeason, SEASON_ES } from '@/lib/anime'
 import { imgProxy, animeThumb } from '@/lib/img'
 import { ultimaTarjeta } from '@/lib/vt'
 import AnimeCard from '@/components/anime/AnimeCard.vue'
@@ -51,7 +51,7 @@ const cwItems = computed(() => store.continueWatching.map(cw => ({
   id: cw.anime.id,
   raw: cw,
   thumb: (cw.ep.in_local || (cw.ep.in_qbt && cw.ep.progress >= 100))
-    ? animeThumb(cw.anime.id, cw.ep.num)
+    ? animeThumb(cw.anime.id, cw.ep.num, cw.ep.ep_type, animeEpisodeKey(cw.ep))
     : (cw.anime.cover ? imgProxy(cw.anime.cover, RAIL_W) : ''),
   title: cw.anime.title,
   subtitle: `Episodio ${cw.ep.num}`,

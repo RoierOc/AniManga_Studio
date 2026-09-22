@@ -79,6 +79,7 @@ from api.webdav import webdav_bp
 from api.cbz import cbz_bp
 from api.anilist import anilist_bp
 from api.anime import anime_bp
+from api.anime_batch import anime_batch_bp
 from api.subtitle import subtitle_bp
 from api.subtitle_batch import subbatch_bp, load_batches
 from api.imgproxy import imgproxy_bp
@@ -105,6 +106,7 @@ app.register_blueprint(webdav_bp, url_prefix='/api/webdav')
 app.register_blueprint(cbz_bp, url_prefix='/api/cbz')
 app.register_blueprint(anilist_bp, url_prefix='/api/anilist')
 app.register_blueprint(anime_bp, url_prefix='/api/anime')
+app.register_blueprint(anime_batch_bp, url_prefix='/api/anime/batch')
 app.register_blueprint(anime_upscale_bp, url_prefix='/api/anime/upscale')
 app.register_blueprint(subtitle_bp, url_prefix='/api/subtitle')
 app.register_blueprint(subbatch_bp, url_prefix='/api/subtitle/batch')

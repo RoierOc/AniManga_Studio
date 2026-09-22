@@ -1,4 +1,4 @@
-"""La copia semanal automática decide sola: hay que fijar CUÁNDO guarda y cuándo no.
+"""La copia diaria automática decide sola: hay que fijar CUÁNDO guarda y cuándo no.
 
 Un respaldo que hay que acordarse de pulsar no es un respaldo, pero uno automático que se
 equivoca es peor: si guardara en cada latido llenaría el repo de commits vacíos, y si no
@@ -34,14 +34,14 @@ def _con_ultimo_guardado(monkeypatch, hace_segundos):
                         lambda: {'last_saved_at': int(time.time() - hace_segundos)})
 
 
-def test_guarda_cuando_ha_pasado_la_semana(entorno, monkeypatch):
-    _con_ultimo_guardado(monkeypatch, 8 * 86400)
+def test_guarda_cuando_ha_pasado_el_dia(entorno, monkeypatch):
+    _con_ultimo_guardado(monkeypatch, 2 * 86400)
     assert S._auto_tick() == 'saved'
     assert entorno == ['save']
 
 
 def test_NO_guarda_si_la_copia_es_reciente(entorno, monkeypatch):
-    _con_ultimo_guardado(monkeypatch, 2 * 86400)
+    _con_ultimo_guardado(monkeypatch, 12 * 3600)
     assert S._auto_tick() == 'fresh'
     assert entorno == [], 'un commit por latido llenaría el repo de ruido'
 
@@ -67,7 +67,7 @@ def test_viene_encendida_por_defecto(monkeypatch):
 
 def test_un_fallo_de_red_no_mata_el_hilo_y_queda_visible(entorno, monkeypatch):
     """Sin red el push revienta: eso se registra y se reintenta, no se traga."""
-    _con_ultimo_guardado(monkeypatch, 8 * 86400)
+    _con_ultimo_guardado(monkeypatch, 2 * 86400)
     monkeypatch.setattr(S._backend, 'save',
                         lambda: (_ for _ in ()).throw(RuntimeError('Push falló: sin red')))
     with pytest.raises(RuntimeError):

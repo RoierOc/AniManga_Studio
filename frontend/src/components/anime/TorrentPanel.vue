@@ -7,6 +7,7 @@ import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Select from '@/components/ui/Select.vue'
+import BatchFileSelector from '@/components/anime/BatchFileSelector.vue'
 
 const store = useAnimeStore()
 const a = computed(() => store.torrentAnime)
@@ -63,6 +64,7 @@ const keyOf = (t) => t.info_hash || t.torrent_url
 
 <template>
   <div v-if="a" class="tp">
+    <BatchFileSelector />
     <button class="tp__back" @click="goBack">
       <Icon name="chevron" :size="16" :style="{ transform: 'rotate(180deg)' }" /> Resultados
     </button>
@@ -166,7 +168,7 @@ const keyOf = (t) => t.info_hash || t.torrent_url
                     :disabled="store.isAdding(keyOf(t)) || store.isAdded(keyOf(t))" @click="store.addToQbt(t)">
               <Spinner v-if="store.isAdding(keyOf(t))" :size="13" />
               <Icon v-else :name="store.isAdded(keyOf(t)) ? 'check' : 'download'" :size="14" />
-              {{ store.isAdded(keyOf(t)) ? 'Añadido' : 'Descargar' }}
+              {{ t.episode === 0 ? 'Elegir archivos' : (store.isAdded(keyOf(t)) ? 'Añadido' : 'Descargar') }}
             </button>
           </div>
         </div>

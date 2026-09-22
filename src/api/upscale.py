@@ -19,8 +19,6 @@ from concurrent.futures import ThreadPoolExecutor
 from api.runtime import (
     write_json_atomic,
     UPSCALED_DIR,
-    manga_dir,
-    upscaled_dir,
     MODELS_DIR,
     build_task_id,
     normalize_chapter,
@@ -226,10 +224,14 @@ def is_color_page(img_pil, threshold=COLOR_DIFF_THRESHOLD, min_fraction=COLOR_PI
 
 
 def is_already_hires(img_pil, long_side=UPSCALE_MAX_INPUT_LONG_SIDE):
-    """True si la página ya está a resolución de lectura (lado mayor ≥ umbral) y NO debe
-    re-escalarse — evita el OOM de reconstruir un 4x sobre una página ya-4K (ver
-    UPSCALE_MAX_INPUT_LONG_SIDE)."""
-    return max(img_pil.width, img_pil.height) >= long_side
+    """True si la página ya tiene suficiente resolución VERTICAL para lectura.
+
+    El ancho no puede decidir esto: una doble página puede ser ancha por ser un
+    spread, pero seguir teniendo una altura de scan normal. Antes se usaba
+    ``max(width, height)`` y una página real de 3333x2448 se copiaba 1:1 sólo
+    por superar el umbral con su ancho.
+    """
+    return img_pil.height >= long_side
 
 
 # ── GPU worker ──────────────────────────────────────────────────────────────
@@ -564,6 +566,60 @@ def _upscale_tiled(img_pil, in_channels=1, tile_size=TILE_SIZE, overlap=TILE_OVE
     if c == 1:
         return Image.fromarray(result_np[:, :, 0], 'L')
     return Image.fromarray(result_np, 'RGB')
+
+
+def _upscale_horizontal_tiled(img_pil, in_channels=1, tile_size=TILE_SIZE,
+                              overlap=TILE_OVERLAP, scale=None, sub_key='eula'):
+    """Upscale a wide page in bounded horizontal strips.
+
+    ``_upscale_tiled`` reconstructs the complete output in ``out_sum`` and
+    ``out_wgt``. A wide RGB/adaptive page can exceed that RAM guard even when
+    its vertical resolution is still a normal manga scan. Process overlapping
+    strips instead, then remove the context overlap before concatenating. This
+    keeps the existing tile/model path and its seams while bounding the peak
+    reconstruction buffer to ``_MAX_RECON_MB``.
+    """
+    from PIL import Image
+
+    if scale is None:
+        scale = _gpu_scale[0]
+
+    h, w = img_pil.height, img_pil.width
+    if _projected_recon_mb(w, h, in_channels, scale) <= _MAX_RECON_MB:
+        return _upscale_tiled(img_pil, in_channels, tile_size, overlap, scale, sub_key)
+
+    # Compute a safe input width from the same conservative estimate used by
+    # the normal guard. Reserve overlap on both sides so each strip has the
+    # same context as the full-page tile pass.
+    per_input_pixel_mb = _projected_recon_mb(1, h, in_channels, scale)
+    max_context_width = max(1, int(_MAX_RECON_MB / max(per_input_pixel_mb, 1e-9)))
+    core_width = max(1, max_context_width - 2 * overlap)
+    while core_width > 1 and _projected_recon_mb(
+        min(w, core_width + 2 * overlap), h, in_channels, scale
+    ) > _MAX_RECON_MB:
+        core_width -= 1
+
+    pieces = []
+    for x0 in range(0, w, core_width):
+        x1 = min(w, x0 + core_width)
+        context_left = min(overlap, x0)
+        context_right = min(overlap, w - x1)
+        crop_left = x0 - context_left
+        crop_right = x1 + context_right
+        strip = img_pil.crop((crop_left, 0, crop_right, h))
+        scaled = _upscale_tiled(
+            strip, in_channels, tile_size, overlap, scale, sub_key
+        )
+        left = context_left * scale
+        right = scaled.width - context_right * scale
+        pieces.append(scaled.crop((left, 0, right, scaled.height)))
+
+    result = Image.new(pieces[0].mode, (sum(p.width for p in pieces), pieces[0].height))
+    x = 0
+    for piece in pieces:
+        result.paste(piece, (x, 0))
+        x += piece.width
+    return result
 
 
 # ── Status helpers ────────────────────────────────────────────────────────────
@@ -1364,8 +1420,19 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                 # con poca RAM libre eso copiaba páginas NORMALES sin escalar → "4K falso". Una
                 # página normal <3000px proyecta como mucho ~1.3GB y escala bien; solo se salta lo
                 # verdaderamente absurdo.
+                sub_key = _get_sub_key(img.height)
                 _proj = _projected_recon_mb(img.width, img.height, in_channels, _gpu_scale[0])
-                if _proj > _MAX_RECON_MB:
+                if _proj > _MAX_RECON_MB and img.width > img.height:
+                    # A double page can be wide without being hi-res vertically.
+                    # Keep the RAM guard, but process it in bounded overlapping
+                    # strips instead of copying the original 1:1.
+                    print(f"[upscale] página horizontal grande {img_path.name} {img.width}x{img.height} "
+                          f"→ franjas (recon~{_proj:.0f}MB > cap {_MAX_RECON_MB}MB)", flush=True)
+                    _t0 = _time.perf_counter()
+                    out_pil = _upscale_horizontal_tiled(
+                        img, in_channels=in_channels, sub_key=sub_key,
+                    )
+                elif _proj > _MAX_RECON_MB:
                     _av, _tot, _rss = _mem_snapshot()
                     print(f"[upscale] WARN página descomunal {img_path.name} {img.width}x{img.height} "
                           f"→ recon~{_proj:.0f}MB > cap {_MAX_RECON_MB}MB (RAM disp={_av}MB): "
@@ -1378,10 +1445,9 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                     shutil.copy2(img_path, out_path)
                     processed += 1
                     continue
-
-                sub_key = _get_sub_key(img.height)
-                _t0 = _time.perf_counter()
-                out_pil = _upscale_tiled(img, in_channels=in_channels, sub_key=sub_key)
+                else:
+                    _t0 = _time.perf_counter()
+                    out_pil = _upscale_tiled(img, in_channels=in_channels, sub_key=sub_key)
                 _dt = _time.perf_counter() - _t0
                 _page_times.append(_dt)
                 _avg = sum(_page_times) / len(_page_times)
