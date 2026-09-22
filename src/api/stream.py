@@ -11,6 +11,7 @@ cerrar o al abrir la siguiente.
 """
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -388,6 +389,8 @@ def stream_seek():
 
 @stream_bp.route('/hls/<sid>/<path:fn>')
 def stream_hls(sid, fn):
+    if not re.fullmatch(r'[0-9a-f]{12}', sid):
+        return 'session not found', 404
     sess = _SESS_ROOT / sid
     if not sess.is_dir():
         return 'session not found', 404
@@ -466,16 +469,15 @@ def _dump_fonts(video, fontdir):
 @stream_bp.route('/subs', methods=['POST'])
 def stream_subs():
     """Extrae una pista de subtítulos (y las fuentes adjuntas del MKV) para
-    renderizarla en el navegador. Body: {path, index} (índice relativo)."""
+    renderizarla en el navegador. Body: {index} (índice relativo)."""
     data = request.get_json(silent=True) or {}
-    video = data.get('path', '')
     idx = int(data.get('index', 0))
-    if not video or not Path(video).exists():
-        return jsonify({'error': 'path inválido'}), 400
-
     sid = _current.get('sid')
     if not sid:
         return jsonify({'error': 'sin sesión activa'}), 409
+    video = (_current.get('seek_ctx') or {}).get('video')
+    if not video or not Path(video).is_file():
+        return jsonify({'error': 'video de sesión no disponible'}), 409
     sess = _SESS_ROOT / sid
     subdir = sess / 'subs'
     subdir.mkdir(exist_ok=True)

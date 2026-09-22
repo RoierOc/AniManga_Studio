@@ -78,12 +78,31 @@ def test_alta_reenvia_el_objeto_del_lookup(client, monkeypatch):
     monkeypatch.setattr(M, '_post', lambda which, path, payload: (
         sent.update(payload) or {'id': 7, 'title': payload['title']}))
 
-    r = client.post('/api/media/add', json={'kind': 'series', 'id': 79126, 'profile': 4})
+    r = client.post('/api/media/add', json={
+        'kind': 'series', 'id': 79126, 'profile': 4, 'root': '/mnt/d/Media/TV',
+    })
     assert r.get_json() == {'ok': True, 'already': False, 'id': 7, 'title': 'The Wire'}
     assert sent['seasons'] == [{'seasonNumber': 1}] and sent['titleSlug'] == 'the-wire'
     assert sent['rootFolderPath'] == '/mnt/d/Media/TV' and sent['qualityProfileId'] == 4
     # Nada de descargar al dar de alta: ver los dos tests de "nada se descarga solo" más abajo.
     assert sent['addOptions'] == {'searchForMissingEpisodes': False, 'monitor': 'none'}
+
+
+def test_alta_rechaza_una_carpeta_raiz_que_no_ofrece_sonarr(client, monkeypatch):
+    import api.media as M
+    sent = []
+    monkeypatch.setattr(M, '_get', lambda which, path, **kw: (
+        [{'tvdbId': 79126, 'title': 'The Wire'}] if 'lookup' in path else
+        [{'path': '/mnt/d/Media/TV'}] if path == 'rootfolder' else
+        [{'id': 4, 'name': 'HD-1080p'}]))
+    monkeypatch.setattr(M, '_post', lambda *args: (sent.append(args) or {'id': 7}))
+
+    response = client.post('/api/media/add', json={
+        'kind': 'series', 'id': 79126, 'root': '/etc',
+    })
+
+    assert response.status_code == 400
+    assert not sent
 
 
 def test_alta_repetida_no_duplica(client, monkeypatch):

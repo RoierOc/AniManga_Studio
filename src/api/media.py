@@ -32,7 +32,6 @@ Endpoints (prefijo /api/media):
 from flask import Blueprint, jsonify, request
 from pathlib import Path
 import json
-import os
 import re
 import threading
 import time as _time
@@ -430,9 +429,13 @@ def media_add():
         profiles = _get(k["app"], "qualityprofile")
         if not roots or not profiles:
             return jsonify({"error": "Sonarr/Radarr sin carpeta raíz o perfil de calidad"}), 409
+        root = d.get("root")
+        root_paths = [r["path"] for r in roots]
+        if root and root not in root_paths:
+            return jsonify({"error": "carpeta raíz no configurada en Sonarr/Radarr"}), 400
 
         item.update({
-            "rootFolderPath": d.get("root") or roots[0]["path"],
+            "rootFolderPath": root or root_paths[0],
             "qualityProfileId": int(d.get("profile") or profiles[0]["id"]),
             "monitored": True,
             # NADA se descarga solo. Añadir a la biblioteca es un acto de catálogo, no una orden

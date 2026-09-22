@@ -421,7 +421,7 @@ async function setSubTrack(idx) {
   if (v) [...v.querySelectorAll('track')].forEach(t => t.remove())
   if (idx < 0 || !p.value?.sess) return
   try {
-    const r = await api.post('/api/stream/subs', { path: p.value.sess.path, index: idx })
+    const r = await api.post('/api/stream/subs', { index: idx })
     if (!p.value) return
     if (r.format === 'ass') {
       jassub = new JASSUB({
