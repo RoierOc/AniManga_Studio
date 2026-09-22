@@ -155,8 +155,8 @@ def guardia_origen():
         return None
     origin = request.headers.get('Origin', '').strip()
     referer = request.headers.get('Referer', '').strip()
-    declared = origin or referer
-    if not declared or _origen_loopback(declared):
+    declared = [value for value in (origin, referer) if value]
+    if not declared or all(_origen_loopback(value) for value in declared):
         return None
     return jsonify({
         'error': 'origen no permitido',

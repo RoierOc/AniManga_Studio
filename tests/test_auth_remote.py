@@ -120,6 +120,14 @@ def test_post_local_con_referer_loopback_si_pasa(cliente):
     assert r.status_code == 200
 
 
+def test_post_local_con_origin_loopback_y_referer_externo_no_pasa(cliente):
+    r = cliente.post('/api/loquesea', headers={
+        'Origin': 'http://localhost:5173',
+        'Referer': 'https://evil.example/form',
+    })
+    assert r.status_code == 403
+
+
 def test_hello_esta_abierto_porque_es_como_se_descubre_el_servidor(cliente):
     r = cliente.get('/api/hello', **_remoto())
     assert r.status_code == 200
