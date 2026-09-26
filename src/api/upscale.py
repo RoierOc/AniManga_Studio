@@ -11,6 +11,7 @@ import queue
 import json
 import os
 import shutil
+import tempfile
 import time
 import numpy as np
 from decimal import Decimal, InvalidOperation
@@ -153,15 +154,9 @@ _FULL_THROTTLE_MS = 0
 _gpu_throttle_ms = [GPU_THROTTLE_MS]   # mutable; worker reads this after each batch
 _gpu_tile_throttle_ms = [0]            # mutable; worker reads this between tiles
 
-# Límite de capítulos escalándose EN PARALELO (cualquier modo). Cada hilo de capítulo
-# mantiene sus PROPIOS buffers de reconstrucción (out_sum/out_wgt float32 ≈ 800MB para una
-# página B&N normal a 4x) además de sus tiles en VRAM. La RAM de WSL es ~6GB, así que varios
-# capítulos a la vez la agotan y tiran el WSL entero (OOM) — justo lo que pasa al "escalar un
-# manga" (upscaleChapters lanza /upscale_chapter en ráfaga, uno por capítulo). El worker GPU
-# es una cola ÚNICA, así que serializar capítulos NO baja el rendimiento real de la GPU: solo
-# acota el pico de RAM del sistema. Ajustable por env (subir solo si hay mucha RAM).
-_UPSCALE_MAX_PARALLEL = max(1, int(os.environ.get("UPSCALE_MAX_PARALLEL_CHAPTERS", "2")))
-_chapter_semaphore = threading.Semaphore(_UPSCALE_MAX_PARALLEL)
+# un único lock cubre modelo, throttling, worker y buffers por capítulo; separar
+# locks por modelo sólo tendría sentido si se admite más de un dispositivo GPU.
+_gpu_job_lock = threading.Lock()
 
 # Guardarraíl por página: si UNA sola página proyecta más de esto en buffers de
 # reconstrucción, se copia sin escalar (como una página ya-hi-res) en vez de arriesgar el OOM.
@@ -210,7 +205,39 @@ def _resize_save(img, path, downscale, quality):
     from PIL import Image as _Image
     if downscale > 1:
         img = img.resize((max(1, img.width // downscale), max(1, img.height // downscale)), _Image.LANCZOS)
-    img.save(path, quality=quality)
+    _atomic_publish(path, lambda tmp: img.save(tmp, format='JPEG', quality=quality))
+
+
+def _atomic_publish(path, write, remove_other_formats=True):
+    """Publica una página sólo tras terminar la escritura; conserva la anterior ante fallo."""
+    path = Path(path)
+    fd, temp_name = tempfile.mkstemp(prefix=f'.{path.stem}.', suffix='.part', dir=path.parent)
+    os.close(fd)
+    temp_path = Path(temp_name)
+    try:
+        write(temp_path)
+        os.replace(temp_path, path)
+    finally:
+        try:
+            temp_path.unlink()
+        except FileNotFoundError:
+            pass
+    if remove_other_formats:
+        for old in path.parent.glob(path.stem + '.*'):
+            if old != path:
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+
+
+def _copy_page_atomic(source, path, remove_other_formats=True):
+    _atomic_publish(path, lambda tmp: shutil.copy2(source, tmp), remove_other_formats)
+
+
+def _set_gpu_mode(eco):
+    _gpu_throttle_ms[0] = _ECO_THROTTLE_MS if eco else _FULL_THROTTLE_MS
+    _gpu_tile_throttle_ms[0] = _ECO_TILE_THROTTLE_MS if eco else 0
 
 
 def is_color_page(img_pil, threshold=COLOR_DIFF_THRESHOLD, min_fraction=COLOR_PIXEL_FRACTION):
@@ -262,6 +289,7 @@ class _TileFuture:
 _gpu_queue: queue.Queue = queue.Queue()
 _gpu_worker_thread = None
 _gpu_worker_lock = threading.Lock()
+_gpu_worker_stopping = False
 _gpu_worker_ready = threading.Event()
 _gpu_worker_error: list = [None]
 _gpu_in_channels: list = [1]   # updated by worker on startup
@@ -438,9 +466,14 @@ def _process_batch(pending, loaded_models, torch, time):
 
 def _ensure_gpu_worker():
     """Start GPU worker if not alive and wait until model is loaded."""
-    global _gpu_worker_thread
+    global _gpu_worker_thread, _gpu_worker_stopping
     with _gpu_worker_lock:
-        if _gpu_worker_thread is None or not _gpu_worker_thread.is_alive():
+        if _gpu_worker_thread and _gpu_worker_thread.is_alive():
+            if _gpu_worker_stopping:
+                raise RuntimeError('El worker GPU sigue deteniéndose; reintenta en unos segundos.')
+        else:
+            _gpu_worker_thread = None
+            _gpu_worker_stopping = False
             _gpu_worker_error[0] = None
             _gpu_worker_ready.clear()
             _gpu_worker_thread = threading.Thread(
@@ -716,6 +749,8 @@ def repair_chapter():
         title = data.get('title')
         chapter = data.get('chapter')
         mode = _mode_from(data)
+        with _gpu_worker_lock:
+            model_key = _active_model_key[0]
 
         if not title or chapter is None:
             return jsonify({'status': 'error', 'message': 'title and chapter required'}), 400
@@ -765,21 +800,14 @@ def repair_chapter():
             'percent': 0,
             'title': actual_folder,
             'chapter': chapter_norm,
-            'model': MODEL_REGISTRY[_active_model_key[0]]['label'],
+            'model': MODEL_REGISTRY[model_key]['label'],
             'repair': True,
         })
-
-        if mode == 'eco':
-            _gpu_throttle_ms[0] = _ECO_THROTTLE_MS
-            _gpu_tile_throttle_ms[0] = _ECO_TILE_THROTTLE_MS
-        else:
-            _gpu_throttle_ms[0] = _FULL_THROTTLE_MS
-            _gpu_tile_throttle_ms[0] = 0
 
         threading.Thread(
             target=thread_guard('upscale')(run_upscale_chapter),
             args=(input_folder, output_folder, missing_images, upscale_id),
-            kwargs={'eco': mode == 'eco'},
+            kwargs={'eco': mode == 'eco', 'model_key': model_key},
             daemon=True,
         ).start()
 
@@ -807,7 +835,6 @@ def get_models():
 @upscale_bp.route('/set_model', methods=['POST'])
 def set_model():
     """Switch upscale model. Restarts GPU worker to load new model(s)."""
-    global _gpu_worker_thread
     data = request.get_json(silent=True) or {}
     key = data.get('model', 'eula')
     if key not in MODEL_REGISTRY:
@@ -818,16 +845,14 @@ def set_model():
     if missing:
         return jsonify({'status': 'error', 'message': 'Archivos de modelo no encontrados', 'missing': missing}), 404
 
-    _active_model_key[0] = key
-
-    # Stop current worker so it reloads with new model on next request
-    with _gpu_worker_lock:
-        if _gpu_worker_thread and _gpu_worker_thread.is_alive():
-            _gpu_queue.put(None)   # poison pill
-            _gpu_worker_thread.join(timeout=10)
-        _gpu_worker_thread = None
-        _gpu_worker_ready.clear()
-        _gpu_worker_error[0] = None
+    if not _gpu_job_lock.acquire(blocking=False):
+        return jsonify({'status': 'busy', 'message': 'Hay un escalado en curso; cambia el modelo al terminar.'}), 409
+    try:
+        ok, message = _switch_model(key)
+    finally:
+        _gpu_job_lock.release()
+    if not ok:
+        return jsonify({'status': 'error', 'message': message}), 503
 
     return jsonify({'status': 'ok', 'model': key, 'label': cfg['label']})
 
@@ -854,13 +879,13 @@ def _fast_from(data):
 def set_upscale_mode():
     data = request.get_json(silent=True) or {}
     mode = _mode_from(data)
-    if mode == 'eco':
-        _gpu_throttle_ms[0] = _ECO_THROTTLE_MS
-        _gpu_tile_throttle_ms[0] = _ECO_TILE_THROTTLE_MS
-    else:
-        _gpu_throttle_ms[0] = _FULL_THROTTLE_MS
-        _gpu_tile_throttle_ms[0] = 0
-    return jsonify({'mode': mode, 'throttle_ms': _gpu_throttle_ms[0], 'tile_throttle_ms': _gpu_tile_throttle_ms[0]})
+    if not _gpu_job_lock.acquire(blocking=False):
+        return jsonify({'status': 'busy', 'message': 'El modo se aplicará al siguiente escalado.'}), 409
+    try:
+        _set_gpu_mode(mode == 'eco')
+        return jsonify({'mode': mode, 'throttle_ms': _gpu_throttle_ms[0], 'tile_throttle_ms': _gpu_tile_throttle_ms[0]})
+    finally:
+        _gpu_job_lock.release()
 
 
 @upscale_bp.route('/upscale_chapter', methods=['POST'])
@@ -881,7 +906,9 @@ def start_upscale_chapter(data):
         if not title or chapter is None:
             return {'status': 'error', 'message': 'title required'}, 400
 
-        cfg = MODEL_REGISTRY.get(_active_model_key[0], MODEL_REGISTRY['eula'])
+        with _gpu_worker_lock:
+            model_key = _active_model_key[0]
+        cfg = MODEL_REGISTRY.get(model_key, MODEL_REGISTRY['eula'])
         missing = [m['file'] for m in cfg['models'] if not Path(m['file']).exists()]
         if missing:
             return {
@@ -920,14 +947,13 @@ def start_upscale_chapter(data):
         exclude_pages = set(data.get('exclude_pages') or data.get('excludePages') or [])
         excluded_written = False
         if exclude_pages:
-            import shutil as _shutil
             from api.roots import up_dir_for
             for p in images:
                 if p.name in exclude_pages:
                     dst = up_dir_for(p)      # al escalado del MISMO disco que el original
                     dst.mkdir(parents=True, exist_ok=True)
                     if not (dst / p.name).exists():
-                        _shutil.copy2(p, dst / p.name)
+                        _copy_page_atomic(p, dst / p.name, remove_other_formats=False)
                         excluded_written = True
         if excluded_written:
             mark_changed()
@@ -966,23 +992,16 @@ def start_upscale_chapter(data):
             'percent': 0,
             'title': actual_folder,
             'chapter': chapter_norm,
-            'model': MODEL_REGISTRY[_active_model_key[0]]['label'],
+            'model': cfg['label'],
             'scale': _gpu_scale[0] // 2 if fast_mode else _gpu_scale[0],
             'skipped_existing': skipped_already,
             'fast': fast_mode,
         })
 
-        if mode == 'eco':
-            _gpu_throttle_ms[0] = _ECO_THROTTLE_MS
-            _gpu_tile_throttle_ms[0] = _ECO_TILE_THROTTLE_MS
-        else:
-            _gpu_throttle_ms[0] = _FULL_THROTTLE_MS
-            _gpu_tile_throttle_ms[0] = 0
-
         threading.Thread(
             target=thread_guard('upscale')(run_upscale_chapter),
             args=(input_folder, output_folder, images, upscale_id),
-            kwargs={'eco': mode == 'eco', 'fast': fast_mode},
+            kwargs={'eco': mode == 'eco', 'fast': fast_mode, 'model_key': model_key},
             daemon=True,
         ).start()
 
@@ -994,21 +1013,26 @@ def start_upscale_chapter(data):
 def _switch_model(key):
     """Cambia el modelo activo y reinicia el worker (misma lógica que /set_model).
     Devuelve (ok, mensaje)."""
-    global _gpu_worker_thread
+    global _gpu_worker_thread, _gpu_worker_stopping
     if key not in MODEL_REGISTRY:
         return False, f'Modelo desconocido: {key}'
-    if key == _active_model_key[0] and _gpu_worker_ready.is_set():
-        return True, 'ya activo'
     cfg = MODEL_REGISTRY[key]
     missing = [m['file'] for m in cfg['models'] if not Path(m['file']).exists()]
     if missing:
         return False, f'Archivos de modelo no encontrados: {missing}'
-    _active_model_key[0] = key
     with _gpu_worker_lock:
         if _gpu_worker_thread and _gpu_worker_thread.is_alive():
-            _gpu_queue.put(None)
+            if key == _active_model_key[0] and _gpu_worker_ready.is_set() and not _gpu_worker_stopping:
+                return True, 'ya activo'
+            if not _gpu_worker_stopping:
+                _gpu_worker_stopping = True
+                _gpu_queue.put(None)
             _gpu_worker_thread.join(timeout=10)
+            if _gpu_worker_thread.is_alive():
+                return False, 'El worker GPU sigue deteniéndose; el modelo activo no se modificó.'
         _gpu_worker_thread = None
+        _gpu_worker_stopping = False
+        _active_model_key[0] = key
         _gpu_worker_ready.clear()
         _gpu_worker_error[0] = None
     return True, 'ok'
@@ -1052,19 +1076,9 @@ def _chapter_norm_of(filename):
     return normalize_chapter(m.group(1))
 
 
-def _run_color_job(input_folder, output_folder, images, upscale_id, chapter_norms):
-    """Ejecuta el escalado a color (síncrono en su hilo) y, si termina bien, deja un
-    marcador '.color_done_<cap>' en la carpeta 4K por CADA capítulo tocado → el botón de
-    color de ese capítulo desaparece (como el 4K). El marcador es verdad en disco (sobrevive
-    reinicios). `chapter_norms` = iterable de capítulos (uno, o varios en el flujo masivo)."""
-    run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=False, fast=False)
-    try:
-        if get_upscale_status(upscale_id).get('status') == 'complete':
-            for cn in chapter_norms:
-                if cn:
-                    _color_marker(output_folder, cn).touch()
-    except Exception:
-        pass
+def _run_color_job(input_folder, output_folder, images, upscale_id, chapter_norms, model_key):
+    run_upscale_chapter(input_folder, output_folder, images, upscale_id,
+                        model_key=model_key, color_chapters=chapter_norms)
 
 
 def _measure_page_color(path):
@@ -1108,14 +1122,10 @@ def _start_color(actual_folder, input_folder, output_folder, images, chapter_nor
     current_status = get_upscale_status(upscale_id)
     if current_status.get('status') in {'starting', 'started', 'upscaling'}:
         return {'status': 'already_running', 'task_id': upscale_id}, 200
-    ok, msg = _switch_model(model_key)
-    if not ok:
-        return {'status': 'error', 'message': msg}, 404
+    missing = [m['file'] for m in MODEL_REGISTRY[model_key]['models'] if not Path(m['file']).exists()]
+    if missing:
+        return {'status': 'error', 'message': 'Archivos de modelo no encontrados', 'missing': missing}, 404
     output_folder.mkdir(parents=True, exist_ok=True)
-    # Un re-escalado a color rehace las páginas → borra los marcadores previos hasta que acabe.
-    for cn in chapter_norms:
-        try: _color_marker(output_folder, cn).unlink()
-        except OSError: pass
     _clear_status_files(upscale_id)
     set_upscale_status(upscale_id, {
         'status': 'upscaling', 'current': 0, 'progress': 0, 'total': len(images),
@@ -1123,11 +1133,9 @@ def _start_color(actual_folder, input_folder, output_folder, images, chapter_nor
         'chapter': chapter_norms[0] if len(chapter_norms) == 1 else 'todo',
         'model': MODEL_REGISTRY[model_key]['label'], 'scale': _gpu_scale[0], 'color': True,
     })
-    _gpu_throttle_ms[0] = _FULL_THROTTLE_MS
-    _gpu_tile_throttle_ms[0] = 0
     threading.Thread(
         target=_run_color_job,
-        args=(input_folder, output_folder, images, upscale_id, chapter_norms),
+        args=(input_folder, output_folder, images, upscale_id, chapter_norms, model_key),
         daemon=True,
     ).start()
     return {'status': 'started', 'total': len(images), 'task_id': upscale_id,
@@ -1313,7 +1321,35 @@ def upscale_color():
 
 # ── Worker threads (chapter threads submit tiles to GPU worker) ───────────────
 
-def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=False, fast=False):
+def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=False, fast=False,
+                        model_key=None, color_chapters=()):
+    """Serializa el estado global de GPU/modelo y conserva el resultado de color completo."""
+    with _gpu_job_lock:
+        if model_key:
+            ok, message = _switch_model(model_key)
+            if not ok:
+                set_upscale_status(upscale_id, {
+                    'status': 'error', 'current': 0, 'progress': 0, 'total': len(images),
+                    'error': message, 'model': MODEL_REGISTRY[model_key]['label'],
+                })
+                return
+        _set_gpu_mode(eco)
+        for chapter in color_chapters:
+            try:
+                _color_marker(output_folder, chapter).unlink()
+            except OSError:
+                pass
+
+        _run_upscale_chapter_locked(input_folder, output_folder, images, upscale_id, eco, fast)
+        if color_chapters and get_upscale_status(upscale_id).get('status') == 'complete':
+            for chapter in color_chapters:
+                try:
+                    _color_marker(output_folder, chapter).touch()
+                except OSError:
+                    pass
+
+
+def _run_upscale_chapter_locked(input_folder, output_folder, images, upscale_id, eco=False, fast=False):
     # Una obra puede estar REPARTIDA entre discos, así que el destino no es uno solo: cada
     # página escalada se escribe en la carpeta escalada del MISMO disco que su original. Si no,
     # quitar un disco dejaría el original en uno y su 4K en otro, y la obra quedaría a medias
@@ -1333,14 +1369,9 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
             _out_by_parent[img_path.parent] = d
         return d
 
-    # Acota los capítulos concurrentes (cualquier modo) → evita el OOM de RAM por buffers
-    # de reconstrucción en paralelo que crashea el WSL. Cola GPU única = sin pérdida de
-    # rendimiento real. Se bloquea aquí hasta que haya un hueco de los _UPSCALE_MAX_PARALLEL.
-    _chapter_semaphore.acquire()
     _avail0, _total0, _rss0 = _mem_snapshot()
     print(f"[upscale] inicio {upscale_id} — modelo={_active_model_key[0]} páginas={len(images)} "
-          f"RAM disp={_avail0}MB/{_total0}MB rss={_rss0}MB "
-          f"(máx {_UPSCALE_MAX_PARALLEL} cap. en paralelo)", flush=True)
+          f"RAM disp={_avail0}MB/{_total0}MB rss={_rss0}MB", flush=True)
     try:
         from PIL import Image
 
@@ -1393,11 +1424,7 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                 if is_already_hires(img):
                     print(f"Copy hi-res (no upscale): {img_path.name} {img.width}x{img.height}", flush=True)
                     out_path = _out_dir(img_path) / (img_path.stem + img_path.suffix)
-                    for _old in _out_dir(img_path).glob(img_path.stem + '.*'):
-                        if _old.suffix.lower() != img_path.suffix.lower():
-                            try: _old.unlink()
-                            except OSError: pass
-                    shutil.copy2(img_path, out_path)
+                    _copy_page_atomic(img_path, out_path)
                     processed += 1
                     continue
                 if fast:
@@ -1408,7 +1435,7 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                 if skip_color and is_color_page(img):
                     print(f"Copy color (no upscale): {img_path.name}", flush=True)
                     out_path = _out_dir(img_path) / (img_path.stem + img_path.suffix)
-                    shutil.copy2(img_path, out_path)
+                    _copy_page_atomic(img_path, out_path, remove_other_formats=False)
                     skipped_color += 1
                     processed += 1
                     continue
@@ -1438,11 +1465,7 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                           f"→ recon~{_proj:.0f}MB > cap {_MAX_RECON_MB}MB (RAM disp={_av}MB): "
                           f"se copia SIN escalar (backstop anti-OOM)", flush=True)
                     out_path = _out_dir(img_path) / (img_path.stem + img_path.suffix)
-                    for _old in _out_dir(img_path).glob(img_path.stem + '.*'):
-                        if _old.suffix.lower() != img_path.suffix.lower():
-                            try: _old.unlink()
-                            except OSError: pass
-                    shutil.copy2(img_path, out_path)
+                    _copy_page_atomic(img_path, out_path)
                     processed += 1
                     continue
                 else:
@@ -1456,13 +1479,6 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                       f"recon~{_proj:.0f}MB — {_dt:.2f}s avg={_avg:.2f}s (n={len(_page_times)})  "
                       f"RAM disp={_avN}MB rss={_rssN}MB", flush=True)
                 out_path = _out_dir(img_path) / (img_path.stem + ".jpg")
-                # Evita que una copia previa con OTRA extensión (p.ej. el .png de una página a
-                # color que el modelo B&N copió tal cual) conviva con el .jpg recién escalado y
-                # lo duplique/ensombrezca en el lector.
-                for _old in _out_dir(img_path).glob(img_path.stem + '.*'):
-                    if _old.suffix.lower() != '.jpg':
-                        try: _old.unlink()
-                        except OSError: pass
                 save_futures.append(_save_pool.submit(_resize_save, out_pil, out_path, OUTPUT_DOWNSCALE, JPEG_QUALITY))
                 processed += 1
             except Exception as e:
@@ -1471,11 +1487,14 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                 traceback.print_exc()
 
         # Wait for all pending saves before marking complete
+        save_failures = 0
         for fut in save_futures:
             try:
                 fut.result()
             except Exception as e:
                 print(f"Save error: {e}", flush=True)
+                processed -= 1
+                save_failures += 1
 
         # Release CUDA + Python memory back to the OS
         try:
@@ -1507,7 +1526,7 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
                 'current': processed,
                 'progress': processed,
                 'total': total,
-                'error': f'Upscale incompleto: {processed}/{total}',
+                'error': f'Upscale incompleto: {processed}/{total}' + (f' ({save_failures} guardados fallidos)' if save_failures else ''),
                 'skipped_color': skipped_color,
                 'model': MODEL_REGISTRY[_active_model_key[0]]['label'],
             })
@@ -1517,4 +1536,3 @@ def run_upscale_chapter(input_folder, output_folder, images, upscale_id, eco=Fal
     finally:
         _avail1, _total1, _rss1 = _mem_snapshot()
         print(f"[upscale] fin {upscale_id} — RAM disp={_avail1}MB rss={_rss1}MB", flush=True)
-        _chapter_semaphore.release()

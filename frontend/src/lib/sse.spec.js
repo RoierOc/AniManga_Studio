@@ -47,4 +47,17 @@ describe('reintento del canal de Actividad', () => {
     expect(sse.sseState.value).toBe('connecting')
     unsubscribe()
   })
+
+  it('marca error de snapshot como desconectado y acepta el siguiente latido válido', () => {
+    sse.onStatus(vi.fn())
+    const source = FakeEventSource.instances[0]
+    source.onopen()
+    expect(sse.sseState.value).toBe('live')
+
+    source.onmessage({ data: '{"_error":true}' })
+    expect(sse.sseState.value).toBe('down')
+
+    source.onmessage({ data: '{"hb":1}' })
+    expect(sse.sseState.value).toBe('live')
+  })
 })

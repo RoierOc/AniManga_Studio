@@ -104,7 +104,8 @@ def stream_status():
                     # `lib/sse.js` lo ignora (no trae downloads/upscale/events).
                     yield 'data: {"hb":1}\n\n'
             except Exception:
-                yield "data: {}\n\n"
+                # No es un latido: el cliente debe dejar de mostrar estados viejos como vivos.
+                yield 'data: {"_error":true}\n\n'
             time.sleep(0.5)
             idle += 0.5
 

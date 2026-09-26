@@ -38,9 +38,18 @@ function ensure() {
     source = new EventSource(url)
     source.onopen = _alive
     source.onmessage = (e) => {
-      _alive()
       let data
       try { data = JSON.parse(e.data) } catch { return }
+      if (!data || typeof data !== 'object' || Array.isArray(data)) return
+      if (data._error) {
+        clearTimeout(_hbTimer)
+        sseState.value = 'down'
+        return
+      }
+      const hasStatus = ['downloads', 'upscale', 'exports', 'transplant', 'subtitles', 'subtitle_batches', 'anime_upscale']
+        .some(key => Object.prototype.hasOwnProperty.call(data, key))
+      if (!hasStatus && !Array.isArray(data.events) && data.hb !== 1) return
+      _alive()
 
       // Aggregated status snapshot
       if (data.downloads || data.upscale || data.exports || data.transplant || data.subtitles || data.subtitle_batches || data.anime_upscale) {
