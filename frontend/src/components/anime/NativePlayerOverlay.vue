@@ -408,6 +408,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           <!-- audio -->
           <div class="wp__menuwrap" v-if="np.audioTracks.length > 1">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'audio' }"
+                    :data-tip="np.isLive ? 'Cambiar pista de audio' : 'La elección se recuerda para este anime'"
                     @click="menuOpen = menuOpen === 'audio' ? '' : 'audio'">Audio</button>
             <div v-if="menuOpen === 'audio'" class="wp__menu" @wheel.stop>
               <button v-for="(t, i) in np.audioTracks" :key="'a' + i"
@@ -417,6 +418,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           <!-- subtítulos: siempre disponible (delay/tamaño/config), incluso con 0-1 pistas -->
           <div class="wp__menuwrap">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'subs' }"
+                    :data-tip="np.isLive ? 'Cambiar subtítulos' : 'La elección se recuerda para este anime'"
                     @click="menuOpen = menuOpen === 'subs' ? '' : 'subs'">Subtítulos</button>
             <div v-if="menuOpen === 'subs'" class="wp__menu" @wheel.stop>
               <div v-if="!np.subTracks.length" class="wp__subsize wp__subnote" @click.stop>
@@ -442,7 +444,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           <!-- Shaders (Anime4K en anime, genéricos en imagen real) -->
           <div class="wp__menuwrap">
             <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'a4k', 'is-glow': np.tier !== 'off' }"
-                    :data-tip="`${scaleName} (mejora de imagen por GPU)`"
+                    :data-tip="np.isLive ? `${scaleName} (ajuste global)` : `${scaleName} (se recuerda por anime)`"
                     @click="menuOpen = menuOpen === 'a4k' ? '' : 'a4k'">
               <Icon name="spark" :size="13" /> {{ scaleLabel }}
             </button>

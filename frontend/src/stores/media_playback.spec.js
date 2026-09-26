@@ -19,6 +19,7 @@ import { api } from '@/lib/api'
 import { send as nativeSend } from '@/lib/nativeBridge'
 import { useMediaStore } from './media'
 import { useAnimeStore } from './anime'
+import { patchAnimePlaybackPrefs, readAnimePlaybackPrefs, trackIdentity } from '@/lib/animePlaybackPrefs'
 
 vi.mock('@/lib/api', () => ({
   api: { get: vi.fn(), post: vi.fn().mockResolvedValue({}), del: vi.fn().mockResolvedValue({}) },
@@ -58,11 +59,66 @@ const sent = (cmd) => nativeSend.mock.calls.filter(c => c[0] === cmd)
 beforeEach(() => {
   setActivePinia(createPinia())
   vi.clearAllMocks()
+  localStorage.removeItem('anime-playback-prefs-v1')
   // `playNative` pide de paso el estilo de subtítulos; sin un valor por defecto ese `await`
   // revienta y ensucia la salida con rechazos que no tienen que ver con lo que se prueba.
   api.get.mockResolvedValue({})
   api.post.mockResolvedValue({})
   nativeListener = null
+})
+
+describe('preferencias del reproductor nativo por anime', () => {
+  it('restaura audio, subtítulo y tier aunque las pistas cambien de orden', async () => {
+    const store = useAnimeStore()
+    const audio = { lang: 'eng', title: 'English' }
+    const subtitle = { lang: 'spa', title: 'Español latino', external: true,
+      win_path: 'D:\\TV\\ep.spa.srt' }
+    patchAnimePlaybackPrefs(42, {
+      audioTrack: trackIdentity(audio), subTrack: trackIdentity(subtitle), tier: 'max_ref_ul_ul',
+    })
+    api.post.mockResolvedValue({
+      ...RESOLVE,
+      audio_tracks: [{ lang: 'jpn', title: 'Japanese' }, audio],
+      sub_tracks: [{ lang: 'eng', title: 'English' }, subtitle],
+      preferred_sub: 1,
+    })
+
+    await store.playNative({ id: 42, title: 'Anime' },
+      { num: 1, in_local: true, local_path: '/anime/ep.mkv' })
+
+    expect(store.nativePlayer).toMatchObject({ aid: 2, sid: 2, tier: 'max_ref_ul_ul' })
+    expect(sent('track')).toContainEqual(['track', { aid: '2' }])
+    nativeListener({ event: 'time', pos: 1, duration: 1400, paused: false })
+    expect(sent('track').at(-1)).toEqual(['track', { sid: '2' }])
+  })
+
+  it('guarda selecciones por anime y no las mezcla con imagen real', () => {
+    const store = useAnimeStore()
+    store.nativePlayer = {
+      animePrefId: 42, isLive: false,
+      audioTracks: [{ lang: 'eng', title: 'English' }],
+      subTracks: [{ lang: 'spa', title: 'Español' }],
+    }
+
+    store.setNativeAudio(0)
+    store.setNativeSub(-1)
+    store.setNative4kTier('maximo')
+
+    expect(readAnimePlaybackPrefs(42)).toEqual({
+      audioTrack: 'embedded:en|english', subTrack: 'off', tier: 'maximo',
+    })
+    expect(store.native4kTier).toBe('maximo')
+
+    store.nativePlayer = { isLive: true, animePrefId: null,
+      audioTracks: [{ lang: 'jpn', title: 'Japanese' }], subTracks: [{ lang: 'eng', title: 'English' }] }
+    store.setNativeAudio(0)
+    store.setNativeSub(0)
+    store.setNative4kTier('live_lite')
+    expect(readAnimePlaybackPrefs(42)).toEqual({
+      audioTrack: 'embedded:en|english', subTrack: 'off', tier: 'maximo',
+    })
+    expect(store.nativeLiveTier).toBe('live_lite')
+  })
 })
 
 describe('los sidecar se cuelgan del archivo NUEVO, no del saliente', () => {

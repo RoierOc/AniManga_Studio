@@ -6,6 +6,7 @@ import { nextUnwatchedEp, animeEpisodeKey, isSpanishOrMulti, isEnglishSub } from
 import { vtGo, marcarTarjeta } from '@/lib/vt'
 import { isNative, send as nativeSend, onMessage as onNativeMessage } from '@/lib/nativeBridge'
 import { setImageRevisions } from '@/lib/img'
+import { patchAnimePlaybackPrefs, readAnimePlaybackPrefs, resolveTrackSelection, trackIdentity } from '@/lib/animePlaybackPrefs'
 
 // Estilo de subtítulos: lo aplica el PLAYER en vivo con `sub-ass-style-overrides` de mpv, NO se
 // hornea en el archivo. Por defecto, el estilo que traían las pistas árabes (Adobe Arabic 26,
@@ -948,6 +949,9 @@ export const useAnimeStore = defineStore('anime', {
     // guarda en el almacén de ese dominio (ver `_reportNativeProgress`).
     async playNative(anime, ep, startPos = 0, opts = {}) {
       this.dismissAutoplay?.()
+      const animePrefId = opts.progressKey ? null : (anime?.al_id || anime?.id)
+      const playbackPrefs = readAnimePlaybackPrefs(animePrefId)
+      const savedTier = NATIVE_4K_VISIBLE.includes(playbackPrefs.tier) ? playbackPrefs.tier : this.native4kTier
       // Mostrar el overlay YA (estado de carga) para no dejar al usuario en la vista
       // previa mientras se resuelve la ruta (ffprobe) — la espera se percibía como
       // "no abre". El spinner se quita al llegar el primer evento de tiempo.
@@ -958,7 +962,8 @@ export const useAnimeStore = defineStore('anime', {
         // ⚠️ Un episodio ya HORNEADO con Anime4K (`ep.a4k`) trae los shaders metidos en los píxeles:
         // aplicárselos otra vez en vivo es pasar la red dos veces — se emborrona y encima cuesta
         // fotogramas gratis. Se abre con los shaders apagados; el menú sigue disponible a mano.
-        tier: ep?.a4k ? 'off' : (opts.progressKey ? this.nativeLiveTier : this.native4kTier),
+        tier: ep?.a4k ? 'off' : (opts.progressKey ? this.nativeLiveTier : savedTier),
+        animePrefId,
         yaHorneado: !!ep?.a4k,
         _lastReport: 0, fullscreen: false,
         audioTracks: [], subTracks: [], aid: 1, sid: 0,
@@ -1004,18 +1009,23 @@ export const useAnimeStore = defineStore('anime', {
         const idx = subTracks.findIndex((t) => esRe.test(`${t.lang || ''} ${t.title || ''}`))
         defSid = idx >= 0 ? idx + 1 : 1
       }
+      const audioTracks = res.audio_tracks || []
+      const selectedTracks = resolveTrackSelection(audioTracks, subTracks, playbackPrefs, defSid)
+      defSid = selectedTracks.subIndex + 1
       Object.assign(this.nativePlayer, {
         pos: resume,
         duration: res.duration || this.nativePlayer.duration || 0,
-        audioTracks: res.audio_tracks || [],
+        audioTracks,
         subTracks,
-        aid: 1,                          // 1-based (orden de aparición)
+        aid: selectedTracks.audioIndex + 1, // mpv usa ids 1-based en orden actual
         sid: defSid,
         thumbs: res.thumbs || null,      // {url, interval} para el scrubbing
       })
       // Cargar con el inicio ya en la posición de reanudación (fiable: fijar 'start'
       // antes de loadfile, no un seek posterior que se ignoraría) + tier Anime4K.
       nativeSend('loadfile', { path: res.win_path, start: resume })
+      if (selectedTracks.audioIndex > 0)
+        nativeSend('track', { aid: String(selectedTracks.audioIndex + 1) })
       // Fijar la pista elegida (mpv no la autoselecciona con sub-auto=no + sub-add auto).
       // SÓLO si es INCRUSTADA: `sid` sobrevive al cambio de archivo, pero un sidecar todavía NO
       // EXISTE en el archivo recién cargado. MEDIDO en el log de mpv (School-Live! E02):
@@ -1042,8 +1052,11 @@ export const useAnimeStore = defineStore('anime', {
           for (const t of externals) nativeSend('subadd', { path: t.win_path })
           // Re-fijar: la pista elegida puede ser una de las que acaban de existir.
           if (defSid > 0) nativeSend('track', { sid: String(defSid) })
+          else if (playbackPrefs.subTrack === 'off') nativeSend('track', { sid: 'no' })
         }
         : null
+      if (defSid === 0 && playbackPrefs.subTrack === 'off' && !externals.length)
+        nativeSend('track', { sid: 'no' })
       nativeSend('shaders', { tier: this.nativePlayer.tier })
       // Permitir amplificar hasta 150% (mpv corta en volume-max, 100 por defecto).
       nativeSend('setprop', { name: 'volume-max', value: '150' })
@@ -1278,11 +1291,20 @@ export const useAnimeStore = defineStore('anime', {
       if (!this.nativePlayer) return
       this.nativePlayer.aid = idx + 1
       nativeSend('track', { aid: String(idx + 1) })
+      const track = this.nativePlayer.audioTracks?.[idx]
+      const identity = trackIdentity(track)
+      if (identity && !this.nativePlayer.isLive && this.nativePlayer.animePrefId != null)
+        patchAnimePlaybackPrefs(this.nativePlayer.animePrefId, { audioTrack: identity })
     },
     setNativeSub(idx) {             // idx 0-based; -1 = desactivar
       if (!this.nativePlayer) return
       this.nativePlayer.sid = idx + 1   // 0 = off
       nativeSend('track', { sid: idx < 0 ? 'no' : String(idx + 1) })
+      const np = this.nativePlayer
+      if (!np.isLive && np.animePrefId != null) {
+        const identity = idx < 0 ? 'off' : trackIdentity(np.subTracks?.[idx])
+        if (identity) patchAnimePlaybackPrefs(np.animePrefId, { subTrack: identity })
+      }
     },
     // Salto de opening que APRENDE por serie: el primer episodio saltas 82 s (el genérico) y,
     // si corriges el aterrizaje con un seek en los siguientes 10 s, esa corrección se suma al
@@ -1305,6 +1327,8 @@ export const useAnimeStore = defineStore('anime', {
       } else {
         this.native4kTier = tier
         localStorage.setItem('anime-native-4k', tier)
+        if (this.nativePlayer?.animePrefId != null)
+          patchAnimePlaybackPrefs(this.nativePlayer.animePrefId, { tier })
       }
       if (this.nativePlayer) {
         this.nativePlayer.tier = tier
