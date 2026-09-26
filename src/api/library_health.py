@@ -1,20 +1,17 @@
-"""Salud de la biblioteca de manga — un solo sitio donde ver (y reparar) los problemas que hoy
-solo se detectaban en barridos manuales o en silencio.
+"""Comprobaciones de salud de la biblioteca de manga, solo lectura.
 
-Reúne los tres controles ya existentes, cada uno en su módulo:
+Reúne controles existentes, cada uno en su módulo:
   - **Fuentes cruzadas**: el mangaId de Suwayomi derivó a otra obra ([[project_source_id_drift]]).
   - **Identidad MangaDex**: la obra no se pudo verificar en MangaDex ([[project_manga_canonical_identity]]).
   - **Errores en vivo**: contador por costura de `observability` (fallos recientes visibles).
 
-El CHECK es de solo lectura y rápido (lee la DB local de Suwayomi y las cachés `.identity.json`, sin
-re-resolver por red); la REPARACIÓN sí ejecuta los fixers reales (pueden tocar la red). No duplica la
-integridad de ficheros: esa vive en `/api/storage/integrity` (panel Almacenamiento)."""
+El check no re-resuelve por red. La interfaz combina este resultado con la integridad de archivos
+de qBittorrent (`/api/storage/integrity`), que también es explícita y de solo lectura. El endpoint
+de reparación se conserva por compatibilidad, pero el panel no lo ejecuta ni lo expone."""
 import json as _json
-from pathlib import Path
 
 from flask import Blueprint, request, jsonify
 
-from api.runtime import manga_dir
 from api.roots import series_dirs, series_titles
 from api.observability import record_error
 
@@ -27,10 +24,10 @@ def _identity_snapshot() -> dict:
     `md_uuid` es 'sin identidad verificable'."""
     # Todas las raíces: una obra que vive sólo en el segundo disco también tiene identidad
     # que revisar, y antes ni se miraba. Ver `api/roots.py`.
-    unresolved, unchecked = [], 0
+    unresolved, unchecked, failed = [], 0, []
     folders = [dirs[0] for dirs in series_titles().values()]
     if not folders:
-        return {"unresolved": [], "unchecked": 0, "total": 0}
+        return {"unresolved": [], "unchecked": 0, "total": 0, "failed": []}
     for d in folders:
         p = next((x / ".identity.json" for x in series_dirs(d.name)
                   if (x / ".identity.json").exists()), None)
@@ -39,12 +36,16 @@ def _identity_snapshot() -> dict:
             continue
         try:
             ident = _json.loads(p.read_text(encoding="utf-8"))
+            if not isinstance(ident, dict):
+                raise ValueError("identity must be a JSON object")
         except Exception as e:
             record_error("library_health", e, op="read_identity", folder=d.name)
+            failed.append(d.name)
             continue
         if not ident.get("md_uuid"):
             unresolved.append(d.name)
-    return {"unresolved": unresolved, "unchecked": unchecked, "total": len(folders)}
+    return {"unresolved": unresolved, "unchecked": unchecked, "total": len(folders),
+            "failed": failed}
 
 
 def _services_snapshot() -> list:
@@ -85,37 +86,52 @@ def _services_snapshot() -> list:
 
 @health_bp.route("/check", methods=["GET"])
 def check():
-    """Instantánea de salud (solo lectura, rápida). Fuentes cruzadas + identidad sin verificar +
-    errores por costura desde el arranque. No modifica nada."""
+    """Instantánea de salud (solo lectura). Cada consulta informa si pudo completarse."""
     # Fuentes: report-only (fix=False). Consulta la DB local de Suwayomi por ref (rápido).
+    checks = {"sources": {"ok": True}, "identity": {"ok": True},
+              "services": {"ok": True}, "errors": {"ok": True}}
     try:
         from api.source_identity import verify_source_refs
         src = verify_source_refs(fix=False)
     except Exception as e:
         record_error("library_health", e, op="check_sources")
         src = []
+        checks["sources"]["ok"] = False
     # Solo 'roto' (no re-resoluble) es un PROBLEMA. 'auto' = el id derivó pero la obra se
     # re-resuelve sola al abrir (el número de Suwayomi es efímero, no es un cruce real).
     broken = [r for r in src if r.get("status") == "roto"]
     autoheal = [r for r in src if r.get("status") == "auto"]
     unreachable = [r for r in src if r.get("status") == "no-consultable"]
 
-    ident = _identity_snapshot()
+    try:
+        ident = _identity_snapshot()
+        checks["identity"]["ok"] = not ident.get("failed")
+    except Exception as e:
+        record_error("library_health", e, op="check_identity")
+        ident = {"unresolved": [], "unchecked": 0, "total": 0, "failed": []}
+        checks["identity"]["ok"] = False
 
     try:
         from api.observability import error_counts
         errors = error_counts()
     except Exception:
         errors = {}
+        checks["errors"]["ok"] = False
 
-    services = _services_snapshot()
+    try:
+        services = _services_snapshot()
+    except Exception as e:
+        record_error("library_health", e, op="check_services")
+        services = []
+        checks["services"]["ok"] = False
     caidos = [s for s in services if not s["online"]]
 
     # Un servicio caído CUENTA como problema: es la causa más frecuente de "no me sale nada".
     problems = len(broken) + len(ident["unresolved"]) + len(caidos)
     return jsonify({
-        "ok": True,
+        "ok": all(check["ok"] for check in checks.values()),
         "problems": problems,
+        "checks": checks,
         "sources": {"broken": broken, "autoheal": autoheal, "unreachable": unreachable},
         "identity": ident,
         "services": services,

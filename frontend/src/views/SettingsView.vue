@@ -8,7 +8,6 @@ import { useSettingsStore } from '@/stores/settings'
 import { formatBytes } from '@/lib/format'
 import Icon from '@/components/ui/Icon.vue'
 import SubStyleCard from '@/components/anime/SubStyleCard.vue'
-import IntegrityCard from '@/components/anime/IntegrityCard.vue'
 import MangaRootsCard from '@/components/settings/MangaRootsCard.vue'
 import HealthCard from '@/components/settings/HealthCard.vue'
 import NovelSourcesCard from '@/components/settings/NovelSourcesCard.vue'
@@ -36,7 +35,7 @@ const TABS = [
   { id: 'general', label: 'General', icon: 'spark', description: 'Escalado 4K, avisos y biblioteca oculta', keywords: ['modelo', 'modo eco', 'código secreto', 'manga', 'notificaciones', 'trabajos'] },
   { id: 'anime', label: 'Anime', icon: 'film', description: 'Descargas, qBittorrent y subtítulos', keywords: ['carpeta', 'ruta', 'episodios', 'servidor'] },
   { id: 'conexiones', label: 'Conexiones', icon: 'globe', description: 'Claves API e importación de .env', keywords: ['servicios', 'api', 'token', 'credenciales'] },
-  { id: 'salud', label: 'Salud', icon: 'check', description: 'Integridad, fuentes y diagnósticos', keywords: ['reparar', 'verificar', 'errores'] },
+  { id: 'salud', label: 'Salud', icon: 'check', description: 'Servicios, fuentes e integridad de torrents', keywords: ['diagnóstico', 'verificar', 'errores'] },
   { id: 'novelas', label: 'Novelas', icon: 'book', description: 'Fuentes e idiomas', keywords: ['capítulos', 'literatura', 'web'] },
   { id: 'almacenamiento', label: 'Almacenamiento', icon: 'folder', description: 'Raíces, espacio de disco y caché', keywords: ['carpetas', 'disco', 'limpiar', 'originales', '4k'] },
   { id: 'copia', label: 'Copia y sync', icon: 'refresh', description: 'Respaldo, Git, Drive y biblioteca móvil', keywords: ['sincronización', 'backup', 'exportar', 'remoto', 'webdav', 'android'] },
@@ -535,9 +534,9 @@ async function onImportFile(e) {
         <div v-show="tab === 'salud'" class="set__cat">
           <div class="set__cathead">
             <span class="set__catic"><Icon name="check" :size="18" /></span>
-            <div><h2>Salud de la biblioteca</h2><p>Detecta y repara fuentes cruzadas, identidades sin verificar y fallos recientes.</p></div>
+            <div><h2>Salud de la biblioteca</h2><p>Comprueba servicios, fuentes, identidades e integridad de archivos sin modificar nada.</p></div>
           </div>
-          <HealthCard />
+          <HealthCard @navigate="setTab" />
         </div>
 
         <!-- Novelas -->
@@ -559,8 +558,6 @@ async function onImportFile(e) {
     <!-- Dónde vive la biblioteca (varios discos) va ANTES del uso de disco: primero qué
          carpetas hay, luego cuánto ocupan. -->
     <section class="card"><MangaRootsCard /></section>
-    <div class="sep" />
-    <IntegrityCard />
     <div class="sep" />
 <!-- Almacenamiento -->
     <section class="card">
