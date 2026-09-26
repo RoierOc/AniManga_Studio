@@ -104,7 +104,7 @@ onUnmounted(() => {
                       <span v-if="eta(t)" class="row__eta">{{ eta(t) }}</span>
                     </div>
                     <div class="row__bar" :class="{ 'is-err': t.status === 'error' }">
-                      <span :style="{ width: t.pct + '%', background: kind(t.kind).color }" />
+                      <span :style="{ transform: `scaleX(${t.pct / 100})`, background: kind(t.kind).color }" />
                     </div>
                     <!-- El paso concreto que el backend ya reporta; sin esto el cajón sólo daba
                          un porcentaje mudo. -->
@@ -180,8 +180,8 @@ onUnmounted(() => {
 .row__eta { font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--ink-ghost); flex-shrink: 0; }
 .row__msg { font-size: var(--fs-2xs); color: var(--ink-faint); margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .row__bar { height: 3px; margin-top: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
-.row__bar span { display: block; height: 100%; transition: width var(--t-base) var(--ease-silk); }
-.row__bar.is-err span { background: var(--coral) !important; width: 100% !important; }
+.row__bar span { display: block; width: 100%; height: 100%; transform-origin: left; transition: transform var(--t-base) var(--ease-silk); }
+.row__bar.is-err span { background: var(--coral) !important; transform: scaleX(1) !important; }
 .row__act { width: 1.5rem; height: 1.5rem; display: grid; place-items: center; border-radius: var(--r-xs); color: var(--ink-faint); border: 1px solid var(--line); flex-shrink: 0; transition: all var(--t-fast); }
 .row__act:hover { color: var(--coral); border-color: color-mix(in srgb, var(--coral) 40%, transparent); }
 

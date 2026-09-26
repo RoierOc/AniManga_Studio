@@ -692,7 +692,7 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 
         <!-- Progreso + estado del auto-scroll (solo tira) -->
         <div v-if="store.mode === 'webtoon' && store.pages.length" class="rd__wprog">
-          <span :style="{ width: wtProgress + '%' }" />
+          <span :style="{ transform: `scaleX(${wtProgress / 100})` }" />
         </div>
         <button v-if="store.mode === 'webtoon' && store.pages.length" class="rd__auto"
                 :class="{ 'is-on': autoScroll }" :data-tip="`Auto-scroll (A) · ${store.autoScrollSpeed} px/s`"
@@ -951,8 +951,8 @@ onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(b
 /* Progreso del capítulo: una línea de 3 px pegada al borde inferior. No se oculta con las barras
    porque es lo único que dice cuánto falta en una tira de 30 imágenes. */
 .rd__wprog { position: absolute; left: 0; right: 0; bottom: 0; z-index: 7; height: 3px; background: rgba(255,255,255,.10); }
-.rd__wprog span { display: block; height: 100%; background: var(--azure-bright); box-shadow: var(--glow-azure);
-  transition: width .12s linear; }
+.rd__wprog span { display: block; width: 100%; height: 100%; transform-origin: left; background: var(--azure-bright); box-shadow: var(--glow-azure);
+  transition: transform .12s linear; }
 /* Botón de auto-scroll: fuera de la barra superior porque se usa MIENTRAS lees, con las barras
    escondidas. Discreto hasta que está activo. */
 .rd__auto { position: absolute; right: var(--s-4); bottom: var(--s-4); z-index: 8;
