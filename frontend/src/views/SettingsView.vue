@@ -17,15 +17,23 @@ import FolderPicker from '@/components/ui/FolderPicker.vue'
 import Select from '@/components/ui/Select.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { filterSettingsSections } from '@/lib/settingsSearch'
+import { isNative } from '@/lib/nativeBridge'
+import { readTaskNotificationsEnabled, setTaskNotificationsEnabled } from '@/lib/taskNotifications'
 
 const ui = useUiStore()
 const manga = useMangaStore()
 const anime = useAnimeStore()
 const settings = useSettingsStore()
+const nativeApp = isNative()
+const taskNotifications = ref(readTaskNotificationsEnabled())
+function saveTaskNotifications(enabled) {
+  taskNotifications.value = enabled
+  setTaskNotificationsEnabled(enabled)
+}
 
 // Settings categories (left rail). Persisted so you land where you left off.
 const TABS = [
-  { id: 'general', label: 'General', icon: 'spark', description: 'Escalado 4K y biblioteca oculta', keywords: ['modelo', 'modo eco', 'código secreto', 'manga'] },
+  { id: 'general', label: 'General', icon: 'spark', description: 'Escalado 4K, avisos y biblioteca oculta', keywords: ['modelo', 'modo eco', 'código secreto', 'manga', 'notificaciones', 'trabajos'] },
   { id: 'anime', label: 'Anime', icon: 'film', description: 'Descargas, qBittorrent y subtítulos', keywords: ['carpeta', 'ruta', 'episodios', 'servidor'] },
   { id: 'conexiones', label: 'Conexiones', icon: 'globe', description: 'Claves API e importación de .env', keywords: ['servicios', 'api', 'token', 'credenciales'] },
   { id: 'salud', label: 'Salud', icon: 'check', description: 'Integridad, fuentes y diagnósticos', keywords: ['reparar', 'verificar', 'errores'] },
@@ -350,6 +358,15 @@ async function onImportFile(e) {
           <input type="checkbox" :checked="manga.eco" @change="manga.setEco($event.target.checked)" />
         </label>
       </div>
+    </section>
+
+    <section v-if="nativeApp" class="card">
+      <div class="card__title"><Icon name="alert" :size="16" /> Notificaciones de tareas</div>
+      <label class="fld fld--chk">
+        <span>Avisarme cuando un trabajo termine o falle</span>
+        <input type="checkbox" :checked="taskNotifications" @change="saveTaskNotifications($event.target.checked)" />
+      </label>
+      <p class="hint">Solo aparecen cuando AniManga no está en primer plano. Al seleccionar el aviso se abre Actividad.</p>
     </section>
 
     

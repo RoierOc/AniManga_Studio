@@ -68,8 +68,11 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::Shell::{
-    ITaskbarList3, TaskbarList, TBPF_ERROR, TBPF_INDETERMINATE, TBPF_NOPROGRESS, TBPF_NORMAL,
-    TBPF_PAUSED,
+    ITaskbarList3, Shell_NotifyIconW, TaskbarList, NOTIFYICONDATAW, NIF_ICON, NIF_INFO,
+    NIF_MESSAGE, NIF_REALTIME, NIF_TIP, NIIF_ERROR, NIIF_INFO, NIIF_NOSOUND,
+    NIIF_RESPECT_QUIET_TIME, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIN_BALLOONHIDE,
+    NIN_BALLOONTIMEOUT, NIN_BALLOONUSERCLICK, TBPF_ERROR, TBPF_INDETERMINATE,
+    TBPF_NOPROGRESS, TBPF_NORMAL, TBPF_PAUSED,
 };
 use windows::Win32::UI::Controls::MARGINS;
 use windows::Win32::UI::HiDpi::{
@@ -85,6 +88,8 @@ use player::{Player, TIMER_RENDER};
 
 const BASE_HOST: &str = "127.0.0.1:5101";
 const APP_URL: &str = "http://127.0.0.1:5101/";
+const WM_TASK_NOTIFICATION: u32 = 0x8000 + 17;
+const TASK_NOTIFICATION_ICON_ID: u32 = 0xA11;
 
 struct App {
     controller: ICoreWebView2CompositionController,
@@ -106,6 +111,7 @@ thread_local! {
        Se crea perezosamente: si el shell de Windows no la ofrece (sesión rara, Explorer caído),
        se registra una vez y se sigue sin ella; nunca es un error que deba parar nada. */
     static TASKBAR: RefCell<Option<ITaskbarList3>> = const { RefCell::new(None) };
+    static TASK_NOTIFICATION_ICON: Cell<bool> = const { Cell::new(false) };
     static OWNED: RefCell<bool> = const { RefCell::new(false) };
     // Contador de frames para throttlear el reporte de tiempo a JS.
     static FRAME: RefCell<u32> = const { RefCell::new(0) };
@@ -900,6 +906,74 @@ fn set_taskbar(hwnd: HWND, state: &str, value: f64) {
     });
 }
 
+fn task_notification_label(kind: &str) -> &'static str {
+    match kind {
+        "export" => "El tomo",
+        "anime_upscale" => "El escalado de anime",
+        "upscale" => "El escalado de manga",
+        "download" | "versiondl" => "La descarga",
+        "subtitle" | "subtitle_batch" => "Los subtítulos",
+        "translate" => "La traducción",
+        _ => "El trabajo",
+    }
+}
+
+fn copy_wide<const N: usize>(target: &mut [u16; N], value: &str) {
+    for (slot, code) in target.iter_mut().zip(value.encode_utf16()).take(N.saturating_sub(1)) {
+        *slot = code;
+    }
+}
+
+fn show_task_notification(hwnd: HWND, status: &str, kind: &str) {
+    if status != "done" && status != "error" {
+        return;
+    }
+
+    let label = task_notification_label(kind);
+    let (title, body, icon_flag) = if status == "error" {
+        ("Trabajo con error", format!("{label} falló. Haz clic para ver el detalle en Actividad."), NIIF_ERROR)
+    } else {
+        ("Trabajo completado", format!("{label} terminó. Haz clic para abrir Actividad."), NIIF_INFO)
+    };
+
+    unsafe {
+        let mut data = NOTIFYICONDATAW::default();
+        data.cbSize = size_of::<NOTIFYICONDATAW>() as u32;
+        data.hWnd = hwnd;
+        data.uID = TASK_NOTIFICATION_ICON_ID;
+        data.hIcon = LoadIconW(None, IDI_APPLICATION).unwrap_or_default();
+
+        if !TASK_NOTIFICATION_ICON.with(Cell::get) {
+            data.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
+            data.uCallbackMessage = WM_TASK_NOTIFICATION;
+            copy_wide(&mut data.szTip, "AniManga Studio");
+            if !Shell_NotifyIconW(NIM_ADD, &data).as_bool() {
+                return;
+            }
+            TASK_NOTIFICATION_ICON.with(|registered| registered.set(true));
+        }
+
+        data.uFlags = NIF_INFO | NIF_REALTIME;
+        data.dwInfoFlags = icon_flag | NIIF_NOSOUND | NIIF_RESPECT_QUIET_TIME;
+        copy_wide(&mut data.szInfoTitle, title);
+        copy_wide(&mut data.szInfo, &body);
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
+    }
+}
+
+fn remove_task_notification_icon(hwnd: HWND) {
+    if !TASK_NOTIFICATION_ICON.with(|registered| registered.replace(false)) {
+        return;
+    }
+    let data = NOTIFYICONDATAW {
+        cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: TASK_NOTIFICATION_ICON_ID,
+        ..Default::default()
+    };
+    unsafe { let _ = Shell_NotifyIconW(NIM_DELETE, &data); }
+}
+
 fn handle_ipc(webview: &ICoreWebView2, msg: &str) {
     ipc_log(&format!("→ {msg}"));
     let cmd = json_str(msg, "cmd").unwrap_or_default();
@@ -933,6 +1007,14 @@ fn handle_ipc(webview: &ICoreWebView2, msg: &str) {
             let hwnd = APP.with(|a| a.borrow().as_ref().map(|app| app.hwnd));
             if let Some(hwnd) = hwnd {
                 set_taskbar(hwnd, &state, value);
+            }
+        }
+        "notify" => {
+            let status = json_str(msg, "status").unwrap_or_default();
+            let kind = json_str(msg, "kind").unwrap_or_default();
+            let hwnd = APP.with(|a| a.borrow().as_ref().map(|app| app.hwnd));
+            if let Some(hwnd) = hwnd {
+                show_task_notification(hwnd, &status, &kind);
             }
         }
         "stop" => with_existing_player(|p| p.stop()),
@@ -1376,15 +1458,33 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 }
                 LRESULT(0)
             }
+            WM_TASK_NOTIFICATION => {
+                match lparam.0 as u32 {
+                    NIN_BALLOONUSERCLICK => {
+                        remove_task_notification_icon(hwnd);
+                        let _ = ShowWindow(hwnd, SW_RESTORE);
+                        let _ = SetForegroundWindow(hwnd);
+                        let webview = APP.with(|a| a.borrow().as_ref().map(|app| app.webview.clone()));
+                        if let Some(webview) = webview {
+                            post_to_js(&webview, r#"{"event":"openActivity"}"#);
+                        }
+                    }
+                    NIN_BALLOONHIDE | NIN_BALLOONTIMEOUT => remove_task_notification_icon(hwnd),
+                    _ => {}
+                }
+                LRESULT(0)
+            }
             WM_CLOSE => {
                 // Ocultar YA la ventana para que el cierre se sienta instantáneo aunque el
                 // teardown tarde un pelín; luego cierre autoritativo único (WebView2 +
                 // backend WSL + autotermina). El Job Object remata cualquier hijo restante.
                 dbg_log("[wm] WM_CLOSE");
+                remove_task_notification_icon(hwnd);
                 let _ = ShowWindow(hwnd, SW_HIDE);
                 shutdown_everything()
             }
             WM_DESTROY => {
+                remove_task_notification_icon(hwnd);
                 PostQuitMessage(0);
                 LRESULT(0)
             }

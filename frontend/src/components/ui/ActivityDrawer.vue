@@ -1,7 +1,9 @@
 <script setup>
-import { computed, onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
+import { isNative, onMessage, send as nativeSend } from '@/lib/nativeBridge'
+import { readTaskNotificationsEnabled, taskNotificationUpdate } from '@/lib/taskNotifications'
 import Icon from './Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import { etaTarea as eta } from '@/lib/eta'
@@ -14,6 +16,9 @@ const ui = useUiStore()
 const store = useMangaStore()
 const groups = computed(() => store.processingGroups)
 const connectionDown = computed(() => sseState.value === 'down')
+let seenTasks = new Map()
+let stopTaskWatch
+let stopNativeMessages
 
 const KIND = {
   download:  { icon: 'download', color: 'var(--azure)',  label: 'Descarga' },
@@ -30,8 +35,25 @@ function viewAll() { ui.activityTab = 'active'; ui.goto('activity') }   // goto(
 function retryActivity() { retrySse() }
 function onKey(e) { if (e.key === 'Escape' && ui.activityOpen) close() }
 
-onMounted(() => window.addEventListener('keydown', onKey))
-onUnmounted(() => window.removeEventListener('keydown', onKey))
+onMounted(() => {
+  window.addEventListener('keydown', onKey)
+  if (!isNative()) return
+
+  stopNativeMessages = onMessage((message) => {
+    if (message?.event === 'openActivity') viewAll()
+  })
+  stopTaskWatch = watch(() => store.normalizedTasks, (tasks) => {
+    const foreground = !document.hidden && document.hasFocus()
+    const update = taskNotificationUpdate(seenTasks, tasks, readTaskNotificationsEnabled(), foreground)
+    seenTasks = update.next
+    for (const notification of update.notifications) nativeSend('notify', notification)
+  }, { immediate: true })
+})
+onUnmounted(() => {
+  window.removeEventListener('keydown', onKey)
+  stopTaskWatch?.()
+  stopNativeMessages?.()
+})
 </script>
 
 <template>
