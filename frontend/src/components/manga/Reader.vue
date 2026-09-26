@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useMangaStore } from '@/stores/manga'
+import { useCbzStore } from '@/stores/cbz'
 import { useUiStore } from '@/stores/ui'
 import { pageUrl } from '@/lib/manga'
 import { imgProxy } from '@/lib/img'
@@ -10,11 +11,26 @@ import Spinner from '@/components/ui/Spinner.vue'
 import { smoothBehavior } from '@/lib/motion'
 
 const store = useMangaStore()
+const cbzStore = useCbzStore()
 const ui = useUiStore()
 const open = computed(() => !!store.reader)
 const isManga = computed(() => store.reader?.kind !== 'cbz')
 const isUpscaled = computed(() => store.reader?.source === 'upscaled')
 const isRTL = computed(() => store.dir === 'rtl')
+
+// CBZ/CBR guarda su propio progreso, separado de `manga_progress.json`.
+watch(() => [store.reader?.kind, store.reader?.title, store.reader?.volumeFile,
+  store.page, store.pages.length], (current, previous) => {
+  const [kind, title, volume, page, total] = current
+  const [oldKind, oldTitle, oldVolume, oldPage, oldTotal] = previous || []
+  if (oldKind === 'cbz' && (kind !== 'cbz' || title !== oldTitle || volume !== oldVolume)) {
+    if (oldTitle && oldVolume && oldTotal > 0)
+      cbzStore.queueProgress(oldTitle, oldVolume, oldPage, oldTotal, oldPage >= oldTotal - 1)
+    cbzStore.flushProgress()
+  }
+  if (kind === 'cbz' && title && volume && total > 0)
+    cbzStore.queueProgress(title, volume, page, total, page >= total - 1)
+}, { flush: 'sync' })
 
 // Ancho de imagen a pedir al backend: al tamaño del viewport (nítido) en lectura
 // normal, o full-res (w=0) al hacer zoom o en fit "original". El backend cachea el
@@ -406,7 +422,7 @@ function onKey(e) {
   }
 }
 onMounted(() => { window.addEventListener('keydown', onKey) })
-onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(barsTimer); cmpEnd(); stopAutoScroll() })
+onUnmounted(() => { window.removeEventListener('keydown', onKey); clearTimeout(barsTimer); cmpEnd(); stopAutoScroll(); cbzStore.flushProgress() })
 </script>
 
 <template>

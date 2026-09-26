@@ -3,6 +3,9 @@ import { api } from '@/lib/api'
 import { useUiStore } from './ui'
 import { useMangaStore } from './manga'
 
+let progressTimer = null
+let pendingProgress = null
+
 export const useCbzStore = defineStore('cbz', {
   state: () => ({
     items: [],            // [{title, volume_count, first_volume}]
@@ -43,8 +46,33 @@ export const useCbzStore = defineStore('cbz', {
         const d = await api.get(`/api/cbz/pages?manga=${encodeURIComponent(this.current.title)}&volume=${encodeURIComponent(vol.name)}`)
         const pages = d.pages || []
         if (!pages.length) { ui.toast('Volumen vacío', 'error'); return }
-        useMangaStore().openReaderRaw(this.current.title, pages, vol.name.replace(/\.[^.]+$/, ''))
+        const saved = Number.isInteger(vol.progress_page) ? vol.progress_page : 0
+        const page = vol.read ? 0 : Math.max(0, Math.min(saved, pages.length - 1))
+        useMangaStore().openReaderRaw(this.current.title, pages,
+          vol.name.replace(/\.[^.]+$/, ''), vol.name, page)
       } catch (_) { ui.toast('No se pudo abrir el volumen', 'error') }
     },
+
+    queueProgress(manga, volume, page, pageCount, read) {
+      if (pendingProgress?.manga === manga && pendingProgress?.volume === volume)
+        read = read || pendingProgress.read
+      pendingProgress = { manga, volume, page, page_count: pageCount, read: !!read }
+      clearTimeout(progressTimer)
+      progressTimer = setTimeout(() => this.flushProgress(), 800)
+    },
+
+    async flushProgress() {
+      clearTimeout(progressTimer)
+      progressTimer = null
+      const progress = pendingProgress
+      pendingProgress = null
+      if (!progress) return
+      try {
+        await api.post('/api/cbz/progress', progress)
+      } catch (_) {
+        useUiStore().toast('No se pudo guardar el progreso del tomo', 'error')
+      }
+    },
+
   },
 })

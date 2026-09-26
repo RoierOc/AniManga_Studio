@@ -11,9 +11,11 @@ from urllib.parse import quote
 import os
 import zipfile
 import subprocess
+import threading
 
 from api.platform import first_windows_user_dir
-from api.runtime import safe_child
+from api.auth import guardia_origen
+from api.runtime import DATA_ROOT, read_json_safe, safe_child, write_json_atomic
 
 cbz_bp = Blueprint("cbz", __name__)
 
@@ -32,6 +34,18 @@ _ARCHIVE_EXTS = {'.cbz', '.cbr', '.zip', '.rar'}
 _IMAGE_EXTS   = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif'}
 _MIME = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
          '.webp': 'image/webp', '.gif': 'image/gif', '.avif': 'image/avif'}
+# one process-wide lock is enough for this single-user desktop state; use per-key or
+# cross-process locking only if concurrent server instances become a supported mode.
+_progress_lock = threading.Lock()
+
+
+def _progress_file() -> Path:
+    return DATA_ROOT / 'cbz_progress.json'
+
+
+def _progress_read() -> dict:
+    data = read_json_safe(_progress_file(), default={}, component='cbz')
+    return data if isinstance(data, dict) else {}
 
 
 def _is_image(name: str) -> bool:
@@ -122,13 +136,68 @@ def list_volumes():
         return jsonify({"error": "not found"}), 404
     vols = sorted([f for f in d.iterdir() if _is_archive(f)], key=lambda f: f.name)
     result = []
+    progress = _progress_read().get(manga, {})
+    if not isinstance(progress, dict):
+        progress = {}
     for v in vols:
         try:
             count = len(_list_entries(v))
         except Exception:
             count = 0
-        result.append({"name": v.name, "page_count": count, "ext": v.suffix.lower()})
+        saved = progress.get(v.name, {})
+        page = saved.get('page') if isinstance(saved, dict) else None
+        valid = (isinstance(saved, dict) and saved.get('page_count') == count
+                 and type(page) is int and 0 <= page < count)
+        result.append({"name": v.name, "page_count": count, "ext": v.suffix.lower(),
+                       "progress_page": page if valid else 0,
+                       "in_progress": valid and not bool(saved.get('read')) if isinstance(saved, dict) else False,
+                       "read": bool(saved.get('read')) and valid if isinstance(saved, dict) else False})
     return jsonify(result)
+
+
+@cbz_bp.route("/progress", methods=["POST"])
+def save_progress():
+    blocked = guardia_origen()
+    if blocked:
+        return blocked
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify({"error": "se esperaba un objeto de progreso"}), 400
+
+    manga = _safe_component(body.get('manga'))
+    volume = _safe_component(body.get('volume'))
+    if not manga or not volume:
+        return jsonify({"error": "manga o volumen inválido"}), 400
+    if _safe_arc(manga, volume) is None:
+        return jsonify({"error": "volumen no encontrado"}), 404
+
+    page = body.get('page')
+    page_count = body.get('page_count')
+    read = body.get('read', False)
+    if (type(page) is not int or type(page_count) is not int or
+            not 1 <= page_count <= 100_000 or not 0 <= page < page_count or
+            type(read) is not bool):
+        return jsonify({"error": "progreso inválido"}), 400
+
+    # Un único archivo por biblioteca local; el nombre del manga y el tomo son
+    # componentes, nunca rutas del sistema suministradas por el cliente.
+    with _progress_lock:
+        data = _progress_read()
+        manga_progress = data.get(manga)
+        if not isinstance(manga_progress, dict):
+            manga_progress = {}
+            data[manga] = manga_progress
+        previous = manga_progress.get(volume)
+        was_read = (isinstance(previous, dict) and previous.get('page_count') == page_count
+                    and type(previous.get('page')) is int
+                    and 0 <= previous['page'] < page_count and bool(previous.get('read')))
+        manga_progress[volume] = {
+            'page': page,
+            'page_count': page_count,
+            'read': was_read or read,
+        }
+        write_json_atomic(_progress_file(), data, indent=2, keep_backup=True)
+    return jsonify({"success": True})
 
 
 @cbz_bp.route("/pages")

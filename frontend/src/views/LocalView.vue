@@ -60,7 +60,10 @@ onMounted(() => { if (!store.loaded) store.load() })
                   <Icon name="library" :size="18" class="vol__ic" />
                   <div class="vol__info">
                     <span class="vol__name">{{ v.name }}</span>
-                    <span class="vol__meta">{{ v.page_count }} pág. · {{ v.ext.replace('.', '').toUpperCase() }}</span>
+                    <span class="vol__meta">
+                      {{ v.read ? 'Leído' : v.in_progress ? `En curso · pág. ${v.progress_page + 1}/${v.page_count}` : `${v.page_count} pág.` }}
+                      · {{ v.ext.replace('.', '').toUpperCase() }}
+                    </span>
                   </div>
                   <Icon name="play" :size="15" class="vol__play" />
                 </li>

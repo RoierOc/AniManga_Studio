@@ -2670,12 +2670,12 @@ export const useMangaStore = defineStore('manga', {
         if (d.status === 'started' || d.status === 'already_running') this.closeColorPicker()
       } catch (_) { ui.toast('No se pudo iniciar el escalado a color', 'error') }
     },
-    openReaderRaw(title, pages, label = '') {
+    openReaderRaw(title, pages, label = '', volumeFile = '', startPage = 0) {
       this._resetView()
-      this.reader = { title, chapter: label, source: '', kind: 'cbz' }
+      this.reader = { title, chapter: label, source: '', kind: 'cbz', volumeFile }
       this._applyReaderPrefs(title)
       this.pages = pages
-      this.page = 0
+      this.page = Math.max(0, Math.min(Number(startPage) || 0, pages.length - 1))
       useUiStore().pushNav()
     },
     // Open a chapter read straight from remote page URLs (no disk round-trip).
