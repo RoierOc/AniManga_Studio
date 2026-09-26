@@ -61,8 +61,8 @@ def test_reinicio_resuelve_y_limita_cambios_a_un_anime(monkeypatch, tmp_path):
         'poster': 'https://image.tmdb.org/t/p/w780/new.jpg',
     })
     episode_stills = {
-        '10_s1_v4': {'1': {'still': 'https://image.tmdb.org/t/p/original/old-still.jpg'}},
-        '11_s1_v4': {'1': {'still': 'https://image.tmdb.org/t/p/original/new-still.jpg'}},
+        '10_s1_v5': {'1': {'still': 'https://image.tmdb.org/t/p/original/old-still.jpg'}},
+        '11_s1_v5': {'1': {'still': 'https://image.tmdb.org/t/p/original/new-still.jpg'}},
     }
     invalidated_meta = []
     monkeypatch.setattr(runtime, 'cache_get', lambda namespace, key, ttl: episode_stills.get(key))
@@ -94,7 +94,7 @@ def test_reinicio_resuelve_y_limita_cambios_a_un_anime(monkeypatch, tmp_path):
         'https://image.tmdb.org/t/p/original/old-still.jpg',
         'https://image.tmdb.org/t/p/original/new-still.jpg',
     }
-    assert set(invalidated_meta) == {('ep_meta', '10_s1_v4'), ('ep_meta', '11_s1_v4')}
+    assert set(invalidated_meta) == {('ep_meta', '10_s1_v5'), ('ep_meta', '11_s1_v5')}
 
 
 def test_reinicio_de_portada_inexistente_responde_404(monkeypatch, tmp_path):

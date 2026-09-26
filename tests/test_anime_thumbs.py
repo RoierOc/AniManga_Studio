@@ -141,11 +141,19 @@ def test_un_fotograma_embadurnado_se_reconoce(tmp_path):
     assert anime._juzgar_fotograma(p_amarillo) == 'ok'
 
 
-def test_el_still_de_tmdb_no_viene_a_300px():
+def test_el_still_de_tmdb_no_viene_a_300px(monkeypatch):
     """La tarjeta lo pinta a ~742 px físicos: w300 se estira ×2,5 y se ve blando."""
     from api import anime
-    import inspect
+    from types import SimpleNamespace
 
-    fuente = inspect.getsource(anime._tmdb_season_episodes)
-    assert 'image.tmdb.org/t/p/original' in fuente
-    assert '/t/p/w300' not in fuente
+    monkeypatch.setattr(anime, '_tmdb_key', lambda: 'test-key')
+    monkeypatch.setattr(anime._http, 'get', lambda *_args, **_kwargs: SimpleNamespace(json=lambda: {
+        'episodes': [{
+            'episode_number': 1, 'name': 'Capítulo', 'overview': '',
+            'still_path': '/still.jpg', 'air_date': '',
+        }]
+    }))
+
+    result = anime._tmdb_season_episodes(42, 2, 'es-ES')
+
+    assert result['1']['still'] == 'https://image.tmdb.org/t/p/original/still.jpg'

@@ -3504,8 +3504,10 @@ def anime_reset_cover(anime_id):
     }
     episode_meta_keys = set()
     for tmdb_id in episode_meta_sources:
-        season = (_tmdb_season_by_year(tmdb_id, year)[0] if year else None) or 1
-        episode_meta_keys.add(_episode_meta_cache_key(tmdb_id, season))
+        season, grouped = _episode_meta_season(
+            tmdb_id, year, title_en, title_romaji or anime.get('title', ''))
+        if season is not None:
+            episode_meta_keys.add(_episode_meta_cache_key(tmdb_id, season, grouped))
     for key in episode_meta_keys:
         cached_meta = cache_get('ep_meta', key, _EP_META_TTL) or {}
         cache_invalidate('ep_meta', key)
@@ -5238,34 +5240,94 @@ def _tmdb_season_episodes(tmdb_id, season, lang):
         num = e.get('episode_number')
         if num is None:
             continue
-        still = e.get('still_path')
-        out[str(num)] = {
-            'title':    (e.get('name') or '').strip(),
-            'overview': (e.get('overview') or '').strip(),
-            # `original`, no `w300`: la tarjeta pinta ~742 px FÍSICOS, así que 300 se estiraba ×2,5
-            # y salía blando. TMDB sólo ofrece w92/w185/w300/original para los stills — no hay
-            # peldaño intermedio. El proxy (`imgProxy`) lo baja al tamaño real y lo cachea en disco,
-            # así que el original se descarga UNA vez.
-            'still':    f'https://image.tmdb.org/t/p/original{still}' if still else '',
-            'aired':    (e.get('air_date') or '').strip(),
-        }
+        out[str(num)] = _tmdb_episode_entry(e)
     return out
 
 
+def _tmdb_episode_entry(e):
+    still = e.get('still_path')
+    return {
+        'title': (e.get('name') or '').strip(),
+        'overview': (e.get('overview') or '').strip(),
+        'still': f'https://image.tmdb.org/t/p/original{still}' if still else '',
+        'aired': (e.get('air_date') or '').strip(),
+    }
+
+
+def _tmdb_season_group(tmdb_id, season):
+    """Devuelve (grupo, subgrupo, detalle EN) si TMDB identifica Tn sin ambigüedad."""
+    try:
+        groups = _http.get(
+            f'https://api.themoviedb.org/3/tv/{tmdb_id}/episode_groups',
+            params={'api_key': _tmdb_key(), 'language': 'en-US'}, timeout=10).json().get('results') or []
+        for group_type in (6, 7):  # Production primero; TV como alternativa.
+            matches = []
+            for group in groups:
+                if str(group.get('type')) != str(group_type) or not group.get('id'):
+                    continue
+                detail = _http.get(
+                    f"https://api.themoviedb.org/3/tv/episode_group/{group['id']}",
+                    params={'api_key': _tmdb_key(), 'language': 'en-US'}, timeout=10).json()
+                seasons = [g for g in (detail.get('groups') or [])
+                           if _extract_season_number(g.get('name'), '') == season and g.get('id')]
+                if len(seasons) > 1:
+                    return None
+                if seasons:
+                    matches.append((group['id'], seasons[0]['id'], detail))
+            if len(matches) == 1:
+                return matches[0]
+            if matches:  # Varios grupos del mismo tipo describen Tn: no elegir a ciegas.
+                return None
+    except Exception:
+        pass
+    return None
+
+
+def _tmdb_group_episodes(tmdb_id, group_ref, lang, english_detail=None):
+    """Mapea 1..N del subgrupo; no usa el número global del episodio emitido."""
+    group_id, season_group_id, _ = group_ref
+    detail = english_detail
+    if detail is None:
+        detail = _http.get(
+            f'https://api.themoviedb.org/3/tv/episode_group/{group_id}',
+            params={'api_key': _tmdb_key(), 'language': lang}, timeout=10).json()
+    season_group = next((g for g in (detail.get('groups') or [])
+                         if str(g.get('id')) == str(season_group_id)), None)
+    episodes = (season_group or {}).get('episodes') or []
+    def _order(pair):
+        try:
+            return int(pair[1]['order']), pair[0]
+        except (KeyError, TypeError, ValueError):
+            return pair[0], pair[0]
+    ordered = sorted(enumerate(episodes), key=_order)
+    return {str(index): _tmdb_episode_entry(e) for index, (_, e) in enumerate(ordered, 1)}
+
+
 _EP_META_TTL = 180 * 24 * 3600
-_EP_META_VERSION = 4
+_EP_META_VERSION = 5
 
 
-def _episode_meta_cache_key(tmdb_id, season):
-    return f'{tmdb_id}_s{season}_v{_EP_META_VERSION}'
+def _episode_meta_season(tmdb_id, year, title_en, title_romaji):
+    year_season = _tmdb_season_by_year(tmdb_id, year)[0] if year else None
+    title_season = _extract_season_number(title_en, title_romaji)
+    if title_season and year_season and title_season != year_season:
+        return title_season, True
+    if year_season:
+        return year_season, False
+    return (title_season, True) if title_season else (None, False)
+
+
+def _episode_meta_cache_key(tmdb_id, season, grouped=False):
+    source = '_g' if grouped else ''
+    return f'{tmdb_id}_s{season}{source}_v{_EP_META_VERSION}'
 
 
 @anime_bp.route('/episode_meta/<anime_id>')
 def anime_episode_meta(anime_id):
     """Título + descripción (+ still) de cada episodio desde TMDB, para el detalle del anime.
-    Usa el tmdb_id/tmdb_type/season_year YA resueltos por el arte del hero; la temporada se
-    fija con _tmdb_season_by_year (misma lógica que evita confundir temporadas de la franquicia).
-    Español primero, rellenando huecos con inglés. Cacheado en disco 7 días por show+temporada.
+    Usa el tmdb_id/tmdb_type/season_year ya resueltos por el arte del hero. Si el año no identifica
+    la temporada, recurre al grupo TMDB de producción/TV cuando el título indica Tn; mapea su orden
+    local para no confundirlo con la numeración global. Nunca fuerza T1. Español primero y caché larga.
     Devuelve { source:'tmdb', season, meta:{ '<num>': {title, overview, still, aired} } } o
     { source:null, meta:{} } cuando no hay match TMDB (el front cae a los títulos de MAL)."""
     from api.runtime import cache_get, cache_set
@@ -5277,19 +5339,33 @@ def anime_episode_meta(anime_id):
     if not tmdb_id or not _tmdb_key() or ttype != 'tv':
         return jsonify({'source': None, 'meta': {}})
 
-    season = _tmdb_season_by_year(tmdb_id, year)[0] or 1
-    ck = _episode_meta_cache_key(tmdb_id, season)   # _v3: idioma consistente · _v4: still original
+    title_en = v.get('title_english') or v.get('title') or ''
+    title_romaji = v.get('title_romaji') or ''
+    season, grouped = _episode_meta_season(tmdb_id, year, title_en, title_romaji)
+    if season is None:
+        return jsonify({'source': None, 'meta': {}})
+    ck = _episode_meta_cache_key(tmdb_id, season, grouped)
     # Los títulos de episodio son prácticamente inmutables → caché larga, sin desalojar.
     disk = cache_get('ep_meta', ck, _EP_META_TTL)
     if disk is not None:
         return jsonify({'source': 'tmdb', 'season': season, 'meta': disk})
 
+    group_ref = _tmdb_season_group(tmdb_id, season) if grouped else None
+    if grouped and not group_ref:
+        return jsonify({'source': None, 'meta': {}})
+
     meta = {}
     try:
-        es = _tmdb_season_episodes(tmdb_id, season, 'es-ES')
+        if group_ref:
+            es = _tmdb_group_episodes(tmdb_id, group_ref, 'es-ES')
+            en = _tmdb_group_episodes(tmdb_id, group_ref, 'en-US', group_ref[2])
+        else:
+            es = _tmdb_season_episodes(tmdb_id, season, 'es-ES')
+            en = {}
         # Rellenar con inglés cuando el español falte O sea un placeholder ('Episodio 7').
         need_en = any(_is_placeholder_title(e['title']) or not e['overview'] for e in es.values()) or not es
-        en = _tmdb_season_episodes(tmdb_id, season, 'en-US') if need_en else {}
+        if need_en and not group_ref:
+            en = _tmdb_season_episodes(tmdb_id, season, 'en-US')
 
         nums = set(es) | set(en)
         # Consistencia de idioma en los TÍTULOS: si a algún episodio le falta el título real en
@@ -5318,7 +5394,7 @@ def anime_episode_meta(anime_id):
         pass
     if meta:
         cache_set('ep_meta', ck, meta, ttl=_EP_META_TTL, max_entries=5000)
-    return jsonify({'source': 'tmdb', 'season': season, 'meta': meta})
+    return jsonify({'source': 'tmdb' if meta else None, 'season': season, 'meta': meta})
 
 
 # ── Subtitle list endpoint ─────────────────────────────────────────────────────
