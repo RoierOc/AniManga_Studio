@@ -7,6 +7,7 @@ import { imgProxy, animeThumb } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import EpisodeMediaInfo from './EpisodeMediaInfo.vue'
 
 const props = defineProps({
   anime: { type: Object, required: true },
@@ -104,11 +105,13 @@ function onPrimary() {
 
 // Todas las acciones viven en el clic derecho (menú contextual) — la tarjeta queda limpia.
 const cm = ref({ open: false, x: 0, y: 0 })
+const mediaInfoOpen = ref(false)
 const menuItems = computed(() => {
   const a = props.anime, e = props.ep
   const items = []
   if (playable.value) {
     items.push({ label: 'Reproducir', icon: 'play', action: () => store.play(a, e) })
+    items.push({ label: 'Información del archivo', icon: 'film', action: () => { mediaInfoOpen.value = true } })
     // Subtítulos en español (estado según la tarea)
     if (subFetching.value) items.push({ label: 'Buscando subtítulos…', icon: 'globe', disabled: true })
     else if (subRunning.value) items.push({ label: `Traduciendo… ${subTask.value?.progress || 0}%`, icon: 'close', danger: true, action: () => store.cancelTranslate(a, e) })
@@ -214,6 +217,8 @@ function openMenu(ev) {
     </Transition>
 
     <ContextMenu v-model:open="cm.open" :x="cm.x" :y="cm.y" :items="menuItems" />
+    <EpisodeMediaInfo v-if="mediaInfoOpen" :anime-id="anime.id" :episode-key="animeEpisodeKey(ep)"
+                      :episode-title="epTitle" @close="mediaInfoOpen = false" />
   </div>
 </template>
 

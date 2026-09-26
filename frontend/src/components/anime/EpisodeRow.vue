@@ -1,10 +1,11 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { animeEpLabel, animeEpisodeKey, isEpisodePlayable } from '@/lib/anime'
 import { imgProxy, animeThumb } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
+import EpisodeMediaInfo from './EpisodeMediaInfo.vue'
 
 const props = defineProps({
   anime: { type: Object, required: true },
@@ -16,6 +17,7 @@ const props = defineProps({
   sel: { type: Object, default: null },
 })
 const store = useAnimeStore()
+const mediaInfoOpen = ref(false)
 
 const playable = computed(() => isEpisodePlayable(props.ep, props.batch))
 // Marcable solo si hay selección activa Y el episodio está en disco (el lote borra archivos).
@@ -112,6 +114,9 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 
       <div class="eprow__acts">
         <template v-if="playable">
+          <button class="eprow__icon" data-tip="Información del archivo" @click.stop="mediaInfoOpen = true">
+            <Icon name="film" :size="13" />
+          </button>
           <button v-if="!subRunning && subTask?.status !== 'done'" class="eprow__icon eprow__icon--sub" :disabled="subFetching"
                   :data-tip="subFetching ? 'Buscando…' : 'Subtítulos en español'" @click.stop="store.translateSubs(anime, ep)">
             <Spinner v-if="subFetching" :size="12" tone="ok" /><span v-else class="eprow__sub-lbl">ES</span>
@@ -161,6 +166,9 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
         <div v-else class="eprow__info-empty">Sin descripción disponible</div>
       </div>
     </Transition>
+
+    <EpisodeMediaInfo v-if="mediaInfoOpen" :anime-id="anime.id" :episode-key="animeEpisodeKey(ep)"
+                      :episode-title="epTitle" @close="mediaInfoOpen = false" />
   </div>
 </template>
 
