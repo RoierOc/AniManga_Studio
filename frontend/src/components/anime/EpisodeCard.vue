@@ -71,7 +71,7 @@ const thumbSrc = computed(() => {
   }
   // 400 se quedaba corto: la tarjeta mide ~495 px CSS, así que pedía el peldaño 640 y lo pintaba
   // a 742 físicos. Con el ancho real cae en el 900 y deja de verse blando.
-  return meta.value?.still ? imgProxy(meta.value.still, 500) : ''
+  return meta.value?.still ? imgProxy(meta.value.still, 500, props.anime.cover_rev) : ''
 })
 
 // Título real del episodio (TMDB/MAL) si lo tenemos; si no, la etiqueta derivada del archivo.

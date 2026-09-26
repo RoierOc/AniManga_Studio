@@ -17,6 +17,7 @@ def _app():
 
 def test_reinicio_resuelve_y_limita_cambios_a_un_anime(monkeypatch, tmp_path):
     from api import anime
+    from api import runtime
 
     lib_path = tmp_path / 'anime_library.json'
     seleccionada = {
@@ -39,6 +40,13 @@ def test_reinicio_resuelve_y_limita_cambios_a_un_anime(monkeypatch, tmp_path):
     }
     otra = {'al_id': 99, 'title': 'Serie B', 'cover': 'https://s4.anilist.co/other.jpg'}
     lib_path.write_text(json.dumps({'42': seleccionada, '99': otra}), encoding='utf-8')
+    thumbs_dir = tmp_path / 'thumbs'
+    thumbs_dir.mkdir()
+    selected_thumb = thumbs_dir / '42_1_w960.jpg'
+    unrelated_thumb = thumbs_dir / '99_1_w960.jpg'
+    selected_thumb.write_bytes(b'old episode frame')
+    unrelated_thumb.write_bytes(b'keep other anime')
+    monkeypatch.setattr(anime, '_THUMBS_DIR', thumbs_dir)
     monkeypatch.setattr(anime, '_lib_path', lambda: lib_path)
     monkeypatch.setattr(anime, '_anilist_enrich', lambda al_id: {
         'title': {'english': 'Series A', 'romaji': 'Serie A'},
@@ -52,6 +60,14 @@ def test_reinicio_resuelve_y_limita_cambios_a_un_anime(monkeypatch, tmp_path):
         'tmdb_type': 'tv',
         'poster': 'https://image.tmdb.org/t/p/w780/new.jpg',
     })
+    episode_stills = {
+        '10_s1_v4': {'1': {'still': 'https://image.tmdb.org/t/p/original/old-still.jpg'}},
+        '11_s1_v4': {'1': {'still': 'https://image.tmdb.org/t/p/original/new-still.jpg'}},
+    }
+    invalidated_meta = []
+    monkeypatch.setattr(runtime, 'cache_get', lambda namespace, key, ttl: episode_stills.get(key))
+    monkeypatch.setattr(runtime, 'cache_invalidate', lambda namespace, key=None: invalidated_meta.append((namespace, key)))
+    monkeypatch.setattr(anime, '_tmdb_season_by_year', lambda tmdb_id, year: (1, None))
     invalidated = []
     monkeypatch.setattr(anime, '_invalidate_img', lambda url: invalidated.append(url) or 1)
 
@@ -64,6 +80,8 @@ def test_reinicio_resuelve_y_limita_cambios_a_un_anime(monkeypatch, tmp_path):
     assert actual['cover_source'] == 'tmdb'
     assert actual['cover_locked'] is False
     assert actual['cover_rev'] == 1
+    assert not selected_thumb.exists()
+    assert unrelated_thumb.exists()
     assert actual['tmdb_id'] == 11
     assert actual['banner'] == seleccionada['banner']
     assert actual['episodes'] == seleccionada['episodes']
@@ -73,7 +91,10 @@ def test_reinicio_resuelve_y_limita_cambios_a_un_anime(monkeypatch, tmp_path):
         seleccionada['cover'], seleccionada['cover_xl'],
         'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/new.jpg',
         'https://image.tmdb.org/t/p/w780/new.jpg',
+        'https://image.tmdb.org/t/p/original/old-still.jpg',
+        'https://image.tmdb.org/t/p/original/new-still.jpg',
     }
+    assert set(invalidated_meta) == {('ep_meta', '10_s1_v4'), ('ep_meta', '11_s1_v4')}
 
 
 def test_reinicio_de_portada_inexistente_responde_404(monkeypatch, tmp_path):

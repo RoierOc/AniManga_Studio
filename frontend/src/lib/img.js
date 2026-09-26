@@ -9,18 +9,22 @@ import { ref } from 'vue'
 
 const ALLOWED_HOSTS = new Set(['image.tmdb.org', 's4.anilist.co', 'uploads.mangadex.org', 'images.mangabaka.dev', 'cdn.mangabaka.dev', 'artworks.thetvdb.com', 'cdn.myanimelist.net'])
 const revisions = ref(new Map())
+const animeRevisions = ref(new Map())
 
 // Per-entry versions change the browser URL for all existing consumers of that image.
 export function setImageRevisions(animes) {
   const next = new Map()
+  const byAnime = new Map()
   for (const anime of animes || []) {
     const revision = anime?.cover_rev
     if (!revision) continue
+    if (anime.id != null) byAnime.set(String(anime.id), revision)
     for (const url of [anime.cover, anime.cover_xl]) {
       if (url) next.set(url, revision)
     }
   }
   revisions.value = next
+  animeRevisions.value = byAnime
 }
 
 function versionParam(url, revision) {
@@ -83,6 +87,8 @@ export function animeThumb(animeId, num, epType, episodeKey = '') {
   const params = new URLSearchParams({ v: THUMB_W })
   if (epType === 'special') params.set('special', '1')
   if (episodeKey) params.set('episode_key', episodeKey)
+  const revision = animeRevisions.value.get(String(animeId))
+  if (revision) params.set('r', revision)
   return `/api/anime/thumb/${animeId}/${num}?${params}`
 }
 

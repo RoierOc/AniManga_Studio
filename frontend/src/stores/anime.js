@@ -847,7 +847,10 @@ export const useAnimeStore = defineStore('anime', {
       useUiStore().toast('Restableciendo portadas…', 'info')
       try {
         await api.post(`/api/anime/library/${encodeURIComponent(id)}/reset_cover`, {})
+        delete this.epMeta[id]
         await this.loadLibrary(true)
+        const refreshed = this.library.find((entry) => String(entry.id) === id) || anime
+        await this.loadEpMeta(refreshed)
         useUiStore().toast('Portadas restablecidas', 'ok')
       } catch (_) {
         useUiStore().toast('No se pudieron restablecer las portadas', 'error')

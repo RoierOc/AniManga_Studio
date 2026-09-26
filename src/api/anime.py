@@ -3440,12 +3440,16 @@ def anime_set_cover(anime_id):
 @anime_bp.route('/library/<anime_id>/reset_cover', methods=['POST'])
 def anime_reset_cover(anime_id):
     """Re-resolve and invalidate poster art for exactly one library entry."""
+    from api.runtime import cache_get, cache_invalidate
+
     lib = _lib_read()
     anime = lib.get(anime_id)
     if not anime:
         return jsonify({'error': 'not found'}), 404
 
     old_urls = {anime.get('cover'), anime.get('cover_xl'), _hd(anime.get('cover_xl', ''))}
+    old_tmdb_id = anime.get('tmdb_id')
+    old_tmdb_type = anime.get('tmdb_type', 'tv')
     al_id = anime.get('al_id')
     fresh = None
     if al_id:
@@ -3490,6 +3494,27 @@ def anime_reset_cover(anime_id):
     except (TypeError, ValueError):
         anime['cover_rev'] = 1
 
+    # Episode cards have an independent frame cache plus TMDB still metadata/cache.
+    # Invalidate only the selected show's old/new season entries.
+    episode_meta_sources = {
+        str(tmdb_id): tmdb_type
+        for tmdb_id, tmdb_type in ((old_tmdb_id, old_tmdb_type),
+                                   (anime.get('tmdb_id'), anime.get('tmdb_type', 'tv')))
+        if tmdb_id and tmdb_type == 'tv'
+    }
+    episode_meta_keys = set()
+    for tmdb_id in episode_meta_sources:
+        season = (_tmdb_season_by_year(tmdb_id, year)[0] if year else None) or 1
+        episode_meta_keys.add(_episode_meta_cache_key(tmdb_id, season))
+    for key in episode_meta_keys:
+        cached_meta = cache_get('ep_meta', key, _EP_META_TTL) or {}
+        cache_invalidate('ep_meta', key)
+        if isinstance(cached_meta, dict):
+            old_urls.update(
+                item.get('still') for item in cached_meta.values()
+                if isinstance(item, dict) and item.get('still')
+            )
+
     for url in old_urls | {anime.get('cover'), anime.get('cover_xl'), _hd(anime.get('cover_xl', ''))}:
         if not url:
             continue
@@ -3499,6 +3524,7 @@ def anime_reset_cover(anime_id):
             record_error('anime', e, op='cover_reset_cache', anime_id=anime_id)
             return jsonify({'error': 'no se pudo invalidar la caché de portada'}), 500
 
+    _borrar_thumbs(anime_id)
     _lib_write(lib)
     return jsonify({
         'ok': True,
@@ -5226,6 +5252,14 @@ def _tmdb_season_episodes(tmdb_id, season, lang):
     return out
 
 
+_EP_META_TTL = 180 * 24 * 3600
+_EP_META_VERSION = 4
+
+
+def _episode_meta_cache_key(tmdb_id, season):
+    return f'{tmdb_id}_s{season}_v{_EP_META_VERSION}'
+
+
 @anime_bp.route('/episode_meta/<anime_id>')
 def anime_episode_meta(anime_id):
     """Título + descripción (+ still) de cada episodio desde TMDB, para el detalle del anime.
@@ -5244,11 +5278,8 @@ def anime_episode_meta(anime_id):
         return jsonify({'source': None, 'meta': {}})
 
     season = _tmdb_season_by_year(tmdb_id, year)[0] or 1
-    ck = f'{tmdb_id}_s{season}_v4'   # _v3: idioma consistente · _v4: still `original` en vez de w300
-    # Los títulos de episodio son prácticamente inmutables una vez emitidos → caché larga
-    # (180 días) y sin desalojo por tamaño (max_entries alto), para que no se re-descarguen
-    # de TMDB una y otra vez con una biblioteca grande.
-    _EP_META_TTL = 180 * 24 * 3600
+    ck = _episode_meta_cache_key(tmdb_id, season)   # _v3: idioma consistente · _v4: still original
+    # Los títulos de episodio son prácticamente inmutables → caché larga, sin desalojar.
     disk = cache_get('ep_meta', ck, _EP_META_TTL)
     if disk is not None:
         return jsonify({'source': 'tmdb', 'season': season, 'meta': disk})

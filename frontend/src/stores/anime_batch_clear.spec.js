@@ -87,16 +87,22 @@ describe('liberación por lote de Mi Anime', () => {
     }
   })
 
-  it('restablece las portadas solo mediante la ruta de la ficha seleccionada', async () => {
+  it('restablece y recarga las imágenes de la ficha seleccionada', async () => {
     const store = useAnimeStore()
+    const anime = { id: '42', title: 'Serie A' }
+    store.library = [anime]
+    store.epMeta['42'] = { 1: { still: 'old-still' } }
     store.loadLibrary = vi.fn().mockResolvedValue(undefined)
+    store.loadEpMeta = vi.fn().mockResolvedValue(undefined)
     api.post.mockResolvedValue({ ok: true })
 
-    await store.resetAnimeCovers({ id: '42', title: 'Serie A' })
+    await store.resetAnimeCovers(anime)
 
     expect(api.post).toHaveBeenCalledWith('/api/anime/library/42/reset_cover', {})
     expect(store.loadLibrary).toHaveBeenCalledOnce()
     expect(store.loadLibrary).toHaveBeenCalledWith(true)
+    expect(store.epMeta['42']).toBeUndefined()
+    expect(store.loadEpMeta).toHaveBeenCalledWith(anime)
   })
 
   it('quita el marcador optimista cuando se elimina ese torrent desde la app', async () => {
