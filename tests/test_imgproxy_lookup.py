@@ -55,3 +55,24 @@ def test_la_extension_escrita_es_siempre_una_que_se_sabe_buscar(tmp_path, monkey
     m = _mod(tmp_path, monkeypatch)
     assert m._ext_for('image/jpeg', 'http://x/a') in m._EXTS
     assert m._ext_for('image/bmp', 'http://x/a.bmp') == '.jpg'   # desconocida → .jpg, no un huérfano
+
+
+def test_invalidate_borra_solo_los_derivados_de_esa_url(tmp_path, monkeypatch):
+    import hashlib
+
+    m = _mod(tmp_path, monkeypatch)
+    url = 'https://s4.anilist.co/file/anilistcdn/media/anime/cover/large/bx42.jpg'
+    key = hashlib.sha256(url.encode()).hexdigest()
+    original = tmp_path / f'{key}.jpg'
+    variant = tmp_path / f'{key}_w320.thumb.webp'
+    unrelated = tmp_path / 'otra-imagen.jpg'
+    for path in (original, variant, unrelated):
+        path.write_bytes(b'image')
+    m._INDEX[key] = original
+
+    assert m.invalidate(url) == 2
+    assert not original.exists()
+    assert not variant.exists()
+    assert unrelated.exists()
+    assert key not in m._INDEX
+    assert m.invalidate('https://untrusted.example/image.jpg') == 0

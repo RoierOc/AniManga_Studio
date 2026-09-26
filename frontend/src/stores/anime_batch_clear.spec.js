@@ -66,4 +66,47 @@ describe('liberación por lote de Mi Anime', () => {
     expect(store.loadQbt).toHaveBeenCalledOnce()
     expect(store.loadLibrary).toHaveBeenCalledOnce()
   })
+
+  it('mantiene marcado el torrent agregado tras el refresco tardío de biblioteca', async () => {
+    vi.useFakeTimers()
+    try {
+      const store = useAnimeStore()
+      store.qbt.connected = true
+      store.torrentAnime = { al_id: 42, title: 'Serie de prueba' }
+      store.loadLibrary = vi.fn().mockResolvedValue(undefined)
+      api.post.mockResolvedValueOnce({ ok: true }).mockResolvedValue({})
+
+      await store.addToQbt({ episode: 3, info_hash: 'abc123', title: 'Serie de prueba 03' })
+      expect(store.isAdded('abc123')).toBe(true)
+
+      await vi.advanceTimersByTimeAsync(3000)
+
+      expect(store.isAdded('abc123')).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('restablece las portadas solo mediante la ruta de la ficha seleccionada', async () => {
+    const store = useAnimeStore()
+    store.loadLibrary = vi.fn().mockResolvedValue(undefined)
+    api.post.mockResolvedValue({ ok: true })
+
+    await store.resetAnimeCovers({ id: '42', title: 'Serie A' })
+
+    expect(api.post).toHaveBeenCalledWith('/api/anime/library/42/reset_cover', {})
+    expect(store.loadLibrary).toHaveBeenCalledOnce()
+    expect(store.loadLibrary).toHaveBeenCalledWith(true)
+  })
+
+  it('quita el marcador optimista cuando se elimina ese torrent desde la app', async () => {
+    const store = useAnimeStore()
+    store.addedHashes = ['abc123', 'otro']
+    store.loadQbt = vi.fn().mockResolvedValue(undefined)
+    store.loadLibrary = vi.fn().mockResolvedValue(undefined)
+
+    await store.qbtAction('delete', 'ABC123')
+
+    expect(store.addedHashes).toEqual(['otro'])
+  })
 })

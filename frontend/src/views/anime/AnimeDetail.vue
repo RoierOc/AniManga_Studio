@@ -83,7 +83,7 @@ const inLibrary = computed(() => store.isInLibrary(anime.value))
 const heroIdx = ref(0)
 const heroTiers = computed(() => {
   const a = anime.value
-  return a ? [a.banner_detail || a.banner, a.cover_xl, a.cover].filter(Boolean).map(imgProxy) : []
+  return a ? [a.banner_detail || a.banner, a.cover_xl, a.cover].filter(Boolean).map(url => imgProxy(url)) : []
 })
 const heroImg = computed(() => heroTiers.value[heroIdx.value] || '')
 const hasBanner = computed(() => heroIdx.value <= 1 && !!((anime.value?.banner_detail || anime.value?.banner) || anime.value?.cover_xl))
@@ -94,6 +94,7 @@ const logoFailed = ref(false)
 const hasLogo = computed(() => !!anime.value?.logo && !logoFailed.value)
 const posterFailed = ref(false)
 watch(() => anime.value?.id, () => { heroIdx.value = 0; logoFailed.value = false; posterFailed.value = false; tab.value = 'eps' })
+watch(() => anime.value?.cover_rev, () => { heroIdx.value = 0; posterFailed.value = false })
 
 // Pestañas estilo Crunchyroll bajo el hero
 const tab = ref('eps')
@@ -390,6 +391,9 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
                     </li>
                     <li role="menuitem" @click="mgmt(() => store.openCoverPicker(anime))">
                       <Icon name="library" :size="14" /> Cambiar portada o fondo
+                    </li>
+                    <li role="menuitem" @click="mgmt(() => store.resetAnimeCovers(anime))">
+                      <Icon name="refresh" :size="14" /> Restablecer portadas
                     </li>
                     <li role="menuitem" @click="mgmt(() => store.openLinkTorrent())">
                       <Icon name="download" :size="14" /> Enlazar torrent de qBittorrent

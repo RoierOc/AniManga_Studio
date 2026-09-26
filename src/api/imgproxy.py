@@ -267,6 +267,31 @@ def render_cached(src, cache_key: str, width: int):
     return _render_variant(src, hashlib.sha256(cache_key.encode()).hexdigest(), _snap(width))
 
 
+def invalidate(url: str) -> int:
+    """Remove one allowlisted source image and all local size variants from the proxy cache."""
+    parsed = urlparse(url or '')
+    if parsed.scheme not in ('http', 'https') or parsed.netloc.lower() not in _ALLOWED_HOSTS:
+        return 0
+
+    key = hashlib.sha256(url.encode()).hexdigest()
+    with _INDEX_LOCK:
+        _INDEX.pop(key, None)
+
+    paths = [_CACHE_DIR / f'{key}{ext}' for ext in _EXTS]
+    paths.extend(
+        _CACHE_DIR / f'{key}_w{width}.thumb.{ext}'
+        for width in _LADDER for ext in ('jpg', 'webp')
+    )
+    removed = 0
+    for path in paths:
+        try:
+            path.unlink()
+            removed += 1
+        except FileNotFoundError:
+            pass
+    return removed
+
+
 @imgproxy_bp.route('')
 def proxy():
     url = request.args.get('u', '')

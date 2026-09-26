@@ -111,6 +111,15 @@ describe('los sidecar se cuelgan del archivo NUEVO, no del saliente', () => {
     expect(sent('subadd')).toHaveLength(0)
   })
 
+  it('restaura el cursor del sistema al cerrar el reproductor nativo', () => {
+    const store = useAnimeStore()
+    store.nativePlayer = { anime: { id: 'anime-1' }, ep: { num: 1 }, pos: 0, duration: 0 }
+
+    store.closeNative()
+
+    expect(sent('cursor').at(-1)).toEqual(['cursor', { hide: false }])
+  })
+
   it('sin sidecar no se aplaza nada (el camino de anime queda intacto)', async () => {
     const store = useAnimeStore()
     api.post.mockResolvedValue({

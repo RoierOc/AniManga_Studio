@@ -5,6 +5,7 @@ import { useUiStore } from './ui'
 import { nextUnwatchedEp, animeEpisodeKey, isSpanishOrMulti, isEnglishSub } from '@/lib/anime'
 import { vtGo, marcarTarjeta } from '@/lib/vt'
 import { isNative, send as nativeSend, onMessage as onNativeMessage } from '@/lib/nativeBridge'
+import { setImageRevisions } from '@/lib/img'
 
 // Estilo de subtítulos: lo aplica el PLAYER en vivo con `sub-ass-style-overrides` de mpv, NO se
 // hornea en el archivo. Por defecto, el estilo que traían las pistas árabes (Adobe Arabic 26,
@@ -146,6 +147,7 @@ export const useAnimeStore = defineStore('anime', {
     epOverrideMenu: null,      // { anime, ep, x, y }
     coverPicker: null,         // { id, tab, tabs: { cover, banner_detail, banner } } | null — each tab is { options, current, loaded }
     coverPickerLoading: false,
+    coverResettingId: null,
     coverSaving: false,
 
     autoplay: null,            // { anime, ep } | null
@@ -207,7 +209,7 @@ export const useAnimeStore = defineStore('anime', {
     targetEp: null,             // target episode when navigating from detail
     epFetch: {},                 // per-episode deep-fetch state: epNum → 'loading' | 'done'
     addingHashes: [],            // keys currently being added to qbt
-    addedHashes: [],             // keys just added (transient ✓)
+    addedHashes: [],             // successful adds bridge polling; an in-app delete clears the marker
     batchSelector: null,          // { torrent, animeId, hash, status, files, error }
 
     // ── Player web embebido (estilo Crunchyroll) ─────────────────────────
@@ -548,6 +550,7 @@ export const useAnimeStore = defineStore('anime', {
         const next = Array.isArray(data) ? data : []
         const needsFull = summary && summaryNeedsFullLibrary(previous, next)
         this.library = summary ? mergeAnimeLibrarySummary(previous, next) : next
+        setImageRevisions(this.library)
         this._ensureDlPolling()   // si hay descargas en curso, refresca el progreso en vivo
         if (summary && needsFull) await this.loadLibrary(true)
       } catch (e) {
@@ -836,6 +839,21 @@ export const useAnimeStore = defineStore('anime', {
         },
       }
       await this.loadPickerTab('cover')
+    },
+    async resetAnimeCovers(anime) {
+      const id = String(anime?.id || '')
+      if (!id || this.coverResettingId === id) return
+      this.coverResettingId = id
+      useUiStore().toast('Restableciendo portadas…', 'info')
+      try {
+        await api.post(`/api/anime/library/${encodeURIComponent(id)}/reset_cover`, {})
+        await this.loadLibrary(true)
+        useUiStore().toast('Portadas restablecidas', 'ok')
+      } catch (_) {
+        useUiStore().toast('No se pudieron restablecer las portadas', 'error')
+      } finally {
+        this.coverResettingId = null
+      }
     },
     async switchPickerTab(tab) {
       if (!this.coverPicker) return
@@ -1325,6 +1343,7 @@ export const useAnimeStore = defineStore('anime', {
           if (watched || pos > 30) anime.last_watched_at = Math.floor(Date.now() / 1000)
         }
       } catch {}
+      nativeSend('cursor', { hide: false })
       nativeSend('stop')
       this.nativePlayer = null
     },
@@ -1629,6 +1648,10 @@ export const useAnimeStore = defineStore('anime', {
     async qbtAction(action, hash, deleteFiles = false) {
       try {
         await api.post('/api/anime/qbt/action', { action, hash, delete_files: deleteFiles })
+        if (action === 'delete') {
+          const removed = String(hash).toLowerCase()
+          this.addedHashes = this.addedHashes.filter((key) => key.toLowerCase() !== removed)
+        }
         if (action === 'recheck') {
           useUiStore().toast('Recalculando archivos… espera unos segundos', 'info')
           await new Promise(r => setTimeout(r, 3000))
@@ -2065,7 +2088,6 @@ export const useAnimeStore = defineStore('anime', {
         if (d.ok) {
           ui.toast('Torrent agregado ✓', 'ok')
           this.addedHashes.push(key)
-          setTimeout(() => { this.addedHashes = this.addedHashes.filter(k => k !== key) }, 2500)
           const a = this.torrentAnime
           if (a) {
             api.post('/api/anime/library/add', {

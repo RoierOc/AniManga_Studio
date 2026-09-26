@@ -23,7 +23,7 @@ import requests as _http
 from api.resilient_http import http as _rhttp  # retry + backoff + per-host rate limiting (AniList/Jikan)
 from flask import Blueprint, has_request_context, jsonify, request, send_file
 
-from api.imgproxy import warm as _warm_img
+from api.imgproxy import warm as _warm_img, invalidate as _invalidate_img
 from api.platform import is_wsl as _is_wsl, is_macos as _is_macos
 from api.config_store import get_secret, set_secrets  # runtime-editable API keys (Ajustes)
 from api import sub_lang  # clasificación robusta de subtítulos ES/LAT (código + título)
@@ -2843,6 +2843,7 @@ def anime_library_get():
                 'title_romaji': anime.get('title_romaji', ''),
                 'cover': anime.get('cover', ''),
                 'cover_xl': _hd(anime.get('cover_xl', '')),
+                'cover_rev': anime.get('cover_rev', 0),
                 'banner': _hd(anime.get('banner', ''), hero=True),
                 'banner_source': anime.get('banner_source', ''),
                 'banner_detail': _hd(anime.get('banner_detail', ''), hero=True),
@@ -3088,6 +3089,7 @@ def anime_library_get():
             'title_romaji': anime.get('title_romaji', ''),
             'cover': anime.get('cover', ''),
             'cover_xl': _hd(anime.get('cover_xl', '')),
+            'cover_rev': anime.get('cover_rev', 0),
             'banner': _hd(anime.get('banner', ''), hero=True),
             'banner_source': anime.get('banner_source', ''),
             'banner_detail': _hd(anime.get('banner_detail', ''), hero=True),
@@ -3433,6 +3435,77 @@ def anime_set_cover(anime_id):
     _lib_write(lib)
     threading.Thread(target=_warm_img, args=(url,), daemon=True).start()
     return jsonify({'ok': True, 'cover': url})
+
+
+@anime_bp.route('/library/<anime_id>/reset_cover', methods=['POST'])
+def anime_reset_cover(anime_id):
+    """Re-resolve and invalidate poster art for exactly one library entry."""
+    lib = _lib_read()
+    anime = lib.get(anime_id)
+    if not anime:
+        return jsonify({'error': 'not found'}), 404
+
+    old_urls = {anime.get('cover'), anime.get('cover_xl'), _hd(anime.get('cover_xl', ''))}
+    al_id = anime.get('al_id')
+    fresh = None
+    if al_id:
+        try:
+            fresh = _anilist_enrich(int(al_id))
+        except Exception as e:
+            record_error('anime', e, op='cover_reset_anilist', anime_id=anime_id)
+
+    media = fresh or {}
+    cover_xl = (media.get('coverImage') or {}).get('extraLarge') or anime.get('cover_xl') or ''
+    titles = media.get('title') or {}
+    title_en = anime.get('title_english') or titles.get('english') or anime.get('title', '')
+    title_romaji = anime.get('title_romaji') or titles.get('romaji') or ''
+    year = anime.get('season_year') or media.get('seasonYear')
+    fmt = anime.get('format') or media.get('format')
+
+    art = None
+    if _tmdb_key() and (title_en or title_romaji):
+        try:
+            art = _tmdb_art(title_en, title_romaji, year, fmt=fmt)
+        except Exception as e:
+            record_error('anime', e, op='cover_reset_tmdb', anime_id=anime_id)
+
+    poster = (art or {}).get('poster') or cover_xl or anime.get('cover', '')
+    if not poster:
+        return jsonify({'error': 'no se encontró una portada para restablecer'}), 502
+
+    if art:
+        if art.get('tmdb_id'):
+            anime['tmdb_id'] = art['tmdb_id']
+        if art.get('tmdb_type'):
+            anime['tmdb_type'] = art['tmdb_type']
+    anime['cover_xl'] = cover_xl
+    anime['cover'] = poster
+    anime['cover_source'] = 'tmdb' if (art or {}).get('poster') else ('anilist' if cover_xl else anime.get('cover_source', ''))
+    anime['cover_locked'] = False
+    anime['_tmdb_tried'] = True
+    anime['_cover_tried'] = True
+    anime['_season_tried'] = True
+    try:
+        anime['cover_rev'] = int(anime.get('cover_rev') or 0) + 1
+    except (TypeError, ValueError):
+        anime['cover_rev'] = 1
+
+    for url in old_urls | {anime.get('cover'), anime.get('cover_xl'), _hd(anime.get('cover_xl', ''))}:
+        if not url:
+            continue
+        try:
+            _invalidate_img(url)
+        except OSError as e:
+            record_error('anime', e, op='cover_reset_cache', anime_id=anime_id)
+            return jsonify({'error': 'no se pudo invalidar la caché de portada'}), 500
+
+    _lib_write(lib)
+    return jsonify({
+        'ok': True,
+        'cover': anime['cover'],
+        'cover_xl': anime['cover_xl'],
+        'cover_rev': anime['cover_rev'],
+    })
 
 
 _BACKDROP_TARGETS = {'banner', 'banner_detail'}
