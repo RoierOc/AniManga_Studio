@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
+import { useInfiniteScroll } from '@/lib/useInfiniteScroll'
 import { useUiStore } from '@/stores/ui'
 import { useMangadexStore } from '@/stores/mangadex'
 import { useDiscoveryStore } from '@/stores/discovery'
@@ -52,6 +53,14 @@ async function copiar(t) {
 
 const SPECIAL_TABS = ['anilist', 'mylist']
 const canMore = computed(() => !SPECIAL_TABS.includes(store.tab) && store.tab !== 'search' && store.popular.length < store.total)
+const popularMore = useInfiniteScroll(
+  () => store.loadPopular(store.tab, store.page + 1),
+  () => canMore.value && !store.loading,
+)
+const anilistMore = useInfiniteScroll(
+  () => store.loadAnilistTop(store.alPage + 1),
+  () => store.tab === 'anilist' && store.alHasMore && !store.alLoading,
+)
 
 function goAnilist() {
   store.tab = 'anilist'
@@ -141,7 +150,7 @@ onMounted(() => {
         <div class="grid">
           <MdCard v-for="m in store.alTop" :key="m.al_id" :manga="{ ...m, contentRating: 'safe' }" :score="m.score" @open="store.openAnilistResult($event)" @menu="openMenu" />
         </div>
-        <div v-if="store.alHasMore" class="more">
+        <div v-if="store.alHasMore" ref="anilistMore" class="more">
           <button class="morebtn" :disabled="store.alLoading" @click="store.loadAnilistTop(store.alPage + 1)">{{ store.alLoading ? 'Cargando…' : 'Cargar más' }}</button>
         </div>
       </template>
@@ -164,7 +173,7 @@ onMounted(() => {
         <div class="grid">
           <MdCard v-for="m in store.list" :key="m.id" :manga="m" :score="store.score(m)" @open="store.openDetail($event)" @menu="openMenu" />
         </div>
-        <div v-if="canMore" class="more">
+        <div v-if="canMore" ref="popularMore" class="more">
           <button class="morebtn" :disabled="store.loading" @click="store.loadPopular(store.tab, store.page + 1)">
             {{ store.loading ? 'Cargando…' : 'Cargar más' }}
           </button>

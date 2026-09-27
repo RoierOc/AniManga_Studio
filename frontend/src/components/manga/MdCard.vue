@@ -6,7 +6,7 @@ import { useBoxWidth } from '@/lib/useBoxWidth'
 import { useDiscoveryStore } from '@/stores/discovery'
 
 const props = defineProps({ manga: { type: Object, required: true }, score: { type: Number, default: null } })
-defineEmits(['open', 'menu'])
+const emit = defineEmits(['open', 'menu'])
 const disco = useDiscoveryStore()
 const thumb = computed(() => imgThumb(props.manga.cover))
 const [poster, boxW] = useBoxWidth(260)
@@ -21,11 +21,19 @@ const tier = computed(() => {
   if (s >= 60) return 'is-mid'
   return 'is-low'
 })
+function openMenuFromButton(ev) {
+  const rect = ev.currentTarget.getBoundingClientRect()
+  const keyboard = ev.detail === 0
+  emit('menu', {
+    ev: { clientX: keyboard ? rect.right : ev.clientX, clientY: keyboard ? rect.bottom : ev.clientY },
+    manga: props.manga,
+  })
+}
 </script>
 
 <template>
-  <article class="mc" tabindex="0" @click="$emit('open', manga)" @keydown.enter="$emit('open', manga)"
-           @contextmenu.prevent="$emit('menu', { ev: $event, manga })">
+  <article class="mc" tabindex="0" @click="$emit('open', manga)" @keydown.enter.self="$emit('open', manga)"
+           @contextmenu.prevent="emit('menu', { ev: $event, manga })">
     <div class="mc__poster" ref="poster">
       <!-- imgProxy: el hotlink directo a uploads.mangadex.org devuelve el
            placeholder anti-hotlink en WebKitGTK (la app de escritorio) -->
@@ -42,6 +50,10 @@ const tier = computed(() => {
         <h3 class="mc__title">{{ manga.title }}</h3>
         <span v-if="manga.year" class="mc__year">{{ manga.year }}</span>
       </div>
+      <button class="mc__actions" :aria-label="`Más acciones para ${manga.title}`" data-tip="Más acciones"
+              @click.stop="openMenuFromButton">
+        <Icon name="more" :size="17" />
+      </button>
     </div>
   </article>
 </template>
@@ -71,11 +83,19 @@ const tier = computed(() => {
 @keyframes shine { to { transform: translateX(120%); } }
 .mc__score { position: absolute; top: var(--s-2); left: var(--s-2); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.5rem; border-radius: var(--r-pill); backdrop-filter: blur(6px); background: rgba(7,10,18,.6); color: var(--ink-soft); }
 .mc__score.is-high { color: var(--jade); } .mc__score.is-mid { color: var(--gold); } .mc__score.is-low { color: var(--ink-faint); }
-.mc__rating { position: absolute; top: var(--s-2); right: var(--s-2); font-family: var(--font-mono); font-size: 0.5625rem; font-weight: 700; padding: 2px 0.375rem; border-radius: var(--r-xs); color: var(--coral); background: rgba(7,10,18,.6); backdrop-filter: blur(6px); }
+.mc__rating { position: absolute; top: calc(var(--s-2) + 2.5rem); right: var(--s-2); font-family: var(--font-mono); font-size: 0.5625rem; font-weight: 700; padding: 2px 0.375rem; border-radius: var(--r-xs); color: var(--coral); background: rgba(7,10,18,.6); backdrop-filter: blur(6px); }
 .mc__hover { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; transition: opacity var(--t-base); }
 .mc:hover .mc__hover, .mc:focus-visible .mc__hover { opacity: 1; }
 .mc__btn { width: 2.875rem; height: 2.875rem; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--azure); box-shadow: var(--glow-azure); transform: scale(.8); transition: transform var(--t-base) var(--ease-snap); }
 .mc:hover .mc__btn { transform: scale(1); }
+.mc__actions { position: absolute; top: var(--s-2); right: var(--s-2); z-index: 2;
+  display: grid; place-items: center; width: 2.25rem; height: 2.25rem; border: 1px solid var(--line-2);
+  border-radius: var(--r-sm); color: #fff; background: rgba(7,10,18,.82); cursor: pointer;
+  opacity: 0; transform: translateY(0.25rem); transition: opacity var(--t-fast), transform var(--t-fast), background var(--t-fast); }
+.mc__actions:hover { background: var(--azure); }
+.mc__actions:focus-visible { opacity: 1; transform: none; outline: 2px solid var(--azure-bright); outline-offset: 2px; }
+.mc:hover .mc__actions, .mc:focus-within .mc__actions { opacity: 1; transform: none; }
+@media (hover: none) { .mc__actions { opacity: 1; transform: none; } }
 .mc__overlay { position: absolute; left: 0; right: 0; bottom: 0; padding: var(--s-3); }
 .mc__title { font-size: var(--fs-sm); font-weight: 600; color: #fff; line-height: var(--lh-snug); text-shadow: 0 1px 6px rgba(0,0,0,.65); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .mc__year { font-size: var(--fs-2xs); color: var(--ink-soft); text-shadow: 0 1px 4px rgba(0,0,0,.6); }

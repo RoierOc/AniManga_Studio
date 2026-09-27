@@ -2,13 +2,14 @@
 /* Descubrir (TMDB). Añadir traduce el id de TMDB al de Sonarr/Radarr vía `/resolve`, que hace un
    lookup EXACTO por `tmdb:<id>` — antes se emparejaba por título y cada obra con nombre no inglés
    abría un «varias coincidencias, elige la correcta» que era puro peaje. */
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onMounted } from 'vue'
 import { useMediaStore } from '@/stores/media'
 import MediaCard from '@/components/media/MediaCard.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import DensityToggle from '@/components/ui/DensityToggle.vue'
+import { useInfiniteScroll } from '@/lib/useInfiniteScroll'
 
 const store = useMediaStore()
 
@@ -29,21 +30,10 @@ function pickKind(k) {
 }
 function pickGenre(id) { store.discoverGenre = store.discoverGenre === id ? '' : id; store.loadDiscover() }
 
-/* Scroll infinito: descubrir no debería toparse con un muro a las 20 primeras. `rootMargin`
- * dispara la carga antes del borde, así la rejilla crece sin que llegues a ver el final.
- * Mismo patrón que el Descubrir de manga. */
-const sentinel = ref(null)
-let io = null
-watch(sentinel, (el, prev) => {
-  if (!('IntersectionObserver' in window)) return   // sin soporte queda el botón
-  if (prev && io) io.unobserve(prev)
-  if (!el) return
-  io = io || new IntersectionObserver((entries) => {
-    if (entries[0].isIntersecting) store.loadMoreDiscover()
-  }, { rootMargin: '600px' })
-  io.observe(el)
-})
-onBeforeUnmount(() => io?.disconnect())
+const sentinel = useInfiniteScroll(
+  () => store.loadMoreDiscover(),
+  () => store.discoverHasMore && !store.discoverLoadingMore && !store.discoverLoading,
+)
 
 // El alta vive en el store (`addFromTmdb`): «Para ti» hace exactamente lo mismo desde la portada.
 const add = (it) => store.addFromTmdb(it, store.discoverKind)

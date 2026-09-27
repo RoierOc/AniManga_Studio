@@ -3,7 +3,7 @@ import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { useUiStore } from '@/stores/ui'
 import { api } from '@/lib/api'
-import { ANIME_STATUS, animeFormatLabel, animeEpLabel, batchInfo, fmtCountdown, nextUnwatchedEp, animeEpisodeKey } from '@/lib/anime'
+import { ANIME_STATUS, animeFormatLabel, animeEpLabel, batchInfo, fmtCountdown, nextUnwatchedEp, animeEpisodeKey, selectAnimeEpisodes } from '@/lib/anime'
 import { imgProxy, imgThumb } from '@/lib/img'
 import { coverRGB, vivid } from '@/lib/coverColor'
 import { formatBytes } from '@/lib/format'
@@ -16,6 +16,7 @@ import Spinner from '@/components/ui/Spinner.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 import FolderPicker from '@/components/ui/FolderPicker.vue'
+import ContentToolbar from '@/components/ui/ContentToolbar.vue'
 
 import { useSubBatchStore } from '@/stores/subbatch'
 import { useAnimeUpscaleStore } from '@/stores/animeUpscale'
@@ -98,6 +99,9 @@ watch(() => anime.value?.cover_rev, () => { heroIdx.value = 0; posterFailed.valu
 
 // Pestañas estilo Crunchyroll bajo el hero
 const tab = ref('eps')
+const epQuery = ref('')
+const epFilter = ref('all')
+watch(() => anime.value?.id, () => { epQuery.value = ''; epFilter.value = 'all' })
 
 // openDetail() always pushes one history entry, so back consumes it and runs the
 // guarded restore. Fall back to a direct close if there's no app history.
@@ -109,7 +113,7 @@ function goBack() { useUiStore().back(() => store.closeDetail()) }
 
 const batch = computed(() => batchInfo(anime.value?.episodes || []))
 const realEps = computed(() =>
-  (anime.value?.episodes || []).filter(e => e.num !== 0 && e.ep_type !== 'special').sort((a, b) => a.num - b.num)
+  selectAnimeEpisodes((anime.value?.episodes || []).filter(e => e.num !== 0 && e.ep_type !== 'special'))
 )
 // Generate placeholder episodes when none are downloaded but total is known
 const placeholders = computed(() => {
@@ -119,6 +123,16 @@ const placeholders = computed(() => {
   return Array.from({ length: t }, (_, i) => ({ num: i + 1, ep_type: 'episode', in_local: false, in_qbt: false, watched: false }))
 })
 const mainEps = computed(() => realEps.value.length ? realEps.value : placeholders.value)
+const epFilters = computed(() => {
+  const eps = mainEps.value
+  return [
+    { id: 'all', label: 'Todos', n: eps.length },
+    { id: 'downloaded', label: 'Descargados', n: eps.filter(e => e.in_local).length },
+    { id: 'unwatched', label: 'No vistos', n: eps.filter(e => !e.watched).length },
+    { id: 'in_progress', label: 'En curso', n: eps.filter(e => Number(e.resume_pos) > 0 && !e.watched).length },
+  ]
+})
+const visibleEps = computed(() => selectAnimeEpisodes(mainEps.value, epQuery.value, epFilter.value))
 const specials = computed(() => (anime.value?.episodes || []).filter(e => e.ep_type === 'special'))
 
 /* ── Selección por lote de episodios ────────────────────────────────────────────────────────
@@ -130,6 +144,7 @@ const specials = computed(() => (anime.value?.episodes || []).filter(e => e.ep_t
 const selectableEps = computed(() =>
   [...mainEps.value, ...specials.value].filter(e => e.in_local))
 const epSel = useMultiSelect(() => selectableEps.value.map(e => animeEpisodeKey(e)))
+watch([epQuery, epFilter], () => epSel.clear())
 const selectedEps = computed(() => selectableEps.value.filter(e => epSel.has(animeEpisodeKey(e))))
 const selectedBytes = computed(() => selectedEps.value.reduce((n, e) => n + (e.size || 0), 0))
 // Cambiar de serie no debe arrastrar la selección de la anterior.
@@ -445,23 +460,27 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
          propia rejilla, donde el episodio en curso ya sale con su miniatura, su «Reanudar · N %»
          y su barra estilo YouTube (`EpisodeCard`). La acción se queda donde no hay que bajar a
          buscarla —el hero— y el contexto donde ya vivía: la rejilla. -->
-    <div class="eptoolbar">
-      <span class="eptoolbar__lbl">{{ mainEps.length }} episodios</span>
-      <button class="eptoolbar__batch" data-tip="Buscar o traducir subtítulos en español de varios episodios"
-              @click="openSubBatch">
-        <Icon name="globe" :size="15" /> Subtítulos ES (lote)
-      </button>
-      <div class="epseg">
-        <button :class="{ 'is-on': epView === 'grid' }" data-tip="Cuadrícula" @click="setEpView('grid')"><Icon name="library" :size="15" /></button>
-        <button :class="{ 'is-on': epView === 'list' }" data-tip="Lista" @click="setEpView('list')"><Icon name="menu" :size="15" /></button>
-      </div>
-    </div>
+    <ContentToolbar :filters="epFilters" v-model:filter="epFilter" v-model:search="epQuery"
+                    search-placeholder="Buscar episodio…">
+      <template #extra>
+        <button class="eptoolbar__batch" data-tip="Buscar o traducir subtítulos en español de varios episodios"
+                @click="openSubBatch">
+          <Icon name="globe" :size="15" /> Subtítulos ES (lote)
+        </button>
+        <div class="epseg">
+          <button :class="{ 'is-on': epView === 'grid' }" data-tip="Cuadrícula" aria-label="Vista de cuadrícula" @click="setEpView('grid')"><Icon name="library" :size="15" /></button>
+          <button :class="{ 'is-on': epView === 'list' }" data-tip="Lista" aria-label="Vista de lista" @click="setEpView('list')"><Icon name="menu" :size="15" /></button>
+        </div>
+      </template>
+    </ContentToolbar>
 
-    <div v-if="epView === 'list'" class="eplist">
-      <EpisodeRow v-for="ep in mainEps" :key="animeEpisodeKey(ep)" :anime="anime" :ep="ep" :batch="batch" :current="isCurrent(ep)" :sel="epSel" />
+    <EmptyState v-if="!visibleEps.length" icon="search" title="No hay episodios que coincidan."
+                hint="Prueba otro número, título o filtro." />
+    <div v-else-if="epView === 'list'" class="eplist">
+      <EpisodeRow v-for="ep in visibleEps" :key="animeEpisodeKey(ep)" :anime="anime" :ep="ep" :batch="batch" :current="isCurrent(ep)" :sel="epSel" />
     </div>
     <div v-else class="epgrid">
-      <EpisodeCard v-for="ep in mainEps" :key="animeEpisodeKey(ep)" :anime="anime" :ep="ep" :batch="batch" />
+      <EpisodeCard v-for="ep in visibleEps" :key="animeEpisodeKey(ep)" :anime="anime" :ep="ep" :batch="batch" />
     </div>
 
     <template v-if="specials.length">
@@ -826,9 +845,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 @media (max-width: 640px) { .dinfo { grid-template-columns: 1fr; } }
 
 
-.eptoolbar { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin: 0 0 var(--s-4); }
-.eptoolbar__lbl { font-family: var(--font-display); font-size: var(--fs-lg); font-weight: 600; color: var(--ink); }
-.eptoolbar__batch { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s-2);
+.eptoolbar__batch { display: inline-flex; align-items: center; gap: var(--s-2);
   padding: var(--s-2) var(--s-4); border-radius: var(--r-pill); font-size: var(--fs-sm); font-weight: 600;
   color: var(--ink-soft); background: var(--surface); border: 1px solid var(--line); cursor: pointer; transition: all var(--t-fast); }
 .eptoolbar__batch:hover { color: #fff; border-color: var(--azure); background: var(--azure-haze); }

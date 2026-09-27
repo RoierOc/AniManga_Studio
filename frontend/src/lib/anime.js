@@ -57,6 +57,23 @@ const episodeSeason = (ep) => {
 export const compareAnimeEpisodes = (a, b) =>
   episodeSeason(a) - episodeSeason(b) || Number(a?.num || 0) - Number(b?.num || 0)
 
+export function selectAnimeEpisodes(episodes = [], query = '', filter = 'all') {
+  const needle = String(query).trim().toLocaleLowerCase()
+  return (episodes || []).filter((ep) => {
+    const num = Number(ep?.num || 0)
+    const season = episodeSeason(ep)
+    const searchable = [
+      ep?.title, num, `episodio ${num}`, season && `temporada ${season}`,
+      season && `s${season}e${num}`, season && `t${season} e${num}`,
+    ].filter(Boolean).join(' ').toLocaleLowerCase()
+    if (needle && !searchable.includes(needle)) return false
+    if (filter === 'downloaded') return !!ep?.in_local
+    if (filter === 'unwatched') return !ep?.watched
+    if (filter === 'in_progress') return Number(ep?.resume_pos) > 0 && !ep?.watched
+    return true
+  }).sort(compareAnimeEpisodes)
+}
+
 export function nextEpisodeAfter(episodes, current, playable = () => true) {
   if (!current) return null
   const ordered = (episodes || [])
