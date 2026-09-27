@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { onSSE } from '@/lib/sse'
 import { useUiStore } from './ui'
-import { nextUnwatchedEp, animeEpisodeKey, isSpanishOrMulti, isEnglishSub } from '@/lib/anime'
+import { nextUnwatchedEp, nextEpisodeAfter, animeEpisodeKey, batchInfo, isEpisodePlayable, isSpanishOrMulti, isEnglishSub } from '@/lib/anime'
 import { vtGo, marcarTarjeta } from '@/lib/vt'
 import { isNative, send as nativeSend, onMessage as onNativeMessage } from '@/lib/nativeBridge'
 import { setImageRevisions } from '@/lib/img'
@@ -1108,11 +1108,13 @@ export const useAnimeStore = defineStore('anime', {
           const { anime, ep, playlist, onProgress } = this.nativePlayer
           this._reportNativeProgress(true)
           this.closeNative()
-          // Con `playlist` (series/películas) el siguiente sale de ahí: `nextUnwatchedEp` mira
-          // `anime.episodes`, que en esos dominios no existe — sin esto no encadenaría nunca.
-          const nxt = playlist
-            ? playlist.find(e => e.num > ep.num && e.in_local) || null
-            : nextUnwatchedEp(anime, ep)
+          // El fin avanza desde el episodio que acaba de sonar; `nextUnwatchedEp` es para
+          // continuar la biblioteca y puede devolver un hueco anterior al reproducido.
+          const episodes = playlist || anime.episodes || []
+          const batch = playlist ? null : batchInfo(episodes)
+          const nxt = nextEpisodeAfter(episodes, ep, playlist
+            ? e => e.in_local
+            : e => isEpisodePlayable(e, batch))
           if (nxt) {
             this.showAutoplay(anime, nxt, playlist
               ? { progressKey: nxt.progressKey || null, playlist, onProgress } : null)

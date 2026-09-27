@@ -1,6 +1,6 @@
 <script setup>
 import { animeThumb } from '@/lib/img'
-import { animeEpisodeKey } from '@/lib/anime'
+import { animeEpisodeKey, compareAnimeEpisodes, nextEpisodeAfter } from '@/lib/anime'
 // Overlay del reproductor NATIVO embebido (libmpv en la shell). El vídeo lo pinta
 // mpv por DEBAJO del WebView2 transparente (ver desktop/native): aquí va SOLO la UI,
 // con la MISMA estética/funcionalidad que PlayerOverlay.vue (clases wp__*). "Airspace":
@@ -81,7 +81,7 @@ const subIndex = computed(() => (np.value ? np.value.sid - 1 : -1))
 const panelEps = computed(() => {
   const eps = (np.value?.playlist || np.value?.anime?.episodes || [])
     .filter((e) => e.num > 0 && e.ep_type !== 'special')
-  return [...eps].sort((a, b) => a.num - b.num)
+  return [...eps].sort(compareAnimeEpisodes)
 })
 function isPlayable(e) {
   return !!(e.in_local || e.info_hash)
@@ -231,13 +231,9 @@ function setBright(v) { store.setNativeBright(v); poke() }
 function bumpSat(d) { store.setNativeSat((np.value.sat || 1) + d); poke() }
 function setSat(v) { store.setNativeSat(v); poke() }
 
-const nextEp = computed(() => (np.value ? require_next() : null))
-function require_next() {
-  // nextUnwatchedEp vive en el store; exponemos "siguiente" simple por número.
-  const eps = panelEps.value
-  const cur = np.value.ep.num
-  return eps.find((e) => e.num > cur && isPlayable(e)) || null
-}
+const nextEp = computed(() => np.value
+  ? nextEpisodeAfter(panelEps.value, np.value.ep, isPlayable)
+  : null)
 // Cambiar de episodio SIN salir tiene que conservar el dominio: si esto es una serie occidental,
 // el progreso del episodio nuevo debe seguir yendo a su almacén (cada item de `playlist` trae su
 // propio progressKey), no a la biblioteca de anime.

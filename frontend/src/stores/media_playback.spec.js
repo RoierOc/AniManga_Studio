@@ -122,6 +122,25 @@ describe('preferencias del reproductor nativo por anime', () => {
 })
 
 describe('los sidecar se cuelgan del archivo NUEVO, no del saliente', () => {
+  it('al terminar avanza desde el episodio actual, no vuelve a un hueco anterior', async () => {
+    const store = useAnimeStore()
+    api.post.mockResolvedValue(RESOLVE)
+    const episodes = [
+      { num: 1, watched: true, in_local: true },
+      { num: 2, watched: true, in_local: true },
+      { num: 3, watched: false, in_local: true },
+      { num: 4, watched: true, in_local: true },
+      { num: 5, watched: false, in_local: true },
+      { num: 6, watched: false, in_local: true },
+      { num: 7, watched: true, in_local: true },
+    ]
+    await store.playNative({ id: 42, title: 'Anime', episodes }, episodes[4])
+
+    nativeListener({ event: 'time', pos: 1399, duration: 1400, paused: false })
+
+    expect(store.autoplay.ep.num).toBe(6)
+  })
+
   it('no se envía `subadd` hasta que mpv confirma que el archivo está sonando', async () => {
     const store = useAnimeStore()
     api.post.mockResolvedValue(RESOLVE)

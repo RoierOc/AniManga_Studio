@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { currentSeason, isCurrentSeason, shiftSeason, batchInfo, isEpisodePlayable, animeEpLabel } from './anime'
+import { currentSeason, isCurrentSeason, shiftSeason, batchInfo, isEpisodePlayable, animeEpLabel, nextEpisodeAfter } from './anime'
 
 describe('shiftSeason', () => {
   it('retrocede y avanza dentro del mismo año', () => {
@@ -44,5 +44,20 @@ describe('batch granular', () => {
 
   it('identifica visualmente la temporada cuando se repite el episodio', () => {
     expect(animeEpLabel({}, { num: 1, season: 2 })).toBe('T2 · Episodio 1')
+  })
+})
+
+describe('siguiente episodio', () => {
+  it('ordena por temporada y omite los que aún no se pueden reproducir', () => {
+    const current = { num: 1, season: 2, in_local: true }
+    const next = { num: 3, season: 2, in_local: true }
+    const episodes = [
+      next,
+      { num: 2, season: 2, in_local: false },
+      current,
+      { num: 2, season: 1, in_local: true },
+    ]
+
+    expect(nextEpisodeAfter(episodes, current, e => e.in_local)).toBe(next)
   })
 })

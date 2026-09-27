@@ -49,6 +49,26 @@ export function animeEpisodeKey(ep = {}) {
   return String(ep.num ?? '')
 }
 
+const episodeSeason = (ep) => {
+  if (ep?.season != null) return Number(ep.season) || 0
+  return Number(animeEpisodeKey(ep).match(/^s(\d+)e/i)?.[1]) || 0
+}
+
+export const compareAnimeEpisodes = (a, b) =>
+  episodeSeason(a) - episodeSeason(b) || Number(a?.num || 0) - Number(b?.num || 0)
+
+export function nextEpisodeAfter(episodes, current, playable = () => true) {
+  if (!current) return null
+  const ordered = (episodes || [])
+    .filter(e => e.num > 0 && e.ep_type !== 'special')
+    .sort(compareAnimeEpisodes)
+  const index = ordered.findIndex(e => animeEpisodeKey(e) === animeEpisodeKey(current))
+  const later = index >= 0
+    ? ordered.slice(index + 1)
+    : ordered.filter(e => compareAnimeEpisodes(e, current) > 0)
+  return later.find(playable) || null
+}
+
 export function animeEpLabel(anime, ep) {
   const fmt = anime?.format
   const seasonPrefix = ep.season ? `T${ep.season} · ` : ''
