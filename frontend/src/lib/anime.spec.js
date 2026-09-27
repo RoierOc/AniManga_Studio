@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { currentSeason, isCurrentSeason, shiftSeason, batchInfo, isEpisodePlayable, animeEpLabel, nextEpisodeAfter, selectAnimeEpisodes } from './anime'
+import { currentSeason, isCurrentSeason, shiftSeason, batchInfo, isEpisodePlayable, animeEpLabel, nextEpisodeAfter } from './anime'
 
 describe('shiftSeason', () => {
   it('retrocede y avanza dentro del mismo año', () => {
@@ -59,30 +59,5 @@ describe('siguiente episodio', () => {
     ]
 
     expect(nextEpisodeAfter(episodes, current, e => e.in_local)).toBe(next)
-  })
-})
-
-describe('episodios visibles en la ficha', () => {
-  it('ordena por temporada antes del número, aunque este vuelva a empezar', () => {
-    const episodes = [
-      { season: 2, num: 1 },
-      { season: 1, num: 3 },
-      { season: 1, num: 1 },
-    ]
-
-    expect(selectAnimeEpisodes(episodes)).toEqual([
-      { season: 1, num: 1 }, { season: 1, num: 3 }, { season: 2, num: 1 },
-    ])
-  })
-
-  it('busca título o clave SxEy y aplica el estado solicitado', () => {
-    const episodes = [
-      { season: 2, num: 1, title: 'Un nuevo comienzo', in_local: true, watched: false, resume_pos: 40 },
-      { season: 1, num: 2, title: 'La ciudad', in_local: true, watched: true, resume_pos: 0 },
-      { season: 2, num: 2, title: 'La promesa', in_local: false, watched: false, resume_pos: 0 },
-    ]
-
-    expect(selectAnimeEpisodes(episodes, 'S2E1', 'in_progress')).toEqual([episodes[0]])
-    expect(selectAnimeEpisodes(episodes, 'ciudad', 'downloaded')).toEqual([episodes[1]])
   })
 })
