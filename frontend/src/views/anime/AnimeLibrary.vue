@@ -27,14 +27,12 @@ tags.load()
 // Aura del hero: color dominante del banner activo, teñido sutilmente detrás del home.
 const heroTint = ref('rgb(77, 141, 255)')
 
-// Background sync (15s) — only refreshes while qBittorrent has active downloads,
-// matching the original app's _qbtSyncTimer behaviour.
-let sync = null
+// El store mantiene un único sondeo de qBittorrent y sincroniza el progreso de esta vista;
+// no crear aquí otro temporizador de biblioteca mientras hay descargas.
 const reloads = []
 onMounted(() => {
   // El hero: 4 de cada 10 entradas enseña tu biblioteca al azar en vez de la cadena de siempre.
   store.tirarDadoHero()
-  sync = setInterval(() => { if (store.hasActiveQbt()) store.loadLibrary(true, true) }, 15000)
   if (!store.seasonal.length) store.loadSeasonal()
   store.loadForYou()   // recomendaciones sobre tu biblioteca (cacheadas 24 h en el backend)
   store.loadAiring()   // fresh airing schedule → "new episode just aired" hero
@@ -43,7 +41,7 @@ onMounted(() => {
   reloads.push(setTimeout(() => store.loadLibrary(true, true), 7000))
   reloads.push(setTimeout(() => store.loadLibrary(true, true), 20000))
 })
-onUnmounted(() => { if (sync) clearInterval(sync); reloads.forEach(clearTimeout) })
+onUnmounted(() => reloads.forEach(clearTimeout))
 
 // Traduce "seguir viendo" de anime a la forma genérica del riel compartido. La miniatura del
 // episodio solo existe si está descargado; si no, se cae a la portada.

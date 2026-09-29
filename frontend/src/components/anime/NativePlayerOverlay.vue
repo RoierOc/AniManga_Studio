@@ -53,6 +53,11 @@ const scaleLabel = computed(() => {
   if (np.value?.tier === 'off') return scaleName.value
   return np.value?.isLive ? 'Shaders·On' : (A4K_TIER_LABEL[np.value?.tier] || 'A4K·On')
 })
+const skipTarget = computed(() => store.nativeSkipTarget())
+const skipLabel = computed(() => skipTarget.value?.kind === 'ed' ? 'Saltar ED' : 'Saltar OP')
+const skipTip = computed(() => skipTarget.value?.source === 'aniskip'
+  ? `Saltar al final del ${skipTarget.value.kind === 'ed' ? 'ending' : 'opening'} (AniSkip)`
+  : 'Avanzar 82 s si no hay un intervalo AniSkip aplicable')
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
 const playing = computed(() => np.value && !np.value.paused)
@@ -383,8 +388,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
           </button>
           <button class="wp__ic" data-tip="-10 s" @click="skip(-10)"><span class="wp__sk">-10</span></button>
           <button class="wp__ic" data-tip="+10 s" @click="skip(10)"><span class="wp__sk">+10</span></button>
-          <button class="wp__skipop" data-tip="Saltar opening" @click="skipOp">
-            <Icon name="spark" :size="13" /> Saltar OP
+          <button class="wp__skipop" :data-tip="skipTip" @click="skipOp">
+            <Icon name="spark" :size="13" /> {{ skipLabel }}
           </button>
 
           <div class="wp__vol">

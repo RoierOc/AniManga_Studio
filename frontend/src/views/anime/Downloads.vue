@@ -16,7 +16,6 @@ import { useGridKeyboard } from '@/lib/useGridKeyboard'
 
 const store = useAnimeStore()
 const ui = useUiStore()
-let poll = null
 
 // Los dos botones de quitar están juntos y solo este BORRA el vídeo: confirmación obligatoria.
 async function removeWithFiles(t) {
@@ -35,10 +34,9 @@ onMounted(async () => {
   // haber pasado por «Mi Anime» — sin esto, la mayoría de filas quedaban sin portada.
   if (!store.library.length) store.loadLibrary(true)
   await store.checkQbt()
-  await store.loadQbt()
-  poll = setInterval(() => store.loadQbt(), 5000)
+  await store.startQbtPolling()
 })
-onUnmounted(() => { if (poll) clearInterval(poll) })
+onUnmounted(() => store.stopQbtPolling())
 
 const isDone = (t) => t.progress >= 100
 // qBittorrent reports paused as 'pausedDL/UP' (v4) or 'stoppedDL/UP' (v5).

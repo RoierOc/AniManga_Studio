@@ -13,6 +13,7 @@
  */
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { api } from '@/lib/api'
 
 const enviados = []
 vi.mock('@/lib/api', () => ({
@@ -42,7 +43,12 @@ function store(duration = 1471.5) {
 const ultimoSeek = () => [...enviados].reverse().find(e => e.tipo === 'seek')
 
 describe('nativeSeek acota la posición', () => {
-  beforeEach(() => { setActivePinia(createPinia()); enviados.length = 0 })
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    enviados.length = 0
+    vi.clearAllMocks()
+    api.get.mockResolvedValue({})
+  })
 
   it('el borde izquierdo NUNCA manda un negativo (el bug)', () => {
     store().nativeSeek(-0.160215)
@@ -86,5 +92,52 @@ describe('nativeSeek acota la posición', () => {
     s.nativeSeek(162) // seek ordinario tras el salto, no debe recalibrarlo
 
     expect(localStorage.getItem(key)).toBeNull()
+  })
+
+  it('usa el final AniSkip del OP y del ED según la posición actual', () => {
+    const s = store()
+    s.nativePlayer.anime = { id: 'serie-prueba', mal_id: 42 }
+    s.nativePlayer.ep = { num: 3 }
+    s.skipTimes['serie-prueba_3'] = { op_end: 123, ed_start: 1400, ed_end: 1470 }
+
+    expect(s.nativeSkipTarget()).toEqual({ position: 123, kind: 'op', source: 'aniskip' })
+    s.nativePlayer.pos = 1420
+    expect(s.nativeSkipTarget()).toEqual({ position: 1470, kind: 'ed', source: 'aniskip' })
+    s.nativeSkipOp()
+    expect(ultimoSeek().pos).toBe(1470)
+  })
+
+  it('conserva el avance fijo si faltan marcas aplicables o ya quedaron atrás', () => {
+    const s = store()
+    s.nativePlayer.anime = { id: 'serie-prueba', mal_id: 42 }
+    s.nativePlayer.ep = { num: 3 }
+    s.nativePlayer.pos = 130
+    s.skipTimes['serie-prueba_3'] = { op_end: 123 }
+
+    expect(s.nativeSkipTarget()).toEqual({ position: 212, kind: 'op', source: 'fallback' })
+  })
+
+  it('no convierte un fallo AniSkip en un vacío cacheado y permite reintentar', async () => {
+    const s = useAnimeStore()
+    api.get.mockRejectedValueOnce(new Error('AniSkip no responde'))
+    api.get.mockResolvedValueOnce({ op_end: 123 })
+    const anime = { id: 'serie-prueba', mal_id: 42 }
+    const ep = { num: 3 }
+
+    await s.loadSkip(anime, ep)
+    expect(s.skipTimes['serie-prueba_3']).toBeUndefined()
+    await s.loadSkip(anime, ep)
+
+    expect(api.get).toHaveBeenCalledTimes(2)
+    expect(s.skipTimes['serie-prueba_3']).toEqual({ op_end: 123 })
+  })
+
+  it('solicita AniSkip al abrir un episodio en el reproductor nativo', async () => {
+    const s = useAnimeStore()
+    await s.playNative({ id: 'serie-prueba', mal_id: 42 }, {
+      num: 3, in_local: true, local_path: '/anime/ep03.mkv',
+    })
+
+    expect(api.get).toHaveBeenCalledWith('/api/anime/skip_times/42/3')
   })
 })

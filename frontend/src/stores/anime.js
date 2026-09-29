@@ -25,7 +25,12 @@ function _loadSubStyle() {
 let autoplayTimer = null
 let nowTimer = null
 let sseBound = false
-let dlPoll = null       // interval para refrescar el progreso de descarga de qBittorrent en vivo
+let dlPoll = null       // temporizador único compartido por Descargas y progreso
+let dlPollDelay = 0
+let dlPollBusy = false
+let qbtViewActive = false
+let qbtRequest = null
+const skipRequests = new Map()
 const subPollers = {}   // subKey -> interval handle
 const HERO_TARGET = 10  // cuántas obras entran en el carrusel del hero
 
@@ -552,8 +557,8 @@ export const useAnimeStore = defineStore('anime', {
         const needsFull = summary && summaryNeedsFullLibrary(previous, next)
         this.library = summary ? mergeAnimeLibrarySummary(previous, next) : next
         setImageRevisions(this.library)
-        this._ensureDlPolling()   // si hay descargas en curso, refresca el progreso en vivo
         if (summary && needsFull) await this.loadLibrary(true)
+        this._ensureDlPolling()   // si hay descargas en curso, refresca el progreso en vivo
       } catch (e) {
         // El toast se desvanece; la rejilla se quedaba anunciando «Aún no has añadido anime»
         // para siempre. El fallo tiene que SOBREVIVIR en el estado para que la vista lo diga.
@@ -976,6 +981,7 @@ export const useAnimeStore = defineStore('anime', {
         // por episodio para que cambiar desde el panel siga guardando en su almacén.
         playlist: opts.playlist || null,
       }
+      if (!opts.progressKey) this.loadSkip(anime, ep)
       this._ensureNativeSub()
 
       const base = ep.in_local
@@ -1296,12 +1302,29 @@ export const useAnimeStore = defineStore('anime', {
         if (identity) patchAnimePlaybackPrefs(np.animePrefId, { subTrack: identity })
       }
     },
-    // Salto manual fijo: un seek cercano puede ser navegación normal y no demuestra
-    // dónde termina el OP; por eso no se calibra ni se guarda por serie.
+    // AniSkip da el final real del OP/ED; 82 s sigue como respaldo y nunca se aprende de seeks.
     nativeSkipOp() {
       const np = this.nativePlayer
       if (!np) return
-      this.nativeSeek((np.pos || 0) + 82)
+      if (!np.isLive && np.anime?.mal_id && this.skipTimes[`${np.anime.id}_${np.ep?.num}`] === undefined)
+        this.loadSkip(np.anime, np.ep)
+      const target = this.nativeSkipTarget()
+      if (target) this.nativeSeek(target.position)
+      return target
+    },
+    nativeSkipTarget() {
+      const np = this.nativePlayer
+      if (!np) return null
+      const position = Math.max(0, Number(np.pos) || 0)
+      const marks = np.isLive ? {} : (this.skipTimes[`${np.anime?.id}_${np.ep?.num}`] || {})
+      const edStart = Number(marks.ed_start), edEnd = Number(marks.ed_end)
+      if (Number.isFinite(edStart) && edStart >= 0 && Number.isFinite(edEnd)
+          && position >= edStart && edEnd > position)
+        return { position: edEnd, kind: 'ed', source: 'aniskip' }
+      const opEnd = Number(marks.op_end)
+      if (Number.isFinite(opEnd) && opEnd > position)
+        return { position: opEnd, kind: 'op', source: 'aniskip' }
+      return { position: position + 82, kind: 'op', source: 'fallback' }
     },
     // Escribe en la preferencia del dominio ABIERTO: el menú del reproductor ofrece los tiers
     // de anime o los de imagen real, y cada uno persiste por su lado.
@@ -1467,9 +1490,13 @@ export const useAnimeStore = defineStore('anime', {
       if (!malId) return
       const key = `${anime.id}_${ep.num}`
       if (this.skipTimes[key] !== undefined) return
-      this.skipTimes[key] = {}
-      try { this.skipTimes[key] = await api.get(`/api/anime/skip_times/${malId}/${ep.num}`) || {} }
-      catch (_) {}
+      if (skipRequests.has(key)) return skipRequests.get(key)
+      const request = api.get(`/api/anime/skip_times/${malId}/${ep.num}`)
+        .then(times => { this.skipTimes[key] = times || {} })
+        .catch(() => {})
+        .finally(() => skipRequests.delete(key))
+      skipRequests.set(key, request)
+      return request
     },
 
     async loadEpInfo(anime, ep) {
@@ -1612,24 +1639,55 @@ export const useAnimeStore = defineStore('anime', {
       }
       return { active, justDone }
     },
+    async _applyQbtProgress(torrents) {
+      this.qbtTorrents = torrents
+      const granular = this.library.some(a => (a.episodes || []).some(e =>
+        e.file_index != null && e.in_qbt && (e.progress ?? 0) < 100))
+      if (granular) {
+        // /qbt/list sólo conoce el porcentaje del torrent; el pulso compacto consulta el
+        // progreso real de los file_index en backend y conserva las rutas ya cargadas.
+        await this.loadLibrary(true, true)
+        return
+      }
+      const { justDone } = this._patchDlProgress(torrents)
+      if (justDone) await this.loadLibrary(true, true)
+    },
     _ensureDlPolling() {
-      if (dlPoll || !this.hasActiveQbt()) return
-      dlPoll = setInterval(async () => {
-        let torrents = []
-        try { torrents = await api.get('/api/anime/qbt/list') || [] } catch (_) { return }
-        this.qbtTorrents = torrents
-        const granular = this.library.some(a => (a.episodes || []).some(e => e.file_index !== undefined && e.file_index !== null && e.in_qbt))
-        if (granular) {
-          // /qbt/list only has torrent-level progress. Reload the compact library
-          // so the backend can read /torrents/files for the selected file indices.
-          await this.loadLibrary(true)
-          if (!this.hasActiveQbt()) { clearInterval(dlPoll); dlPoll = null }
-          return
+      if (dlPollBusy) return
+      const active = this.hasActiveQbt()
+      if (!qbtViewActive && !active) {
+        if (dlPoll) clearTimeout(dlPoll)
+        dlPoll = null
+        dlPollDelay = 0
+        return
+      }
+      const delay = active ? 3000 : 5000
+      if (dlPoll && dlPollDelay === delay) return
+      if (dlPoll) clearTimeout(dlPoll)
+      dlPollDelay = delay
+      dlPoll = setTimeout(async () => {
+        dlPoll = null
+        dlPollDelay = 0
+        if (!qbtViewActive && !this.hasActiveQbt()) return
+        dlPollBusy = true
+        try {
+          const torrents = await this.loadQbt()
+          if (Array.isArray(torrents)) await this._applyQbtProgress(torrents)
+        } finally {
+          dlPollBusy = false
+          this._ensureDlPolling()
         }
-        const { active, justDone } = this._patchDlProgress(torrents)
-        if (justDone) await this.loadLibrary(true)   // recoge in_local + estado final
-        if (!active && !this.hasActiveQbt()) { clearInterval(dlPoll); dlPoll = null }
-      }, 3000)
+      }, delay)
+    },
+    async startQbtPolling() {
+      const wasActive = qbtViewActive
+      qbtViewActive = true
+      this._ensureDlPolling()
+      if (!wasActive) await this.loadQbt()
+    },
+    stopQbtPolling() {
+      qbtViewActive = false
+      this._ensureDlPolling()
     },
     async checkQbt() {
       try {
@@ -1650,12 +1708,25 @@ export const useAnimeStore = defineStore('anime', {
         else ui.toast('No se pudo conectar a qBittorrent', 'error')
       } catch (_) { useUiStore().toast('Error configurando qBittorrent', 'error') }
     },
-    async loadQbt() {
+    loadQbt() {
+      if (qbtRequest) return qbtRequest
       this.qbtLoading = true
       this.qbtError = ''
-      try { this.qbtTorrents = await api.get('/api/anime/qbt/list') || [] }
-      catch (e) { this.qbtTorrents = []; this.qbtError = e?.body || e?.message || 'qBittorrent no responde' }
-      finally { this.qbtLoading = false }
+      qbtRequest = api.get('/api/anime/qbt/list')
+        .then(torrents => {
+          this.qbtTorrents = Array.isArray(torrents) ? torrents : []
+          return this.qbtTorrents
+        })
+        .catch(e => {
+          this.qbtTorrents = []
+          this.qbtError = e?.body || e?.message || 'qBittorrent no responde'
+          return null
+        })
+        .finally(() => {
+          this.qbtLoading = false
+          qbtRequest = null
+        })
+      return qbtRequest
     },
     async qbtAction(action, hash, deleteFiles = false) {
       try {

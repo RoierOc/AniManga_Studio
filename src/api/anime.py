@@ -5152,8 +5152,9 @@ def anime_skip_times(mal_id, episode):
                 result['ed_end']   = round(iv.get('endTime',   0), 2)
         _aniskip_cache[key] = result
         return jsonify(result)
-    except Exception:
-        return jsonify({})
+    except Exception as e:
+        record_error('anime', e, op='aniskip', mal_id=mal_id, episode=episode)
+        return jsonify({'error': str(e) or 'AniSkip no responde'}), 502
 
 
 # ── Episode info (Jikan) ───────────────────────────────────────────────────────
