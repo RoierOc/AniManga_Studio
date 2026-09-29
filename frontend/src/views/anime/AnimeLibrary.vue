@@ -36,10 +36,14 @@ onMounted(() => {
   if (!store.seasonal.length) store.loadSeasonal()
   store.loadForYou()   // recomendaciones sobre tu biblioteca (cacheadas 24 h en el backend)
   store.loadAiring()   // fresh airing schedule → "new episode just aired" hero
-  // Hero banners/genres are backfilled server-side after the first library load;
-  // refresh silently a couple of times so HD art appears without a manual reload.
-  reloads.push(setTimeout(() => store.loadLibrary(true, true), 7000))
-  reloads.push(setTimeout(() => store.loadLibrary(true, true), 20000))
+  // El backfill tarda en segundo plano. Releer solo si aún falta algún dato que puede completar;
+  // si el arte ya está listo, estas comprobaciones no generan peticiones de biblioteca.
+  reloads.push(setTimeout(() => {
+    if (store.needsAnimeMetadataBackfill()) store.loadLibrary(true, true)
+  }, 7000))
+  reloads.push(setTimeout(() => {
+    if (store.needsAnimeMetadataBackfill()) store.loadLibrary(true, true)
+  }, 20000))
 })
 onUnmounted(() => reloads.forEach(clearTimeout))
 

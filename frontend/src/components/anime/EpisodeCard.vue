@@ -24,6 +24,10 @@ const rutaOriginal = computed(() => props.ep.original_path || props.ep.local_pat
 const horneando = computed(() => a4k.trabajoDe(rutaOriginal.value))
 
 const playable = computed(() => isEpisodePlayable(props.ep, props.batch))
+const primaryLabel = computed(() => {
+  const action = downloading.value ? 'Descargando' : playable.value ? 'Reproducir' : 'Buscar torrent para'
+  return `${action} ${props.anime.title || 'anime'}, episodio ${props.ep.num}`
+})
 const downloading = computed(() => {
   if (props.ep.file_index !== undefined && props.ep.file_index !== null) {
     return !!props.ep.in_qbt && props.ep.progress < 100
@@ -170,7 +174,7 @@ function openMenu(ev) {
   <div class="ep" :class="{ 'ep--watched': ep.watched, 'ep--dl': downloading, 'ep--missing': !playable && !downloading }"
        @mouseenter.once="store.loadSkip(anime, ep)" @contextmenu.prevent="openMenu">
 
-    <div class="ep__thumb" @click="onPrimary">
+    <button type="button" class="ep__thumb" :aria-label="primaryLabel" :disabled="downloading" @click="onPrimary">
       <div class="ep__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 200)}')` : ''" />
       <img v-if="thumbSrc" class="ep__img" :src="thumbSrc"
            loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" @error="onThumbError" alt="" />
@@ -193,7 +197,7 @@ function openMenu(ev) {
       <div v-if="playable" class="ep__play"><span class="ep__play-c"><Icon name="play" :size="26" /></span></div>
       <span v-if="subFetching" class="ep__subtag ep__subtag--load"><Spinner :size="10" tone="light" /> Buscando ES…</span>
       <span v-else-if="subRunning" class="ep__subtag">✨ {{ subTask?.progress || 0 }}%</span>
-    </div>
+    </button>
 
     <!-- Título BAJO la miniatura (Crunchyroll/Netflix): misma tipografía, ahora sin competir
          con el arte de la portada. El nº se queda arriba sobre la imagen. -->
@@ -230,14 +234,17 @@ function openMenu(ev) {
 .ep { position: relative; transition: transform var(--t-base) var(--ease-snap); }
 .ep:hover { transform: translateY(-3px); }
 
-.ep__thumb { position: relative; aspect-ratio: 16 / 9; cursor: pointer; overflow: hidden;
+.ep__thumb { position: relative; display: block; width: 100%; padding: 0; color: inherit; font: inherit; text-align: left;
+  aspect-ratio: 16 / 9; cursor: pointer; overflow: hidden;
   border-radius: var(--r-md); background: var(--surface-2); border: 1px solid var(--line);
   transition: border-color var(--t-base) var(--ease-silk), box-shadow var(--t-base); }
+.ep__thumb:focus-visible { outline: 2px solid var(--azure-bright); outline-offset: 3px; }
+.ep__thumb:disabled { cursor: default; }
 .ep:hover .ep__thumb { border-color: var(--line-strong); box-shadow: var(--shadow-md); }
 /* Degradado más corto que antes: ya sólo tiene que dar contraste al nº, no a un título de 2
    líneas. Así se ve más portada. */
 .ep__thumb::after { content: ''; position: absolute; inset: 0; z-index: 1; pointer-events: none; background: linear-gradient(0deg, rgba(5,7,13,.88) 0%, rgba(5,7,13,.34) 20%, transparent 44%); }
-.ep--missing .ep__thumb, .ep--dl .ep__thumb { cursor: default; }
+.ep--dl .ep__thumb { cursor: default; }
 .ep__bg { position: absolute; inset: 0; background-size: cover; background-position: center; filter: blur(18px) brightness(.4); transform: scale(1.2); }
 .ep__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-slow), transform var(--t-cine) var(--ease-silk), filter var(--t-base) var(--ease-silk); }
 .ep__img.is-loaded { opacity: 1; }

@@ -55,4 +55,13 @@ describe('estado de carga del calendario', () => {
     expect(wrapper.find('.schedule-error').exists()).toBe(false)
     wrapper.unmount()
   })
+
+  it('muestra el fallo de emisiones de la biblioteca aunque Temporada haya respondido', () => {
+    const { store, wrapper } = render({ airingError: 'AniList caído' })
+
+    expect(wrapper.find('.schedule-error').text()).toContain('AniList caído')
+    expect(wrapper.find('.schedule-empty').exists()).toBe(false)
+
+    wrapper.unmount()
+  })
 })

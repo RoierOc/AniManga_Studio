@@ -94,8 +94,13 @@ const airedToday = computed(() => {
 const hasEntries = computed(() => hasAny.value || airedToday.value.length > 0)
 // AniList puede fallar dejando el calendario sin filas. Ese caso no es «no hay estrenos»:
 // conserva la causa y ofrece reintento, igual que Temporada.
-const showScheduleError = computed(() =>
-  !hasEntries.value && !store.seasonalLoading && !!store.seasonalError)
+const showScheduleError = computed(() => !!store.airingError ||
+  (!hasEntries.value && !store.seasonalLoading && !!store.seasonalError))
+const scheduleErrorDetail = computed(() => [store.seasonalError, store.airingError].filter(Boolean).join(' · '))
+function retrySchedule() {
+  if (store.seasonalError) store.loadSeasonal()
+  if (store.airingError) store.loadAiring()
+}
 
 /* `[]` = el locale del SISTEMA. Toda la app está escrita en español a mano, así que dejar que la
    configuración de Windows decida el idioma de las fechas hacía que aquí saliera «Thursday,
@@ -131,8 +136,8 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
     </header>
 
     <ErrorState v-if="showScheduleError" title="No se pudo cargar el calendario."
-                :detail="store.seasonalError" @retry="store.loadSeasonal()" />
-    <EmptyState v-else-if="!hasEntries && !store.seasonalLoading" icon="clock" title="No hay estrenos próximos."
+                :detail="scheduleErrorDetail" @retry="retrySchedule" />
+    <EmptyState v-else-if="!hasEntries && !store.seasonalLoading && !store.airingLoading" icon="clock" title="No hay estrenos próximos."
                 hint="Añade series en emisión o revisa la pestaña Temporada." />
 
     <!-- Emitido hoy: episodios que YA salieron hoy, con el tiempo transcurrido -->

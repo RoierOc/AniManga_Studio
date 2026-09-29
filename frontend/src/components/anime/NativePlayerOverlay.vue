@@ -201,6 +201,23 @@ function tlUp(e) {
   store.nativeSeek(posDeEvento(e))   // el definitivo, sin limitar
   poke()
 }
+function onTlKeydown(e) {
+  const step = e.key === 'PageUp' || e.key === 'PageDown' ? 30 : 5
+  let target
+  switch (e.key) {
+    case 'ArrowLeft': case 'ArrowDown': target = pos.value - step; break
+    case 'ArrowRight': case 'ArrowUp': target = pos.value + step; break
+    case 'PageDown': target = pos.value - step; break
+    case 'PageUp': target = pos.value + step; break
+    case 'Home': target = 0; break
+    case 'End': target = duration.value; break
+    default: return
+  }
+  e.preventDefault()
+  e.stopPropagation()
+  store.nativeSeek(Math.max(0, Math.min(duration.value, target)))
+  poke()
+}
 function onTlHover(e) {
   const r = e.currentTarget.getBoundingClientRect()
   const f = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width))
@@ -356,7 +373,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
       <!-- cabecera -->
       <header class="wp__head">
-        <button class="wp__ic" data-tip="Volver" @click="close">
+        <button class="wp__ic" aria-label="Cerrar reproductor" data-tip="Volver" @click="close">
           <Icon name="chevron" :size="20" style="transform: rotate(90deg)" />
         </button>
         <div class="wp__titles">
@@ -369,9 +386,13 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
       <footer ref="barEl" class="wp__bar" @click.stop>
         <!-- timeline -->
         <div ref="tlEl" class="wp__timeline" :class="{ 'is-drag': arrastrando }"
+             role="slider" tabindex="0" aria-orientation="horizontal" aria-label="Posición del episodio"
+             :aria-valuemin="0" :aria-valuemax="Math.floor(duration)"
+             :aria-valuenow="Math.floor(arrastrando ? posArrastre : pos)"
+             :aria-valuetext="`${fmt(arrastrando ? posArrastre : pos)} de ${fmt(duration)}`"
              @pointerdown.prevent="tlDown" @pointermove="tlMove"
              @pointerup="tlUp" @pointercancel="tlUp"
-             @mouseleave="arrastrando || (tlHover = -1)">
+             @mouseleave="arrastrando || (tlHover = -1)" @keydown="onTlKeydown">
           <div class="wp__tl-cur" :style="{ width: pct + '%' }" />
           <div class="wp__tl-knob" :style="{ left: pct + '%' }" />
           <div v-if="tlHover >= 0" class="wp__preview" :style="{ left: tlLeft + 'px' }">
@@ -383,22 +404,23 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         </div>
 
         <div class="wp__row">
-          <button class="wp__ic" @click="togglePlay" :data-tip="playing ? 'Pausa' : 'Reproducir'">
+          <button class="wp__ic" :aria-label="playing ? 'Pausar episodio' : 'Reproducir episodio'" @click="togglePlay" :data-tip="playing ? 'Pausa' : 'Reproducir'">
             <Icon :name="playing ? 'pause' : 'play'" :size="20" />
           </button>
-          <button class="wp__ic" data-tip="-10 s" @click="skip(-10)"><span class="wp__sk">-10</span></button>
-          <button class="wp__ic" data-tip="+10 s" @click="skip(10)"><span class="wp__sk">+10</span></button>
-          <button class="wp__skipop" :data-tip="skipTip" @click="skipOp">
+          <button class="wp__ic" aria-label="Retroceder 10 segundos" data-tip="-10 s" @click="skip(-10)"><span class="wp__sk">-10</span></button>
+          <button class="wp__ic" aria-label="Avanzar 10 segundos" data-tip="+10 s" @click="skip(10)"><span class="wp__sk">+10</span></button>
+          <button class="wp__skipop" :aria-label="skipLabel" :data-tip="skipTip" @click="skipOp">
             <Icon name="spark" :size="13" /> {{ skipLabel }}
           </button>
 
           <div class="wp__vol">
-            <button class="wp__ic" @click="toggleMute" :data-tip="muted ? 'Quitar silencio' : 'Silenciar'">
+            <button class="wp__ic" :aria-label="muted ? 'Quitar silencio' : 'Silenciar'" @click="toggleMute" :data-tip="muted ? 'Quitar silencio' : 'Silenciar'">
               <span class="wp__sk">{{ muted ? '🔇' : '🔊' }}</span>
             </button>
             <!-- La barra llega a 100 (como mpv); la rueda del ratón la supera hasta 150,
                  que se refleja solo en el badge, no en el relleno de la barra. -->
             <input type="range" min="0" max="100" step="1" :value="Math.min(100, store.nativeVol)" @input="onVol"
+                   aria-label="Volumen" :aria-valuetext="`${store.nativeVol}%`"
                    :data-tip="`Volumen ${store.nativeVol}% — rueda del ratón para superar el 100% (hasta 150%)`" />
             <span v-if="store.nativeVol > 100" class="wp__boost" data-tip="Volumen aumentado por encima del 100% (rueda del ratón)">{{ store.nativeVol }}%</span>
           </div>
@@ -473,7 +495,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
 
           <!-- velocidad -->
           <div class="wp__menuwrap">
-            <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'speed' }"
+          <button class="wp__ctl" :class="{ 'is-on': menuOpen === 'speed' }"
+                    :aria-label="`Velocidad de reproducción: ${np.speed}×`"
                     @click="menuOpen = menuOpen === 'speed' ? '' : 'speed'">{{ np.speed }}×</button>
             <div v-if="menuOpen === 'speed'" class="wp__menu" @wheel.stop>
               <button v-for="s in SPEEDS" :key="s" :class="{ 'is-sel': s === np.speed }"
@@ -489,6 +512,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
             <Icon name="menu" :size="14" /> Episodios
           </button>
           <button class="wp__ic" :class="{ 'is-on': np.fullscreen }"
+                  :aria-label="np.fullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'"
                   :data-tip="np.fullscreen ? 'Salir de pantalla completa' : 'Pantalla completa'" @click="toggleFs">
             <Icon :name="np.fullscreen ? 'collapse' : 'expand'" :size="18" />
           </button>
@@ -521,7 +545,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
         <aside v-if="epPanel" class="wp__eps" @click.stop @mousemove.stop="poke" @wheel.stop>
           <header class="wp__eps-head">
             <h3>{{ np.anime?.title }}</h3>
-            <button class="wp__ic" data-tip="Cerrar" @click="epPanel = false"><Icon name="close" :size="16" /></button>
+            <button class="wp__ic" aria-label="Cerrar lista de episodios" data-tip="Cerrar" @click="epPanel = false"><Icon name="close" :size="16" /></button>
           </header>
           <div class="wp__eps-list">
             <button v-for="e in panelEps" :key="e.num" class="wp__ep"
@@ -589,6 +613,8 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   position: relative; height: 0.3125rem; border-radius: 3px; background: rgba(255, 255, 255, 0.18);
   cursor: pointer; margin-bottom: var(--s-3);
 }
+.wp__timeline:focus-visible { outline: 2px solid var(--azure-bright); outline-offset: 4px; }
+.wp__timeline:focus-visible .wp__tl-knob { opacity: 1; }
 .wp__timeline:hover { height: 0.5rem; }
 .wp__tl-cur { position: absolute; inset: 0 auto 0 0; border-radius: 3px; background: var(--azure-bright); }
 .wp__tl-knob {
@@ -635,6 +661,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKey))
   cursor: pointer; transition: all var(--t-fast);
 }
 .wp__skipop:hover { background: color-mix(in srgb, var(--azure) 40%, transparent); border-color: var(--azure-glow); }
+.wp__skipop:focus-visible { outline: 2px solid var(--azure-bright); outline-offset: 2px; }
 
 .wp__vol { display: flex; align-items: center; gap: 4px; }
 .wp__vol input[type='range'] { width: 6rem; accent-color: var(--azure-bright); cursor: pointer; }

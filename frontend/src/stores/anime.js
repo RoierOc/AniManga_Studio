@@ -7,6 +7,7 @@ import { vtGo, marcarTarjeta } from '@/lib/vt'
 import { isNative, send as nativeSend, onMessage as onNativeMessage } from '@/lib/nativeBridge'
 import { setImageRevisions } from '@/lib/img'
 import { patchAnimePlaybackPrefs, readAnimePlaybackPrefs, resolveTrackSelection, trackIdentity } from '@/lib/animePlaybackPrefs'
+import { animeDiscoveryActions } from './animeDiscovery'
 
 // Estilo de subtítulos: lo aplica el PLAYER en vivo con `sub-ass-style-overrides` de mpv, NO se
 // hornea en el archivo. Por defecto, el estilo que traían las pistas árabes (Adobe Arabic 26,
@@ -125,6 +126,8 @@ export const useAnimeStore = defineStore('anime', {
     epInfoOpen: null,          // currently expanded ep-info key
     nextAiring: {},            // al_id -> {episode, airing_at}
     airing: {},                // al_id -> {status, next_episode, next_airing_at, last_episode, last_aired_at} — fresh airing schedule
+    airingLoading: false,
+    airingError: '',           // el fallo al consultar episodios no es un calendario vacío
 
     // discovery in detail (keyed by al_id)
     recs: {}, recsState: {},
@@ -486,6 +489,7 @@ export const useAnimeStore = defineStore('anime', {
   },
 
   actions: {
+    ...animeDiscoveryActions,
     /* Cada ENTRADA en Mi Anime vuelve a tirar el dado del hero: 4 de cada 10 veces sale tu
        biblioteca, las otras 6 la cadena de siempre. Se llama desde `AnimeLibrary.onMounted` (la
        vista se monta y desmonta con `v-if` al cambiar de sub-pestaña, así que «entrar» es
@@ -511,30 +515,7 @@ export const useAnimeStore = defineStore('anime', {
       }
     },
 
-    async loadAiring() {
-      try { this.airing = await api.get('/api/anime/airing') || {} } catch (_) {}
-    },
-
     setLibSort(id) { this.libSort = id; localStorage.setItem('anime-libsort', id) },
-
-    /* «Para ti»: recomendaciones agregadas sobre TU biblioteca (no de una serie suelta).
-     * El backend cachea 24 h con una huella de la biblioteca, así que esto es barato salvo la
-     * primera vez. `forYouReason` distingue «aún no has visto nada» (vacío legítimo, se explica)
-     * de «AniList no respondió» (fallo, se calla y se reintenta luego) — no son lo mismo. */
-    async loadForYou() {
-      if (this.forYou.length || this._forYouLoading) return
-      this._forYouLoading = true
-      try {
-        const r = await api.get('/api/for_you/anime')
-        if (Array.isArray(r)) { this.forYou = r; this.forYouReason = '' }
-        else { this.forYou = r?.items || []; this.forYouReason = r?.reason || '' }
-      } catch {
-        this.forYou = []
-        this.forYouReason = ''      // un fallo NO es «no tienes historial»
-      } finally {
-        this._forYouLoading = false
-      }
-    },
 
     /* ── Download location ──────────────────────────────────────────────── */
     async loadDlSettings() {
@@ -1767,38 +1748,6 @@ export const useAnimeStore = defineStore('anime', {
       return { total: unique.length, successful, failed }
     },
 
-    /* ── Seasonal ───────────────────────────────────────────────────────── */
-    async loadSeasonal() {
-      this.seasonalLoading = true
-      this.seasonalError = ''
-      try {
-        const p = new URLSearchParams({ sort: this.seasonSort })
-        if (this.season) p.set('season', this.season)
-        if (this.year) p.set('year', String(this.year))
-        const d = await api.get(`/api/anime/seasonal?${p}`)
-        this.seasonal = d.results || []
-        if (!this.season) this.season = d.season || ''
-        if (!this.year) this.year = d.year || 0
-      } catch (e) { this.seasonal = []; this.seasonalError = e?.body || e?.message || 'Error desconocido' }
-      finally { this.seasonalLoading = false }
-    },
-    seasonNav(dir) {
-      const S = ['WINTER', 'SPRING', 'SUMMER', 'FALL']
-      const idx = S.indexOf(this.season)
-      if (idx === -1) return this.loadSeasonal()
-      let ni = idx + dir
-      if (ni < 0) { ni = 3; this.year-- }
-      else if (ni > 3) { ni = 0; this.year++ }
-      this.season = S[ni]
-      this.loadSeasonal()
-    },
-    isInLibrary(anime) {
-      if (!anime) return false
-      return this.library.some(a =>
-        (anime.al_id && a.al_id === anime.al_id) ||
-        (anime.mal_id && a.mal_id === anime.mal_id) ||
-        (anime.title && a.title === anime.title))
-    },
     async addToLibrary(anime) {
       try {
         const d = await api.post('/api/anime/library/add', {
@@ -1810,42 +1759,6 @@ export const useAnimeStore = defineStore('anime', {
         })
         if (d.ok) { useUiStore().toast(`"${anime.title}" añadido a Mi Anime`, 'ok'); await this.loadLibrary(true) }
       } catch (_) { useUiStore().toast('Error al añadir a biblioteca', 'error') }
-    },
-
-    /* ── Explore (AniList browse) ───────────────────────────────────────── */
-    _exploreSortKey() {
-      return { score: 'SCORE_DESC', popularity: 'POPULARITY_DESC', trending: 'TRENDING_DESC' }[this.exploreSort] || 'SCORE_DESC'
-    },
-    async loadExplore(append = false) {
-      this.exploreLoading = true
-      this.exploreError = ''
-      try {
-        if (!append) this.explorePage = 1
-        const p = new URLSearchParams({ sort: this._exploreSortKey(), page: String(this.explorePage) })
-        // género o tag: la lista combina ambos, así que resolvemos el tipo
-        if (this.exploreGenre) {
-          const g = this.exploreGenreList.find(x => x.name === this.exploreGenre)
-          p.set(g?.type === 'tag' ? 'tag' : 'genre', this.exploreGenre)
-        }
-        if (this.exploreYear) p.set('year', String(this.exploreYear))
-        if (this.exploreFormat) p.set('format', this.exploreFormat)
-        const d = await api.get(`/api/anilist/anime_top?${p}`)
-        const rows = d.results || []
-        this.explore = append ? [...this.explore, ...rows] : rows
-        this.exploreHasNext = !!d.hasNextPage
-      } catch (e) {
-        if (!append) this.explore = []
-        this.exploreError = e?.body || e?.message || 'Error desconocido'
-      } finally { this.exploreLoading = false }
-    },
-    async loadExploreMore() {
-      if (this.exploreLoading || !this.exploreHasNext) return
-      this.explorePage += 1
-      await this.loadExplore(true)
-    },
-    async loadExploreGenres() {
-      if (this.exploreGenreList.length) return
-      try { this.exploreGenreList = (await api.get('/api/anilist/genres')) || [] } catch (_) { this.exploreGenreList = [] }
     },
 
     /* ── Search + torrents ──────────────────────────────────────────────── */

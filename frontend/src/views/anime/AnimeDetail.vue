@@ -540,21 +540,22 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
       <section v-if="franchise.length > 1" class="disc" style="margin-top: 0">
         <h3 class="disc__title">Orden de la franquicia <small class="disc__sub">por estreno</small></h3>
         <ol class="fran">
-          <li v-for="(f, i) in franchise" :key="f.al_id"
-              class="fran__row" :class="{ 'is-cur': f.is_current, 'is-own': f.in_library }"
-              @click="store.openFranchiseItem(f)">
-            <span class="fran__n">{{ i + 1 }}</span>
-            <img v-if="f.cover" class="fran__cover" :src="imgProxy(f.cover)" :alt="f.title" loading="lazy" decoding="async" />
-            <div class="fran__meta">
-              <span class="fran__t">{{ f.title }}</span>
-              <span class="fran__sub">
-                <em v-if="f.year">{{ f.year }}</em>
-                <span class="fran__badge">{{ fmtLabel(f.format) }}</span>
-                <span v-if="f.episodes">{{ f.episodes }} ep</span>
-              </span>
-            </div>
-            <span v-if="f.is_current" class="fran__tag fran__tag--cur">Estás aquí</span>
-            <span v-else-if="f.in_library" class="fran__tag fran__tag--own"><Icon name="check" :size="11" /> En tu biblioteca</span>
+          <li v-for="(f, i) in franchise" :key="f.al_id">
+            <button type="button" class="fran__row" :class="{ 'is-cur': f.is_current, 'is-own': f.in_library }"
+                    :aria-label="`Abrir ${f.title}`" @click="store.openFranchiseItem(f)">
+              <span class="fran__n">{{ i + 1 }}</span>
+              <img v-if="f.cover" class="fran__cover" :src="imgProxy(f.cover)" :alt="f.title" loading="lazy" decoding="async" />
+              <div class="fran__meta">
+                <span class="fran__t">{{ f.title }}</span>
+                <span class="fran__sub">
+                  <em v-if="f.year">{{ f.year }}</em>
+                  <span class="fran__badge">{{ fmtLabel(f.format) }}</span>
+                  <span v-if="f.episodes">{{ f.episodes }} ep</span>
+                </span>
+              </div>
+              <span v-if="f.is_current" class="fran__tag fran__tag--cur">Estás aquí</span>
+              <span v-else-if="f.in_library" class="fran__tag fran__tag--own"><Icon name="check" :size="11" /> En tu biblioteca</span>
+            </button>
           </li>
         </ol>
       </section>
@@ -569,7 +570,8 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
       <section v-if="recs.length" class="disc" :style="stacks.length ? {} : { marginTop: 0 }">
         <h3 class="disc__title">Recomendaciones</h3>
         <div class="recgrid">
-          <article v-for="r in recs" :key="r.al_id" class="rec" @click="store.openRec(r)">
+          <button v-for="r in recs" :key="r.al_id" type="button" class="rec"
+                  :aria-label="`Abrir ${r.title}`" @click="store.openRec(r)">
             <div class="rec__poster">
               <img v-if="r.cover" :src="imgProxy(r.cover)" :alt="r.title" loading="lazy" decoding="async" />
               <div class="rec__scrim" />
@@ -577,7 +579,7 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
               <span v-if="store.isInLibrary(r)" class="rec__in"><Icon name="check" :size="10" /></span>
               <div class="rec__ov"><span class="rec__t">{{ r.title }}</span></div>
             </div>
-          </article>
+          </button>
         </div>
       </section>
       <p v-if="!recs.length && !stacks.length && franchise.length <= 1" class="dinfo__none">Sin relacionados todavía.</p>
@@ -596,9 +598,10 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
           </header>
           <div v-if="store.stackBrowseState === 'loading'" class="center"><Spinner /></div>
           <div v-else class="bgrid">
-            <article v-for="a in store.stackBrowseAnime" :key="a.al_id || a.mal_id" class="rec" @click="store.openRec(a); store.closeStackBrowse()">
+            <button v-for="a in store.stackBrowseAnime" :key="a.al_id || a.mal_id" type="button" class="rec"
+                    :aria-label="`Abrir ${a.title}`" @click="store.openRec(a); store.closeStackBrowse()">
               <div class="rec__poster"><img v-if="a.cover" :src="imgProxy(a.cover)" :alt="a.title" loading="lazy" decoding="async" /><div class="rec__scrim" /><span v-if="a.score" class="rec__score">★ {{ (a.score/10).toFixed(1) }}</span><div class="rec__ov"><span class="rec__t">{{ a.title }}</span></div></div>
-            </article>
+            </button>
           </div>
         </div>
       </div>
@@ -627,9 +630,10 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
                         : `Sin resultados para «${store.tagBrowse}»`"
                       :hint="store.tagBrowseRank ? 'Baja el umbral para ver las que sólo lo tocan de refilón.' : ''" />
           <div v-else class="bgrid">
-            <article v-for="a in store.tagBrowseAnime" :key="a.al_id" class="rec" @click="store.openRec(a); store.closeTagBrowse()">
+            <button v-for="a in store.tagBrowseAnime" :key="a.al_id" type="button" class="rec"
+                    :aria-label="`Abrir ${a.title}`" @click="store.openRec(a); store.closeTagBrowse()">
               <div class="rec__poster"><img v-if="a.cover" :src="imgProxy(a.cover)" :alt="a.title" loading="lazy" decoding="async" /><div class="rec__scrim" /><span v-if="a.score" class="rec__score">★ {{ (a.score/10).toFixed(1) }}</span><span v-if="a.tag_rank" class="rec__rank">{{ a.tag_rank }}%</span><div class="rec__ov"><span class="rec__t">{{ a.title }}</span></div></div>
-            </article>
+            </button>
           </div>
         </div>
       </div>
@@ -895,10 +899,12 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 /* orden de franquicia: timeline vertical de entregas */
 .fran { list-style: none; display: flex; flex-direction: column; gap: var(--s-2); }
 .fran__row {
-  display: flex; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3);
+  display: flex; width: 100%; align-items: center; gap: var(--s-3); padding: var(--s-2) var(--s-3);
+  color: inherit; font: inherit; text-align: left; background: transparent;
   border: 1px solid var(--line); border-radius: var(--r-md); cursor: pointer;
   transition: border-color var(--t-fast), background var(--t-fast);
 }
+.fran__row:focus-visible { outline: 2px solid var(--azure-bright); outline-offset: 2px; }
 .fran__row:hover { border-color: var(--azure); background: color-mix(in srgb, var(--azure) 7%, transparent); }
 .fran__row.is-cur { cursor: default; border-color: var(--azure); background: color-mix(in srgb, var(--azure) 12%, transparent); }
 .fran__n { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--ink-faint); width: 1.4rem; text-align: center; flex: none; }
@@ -919,7 +925,9 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
 .chip--stack:hover { background: color-mix(in srgb, var(--violet) 12%, transparent); }
 
 .recgrid, .bgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.125rem, 1fr)); gap: var(--s-4); }
-.rec { cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }
+.rec { display: block; width: 100%; padding: 0; border: 0; color: inherit; background: transparent;
+  font: inherit; text-align: left; cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }
+.rec:focus-visible { outline: 2px solid var(--azure-bright); outline-offset: 3px; border-radius: var(--r-md); }
 .rec:hover { transform: translateY(-5px); }
 .rec__poster { position: relative; aspect-ratio: 2/3; border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); }
 .rec:hover .rec__poster { border-color: var(--azure-glow); box-shadow: var(--shadow-md); }

@@ -49,6 +49,21 @@ const resumePct = computed(() => {
 })
 
 const meta = computed(() => store.epMeta[props.anime.id]?.[animeEpisodeKey(props.ep)] || store.epMeta[props.anime.id]?.[props.ep.num] || null)
+const failedLocalThumb = ref('')
+const localThumbSrc = computed(() => playable.value || props.ep.has_thumb
+  ? animeThumb(props.anime.id, props.ep.num, props.ep.ep_type, animeEpisodeKey(props.ep))
+  : '')
+const thumbSrc = computed(() => {
+  if (localThumbSrc.value && failedLocalThumb.value !== localThumbSrc.value) return localThumbSrc.value
+  return meta.value?.still ? imgProxy(meta.value.still, 320, props.anime.cover_rev) : ''
+})
+function onThumbError(e) {
+  if (localThumbSrc.value && thumbSrc.value === localThumbSrc.value) {
+    failedLocalThumb.value = localThumbSrc.value
+    return
+  }
+  e.target.style.display = 'none'
+}
 const infoOpen = computed(() => store.epInfoOpen === `${props.anime.id}_${animeEpisodeKey(props.ep)}`)
 const jikanInfo = computed(() => store.epInfo[`${props.anime.mal_id}_${animeEpisodeKey(props.ep)}`])
 const info = computed(() => {
@@ -81,16 +96,17 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
       <span class="eprow__box"><Icon v-if="sel.has(animeEpisodeKey(ep))" name="check" :size="11" /></span>
     </button>
     <div class="eprow__main">
-      <div class="eprow__thumb" @click="onPlay">
+      <button type="button" class="eprow__thumb" :disabled="!playable"
+              :aria-label="'Reproducir ' + anime.title + ', episodio ' + ep.num" @click="onPlay">
         <div class="eprow__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 120)}')` : ''" />
-        <img v-if="playable || ep.has_thumb" class="eprow__img" :src="animeThumb(anime.id, ep.num, ep.ep_type, animeEpisodeKey(ep))"
-             loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
+        <img v-if="thumbSrc" class="eprow__img" :src="thumbSrc"
+             loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" @error="onThumbError" alt="" />
         <div class="eprow__num"><span class="eprow__num-k">{{ ep.ep_type === 'special' ? 'SP' : 'EP' }}</span><span class="eprow__num-v">{{ String(ep.num).padStart(2, '0') }}</span></div>
         <!-- resume / download / finished bar -->
         <div v-if="resumePct" class="eprow__bar eprow__bar--resume"><span :style="{ '--progress': resumePct / 100 }" /></div>
         <div v-else-if="downloading" class="eprow__bar eprow__bar--dl"><span :style="{ '--progress': dlPct / 100 }" /></div>
         <div v-if="playable" class="eprow__play"><Icon name="play" :size="24" /></div>
-      </div>
+      </button>
 
       <div class="eprow__body">
         <div class="eprow__titrow">
@@ -197,7 +213,11 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 
 .eprow__main { display: flex; align-items: stretch; gap: var(--s-3); padding: var(--s-2); }
 
-.eprow__thumb { position: relative; flex-shrink: 0; width: 10rem; aspect-ratio: 16/9; border-radius: var(--r-sm); overflow: hidden; cursor: pointer; }
+.eprow__thumb { position: relative; display: block; flex-shrink: 0; width: 10rem; aspect-ratio: 16/9; padding: 0;
+  border: 0; border-radius: var(--r-sm); overflow: hidden; color: inherit; background: transparent;
+  font: inherit; line-height: inherit; text-align: left; cursor: pointer; }
+.eprow__thumb:focus-visible { outline: 2px solid var(--azure-bright); outline-offset: 2px; }
+.eprow__thumb:disabled { cursor: default; }
 .eprow--missing .eprow__thumb, .eprow--dl .eprow__thumb { cursor: default; }
 .eprow__bg { position: absolute; inset: 0; background-size: cover; background-position: center; filter: blur(16px) brightness(.4); transform: scale(1.2); }
 .eprow__img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-slow), transform var(--t-cine) var(--ease-silk); }

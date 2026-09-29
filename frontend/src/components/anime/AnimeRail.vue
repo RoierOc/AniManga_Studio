@@ -43,10 +43,10 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
     <div class="rail__head">
       <h3 class="rail__title">{{ title }}</h3>
       <div v-if="canL || canR" class="rail__nav">
-        <button class="rail__arrow" :disabled="!canL" data-tip="Anterior" @click="page(-1)">
+        <button class="rail__arrow" aria-label="Desplazar carrusel hacia atrás" :disabled="!canL" data-tip="Anterior" @click="page(-1)">
           <Icon name="chevron" :size="16" :style="{ transform: 'rotate(180deg)' }" />
         </button>
-        <button class="rail__arrow" :disabled="!canR" data-tip="Siguiente" @click="page(1)">
+        <button class="rail__arrow" aria-label="Desplazar carrusel hacia delante" :disabled="!canR" data-tip="Siguiente" @click="page(1)">
           <Icon name="chevron" :size="16" />
         </button>
       </div>
@@ -54,8 +54,8 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
 
     <!-- Episode thumbnails (16:9) -->
     <div v-if="variant === 'episode'" ref="row" class="rail__row" @scroll.passive="updateArrows">
-      <article v-for="it in items" :key="it.anime.id + '-' + (it.ep?.num ?? '')" class="ecard"
-               @click="$emit('select', it)">
+      <button v-for="it in items" :key="it.anime.id + '-' + (it.ep?.num ?? '')" type="button" class="ecard"
+              :aria-label="`Reproducir ${it.anime.title}, episodio ${it.ep?.num}`" @click="$emit('select', it)">
         <div class="ecard__thumb">
           <img :src="epThumb(it)" :alt="'Ep ' + it.ep?.num" loading="lazy" decoding="async"
                @load="$event.target.classList.add('is-loaded')"
@@ -70,13 +70,13 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
         </div>
         <div class="ecard__title">{{ it.anime.title }}</div>
         <div class="ecard__sub">Episodio {{ it.ep?.num }}</div>
-      </article>
+      </button>
     </div>
 
     <!-- Poster cards (2:3) -->
     <div v-else ref="row" class="rail__row" @scroll.passive="updateArrows">
-      <article v-for="it in items" :key="it.anime.id || it.anime.al_id" class="pcard"
-               @click="$emit('select', it)">
+      <button v-for="it in items" :key="it.anime.id || it.anime.al_id" type="button" class="pcard"
+              :aria-label="`Abrir ${it.anime.title}`" @click="$emit('select', it)">
         <div class="pcard__poster">
           <img v-if="imgThumb(it.anime.cover)" :src="imgThumb(it.anime.cover)" class="blurup" aria-hidden="true" alt="" />
           <img v-if="it.anime.cover" :src="imgProxy(it.anime.cover, 220)" :alt="it.anime.title" loading="lazy" decoding="async"
@@ -88,7 +88,7 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
           <div class="pcard__hover"><span class="pcard__btn"><Icon name="play" :size="16" /></span></div>
           <div class="pcard__overlay"><h4 class="pcard__name">{{ it.anime.title }}</h4></div>
         </div>
-      </article>
+      </button>
     </div>
   </section>
 </template>
@@ -110,7 +110,9 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
 .rail__row::-webkit-scrollbar-thumb { background: var(--line-2); border-radius: var(--r-pill); }
 
 /* ── episode (16:9) ── */
-.ecard { flex: 0 0 18.75rem; scroll-snap-align: start; cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }
+.ecard { display: block; padding: 0; border: 0; color: inherit; background: transparent; font: inherit; text-align: left;
+  flex: 0 0 18.75rem; scroll-snap-align: start; cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }
+.ecard:focus-visible, .pcard:focus-visible { outline: 2px solid var(--azure-bright); outline-offset: 3px; border-radius: var(--r-md); }
 .ecard:hover { transform: translateY(-5px); }
 .ecard__thumb { position: relative; aspect-ratio: 16/9; border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); transition: box-shadow var(--t-base), border-color var(--t-base); }
 .ecard:hover .ecard__thumb { border-color: var(--azure-glow); box-shadow: var(--shadow-lg); }
@@ -118,7 +120,7 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
 .ecard__img.is-loaded { opacity: 1; }
 .ecard__scrim { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(7,10,18,.1), rgba(5,7,13,.65)); }
 .ecard__play { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; opacity: 0; transition: opacity var(--t-base); }
-.ecard:hover .ecard__play { opacity: 1; }
+.ecard:hover .ecard__play, .ecard:focus-visible .ecard__play { opacity: 1; }
 .ecard__play :deep(svg) { filter: drop-shadow(0 2px 8px rgba(0,0,0,.6)); }
 .ecard__new { position: absolute; top: var(--s-2); right: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; letter-spacing: .04em; padding: 2px 0.4375rem; border-radius: var(--r-xs); color: #fff; background: var(--azure); box-shadow: var(--glow-azure); animation: pulse-live 1.8s var(--ease-drift) infinite; }
 .ecard__ep { position: absolute; top: var(--s-2); left: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.4375rem; border-radius: var(--r-xs); background: rgba(7,10,18,.7); color: var(--ice); }
@@ -128,7 +130,8 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
 .ecard__sub { font-size: var(--fs-xs); color: var(--ink-faint); }
 
 /* ── poster (2:3) ── */
-.pcard { flex: 0 0 9.5rem; scroll-snap-align: start; cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }
+.pcard { display: block; padding: 0; border: 0; color: inherit; background: transparent; font: inherit; text-align: left;
+  flex: 0 0 9.5rem; scroll-snap-align: start; cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }
 .pcard:hover { transform: translateY(-6px); }
 .pcard__poster { position: relative; aspect-ratio: 2/3; border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); box-shadow: var(--shadow-sm); transition: box-shadow var(--t-base), border-color var(--t-base); }
 .pcard:hover .pcard__poster { border-color: var(--azure-glow); box-shadow: var(--shadow-lg), 0 0 0 1px var(--azure-glow); }
@@ -140,9 +143,9 @@ watch(() => props.items.length, async () => { await nextTick(); updateArrows() }
 .pcard__fmt { position: absolute; top: var(--s-2); left: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 600; padding: 2px 0.375rem; border-radius: var(--r-xs); color: var(--ink); background: rgba(7,10,18,.6); backdrop-filter: blur(6px); }
 .pcard__score { position: absolute; top: var(--s-2); right: var(--s-2); display: inline-flex; align-items: center; gap: 3px; font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.375rem; border-radius: var(--r-pill); color: var(--gold); background: color-mix(in srgb, var(--gold) 15%, rgba(7,10,18,.7)); }
 .pcard__hover { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; transition: opacity var(--t-base); }
-.pcard:hover .pcard__hover { opacity: 1; }
+.pcard:hover .pcard__hover, .pcard:focus-visible .pcard__hover { opacity: 1; }
 .pcard__btn { width: 2.75rem; height: 2.75rem; display: grid; place-items: center; border-radius: 50%; color: #fff; background: var(--azure); box-shadow: var(--glow-azure); transform: scale(.8); transition: transform var(--t-base) var(--ease-snap); }
-.pcard:hover .pcard__btn { transform: scale(1); }
+.pcard:hover .pcard__btn, .pcard:focus-visible .pcard__btn { transform: scale(1); }
 .pcard__overlay { position: absolute; left: 0; right: 0; bottom: 0; padding: var(--s-3); }
 .pcard__name { font-size: var(--fs-xs); font-weight: 600; line-height: var(--lh-snug); color: #fff; text-shadow: 0 1px 6px rgba(0,0,0,.65); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 </style>
