@@ -42,6 +42,7 @@ const resumePct = computed(() => {
 
 // Metadatos del episodio (TMDB o MAL de reserva) cargados en bloque al abrir el detalle.
 const meta = computed(() => store.epMeta[props.anime.id]?.[animeEpisodeKey(props.ep)] || store.epMeta[props.anime.id]?.[props.ep.num] || null)
+const failedLocalThumb = ref('')
 const infoOpen = computed(() => store.epInfoOpen === `${props.anime.id}_${animeEpisodeKey(props.ep)}`)
 const jikanInfo = computed(() => store.epInfo[`${props.anime.mal_id}_${animeEpisodeKey(props.ep)}`])
 // Descripción: la de TMDB si la hay; si no, la sinopsis de MAL (epInfo).
@@ -58,22 +59,24 @@ const subFetching = computed(() => store.subFetching === subKey.value)
 // marcador/sidecar en disco) o recién hecho en esta sesión. No cuenta ES ya incrustados de origen.
 const hasES = computed(() => props.ep.es_injected || subTask.value?.status === 'done')
 
-/* La imagen de la tarjeta: **el fotograma del fichero que tienes, y si no, el still de TMDB**.
- *
- * La miniatura local gana siempre porque sale del vídeo de verdad — es ESTE episodio, no material
- * de promoción. Pero para un episodio que aún no está descargado no hay vídeo del que sacar nada, y
- * hasta ahora esa tarjeta se quedaba con la portada desenfocada: media rejilla eran nueve manchas
- * borrosas idénticas. `meta.still` ya venía en `/api/anime/episode_meta` y no se usaba para esto.
- *
- * Idea traída del móvil, donde se probó primero. */
+/* Prefiere el fotograma del vídeo; si no puede cargarse, usa el still individual de TMDB.
+ * `failedLocalThumb` evita reintentar la misma URL corrupta hasta que cambie su revisión. */
+const localThumbSrc = computed(() => playable.value || props.ep.has_thumb
+  ? animeThumb(props.anime.id, props.ep.num, props.ep.ep_type, animeEpisodeKey(props.ep))
+  : '')
 const thumbSrc = computed(() => {
-  if (playable.value || props.ep.has_thumb) {
-    return animeThumb(props.anime.id, props.ep.num, props.ep.ep_type, animeEpisodeKey(props.ep))
-  }
+  if (localThumbSrc.value && failedLocalThumb.value !== localThumbSrc.value) return localThumbSrc.value
   // 400 se quedaba corto: la tarjeta mide ~495 px CSS, así que pedía el peldaño 640 y lo pintaba
   // a 742 físicos. Con el ancho real cae en el 900 y deja de verse blando.
   return meta.value?.still ? imgProxy(meta.value.still, 500, props.anime.cover_rev) : ''
 })
+function onThumbError(e) {
+  if (localThumbSrc.value && thumbSrc.value === localThumbSrc.value) {
+    failedLocalThumb.value = localThumbSrc.value
+    return
+  }
+  e.target.style.display = 'none'
+}
 
 // Título real del episodio (TMDB/MAL) si lo tenemos; si no, la etiqueta derivada del archivo.
 const epTitle = computed(() => {
@@ -170,7 +173,7 @@ function openMenu(ev) {
     <div class="ep__thumb" @click="onPrimary">
       <div class="ep__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 200)}')` : ''" />
       <img v-if="thumbSrc" class="ep__img" :src="thumbSrc"
-           loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" @error="$event.target.style.display='none'" alt="" />
+           loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" @error="onThumbError" alt="" />
 
       <!-- Sobre la portada se queda SÓLO el nº (y el "Visto"). El título vive debajo. -->
       <div class="ep__overlay">
