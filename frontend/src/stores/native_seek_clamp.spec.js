@@ -73,4 +73,18 @@ describe('nativeSeek acota la posición', () => {
     store(0).nativeSeek(900)
     expect(ultimoSeek().pos).toBe(900)
   })
+
+  it('Saltar OP no reaprende de una búsqueda posterior', () => {
+    const key = 'anime-skipop:serie-prueba'
+    localStorage.removeItem(key)
+    const s = store()
+    s.nativePlayer.anime = { id: 'serie-prueba' }
+    s.nativePlayer.pos = 100
+
+    s.nativeSkipOp()
+    expect(ultimoSeek().pos).toBe(182)
+    s.nativeSeek(162) // seek ordinario tras el salto, no debe recalibrarlo
+
+    expect(localStorage.getItem(key)).toBeNull()
+  })
 })

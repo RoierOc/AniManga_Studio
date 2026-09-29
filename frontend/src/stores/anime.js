@@ -1171,18 +1171,6 @@ export const useAnimeStore = defineStore('anime', {
       const dur = this.nativePlayer?.duration || 0
       pos = Math.max(0, dur ? Math.min(pos, dur - 0.5) : pos)
 
-      // Calibración del "Saltar OP": un seek en los 10 s siguientes al salto (y a menos de
-      // 60 s del punto de aterrizaje) se lee como corrección → se aprende para esta serie.
-      // El propio seek del salto (pos === target) no cuenta.
-      const cal = this._skipOpCal
-      if (cal && Date.now() - cal.at < 10000) {
-        const d = pos - cal.target
-        if (Math.abs(d) > 1 && Math.abs(d) < 60) {
-          const learned = Math.min(200, Math.max(20, Math.round(cal.amt + d)))
-          try { localStorage.setItem(cal.key, String(learned)) } catch {}
-          this._skipOpCal = null
-        }
-      }
       if (!this.nativePlayer) return
       this.nativePlayer.pos = pos
       nativeSend('seek', { pos })
@@ -1308,17 +1296,12 @@ export const useAnimeStore = defineStore('anime', {
         if (identity) patchAnimePlaybackPrefs(np.animePrefId, { subTrack: identity })
       }
     },
-    // Salto de opening que APRENDE por serie: el primer episodio saltas 82 s (el genérico) y,
-    // si corriges el aterrizaje con un seek en los siguientes 10 s, esa corrección se suma al
-    // salto guardado de ESA serie. Del episodio 2 en adelante "Saltar OP" cae exacto.
+    // Salto manual fijo: un seek cercano puede ser navegación normal y no demuestra
+    // dónde termina el OP; por eso no se calibra ni se guarda por serie.
     nativeSkipOp() {
       const np = this.nativePlayer
       if (!np) return
-      const key = `anime-skipop:${np.anime?.id || ''}`
-      const amt = Math.min(200, Math.max(20, Number(localStorage.getItem(key)) || 82))
-      const target = (np.pos || 0) + amt
-      this._skipOpCal = { at: Date.now(), target, key, amt }
-      this.nativeSeek(target)
+      this.nativeSeek((np.pos || 0) + 82)
     },
     // Escribe en la preferencia del dominio ABIERTO: el menú del reproductor ofrece los tiers
     // de anime o los de imagen real, y cada uno persiste por su lado.
