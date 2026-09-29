@@ -88,10 +88,45 @@ describe('una respuesta que llega tarde no puede pisar a la buena', () => {
     const s = useAnimeStore()
     s.searchResults = [{ al_id: 1, title: 'viejo' }]
     s.searchQuery = 'a'                    // por debajo del mínimo de 2 letras
+    s.searchCompleted = true
 
     await s.searchAnime()
 
     expect(s.searchResults).toEqual([])
     expect(s.searchLoading).toBe(false)
+    expect(s.searchCompleted).toBe(false)
+  })
+
+  it('marca como terminada una búsqueda correcta aunque no encuentre coincidencias', async () => {
+    api.get.mockResolvedValueOnce([])
+    const s = useAnimeStore()
+    s.searchQuery = 'Naruto inexistente'
+
+    await s.searchAnime()
+
+    expect(s.searchResults).toEqual([])
+    expect(s.searchCompleted).toBe(true)
+  })
+
+  it('al editar la consulta invalida de inmediato la respuesta y los resultados anteriores', async () => {
+    vi.useFakeTimers()
+    const anterior = defer()
+    api.get.mockReturnValueOnce(anterior.p)
+    const s = useAnimeStore()
+    s.searchQuery = 'Naruto'
+    const enVuelo = s.searchAnime()
+
+    try {
+      s.searchQuery = 'One Piece'
+      s.onSearchInput()
+      anterior.resolve([{ al_id: 1, title: 'Naruto' }])
+      await enVuelo
+
+      expect(s.searchResults).toEqual([])
+      expect(s.searchCompleted).toBe(false)
+    } finally {
+      clearTimeout(s._searchTimer)
+      vi.useRealTimers()
+    }
   })
 })

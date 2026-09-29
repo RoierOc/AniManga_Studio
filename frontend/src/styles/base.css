@@ -288,7 +288,8 @@ ul, ol { list-style: none; }
   padding: var(--s-2) var(--s-4); border-radius: var(--r-pill); font-size: var(--fs-sm);
   font-weight: 500; color: var(--ink-faint); transition: all var(--t-fast) var(--ease-silk); }
 .subnav__tab:hover { color: var(--ink); background: var(--surface); }
-.subnav__tab.is-active { color: var(--azure-bright); background: var(--azure-haze); }
+.subnav__tab.is-active { color: var(--domain-accent, var(--azure-bright));
+  background: var(--domain-accent-soft, var(--azure-haze)); }
 .subnav__n { font-family: var(--font-mono); font-size: var(--fs-2xs); padding: 1px 6px;
   border-radius: var(--r-pill); background: var(--azure); color: #fff; }
 @media (max-width: 640px) { .subnav { padding: var(--s-3) var(--s-4); } }

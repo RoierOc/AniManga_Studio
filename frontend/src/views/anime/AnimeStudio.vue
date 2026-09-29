@@ -82,7 +82,8 @@ const current = computed(() => {
 </template>
 
 <style scoped>
-.studio { width: 100%; }
+.studio { width: 100%; --domain-accent: var(--cyan);
+  --domain-accent-soft: color-mix(in srgb, var(--cyan) 12%, transparent); }
 /* Barra de sub-navegación a ancho COMPLETO con separador inferior: se lee como una barra
    intencional tanto sobre el hero a sangre (Mi Anime) como sobre las vistas centradas (Buscar,
    Explorar…). Alineada a la izquierda con el mismo padding que el contenido → las pestañas cuadran

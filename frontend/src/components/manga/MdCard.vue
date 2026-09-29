@@ -42,9 +42,11 @@ function openMenuFromButton(ev) {
       <div v-else class="mc__ph"><Icon name="library" :size="28" /></div>
       <div class="mc__scrim" />
       <span class="mc__shine" />
-      <span v-if="score" class="mc__score" :class="tier">★ {{ (score / 10).toFixed(1) }}</span>
+      <div class="mc__badges">
+        <span v-if="score" class="mc__score" :class="tier">★ {{ (score / 10).toFixed(1) }}</span>
+        <span v-if="enBiblioteca" class="mc__have" data-tip="Ya está en tu biblioteca"><Icon name="check" :size="12" /> La tienes</span>
+      </div>
       <span v-if="manga.contentRating && manga.contentRating !== 'safe'" class="mc__rating">{{ manga.contentRating === 'suggestive' ? '16+' : '18+' }}</span>
-      <span v-if="enBiblioteca" class="mc__have" data-tip="Ya está en tu biblioteca"><Icon name="check" :size="12" /> La tienes</span>
       <div class="mc__hover"><span class="mc__btn"><Icon name="search" :size="16" /></span></div>
       <div class="mc__overlay">
         <h3 class="mc__title">{{ manga.title }}</h3>
@@ -65,8 +67,9 @@ function openMenuFromButton(ev) {
 .mc:hover .mc__poster { border-color: var(--azure-glow); box-shadow: var(--shadow-lg), 0 0 0 1px var(--azure-glow); }
 .mc__img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-slow), transform var(--t-cine) var(--ease-silk); }
 .mc__img.is-loaded { opacity: 1; }
+.mc__badges { position: absolute; top: var(--s-2); left: var(--s-2); z-index: 1;
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--s-1); }
 .mc__have {
-  position: absolute; left: var(--s-2); bottom: auto; top: var(--s-2);
   display: inline-flex; align-items: center; gap: 3px;
   font-size: var(--fs-2xs); font-weight: 600; padding: 2px 0.4375rem; border-radius: var(--r-pill);
   color: var(--jade); background: rgba(7,10,18,.66); backdrop-filter: blur(6px);
@@ -81,7 +84,7 @@ function openMenuFromButton(ev) {
 .mc__shine { position: absolute; inset: 0; pointer-events: none; background: linear-gradient(112deg, transparent 35%, rgba(168,200,255,.14) 48%, transparent 60%); transform: translateX(-120%); }
 .mc:hover .mc__shine { animation: shine .8s var(--ease-silk) forwards; }
 @keyframes shine { to { transform: translateX(120%); } }
-.mc__score { position: absolute; top: var(--s-2); left: var(--s-2); font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.5rem; border-radius: var(--r-pill); backdrop-filter: blur(6px); background: rgba(7,10,18,.6); color: var(--ink-soft); }
+.mc__score { font-size: var(--fs-2xs); font-weight: 700; padding: 2px 0.5rem; border-radius: var(--r-pill); backdrop-filter: blur(6px); background: rgba(7,10,18,.6); color: var(--ink-soft); }
 .mc__score.is-high { color: var(--jade); } .mc__score.is-mid { color: var(--gold); } .mc__score.is-low { color: var(--ink-faint); }
 .mc__rating { position: absolute; top: calc(var(--s-2) + 2.5rem); right: var(--s-2); font-family: var(--font-mono); font-size: 0.5625rem; font-weight: 700; padding: 2px 0.375rem; border-radius: var(--r-xs); color: var(--coral); background: rgba(7,10,18,.6); backdrop-filter: blur(6px); }
 .mc__hover { position: absolute; inset: 0; display: grid; place-items: center; opacity: 0; transition: opacity var(--t-base); }

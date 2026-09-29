@@ -84,9 +84,22 @@ const railMedias = computed(() => aRiel(store.dejadoAMedias, RAIL_POSTER_W).map(
    serían 12 peticiones para algo que quizá no mires. El store memoriza por obra. */
 function alEntrarMedias(item) { store.pedirRecap(item.raw) }
 
-/* `goto` no sabe de sub-vistas (y `pushNav` con una sub rompe el atrás — regla del repo): el
-   panel de Mi Anime lo elige su propio store, igual que hace `AnimeLibrary`. */
-function irAAnime(sub) { useAnimeStore().sub = sub; ui.goto('anime') }
+/* `goto` no sabe de sub-vistas; fijamos la pestaña antes de entrar para que el destino y el
+   modo de la barra lateral sigan de acuerdo. */
+function irAAnime(sub) {
+  useAnimeStore().sub = sub
+  ui.setModeHome('anime', 'anime')
+  ui.goto('anime')
+}
+function irAManga() {
+  ui.setModeHome('anime', 'explore')
+  ui.goto('explore')
+}
+function irAMedia(sub) {
+  ui.tabs.media = sub
+  ui.setModeHome('cine', 'media')
+  ui.goto('media')
+}
 
 /* Clic derecho en la fila. El riel ya emitía `menu` desde el principio, pero la Portada no lo
    escuchaba: el gesto existía y no pasaba NADA — que es peor que no tenerlo, porque parece roto.
@@ -107,16 +120,39 @@ function abrirMenu({ ev, item }) {
   }
 }
 
-/* Rotación del hero. Se PARA al pasar el ratón por encima: el carrusel cambiándote la película
-   justo cuando ibas a pulsar «Continuar» es de los detalles que hacen que una app moleste. */
+/* La rotación no debe competir con la interacción: se pausa con puntero/foco y cuando el usuario
+   pide movimiento reducido, también si cambia esa preferencia con la app abierta. */
 const paused = ref(false)
+const pointerWithin = ref(false)
+const focusWithin = ref(false)
+const reducedMotion = ref(false)
+let motionPreference = null
 let timer = null
+function syncPause() { paused.value = pointerWithin.value || focusWithin.value || reducedMotion.value }
+function setPointerWithin(on) { pointerWithin.value = on; syncPause() }
+function onHeroFocusOut(e) {
+  focusWithin.value = !!e.currentTarget.contains(e.relatedTarget)
+  syncPause()
+}
+function onMotionPreference(e) { reducedMotion.value = e.matches; syncPause() }
 function tick() {
   timer = setInterval(() => { if (!paused.value) store.nextHero(1) }, 9000)
 }
 
-onMounted(() => { store.init(); tick() })
-onBeforeUnmount(() => clearInterval(timer))
+onMounted(() => {
+  store.init()
+  if (window.matchMedia) {
+    motionPreference = window.matchMedia('(prefers-reduced-motion: reduce)')
+    reducedMotion.value = motionPreference.matches
+    motionPreference.addEventListener?.('change', onMotionPreference)
+  }
+  syncPause()
+  tick()
+})
+onBeforeUnmount(() => {
+  clearInterval(timer)
+  motionPreference?.removeEventListener?.('change', onMotionPreference)
+})
 
 function onKey(e) {
   if (e.key === 'ArrowRight') store.nextHero(1)
@@ -128,7 +164,9 @@ function onKey(e) {
   <div class="home" @keydown="onKey" tabindex="-1">
 
     <!-- ── Hero ────────────────────────────────────────────────────────── -->
-    <section v-if="hero" class="hero" @mouseenter="paused = true" @mouseleave="paused = false">
+    <section v-if="hero" class="hero"
+             @mouseenter="setPointerWithin(true)" @mouseleave="setPointerWithin(false)"
+             @focusin="focusWithin = true; syncPause()" @focusout="onHeroFocusOut">
       <!-- `:key` fuerza el remontaje al cambiar de item: sin él la imagen se sustituía en seco,
            sin el fundido, y el Ken Burns no volvía a empezar. -->
       <div :key="hero.key" class="hero__art" :style="{ backgroundImage: `url(${heroArt})` }" />
@@ -234,8 +272,17 @@ function onKey(e) {
       <EmptyState v-else-if="store.isEmpty"
                   icon="home"
                   title="Aún no has empezado nada"
-                  body="Cuando veas un episodio o leas un capítulo, aparecerá aquí para que puedas retomarlo de un clic.">
-        <button class="btn btn--ghost" @click="ui.goto('library')">Ir a la biblioteca</button>
+                  hint="Cuando empieces a ver o leer algo, aparecerá aquí para que puedas retomarlo.">
+        <template #action>
+          <template v-if="ui.mode === 'cine'">
+            <button class="is-primary" @click="irAMedia('library')">Abrir Mi Biblioteca</button>
+            <button @click="irAMedia('search')">Buscar series y películas</button>
+          </template>
+          <template v-else>
+            <button class="is-primary" @click="irAAnime('library')">Abrir Mi Anime</button>
+            <button @click="irAManga">Explorar manga</button>
+          </template>
+        </template>
       </EmptyState>
     </div>
 

@@ -42,7 +42,8 @@ const current = computed(() => (tab.value === 'sources' ? SourcesView : MangaDex
 <style scoped>
 /* block (NO flex column): así la vista interna, que centra con max-width +
  * margin auto, llena el ancho como bloque; en flex column se encogía al contenido. */
-.explore { display: block; }
+.explore { display: block; --domain-accent: var(--rose);
+  --domain-accent-soft: color-mix(in srgb, var(--rose) 12%, transparent); }
 /* selector de fuente: dos cajas grandes y diferenciadas (no una pestaña sutil);
  * mismo ancho/centrado que la vista de abajo para que quede alineado */
 .srcpick {
@@ -58,8 +59,8 @@ const current = computed(() => (tab.value === 'sources' ? SourcesView : MangaDex
   transition: border-color var(--t-fast), background var(--t-fast), color var(--t-fast);
 }
 .srcpick__opt:hover { color: var(--ink); border-color: var(--line-strong); }
-.srcpick__opt.is-on { color: var(--ink); border-color: var(--azure); background: var(--azure-haze); }
-.srcpick__opt.is-on .srcpick__ic { color: var(--azure-bright); }
+.srcpick__opt.is-on { color: var(--ink); border-color: var(--domain-accent); background: var(--domain-accent-soft); }
+.srcpick__opt.is-on .srcpick__ic { color: var(--domain-accent); }
 .srcpick__ic { flex: none; }
 .srcpick__txt { display: flex; flex-direction: column; line-height: 1.2; text-align: left; }
 .srcpick__txt b { font-size: var(--fs-sm); font-weight: 600; }

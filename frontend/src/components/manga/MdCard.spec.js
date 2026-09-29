@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import MdCard from './MdCard.vue'
+import { useDiscoveryStore } from '@/stores/discovery'
 
 beforeEach(() => setActivePinia(createPinia()))
 
@@ -27,5 +28,16 @@ describe('MdCard · acciones accesibles sin clic derecho', () => {
 
     await wrapper.get('.mc__actions').trigger('keydown', { key: 'Enter' })
     expect(wrapper.emitted('open')).toBeUndefined()
+  })
+
+  it('apila la nota y «La tienes» para que ninguna etiqueta tape a la otra', () => {
+    useDiscoveryStore().libraryTitles = ['ambas etiquetas']
+    const wrapper = mount(MdCard, {
+      props: { manga: { id: 'manga-3', title: 'Ambas etiquetas', cover: '' }, score: 82 },
+      global: { stubs: { Icon: true } },
+    })
+
+    expect(wrapper.find('.mc__badges .mc__score').exists()).toBe(true)
+    expect(wrapper.find('.mc__badges .mc__have').exists()).toBe(true)
   })
 })

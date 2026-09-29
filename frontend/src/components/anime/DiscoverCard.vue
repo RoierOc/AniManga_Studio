@@ -25,7 +25,7 @@ const scoreTier = computed(() => {
 </script>
 
 <template>
-  <article class="sc" tabindex="0" @click="store.openTorrents(anime)" @keydown.enter="store.openTorrents(anime)">
+  <article class="sc" tabindex="0" @click="store.openTorrents(anime)" @keydown.enter.self="store.openTorrents(anime)">
     <div class="sc__cover" ref="cov">
       <img v-if="thumb" :src="thumb" class="blurup" aria-hidden="true" alt="" />
       <img v-if="anime.cover" :src="coverUrl" :alt="anime.title" loading="lazy" decoding="async"
@@ -61,10 +61,10 @@ const scoreTier = computed(() => {
 
 <style scoped>
 .sc { outline: none; cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }
-.sc:hover, .sc:focus-visible { transform: translateY(-6px); }
+.sc:hover, .sc:focus-visible, .sc:focus-within { transform: translateY(-6px); }
 
 .sc__cover { position: relative; aspect-ratio: 2/3; border-radius: var(--r-md); overflow: hidden; background: var(--surface-2); border: 1px solid var(--line); box-shadow: var(--shadow-sm); transition: box-shadow var(--t-base), border-color var(--t-base); }
-.sc:hover .sc__cover { border-color: var(--azure-glow); box-shadow: var(--shadow-lg), 0 0 0 1px var(--azure-glow); }
+.sc:hover .sc__cover, .sc:focus-within .sc__cover { border-color: var(--azure-glow); box-shadow: var(--shadow-lg), 0 0 0 1px var(--azure-glow); }
 .sc__img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity var(--t-slow), transform var(--t-cine) var(--ease-silk); }
 .sc__img.is-loaded { opacity: 1; }
 .sc:hover .sc__img { transform: scale(1.07); }
@@ -83,7 +83,7 @@ const scoreTier = computed(() => {
 .sc__airing { position: absolute; top: var(--s-2); right: var(--s-2); font-family: var(--font-mono); font-size: 0.5rem; font-weight: 700; letter-spacing: .1em; padding: 2px 0.375rem; border-radius: var(--r-xs); color: var(--cyan); background: rgba(7,10,18,.66); backdrop-filter: blur(6px); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--cyan) 28%, transparent); }
 
 .sc__overlay { position: absolute; inset: 0; display: flex; align-items: flex-end; padding: var(--s-3); opacity: 0; background: linear-gradient(0deg, rgba(5,7,13,.85), transparent 60%); transition: opacity var(--t-base); }
-.sc:hover .sc__overlay, .sc:focus-visible .sc__overlay { opacity: 1; }
+.sc:hover .sc__overlay, .sc:focus-visible .sc__overlay, .sc:focus-within .sc__overlay { opacity: 1; }
 .sc__add { width: 100%; padding: 0.4375rem; border-radius: var(--r-sm); font-size: var(--fs-xs); font-weight: 600; color: #fff; background: var(--azure); transition: background var(--t-fast); }
 .sc__add:hover { background: var(--azure-bright); }
 .sc__add.is-in { background: transparent; color: var(--jade); border: 1px solid color-mix(in srgb, var(--jade) 35%, transparent); cursor: default; }

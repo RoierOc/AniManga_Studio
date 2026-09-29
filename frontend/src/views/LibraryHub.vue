@@ -46,7 +46,8 @@ const current = computed(() => (tab.value === 'local' ? LocalView : LibraryView)
 <style scoped>
 /* block (NO flex column): la vista interna centra con max-width + margin auto y
  * así llena el ancho como bloque; en flex column se encogía al contenido. */
-.libhub { display: block; }
+.libhub { display: block; --domain-accent: var(--rose);
+  --domain-accent-soft: color-mix(in srgb, var(--rose) 12%, transparent); }
 .libhub__bar {
   display: flex; align-items: center; gap: var(--s-3);
   max-width: var(--content-max); margin: 0 auto;   /* alineado con la vista de abajo */
@@ -61,7 +62,7 @@ const current = computed(() => (tab.value === 'local' ? LocalView : LibraryView)
 }
 .libtabs__t:hover { color: var(--ink); }
 .libtabs__t.is-on { color: var(--ink); background: var(--surface); box-shadow: var(--shadow-sm); }
-.libtabs__t.is-on :deep(svg) { color: var(--azure-bright); }
+.libtabs__t.is-on :deep(svg) { color: var(--domain-accent); }
 .libhub__right { margin-left: auto; display: flex; align-items: center; gap: var(--s-2); }
 .libhub__import {
   display: flex; align-items: center; gap: var(--s-2);

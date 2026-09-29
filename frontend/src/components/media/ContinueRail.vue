@@ -59,8 +59,10 @@ function onWheel(e) {
       <button v-if="action" class="cw__all" @click="action.fn">{{ action.label }} ›</button>
     </header>
     <div class="cw__row" @wheel="onWheel">
-      <article v-for="it in items" :key="it.id" class="cwc"
+      <article v-for="it in items" :key="it.id" class="cwc" role="button" tabindex="0"
+               :aria-label="`${it.title}${it.subtitle ? `, ${it.subtitle}` : ''}`"
                @click="emit('play', it)" @mouseenter="emit('enter', it)"
+               @keydown.enter.prevent="emit('play', it)" @keydown.space.prevent="emit('play', it)"
                @contextmenu.prevent="emit('menu', { ev: $event, item: it })">
         <div class="cwc__thumb">
           <img v-if="it.thumb" :src="it.thumb" :alt="it.title" loading="lazy" decoding="async" class="cwc__img"
@@ -109,7 +111,8 @@ function onWheel(e) {
    de su base. Medido en el riel de anime: 334 px las normales y 434 px tres de ellas, con la
    miniatura a 244 px en vez de 188. Con `width` fijo no se notaba porque nada podía crecer. */
 .cwc { flex: 1 0 20rem; min-width: 0; max-width: 26rem; cursor: pointer; transition: transform var(--t-base) var(--ease-snap); }
-.cwc:hover { transform: translateY(-5px); }
+.cwc:hover, .cwc:focus-visible { transform: translateY(-5px); }
+.cwc:focus-visible { outline: 2px solid var(--azure-bright); outline-offset: 3px; border-radius: var(--r-md); }
 .cwc__thumb { position: relative; aspect-ratio: 16/9; border-radius: var(--r-md); overflow: hidden;
   background: var(--surface-2); border: 1px solid var(--line); }
 .cwc:hover .cwc__thumb { border-color: var(--azure-glow); box-shadow: var(--shadow-lg); }

@@ -200,6 +200,7 @@ export const useAnimeStore = defineStore('anime', {
     // search + torrents
     searchQuery: '',
     searchResults: [],
+    searchCompleted: false,    // distingue el primer estado de una búsqueda terminada sin resultados
     searchError: '',           // la búsqueda falló (≠ sin resultados)
     _searchReqId: 0,           // anti-carrera al buscar mientras se escribe
     _searchTimer: 0,
@@ -1852,17 +1853,18 @@ export const useAnimeStore = defineStore('anime', {
       const q = this.searchQuery.trim()
       // Al BORRAR hasta menos de 2 letras hay que limpiar, o se quedan colgados los resultados
       // de la consulta anterior bajo una caja que ya no dice eso.
-      if (q.length < 2) { this._searchReqId++; this.searchResults = []; this.searchError = ''; this.searchLoading = false; return }
+      if (q.length < 2) { this._searchReqId++; this.searchResults = []; this.searchCompleted = false; this.searchError = ''; this.searchLoading = false; return }
       // Anti-carrera: al buscar mientras se escribe, la respuesta de "nar" puede llegar DESPUÉS
       // que la de "naruto" y pisarla. Sólo escribe el resultado la petición más reciente.
       const rid = ++this._searchReqId
       this.searchLoading = true
       this.searchResults = []
+      this.searchCompleted = false
       this.searchError = ''
       try {
         const d = await api.get(`/api/anime/search?q=${encodeURIComponent(q)}`)
         if (rid !== this._searchReqId) return
-        if (Array.isArray(d)) this.searchResults = d
+        if (Array.isArray(d)) { this.searchResults = d; this.searchCompleted = true }
       } catch (e) {
         if (rid !== this._searchReqId) return
         // Una búsqueda que revienta NO es una búsqueda sin resultados: decir «nada coincide»
@@ -1879,6 +1881,11 @@ export const useAnimeStore = defineStore('anime', {
        dispara ya, sin esperar al debounce. */
     onSearchInput() {
       clearTimeout(this._searchTimer)
+      this._searchReqId++ // invalida cualquier respuesta de la consulta que el usuario acaba de editar
+      this.searchResults = []
+      this.searchCompleted = false
+      this.searchError = ''
+      this.searchLoading = false
       this._searchTimer = setTimeout(() => this.searchAnime(), 350)
     },
     submitSearch() { clearTimeout(this._searchTimer); this.searchAnime() },

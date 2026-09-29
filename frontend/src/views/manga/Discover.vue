@@ -141,7 +141,8 @@ onBeforeUnmount(() => { document.removeEventListener('click', onDocClick); io?.d
 </template>
 
 <style scoped>
-.disco { padding: 0 var(--s-6) var(--s-8); max-width: var(--content-max); margin: 0 auto; }
+.disco { padding: 0 var(--s-6) var(--s-8); max-width: var(--content-max); margin: 0 auto;
+  --domain-accent: var(--rose); --domain-accent-soft: color-mix(in srgb, var(--rose) 12%, transparent); }
 
 /* ── Barra de filtros ── */
 .filters { position: sticky; top: 0; z-index: 8; padding: var(--s-3) 0 var(--s-4);
@@ -150,7 +151,7 @@ onBeforeUnmount(() => { document.removeEventListener('click', onDocClick); io?.d
 .fsearch { display: flex; align-items: center; gap: var(--s-3); padding: var(--s-3) var(--s-4);
   border: 1px solid var(--line-strong); border-radius: var(--r-lg, 1rem); background: var(--surface);
   color: var(--ink-faint); transition: border-color var(--t-fast); }
-.fsearch:focus-within { border-color: var(--azure); }
+.fsearch:focus-within { border-color: var(--domain-accent); }
 .fsearch input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: var(--ink); font-size: var(--fs-base); }
 .fsearch__x { flex: none; color: var(--ink-faint); padding: 2px; border-radius: 50%; transition: color var(--t-fast); }
 .fsearch__x:hover { color: var(--ink); }
@@ -162,7 +163,7 @@ onBeforeUnmount(() => { document.removeEventListener('click', onDocClick); io?.d
 .seg { font-size: var(--fs-xs); font-weight: 600; padding: var(--s-2) var(--s-3); border-radius: var(--r-pill);
   color: var(--ink-faint); transition: all var(--t-fast); white-space: nowrap; }
 .seg:hover { color: var(--ink); }
-.seg.is-on { color: var(--azure-bright); background: var(--azure-haze); }
+.seg.is-on { color: var(--domain-accent); background: var(--domain-accent-soft); }
 
 /* Dropdowns */
 .dd { position: relative; }
@@ -170,7 +171,7 @@ onBeforeUnmount(() => { document.removeEventListener('click', onDocClick); io?.d
   border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); color: var(--ink-soft);
   font-size: var(--fs-sm); font-weight: 600; transition: all var(--t-fast); }
 .dd__btn:hover { color: var(--ink); border-color: var(--line-strong); }
-.dd__btn.is-on { color: var(--azure-bright); border-color: var(--azure); background: var(--azure-haze); }
+.dd__btn.is-on { color: var(--domain-accent); border-color: var(--domain-accent); background: var(--domain-accent-soft); }
 .dd__count { display: inline-grid; place-items: center; min-width: 1.15rem; height: 1.15rem; padding: 0 4px;
   font-family: var(--font-mono); font-size: var(--fs-2xs); font-weight: 700; color: #0b0f1a; background: var(--azure); border-radius: 62.4375rem; }
 .dd__caret { transition: transform var(--t-fast); }
@@ -216,7 +217,7 @@ onBeforeUnmount(() => { document.removeEventListener('click', onDocClick); io?.d
   color: var(--ink-faint); text-align: center; }
 .state__btn { margin-top: var(--s-1); padding: var(--s-2) var(--s-4); border-radius: var(--r-md); font-size: var(--fs-sm);
   font-weight: 600; color: var(--ink); border: 1px solid var(--line-strong); transition: all var(--t-fast); }
-.state__btn:hover { border-color: var(--azure); color: var(--azure-bright); }
+.state__btn:hover { border-color: var(--domain-accent); color: var(--domain-accent); }
 
 @media (max-width: 1100px) { .grid { grid-template-columns: repeat(5, 1fr); } }
 @media (max-width: 900px)  { .grid { grid-template-columns: repeat(4, 1fr); } }

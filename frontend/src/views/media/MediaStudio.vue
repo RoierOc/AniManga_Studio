@@ -68,5 +68,5 @@ function selectTab(id) {
 </template>
 
 <style scoped>
-.mstudio { display: block; }
+.mstudio { display: block; --domain-accent: var(--azure-bright); --domain-accent-soft: var(--azure-haze); }
 </style>

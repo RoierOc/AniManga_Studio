@@ -7,6 +7,7 @@ import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
+import EmptyState from '@/components/ui/EmptyState.vue'
 
 const store = useAnimeStore()
 onMounted(() => store.checkQbt())
@@ -39,10 +40,17 @@ onMounted(() => store.checkQbt())
          usuario no los usaba. Una vista de búsqueda que no ha buscado nada no tiene por qué
          inventarse contenido: la caja es la interfaz. Temporada y Explorar ya son las vistas de
          descubrimiento, y están en la misma barra. -->
-    <div v-else-if="!store.searchResults.length" class="hint">
+    <div v-else-if="!store.searchCompleted" class="hint">
       <Icon name="film" :size="34" />
       <p>Busca un anime para ver torrents disponibles y enviarlos a qBittorrent.</p>
     </div>
+    <EmptyState v-else-if="!store.searchResults.length" icon="search"
+                :title="`No encontramos «${store.searchQuery.trim()}»`"
+                hint="Prueba con otro título o limpia la búsqueda para empezar de nuevo.">
+      <template #action>
+        <button class="search__clear" @click="store.searchQuery = ''; store.submitSearch()">Limpiar búsqueda</button>
+      </template>
+    </EmptyState>
     <!-- Antes esto era una tarjeta propia (`.rc`) que apuntaba el <img> DIRECTO al CDN de
          AniList y no decía si ya tenías la serie. `DiscoverCard` ya hace las tres cosas bien
          y su clic ES «buscar torrents». -->
@@ -64,6 +72,9 @@ onMounted(() => store.checkQbt())
 .bigbox__go:hover { background: var(--azure-bright); }
 
 .hint { display: flex; flex-direction: column; align-items: center; gap: var(--s-3); padding: var(--s-9) 0; color: var(--ink-faint); text-align: center; }
+.search__clear { padding: var(--s-3) var(--s-5); border-radius: var(--r-pill); color: var(--ink);
+  background: var(--surface); border: 1px solid var(--line); cursor: pointer; }
+.search__clear:hover { border-color: var(--azure); background: var(--azure-haze); }
 
 /* Ancho base propio; el resto de la rejilla (densidad, hueco, móvil) vive en base.css */
 .grid { --card-min: 11.875rem; gap: var(--s-5); }
