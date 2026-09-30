@@ -209,3 +209,11 @@ export function matchLibrary(relTitle, library = []) {
   }
   return best?.anime || null
 }
+// El avance de visionado no es la disponibilidad en disco.
+export function animeWatchProgress(anime) {
+  const episodes = (anime.episodes || []).filter(e => e.num > 0 && e.ep_type !== 'special')
+  const watched = episodes.filter(e => e.watched).length
+  const total = Number(anime.total_episodes) || episodes.length
+  return { watched, total, available: anime.downloaded_count || 0,
+    fraction: total ? Math.min(1, watched / total) : 0 }
+}

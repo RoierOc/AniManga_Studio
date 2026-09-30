@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
-import { ANIME_STATUS, STATUS_ORDER, nextUnwatchedEp, animeEpisodeKey, currentSeason, isCurrentSeason, shiftSeason, SEASON_ES } from '@/lib/anime'
+import { ANIME_STATUS, STATUS_ORDER, nextUnwatchedEp, animeEpisodeKey, currentSeason, isCurrentSeason, shiftSeason, SEASON_ES, animeWatchProgress } from '@/lib/anime'
 import { imgProxy, animeThumb } from '@/lib/img'
 import { ultimaTarjeta } from '@/lib/vt'
 import AnimeCard from '@/components/anime/AnimeCard.vue'
@@ -98,8 +98,8 @@ const filtered = computed(() => {
     if (s === 'title') return (a.title || '').localeCompare(b.title || '')
     if (s === 'last_watched') return (b.last_watched_at || 0) - (a.last_watched_at || 0)
     if (s === 'progress') {
-      const pa = (a.downloaded_count || 0) / (a.total_episodes || 1)
-      const pb = (b.downloaded_count || 0) / (b.total_episodes || 1)
+      const pa = animeWatchProgress(a).fraction
+      const pb = animeWatchProgress(b).fraction
       return pb - pa
     }
     return (b.added_at || 0) - (a.added_at || 0)

@@ -13,6 +13,7 @@ import ErrorState from '@/components/ui/ErrorState.vue'
 import FolderPicker from '@/components/ui/FolderPicker.vue'
 import MediaQueue from '@/components/media/MediaQueue.vue'
 import { useGridKeyboard } from '@/lib/useGridKeyboard'
+import { groupAnimeDownloads } from '@/lib/animeDownloads'
 
 const store = useAnimeStore()
 const ui = useUiStore()
@@ -85,8 +86,14 @@ const visibles = computed(() => {
   })
 })
 
+const groups = computed(() => groupAnimeDownloads(visibles.value))
+const expanded = ref(new Set())
+function toggleGroup(key) {
+  if (expanded.value.has(key)) expanded.value.delete(key)
+  else expanded.value.add(key)
+}
 const { selected: selectedHashes, count: selectedCount, clear: clearSelection, onKey: onGridKey, onSelect: onGridSelect } =
-  useGridKeyboard(() => visibles.value.map(({ t }) => t.hash))
+  useGridKeyboard(() => groups.value.filter(g => expanded.value.has(g.key)).flatMap(g => g.rows.map(({ t }) => t.hash)))
 const selectedRows = computed(() => visibles.value.filter(({ t }) => selectedHashes.has(String(t.hash))))
 const selectedActive = computed(() => selectedRows.value.filter(({ t }) => !isDone(t) && !isPaused(t)))
 const selectedPaused = computed(() => selectedRows.value.filter(({ t }) => !isDone(t) && isPaused(t)))
@@ -185,8 +192,7 @@ const ajustes = ref(false)
                   hint="Lo que envíes a qBittorrent desde Buscar Anime aparecerá aquí." />
       <EmptyState v-else-if="!visibles.length" full icon="search" title="Nada coincide con la búsqueda." />
 
-      <div v-else class="dl__list" role="listbox" aria-label="Descargas de qBittorrent"
-           :aria-multiselectable="true" @keydown="onGridKey">
+      <div v-else class="dl__list" @keydown="onGridKey">
         <div v-if="selectedCount" class="dl__selection" aria-live="polite">
           <span>{{ selectedCount }} marcada(s)</span>
           <button v-if="selectedActive.length" type="button" class="dl__selection-action"
@@ -202,7 +208,16 @@ const ajustes = ref(false)
         <p v-if="cayendoASembrando" class="dl__nota">
           No hay nada descargando ahora — estos son tus {{ cuenta.sembrando }} torrents terminados.
         </p>
-        <div v-for="{ t, r, cover } in visibles" :key="t.hash" class="trow"
+        <section v-for="g in groups" :key="g.key" class="dl__group" role="group" :aria-label="g.title">
+          <button class="dl__group-head" type="button" :aria-expanded="expanded.has(g.key)" @click="toggleGroup(g.key)">
+            <img v-if="g.cover" :src="imgProxy(g.cover, 96)" alt="" loading="lazy" decoding="async" />
+            <span class="dl__group-title">{{ g.title }}<small v-if="g.season != null"> · T{{ g.season }}</small></span>
+            <span>{{ g.rows.length }} torrent(s) · {{ g.active }} pendiente(s)</span>
+            <span v-if="g.speed">↓ {{ formatSpeed(g.speed) }}</span>
+            <Icon :name="expanded.has(g.key) ? 'collapse' : 'expand'" :size="16" />
+          </button>
+        <div v-if="expanded.has(g.key)" role="listbox" :aria-label="'Torrents de ' + g.title" :aria-multiselectable="true">
+        <div v-for="{ t, r, cover } in g.rows" :key="t.hash" class="trow"
              :class="{ 'trow--done': isDone(t), 'trow--selected': selectedHashes.has(String(t.hash)) }"
              data-grid-item :data-grid-key="t.hash" role="option" tabindex="0"
              :aria-selected="selectedHashes.has(String(t.hash))" @click="selectTorrent(t.hash, $event)">
@@ -215,7 +230,7 @@ const ajustes = ref(false)
           <div class="trow__main">
             <div class="trow__name" :data-tip="t.name">{{ r.title }}</div>
             <div v-if="detalle(r)" class="trow__meta">{{ detalle(r) }}</div>
-            <div class="trow__bar"><span :style="{ width: Math.min(100, t.progress) + '%' }" /></div>
+            <div class="trow__bar"><span :style="{ transform: `scaleX(${Math.max(0, Math.min(100, t.progress)) / 100})` }" /></div>
             <div class="trow__stats">
               <span class="trow__state" :class="{ 'is-dl': !isDone(t) }">{{ qbtStateLabel(t.state) }}</span>
               <span v-if="!isDone(t)">{{ Math.round(t.progress) }}%</span>
@@ -225,7 +240,7 @@ const ajustes = ref(false)
               <span class="muted">{{ t.num_seeds }}S / {{ t.num_leechs }}L</span>
             </div>
           </div>
-          <div class="trow__actions">
+          <div class="trow__actions" @click.stop>
             <button class="ti" :class="{ 'is-on': isPaused(t) }" :data-tip="isPaused(t) ? 'Reanudar' : 'Pausar'"
                     @click="store.qbtAction(isPaused(t) ? 'resume' : 'pause', t.hash)">
               <Icon :name="isPaused(t) ? 'play' : 'pause'" :size="14" />
@@ -239,6 +254,8 @@ const ajustes = ref(false)
                     @click="removeWithFiles(t)"><Icon name="trash" :size="14" /></button>
           </div>
         </div>
+        </div>
+        </section>
       </div>
     </template>
 
@@ -249,6 +266,12 @@ const ajustes = ref(false)
 
 <style scoped>
 .dl { max-width: var(--content-max); margin: 0 auto; padding: 0 var(--s-6) var(--s-8); }
+.dl__group { border-bottom: 1px solid var(--line); }
+.dl__group-head { width: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3); padding: var(--s-3); text-align: left; color: var(--ink-soft); font-size: var(--fs-xs); }
+.dl__group-head:hover { background: var(--surface); }
+.dl__group-head:focus-visible { outline: 2px solid var(--azure); outline-offset: -2px; }
+.dl__group-head img { width: 2.5rem; height: 3.5rem; object-fit: cover; border-radius: var(--r-xs); }
+.dl__group-title { flex: 1; min-width: 10rem; color: var(--ink); font-size: var(--fs-sm); font-weight: 600; }
 
 /* download location */
 .loc { margin-bottom: var(--s-5); padding: var(--s-4); border: 1px solid var(--line-2); border-radius: var(--r-md); background: var(--surface); }
@@ -309,8 +332,9 @@ const ajustes = ref(false)
 .trow__meta { font-size: var(--fs-xs); color: var(--ink-faint); margin-bottom: 0.375rem; }
 .trow__name { font-size: var(--fs-sm); font-weight: 600; margin-bottom: 0.125rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .trow__bar { height: 4px; border-radius: var(--r-pill); background: var(--surface-3); overflow: hidden; }
-.trow__bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--azure)); transition: width var(--t-base) var(--ease-silk); }
+.trow__bar span { display: block; width: 100%; height: 100%; transform-origin: left; background: linear-gradient(90deg, var(--cyan), var(--azure)); transition: transform var(--t-base) var(--ease-silk); }
 .trow--done .trow__bar span { background: var(--jade); }
+@media (prefers-reduced-motion: reduce) { .trow__bar span { transition: none; } }
 .trow__stats { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s-3); margin-top: 0.375rem; font-size: var(--fs-xs); color: var(--ink-soft); font-family: var(--font-mono); }
 .trow__stats .muted { color: var(--ink-faint); }
 .trow__state { color: var(--ink-faint); }

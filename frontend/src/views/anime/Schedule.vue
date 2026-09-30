@@ -6,9 +6,13 @@ import { imgProxy } from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
+import Select from '@/components/ui/Select.vue'
+import { scheduleDays } from '@/lib/animeSchedule'
 
 const store = useAnimeStore()
 const nowTick = ref(Date.now())
+const scope = ref('all')
+const layout = ref('week')
 let timer = null
 
 onMounted(() => {
@@ -18,16 +22,13 @@ onMounted(() => {
 })
 onUnmounted(() => { if (timer) clearInterval(timer) })
 
-// Columnas Lun→Dom (JS getDay: 0=Dom … 6=Sáb)
-const WEEK = [
-  { d: 1, label: 'Lunes' }, { d: 2, label: 'Martes' }, { d: 3, label: 'Miércoles' },
-  { d: 4, label: 'Jueves' }, { d: 5, label: 'Viernes' }, { d: 6, label: 'Sábado' }, { d: 0, label: 'Domingo' },
-]
-
 // Próximos estrenos (≤ 8 días): biblioteca en emisión + populares de temporada.
 const entries = computed(() => {
   const now = nowTick.value / 1000
-  const HORIZON = 8 * 86400
+  const end = new Date(nowTick.value)
+  end.setDate(end.getDate() + 7)
+  end.setHours(23, 59, 59, 999)
+  const HORIZON = end.getTime() / 1000 - now
   const out = []
   const seen = new Set()
   for (const a of store.library) {
@@ -42,17 +43,11 @@ const entries = computed(() => {
     if (!at || at < now || at > now + HORIZON || seen.has(a.al_id)) continue
     out.push({ anime: a, ep: a.next_episode, at, mine: false })
   }
-  return out
+  return scope.value === 'mine' ? out.filter(e => e.mine) : out
 })
 
-const days = computed(() => {
-  const todayD = new Date(nowTick.value).getDay()
-  return WEEK.map(w => ({
-    ...w,
-    isToday: w.d === todayD,
-    items: entries.value.filter(e => new Date(e.at * 1000).getDay() === w.d).sort((x, y) => x.at - y.at),
-  }))
-})
+const days = computed(() => scheduleDays(entries.value, nowTick.value)
+  .filter(day => layout.value !== 'agenda' || day.items.length))
 const hasAny = computed(() => entries.value.length > 0)
 
 // Misma fecha de calendario local (no "últimas 24h") para casar con la cabecera "HOY".
@@ -88,7 +83,7 @@ const airedToday = computed(() => {
     if (!at && a.airing_at) { at = a.airing_at - 7 * 86400; ep = (a.next_episode || 1) - 1 }
     consider(a, at, ep, false)
   }
-  return out.sort((x, y) => y.at - x.at)   // más reciente primero
+  return out.filter(e => scope.value !== 'mine' || e.mine).sort((x, y) => y.at - x.at)
 })
 
 const hasEntries = computed(() => hasAny.value || airedToday.value.length > 0)
@@ -134,6 +129,12 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
         <h1>Estrenos</h1>
       </div>
     </header>
+    <div class="sched__controls">
+      <Select v-model="scope" aria-label="Contenido del calendario"
+              :options="[{value:'all',label:'Todos'}, {value:'mine',label:'Mi biblioteca'}]" />
+      <Select v-model="layout" aria-label="Vista del calendario"
+              :options="[{value:'week',label:'Semana'}, {value:'agenda',label:'Agenda'}]" />
+    </div>
 
     <ErrorState v-if="showScheduleError" title="No se pudo cargar el calendario."
                 :detail="scheduleErrorDetail" @retry="retrySchedule" />
@@ -167,9 +168,9 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
       </div>
     </section>
 
-    <h3 v-if="hasAny && airedToday.length" class="week__title">Próximos esta semana</h3>
-    <div v-if="hasAny" class="week">
-      <section v-for="day in days" :key="day.d" class="col" :class="{ 'is-today': day.isToday }">
+    <h3 v-if="hasAny && airedToday.length" class="week__title">Próximos días</h3>
+    <div v-if="hasAny" class="week" :class="{ 'week--agenda': layout === 'agenda' }">
+      <section v-for="day in days" :key="day.key" class="col" :class="{ 'is-today': day.isToday }">
         <div class="col__head">
           <span class="col__day">{{ day.label }}</span>
           <span v-if="day.isToday" class="col__today">HOY</span>
@@ -194,6 +195,7 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
 
 <style scoped>
 .sched { max-width: var(--content-max); margin: 0 auto; padding: 0 var(--s-6) var(--s-8); }
+.sched__controls { display: flex; gap: var(--s-3); margin-bottom: var(--s-5); }
 .hero { padding: var(--s-5) 0; }
 .hero__eyebrow { display: flex; align-items: center; gap: var(--s-2); font-family: var(--font-mono); font-size: var(--fs-2xs); letter-spacing: var(--tracking-caps); color: var(--azure); margin-bottom: var(--s-2); }
 .hero__tick { width: 0.875rem; height: 1px; background: var(--azure); box-shadow: 0 0 8px var(--azure-glow); }
@@ -237,7 +239,9 @@ const openEntry = (e) => e.mine ? store.openDetail(e.anime) : store.openPreview(
 .tcard__cd--aired { color: var(--jade); }
 
 .week__title { font-family: var(--font-display); font-size: var(--fs-lg); margin-bottom: var(--s-3); color: var(--ink-soft); }
-.week { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: var(--s-3); }
+.week { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s-3); }
+.week.week--agenda { display: grid; grid-template-columns: 1fr; grid-auto-flow: row; overflow: visible; }
+.week--agenda .ent { max-width: 40rem; }
 .col { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--s-3); display: flex; flex-direction: column; gap: var(--s-2); }
 .col.is-today { border-color: var(--azure); box-shadow: inset 0 0 0 1px var(--azure-glow); }
 .col__head { display: flex; align-items: center; justify-content: space-between; padding-bottom: var(--s-2); border-bottom: 1px solid var(--line); }

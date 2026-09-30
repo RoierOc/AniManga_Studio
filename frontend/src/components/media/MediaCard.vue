@@ -27,6 +27,7 @@ const props = defineProps({
   flag: { type: Object, default: null },
   // Progreso textual: { done, total }.
   count: { type: Object, default: null },
+  watchProgress: { type: Object, default: null },
   // Puntitos de disponibilidad: 'done' | 'dl' | 'missing'.
   dots: { type: Array, default: () => [] },
   // Etiquetas (géneros) que aparecen al desplegar.
@@ -93,14 +94,23 @@ const coverUrl = computed(() => imgProxy(props.cover, boxW.value))
 
       <!-- Título e info se revelan al hover DENTRO del póster: sin reflow ni solape con vecinas -->
       <div class="mcard__overlay">
+        <div class="mcard__summary">
         <span v-if="flag" class="mcard__flag" :class="`mcard__flag--${flag.tone || 'soft'}`">
           <span v-if="flag.tone === 'live'" class="mcard__flagdot" />
           <Icon v-else-if="flag.icon" :name="flag.icon" :size="11" />
           {{ flag.label }}
         </span>
         <h3 class="mcard__title">{{ title }}</h3>
+        <div v-if="watchProgress" class="mcard__watch">
+          <span>Vistos {{ watchProgress.watched }}/{{ watchProgress.total || '?' }}</span>
+          <span>Disponibles {{ watchProgress.available }}</span>
+          <div role="progressbar" aria-label="Avance de visionado" :aria-valuenow="watchProgress.watched"
+               :aria-valuemax="watchProgress.total || Math.max(1, watchProgress.watched)" aria-valuemin="0">
+            <i :style="{ transform: `scaleX(${watchProgress.fraction})` }" />
+          </div>
+        </div>
         <div v-if="count || dots.length" class="mcard__bottom">
-          <span v-if="count" class="mcard__eps">
+          <span v-if="count && !watchProgress" class="mcard__eps">
             <span class="mcard__count">{{ count.done }}</span>
             <span v-if="count.total" class="mcard__total"> / {{ count.total }}</span>
           </span>
@@ -109,7 +119,8 @@ const coverUrl = computed(() => imgProxy(props.cover, boxW.value))
           </div>
         </div>
 
-        <!-- Hover-expand: crece hacia arriba dentro del póster (overflow:hidden lo recorta) -->
+        </div>
+        <!-- Se revela sin animar dimensiones ni desplazar las tarjetas vecinas. -->
         <div class="mcard__extra">
           <div v-if="tags.length" class="mcard__tags">
             <span v-for="t in tags" :key="t" class="mcard__t">{{ t }}</span>
@@ -200,12 +211,21 @@ const coverUrl = computed(() => imgProxy(props.cover, boxW.value))
 .md--dl      { background: var(--cyan); animation: pulse-live 1.6s var(--ease-drift) infinite; }
 .md--missing { background: rgba(255,255,255,.14); }
 
+.mcard__watch { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--s-1); font-size: var(--fs-2xs); color: var(--ice); margin-top: var(--s-2); }
+.mcard__watch div { width: 100%; height: .1875rem; background: rgba(255,255,255,.2); overflow: hidden; border-radius: var(--r-pill); }
+.mcard__watch i { display: block; width: 100%; height: 100%; background: var(--cyan); transform-origin: left; transition: transform var(--t-base); }
 .mcard__extra {
-  max-height: 0; opacity: 0; overflow: hidden;
-  transition: max-height var(--t-base) var(--ease-silk), opacity var(--t-base) var(--ease-silk), margin-top var(--t-base) var(--ease-silk);
+  position: absolute; left: var(--s-3); right: var(--s-3); bottom: var(--s-3); height: 4.75rem; opacity: 0; visibility: hidden;
+  transform: translateY(100%);
+  transition: transform var(--t-base) var(--ease-silk), opacity var(--t-base) var(--ease-silk), visibility var(--t-base);
 }
-.mcard:hover .mcard__extra, .mcard:focus-within .mcard__extra { max-height: 8rem; opacity: 1; margin-top: var(--s-2); }
-.mcard__tags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: var(--s-3); }
+.mcard:hover .mcard__extra, .mcard:focus-within .mcard__extra { opacity: 1; visibility: visible; transform: translateY(0); }
+.mcard__summary { transition: transform var(--t-base) var(--ease-silk); }
+.mcard:hover .mcard__summary, .mcard:focus-within .mcard__summary { transform: translateY(-5rem); }
+@media (prefers-reduced-motion: reduce) {
+  .mcard, .mcard__summary, .mcard__extra, .mcard__watch i { transition: none; }
+}
+.mcard__tags { display: flex; gap: var(--s-1); margin-bottom: var(--s-3); overflow: hidden; white-space: nowrap; }
 .mcard__t { font-size: var(--fs-2xs); padding: 2px 0.5rem; border-radius: var(--r-pill);
   background: color-mix(in srgb, var(--azure) 28%, rgba(7,10,18,.5)); color: var(--ice); backdrop-filter: blur(4px); }
 .mcard__acts { display: flex; gap: var(--s-2); }

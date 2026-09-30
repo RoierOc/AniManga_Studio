@@ -10,7 +10,7 @@
  */
 import { computed, ref } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
-import { ANIME_STATUS, animeFormatLabel, fmtCountdown } from '@/lib/anime'
+import { ANIME_STATUS, animeFormatLabel, fmtCountdown, animeWatchProgress } from '@/lib/anime'
 import MediaCard from '@/components/media/MediaCard.vue'
 
 const props = defineProps({
@@ -23,6 +23,7 @@ const store = useAnimeStore()
 
 const total = computed(() => props.anime.total_episodes || 0)
 const done = computed(() => props.anime.downloaded_count || 0)
+const watchProgress = computed(() => animeWatchProgress(props.anime))
 const status = computed(() => ANIME_STATUS[props.anime.status] || null)
 const genres = computed(() => (props.anime.genres || []).slice(0, 3))
 
@@ -80,6 +81,7 @@ const dots = computed(() =>
     :status="status"
     :flag="flag"
     :count="{ done, total }"
+    :watch-progress="watchProgress"
     :dots="dots"
     :tags="genres"
     :selectable="selectable"

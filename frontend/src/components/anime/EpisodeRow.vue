@@ -9,6 +9,7 @@ import {
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EpisodeMediaInfo from './EpisodeMediaInfo.vue'
+import { hideEpisodeSpoilers } from '@/lib/animeSpoilers'
 
 const props = defineProps({
   anime: { type: Object, required: true },
@@ -20,6 +21,9 @@ const props = defineProps({
   sel: { type: Object, default: null },
 })
 const store = useAnimeStore()
+const revealed = ref('')
+const episodeIdentity = computed(() => `${props.anime.id}_${animeEpisodeKey(props.ep)}`)
+const spoilerHidden = computed(() => hideEpisodeSpoilers(store.hideSpoilers, props.ep, revealed.value === episodeIdentity.value))
 const mediaInfoOpen = ref(false)
 
 const playable = computed(() => isEpisodePlayable(props.ep, props.batch))
@@ -87,6 +91,7 @@ const subFetching = computed(() => store.subFetching === subKey.value)
 
 // Título real del episodio (TMDB/MAL) si lo tenemos; si no, la etiqueta derivada del archivo.
 const epTitle = computed(() => {
+  if (spoilerHidden.value) return animeEpLabel(props.anime, { ...props.ep, title: '' })
   if (props.ep.ep_type !== 'special' && meta.value?.title) return meta.value.title
   return animeEpLabel(props.anime, props.ep)
 })
@@ -108,7 +113,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
       <button type="button" class="eprow__thumb" :disabled="!playable"
               :aria-label="'Reproducir ' + anime.title + ', episodio ' + ep.num" @click="onPlay">
         <div class="eprow__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 120)}')` : ''" />
-        <img v-if="thumbSrc" class="eprow__img" :class="{ 'is-loaded': wasAnimeThumbLoaded(thumbSrc) }" :src="thumbSrc"
+        <img v-if="thumbSrc && !spoilerHidden" class="eprow__img" :class="{ 'is-loaded': wasAnimeThumbLoaded(thumbSrc) }" :src="thumbSrc"
              loading="lazy" decoding="async" @load="onThumbLoad" @error="onThumbError" alt="" />
         <div class="eprow__num"><span class="eprow__num-k">{{ ep.ep_type === 'special' ? 'SP' : 'EP' }}</span><span class="eprow__num-v">{{ String(ep.num).padStart(2, '0') }}</span></div>
         <!-- resume / download / finished bar -->
@@ -118,6 +123,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
       </button>
 
       <div class="eprow__body">
+        <button v-if="spoilerHidden" class="eprow__reveal" type="button" @click="revealed = episodeIdentity">Mostrar spoilers</button>
         <div class="eprow__titrow">
           <span v-if="current" class="eprow__badge">EN CURSO</span>
           <span class="eprow__title">{{ epTitle }}</span>
@@ -178,7 +184,8 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
     <!-- expandable episode info -->
     <Transition name="info">
       <div v-if="infoOpen" class="eprow__info">
-        <div v-if="info === null" class="eprow__info-load"><span class="dot" /><span class="dot" /><span class="dot" /></div>
+        <button v-if="spoilerHidden" type="button" @click="revealed = episodeIdentity">Mostrar spoilers de este episodio</button>
+        <div v-else-if="info === null" class="eprow__info-load"><span class="dot" /><span class="dot" /><span class="dot" /></div>
         <template v-else-if="info?.synopsis">
           <div v-if="info.title" class="eprow__info-title">{{ info.title }}</div>
           <p class="eprow__info-syn">{{ info.synopsis }}</p>
@@ -284,6 +291,7 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
 
 .eprow__info { padding: var(--s-3); border-top: 1px solid var(--line); background: var(--base); font-size: var(--fs-xs); line-height: 1.55; }
 .eprow__info-title { font-weight: 600; color: var(--ink); margin-bottom: 4px; font-size: var(--fs-sm); }
+.eprow__reveal { color: var(--azure-bright); font-size: var(--fs-xs); padding: var(--s-2) 0; }
 .eprow__info-syn { color: var(--ink-soft); }
 .eprow__info-meta { display: flex; align-items: center; gap: var(--s-2); margin-top: var(--s-2); color: var(--ink-faint); }
 .eprow__ibadge { padding: 1px 0.375rem; border-radius: var(--r-xs); font-weight: 600; font-size: var(--fs-2xs); }

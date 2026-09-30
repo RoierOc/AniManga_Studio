@@ -51,6 +51,7 @@ const STATUS_OPTS = [
 const MANY = Array.from({ length: 40 }, (_, i) => ({ value: `v${i}`, label: `Opción número ${i + 1}`, hint: `${i * 7}px` }))
 
 const CARDS = [
+  { caso: 'Vistos ≠ disponibles', props: { cover: '', title: 'Serie de ejemplo', kindLabel: 'TV', watchProgress: { watched: 5, total: 12, available: 12, fraction: 5 / 12 }, tags: ['Aventura'] } },
   { caso: 'Normal', props: { cover: '', title: 'Ao no Hako', kindLabel: 'MANGA', status: { label: 'Leyendo', color: 'var(--azure)' }, count: { done: 24, total: 158 }, tags: ['Romance', 'Deportes'] } },
   { caso: 'Título kilométrico', props: { cover: '', title: LONG, kindLabel: 'MANGA', count: { done: 7, total: 12 }, tags: ['Comedia'] } },
   { caso: 'Sin portada ni datos', props: { cover: '', title: '?' } },
