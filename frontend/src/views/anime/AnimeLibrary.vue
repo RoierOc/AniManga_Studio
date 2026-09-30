@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { ANIME_STATUS, STATUS_ORDER, nextUnwatchedEp, animeEpisodeKey, currentSeason, isCurrentSeason, shiftSeason, SEASON_ES } from '@/lib/anime'
 import { imgProxy, animeThumb } from '@/lib/img'
