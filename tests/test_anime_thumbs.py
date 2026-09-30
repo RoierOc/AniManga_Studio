@@ -157,3 +157,128 @@ def test_el_still_de_tmdb_no_viene_a_300px(monkeypatch):
     result = anime._tmdb_season_episodes(42, 2, 'es-ES')
 
     assert result['1']['still'] == 'https://image.tmdb.org/t/p/original/still.jpg'
+
+
+@pytest.mark.parametrize('torrent', [False, True], ids=['carpeta-local', 'torrent'])
+def test_respaldo_tmdb_queda_en_disco_y_sobrevive_proceso_nuevo(tmp_path, monkeypatch, torrent):
+    import hashlib
+    import io
+    from flask import Flask
+    from PIL import Image
+    from api import anime, imgproxy, runtime
+
+    thumbs = tmp_path / 'thumbs'
+    proxy = tmp_path / 'proxy'
+    proxy.mkdir()
+    monkeypatch.setattr(anime, '_THUMBS_DIR', thumbs)
+    monkeypatch.setattr(imgproxy, '_CACHE_DIR', proxy)
+    monkeypatch.setattr(imgproxy, '_INDEX', {})
+    monkeypatch.setattr(runtime, '_CACHE_DIR', tmp_path / 'metadata')
+    still = 'https://image.tmdb.org/t/p/original/episode-two.jpg'
+    Image.new('RGB', (1280, 720), (20, 40, 200)).save(
+        proxy / (hashlib.sha256(still.encode()).hexdigest() + '.jpg'))
+    runtime.cache_set('ep_meta', '62640_s1_v5', {'2': {'still': still}})
+    entry = {'local_path': str(tmp_path), 'tmdb_id': 62640, 'tmdb_type': 'tv',
+             'season_year': 2014, 'episodes': {'2': {'info_hash': 'torrent'}} if torrent else {}}
+    monkeypatch.setattr(anime, '_lib_read', lambda: {'18897': entry})
+    monkeypatch.setattr(anime, '_buscar_video', lambda *_: 'episode-two.mkv')
+    monkeypatch.setattr(anime, 'resolve_episode_video', lambda *_: ('episode-two.mkv', None))
+    monkeypatch.setattr(anime, '_ffprobe_duration', lambda *_: 1451)
+    monkeypatch.setattr(anime, '_tmdb_key', lambda: 'test-key')
+    monkeypatch.setattr(anime, '_episode_meta_season', lambda *_: (1, False))
+
+    def corrupt_frame(*_):
+        raise RuntimeError('ningún momento da un fotograma utilizable')
+
+    monkeypatch.setattr(anime, '_extraer_fotograma_util', corrupt_frame)
+
+    def client():
+        app = Flask(__name__)
+        app.register_blueprint(anime.anime_bp, url_prefix='/api/anime')
+        return app.test_client()
+
+    first = client().get('/api/anime/thumb/18897/2?episode_key=2')
+    assert first.status_code == 200
+    saved = thumbs / '18897_2_w960.jpg'
+    assert saved.exists()
+    with Image.open(io.BytesIO(first.data)) as im:
+        assert im.width == 960
+        assert im.getpixel((20, 20))[2] > 180
+
+    # Un intérprete nuevo, sin acceso a metadata/vídeo ni estado RAM, recibe el mismo JPEG.
+    script = '''
+import hashlib, sys
+from pathlib import Path
+from flask import Flask
+from api import anime
+anime._THUMBS_DIR = Path(sys.argv[1])
+def unavailable():
+    raise AssertionError('No se debe volver a consultar la biblioteca')
+anime._lib_read = unavailable
+app = Flask(__name__)
+app.register_blueprint(anime.anime_bp, url_prefix='/api/anime')
+response = app.test_client().get('/api/anime/thumb/18897/2?episode_key=2')
+print(response.status_code, hashlib.sha256(response.data).hexdigest())
+'''
+    from pathlib import Path
+    returned = subprocess.run(
+        [sys.executable, '-c', script, str(thumbs)], capture_output=True, text=True, timeout=15,
+        env={**os.environ, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'src')},
+        check=True,
+    )
+    assert returned.stdout.strip() == '200 ' + hashlib.sha256(first.data).hexdigest()
+    assert saved.read_bytes() == first.data
+
+
+def test_especial_corrupto_no_hereda_el_still_del_episodio_regular(tmp_path, monkeypatch):
+    from flask import Flask
+    from api import anime
+
+    monkeypatch.setattr(anime, '_THUMBS_DIR', tmp_path)
+    monkeypatch.setattr(anime, '_lib_read', lambda: {'18897': {'local_path': str(tmp_path)}})
+    monkeypatch.setattr(anime, '_escanear_carpetas', lambda *_: [
+        {'num': 2, 'ep_type': 'special', 'path': 'special-two.mkv'},
+    ])
+    monkeypatch.setattr(anime, '_ffprobe_duration', lambda *_: 100)
+    def corrupt_frame(_video, dest, _duration):
+        dest.write_bytes(b'JPEG incompleto')
+        raise RuntimeError('fotograma corrupto')
+    monkeypatch.setattr(anime, '_extraer_fotograma_util', corrupt_frame)
+    def regular_metadata(_id):
+        raise AssertionError('Un especial no puede usar metadata de un episodio regular')
+    monkeypatch.setattr(anime, '_episode_metadata', regular_metadata)
+    app = Flask(__name__)
+    app.register_blueprint(anime.anime_bp, url_prefix='/api/anime')
+
+    response = app.test_client().get('/api/anime/thumb/18897/2?special=1')
+
+    assert response.status_code == 500
+    assert not list(tmp_path.glob('*.jpg'))
+
+
+def test_pregeneracion_respeta_identidad_de_temporada_de_la_biblioteca(tmp_path, monkeypatch):
+    from PIL import Image
+    from api import anime
+
+    monkeypatch.setattr(anime, '_THUMBS_DIR', tmp_path)
+    monkeypatch.setattr(anime, '_lib_read', lambda: {'42': {'local_path': str(tmp_path)}})
+    monkeypatch.setattr(anime.time, 'sleep', lambda *_: None)
+    monkeypatch.setattr(anime, '_video_duration', lambda *_: 100)
+    monkeypatch.setattr(anime, '_escanear_carpetas', lambda *_: [
+        {'num': 2, 'season': 1, 'path': 'season-one.mkv'},
+        {'num': 2, 'season': 2, 'path': 'season-two.mkv'},
+    ])
+    def frame(video, dest, _duration):
+        color = (200, 20, 20) if video == 'season-one.mkv' else (20, 20, 200)
+        Image.new('RGB', (960, 540), color).save(dest)
+    monkeypatch.setattr(anime, '_extraer_fotograma_util', frame)
+
+    anime._pregen_thumbs()
+
+    assert {p.name for p in tmp_path.glob('*.jpg')} == {
+        '42_s01e002_w960.jpg', '42_s02e002_w960.jpg',
+    }
+    with Image.open(tmp_path / '42_s01e002_w960.jpg') as first:
+        assert first.getpixel((10, 10))[0] > 180
+    with Image.open(tmp_path / '42_s02e002_w960.jpg') as second:
+        assert second.getpixel((10, 10))[2] > 180

@@ -5032,6 +5032,26 @@ def _extraer_fotograma_util(video: str, dest, duration: float) -> None:
     raise RuntimeError(f'ningún momento de {video} da un fotograma utilizable')
 
 
+def _cache_tmdb_thumb(meta, episode, episode_key, dest) -> bool:
+    """Guarda el still de respaldo en el mismo caché persistente que los fotogramas locales."""
+    from PIL import Image
+
+    entry = meta.get(episode_key) or meta.get(str(episode)) or {}
+    src = _warm_img(entry.get('still'))
+    if not src:
+        return False
+    tmp = dest.with_suffix(f'.{os.getpid()}-{threading.get_ident()}.part')
+    try:
+        with Image.open(src) as im:
+            im = im.convert('RGB')
+            im.thumbnail((_THUMB_W, _THUMB_W), Image.Resampling.LANCZOS)
+            im.save(tmp, 'JPEG', quality=95, subsampling=0)
+        tmp.replace(dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return True
+
+
 @anime_bp.route('/thumb/<anime_id>/<int:episode>')
 def anime_thumb(anime_id, episode):
     _THUMBS_DIR.mkdir(parents=True, exist_ok=True)
@@ -5081,8 +5101,17 @@ def anime_thumb(anime_id, episode):
     duration = _ffprobe_duration(video)
     try:
         _extraer_fotograma_util(video, cache_path, duration)
-    except Exception:
-        return ('', 500)
+    except Exception as e:
+        cache_path.unlink(missing_ok=True)
+        record_error('anime', e, op='thumb_extract', anime_id=anime_id, episode=episode)
+        try:
+            # Un especial no puede heredar el still del episodio regular con el mismo número.
+            meta = {} if is_special else _episode_metadata(anime_id).get('meta') or {}
+            if is_special or not _cache_tmdb_thumb(meta, episode, episode_key, cache_path):
+                return ('', 500)
+        except Exception as fallback_error:
+            record_error('anime', fallback_error, op='thumb_fallback', anime_id=anime_id, episode=episode)
+            return ('', 500)
 
     if not cache_path.exists() or cache_path.stat().st_size == 0:
         return ('', 500)
@@ -5104,17 +5133,27 @@ def _pregen_thumbs():
             episodes = _escanear_carpetas(anime)
         except Exception:
             continue
+        fallback_meta = None
         for ep in episodes:
             ep_type = ep.get('ep_type', 'episode')
             ep_num  = ep['num']
-            cache_path = _THUMBS_DIR / _thumb_key(anime_id, ep_num, ep_type == 'special')
+            episode_key = (f"s{int(ep['season']):02d}e{ep_num:03d}"
+                           if ep.get('season') else str(ep_num))
+            cache_path = _THUMBS_DIR / _thumb_key(anime_id, ep_num, ep_type == 'special', episode_key)
             if cache_path.exists() and cache_path.stat().st_size > 0:
                 continue
             video = ep['path']
             try:
                 _extraer_fotograma_util(video, cache_path, _video_duration(video))
             except Exception:
-                pass
+                cache_path.unlink(missing_ok=True)
+                try:
+                    if ep_type != 'special':
+                        if fallback_meta is None:
+                            fallback_meta = _episode_metadata(anime_id).get('meta') or {}
+                        _cache_tmdb_thumb(fallback_meta, ep_num, episode_key, cache_path)
+                except Exception as fallback_error:
+                    record_error('anime', fallback_error, op='thumb_pregen_fallback', anime_id=anime_id, episode=ep_num)
             time.sleep(2.0)  # throttle to avoid CPU saturation while server is running
 
 
@@ -5325,6 +5364,10 @@ def _episode_meta_cache_key(tmdb_id, season, grouped=False):
 
 @anime_bp.route('/episode_meta/<anime_id>')
 def anime_episode_meta(anime_id):
+    return jsonify(_episode_metadata(anime_id))
+
+
+def _episode_metadata(anime_id):
     """Título + descripción (+ still) de cada episodio desde TMDB, para el detalle del anime.
     Usa el tmdb_id/tmdb_type/season_year ya resueltos por el arte del hero. Si el año no identifica
     la temporada, recurre al grupo TMDB de producción/TV cuando el título indica Tn; mapea su orden
@@ -5338,22 +5381,22 @@ def anime_episode_meta(anime_id):
     ttype = v.get('tmdb_type', 'tv')
     year = v.get('season_year')
     if not tmdb_id or not _tmdb_key() or ttype != 'tv':
-        return jsonify({'source': None, 'meta': {}})
+        return {'source': None, 'meta': {}}
 
     title_en = v.get('title_english') or v.get('title') or ''
     title_romaji = v.get('title_romaji') or ''
     season, grouped = _episode_meta_season(tmdb_id, year, title_en, title_romaji)
     if season is None:
-        return jsonify({'source': None, 'meta': {}})
+        return {'source': None, 'meta': {}}
     ck = _episode_meta_cache_key(tmdb_id, season, grouped)
     # Los títulos de episodio son prácticamente inmutables → caché larga, sin desalojar.
     disk = cache_get('ep_meta', ck, _EP_META_TTL)
     if disk is not None:
-        return jsonify({'source': 'tmdb', 'season': season, 'meta': disk})
+        return {'source': 'tmdb', 'season': season, 'meta': disk}
 
     group_ref = _tmdb_season_group(tmdb_id, season) if grouped else None
     if grouped and not group_ref:
-        return jsonify({'source': None, 'meta': {}})
+        return {'source': None, 'meta': {}}
 
     meta = {}
     try:
@@ -5395,7 +5438,7 @@ def anime_episode_meta(anime_id):
         pass
     if meta:
         cache_set('ep_meta', ck, meta, ttl=_EP_META_TTL, max_entries=5000)
-    return jsonify({'source': 'tmdb' if meta else None, 'season': season, 'meta': meta})
+    return {'source': 'tmdb' if meta else None, 'season': season, 'meta': meta}
 
 
 # ── Subtitle list endpoint ─────────────────────────────────────────────────────

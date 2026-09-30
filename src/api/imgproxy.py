@@ -175,13 +175,14 @@ def _fetch_and_cache(url):
 def warm(url):
     """Best-effort proactive cache fill, called from anime.py's metadata
     backfill once a banner/logo/cover URL is resolved. Silently no-ops for
-    falsy URLs or hosts outside the allowlist — never warms an arbitrary URL."""
+    falsy URLs or hosts outside the allowlist — never warms an arbitrary URL.
+    Returns the cached path on success so other persistent image caches can reuse it."""
     if not url:
         return
     try:
         if urlparse(url).netloc.lower() not in _ALLOWED_HOSTS:
             return
-        _fetch_and_cache(url)
+        return _fetch_and_cache(url)
     except Exception:
         pass
 
