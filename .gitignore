@@ -1,4 +1,9 @@
 # Python cache artifacts
+# Dependencias y resultados de compilacion regenerables
+node_modules/
+/frontend/dist/
+*.bak_ai
+
 __pycache__/
 *.py[cod]
 *$py.class
