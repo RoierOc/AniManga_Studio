@@ -32,6 +32,7 @@ let dlPollBusy = false
 let qbtViewActive = false
 let qbtRequest = null
 const skipRequests = new Map()
+const epMetaRequests = new Map()
 const subPollers = {}   // subKey -> interval handle
 const HERO_TARGET = 10  // cuántas obras entran en el carrusel del hero
 
@@ -122,7 +123,8 @@ export const useAnimeStore = defineStore('anime', {
 
     skipTimes: {},             // `${animeId}_${ep}` -> {op_start, op_end, ed_start, ed_end}
     epInfo: {},                // `${malId}_${ep}` -> {title, synopsis, ...} | null(loading)
-    epMeta: {},                // anime.id -> { '<num>': {title, overview, still, aired} }  (TMDB, o MAL de reserva)
+    epMeta: {},                // anime.id -> null(en vuelo) | metadata TMDB/MAL por episodio
+    epMetaNeedsTmdb: {},       // anime.id -> MAL provisional; volver a consultar al llegar tmdb_id
     epInfoOpen: null,          // currently expanded ep-info key
     nextAiring: {},            // al_id -> {episode, airing_at}
     airing: {},                // al_id -> {status, next_episode, next_airing_at, last_episode, last_aired_at} — fresh airing schedule
@@ -836,6 +838,7 @@ export const useAnimeStore = defineStore('anime', {
       try {
         await api.post(`/api/anime/library/${encodeURIComponent(id)}/reset_cover`, {})
         delete this.epMeta[id]
+        delete this.epMetaNeedsTmdb[id]
         await this.loadLibrary(true)
         const refreshed = this.library.find((entry) => String(entry.id) === id) || anime
         await this.loadEpMeta(refreshed)
@@ -1502,24 +1505,59 @@ export const useAnimeStore = defineStore('anime', {
     // (mejores nombres/descripciones, temporada correcta vía season_by_year); si no hay match
     // TMDB, cae a los títulos de MAL. Cacheado en el store por anime; backend cachea 7 días.
     async loadEpMeta(anime) {
-      if (!anime?.id || this.epMeta[anime.id] !== undefined) return
-      this.epMeta[anime.id] = {}
-      try {
-        const d = await api.get(`/api/anime/episode_meta/${anime.id}`)
-        if (d?.source === 'tmdb' && d.meta && Object.keys(d.meta).length) {
-          this.epMeta[anime.id] = d.meta
-          return
-        }
-      } catch (_) { /* cae a MAL */ }
-      // Reserva: títulos de MAL (solo title).
-      if (anime.mal_id) {
-        try {
-          const t = (await api.get(`/api/anime/episode_titles/${anime.mal_id}`))?.titles || {}
-          const m = {}
-          for (const [num, v] of Object.entries(t)) m[num] = { title: v.title || '', overview: '' }
-          this.epMeta[anime.id] = m
-        } catch (_) { /* deja {} */ }
+      const id = anime?.id
+      if (!id) return
+      const pending = epMetaRequests.get(id)
+      if (pending) {
+        await pending
+        // Si la primera llamada llegó antes del backfill y volvió vacía, reintenta ahora con
+        // la entrada enriquecida que llegó mientras estaba en vuelo, incluso si MAL dio títulos.
+        if (anime.tmdb_id && (this.epMeta[id] === undefined || this.epMetaNeedsTmdb[id]))
+          return this.loadEpMeta(anime)
+        return
       }
+      const upgradeMAL = anime.tmdb_id && this.epMetaNeedsTmdb[id]
+      if (this.epMeta[id] !== undefined && !upgradeMAL) return
+      if (upgradeMAL) {
+        delete this.epMeta[id]
+        delete this.epMetaNeedsTmdb[id]
+      }
+      this.epMeta[id] = null  // petición en curso; no convertir aún un fallo/no-listo en vacío
+      let responseReceived = false
+      const request = (async () => {
+        try {
+          const d = await api.get(`/api/anime/episode_meta/${id}`)
+          responseReceived = true
+          if (d?.source === 'tmdb' && d.meta && Object.keys(d.meta).length) {
+            this.epMeta[id] = d.meta
+            delete this.epMetaNeedsTmdb[id]
+            return
+          }
+        } catch (_) { /* cae a MAL */ }
+        // Reserva: títulos de MAL (solo title).
+        if (anime.mal_id) {
+          try {
+            const t = (await api.get(`/api/anime/episode_titles/${anime.mal_id}`))?.titles || {}
+            const m = {}
+            for (const [num, v] of Object.entries(t)) m[num] = { title: v.title || '', overview: '' }
+            if (Object.keys(m).length) {
+              this.epMeta[id] = m
+              if (!anime.tmdb_id) this.epMetaNeedsTmdb[id] = true
+              return
+            }
+          } catch (_) { /* deja {} */ }
+        }
+        // Una entrada AniList recién agregada se enriquece en segundo plano. Si aún no tiene
+        // tmdb_id, la respuesta vacía es transitoria: no la memorices y permite reintentar.
+        if (responseReceived && anime.tmdb_id) this.epMeta[id] = {}
+        else delete this.epMeta[id]
+      })()
+      let tracked
+      tracked = request.finally(() => {
+        if (epMetaRequests.get(id) === tracked) epMetaRequests.delete(id)
+      })
+      epMetaRequests.set(id, tracked)
+      await tracked
     },
 
     /* ── Auto-play ──────────────────────────────────────────────────────── */

@@ -3,7 +3,10 @@ import { computed, ref } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { useAnimeUpscaleStore } from '@/stores/animeUpscale'
 import { animeEpLabel, animeEpisodeKey, isEpisodePlayable } from '@/lib/anime'
-import { imgProxy, animeThumb } from '@/lib/img'
+import {
+  imgProxy, animeThumb, wasAnimeThumbLoaded, wasAnimeThumbFailed,
+  rememberAnimeThumbLoaded, rememberAnimeThumbFailed,
+} from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
 import Spinner from '@/components/ui/Spinner.vue'
@@ -69,14 +72,20 @@ const localThumbSrc = computed(() => playable.value || props.ep.has_thumb
   ? animeThumb(props.anime.id, props.ep.num, props.ep.ep_type, animeEpisodeKey(props.ep))
   : '')
 const thumbSrc = computed(() => {
-  if (localThumbSrc.value && failedLocalThumb.value !== localThumbSrc.value) return localThumbSrc.value
+  const local = localThumbSrc.value
+  if (local && failedLocalThumb.value !== local && !wasAnimeThumbFailed(local)) return local
   // 400 se quedaba corto: la tarjeta mide ~495 px CSS, así que pedía el peldaño 640 y lo pintaba
   // a 742 físicos. Con el ancho real cae en el 900 y deja de verse blando.
   return meta.value?.still ? imgProxy(meta.value.still, 500, props.anime.cover_rev) : ''
 })
+function onThumbLoad(e) {
+  rememberAnimeThumbLoaded(thumbSrc.value)
+  e.target.classList.add('is-loaded')
+}
 function onThumbError(e) {
   if (localThumbSrc.value && thumbSrc.value === localThumbSrc.value) {
     failedLocalThumb.value = localThumbSrc.value
+    rememberAnimeThumbFailed(localThumbSrc.value)
     return
   }
   e.target.style.display = 'none'
@@ -176,8 +185,8 @@ function openMenu(ev) {
 
     <button type="button" class="ep__thumb" :aria-label="primaryLabel" :disabled="downloading" @click="onPrimary">
       <div class="ep__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 200)}')` : ''" />
-      <img v-if="thumbSrc" class="ep__img" :src="thumbSrc"
-           loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" @error="onThumbError" alt="" />
+      <img v-if="thumbSrc" class="ep__img" :class="{ 'is-loaded': wasAnimeThumbLoaded(thumbSrc) }" :src="thumbSrc"
+           loading="lazy" decoding="async" @load="onThumbLoad" @error="onThumbError" alt="" />
 
       <!-- Sobre la portada se queda SÓLO el nº (y el "Visto"). El título vive debajo. -->
       <div class="ep__overlay">

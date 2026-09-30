@@ -54,6 +54,33 @@ describe('EpisodeRow · miniatura de episodio', () => {
     expect(wrapper.get('.eprow__img').element.style.display).toBe('none')
   })
 
+  it('no vuelve a intentar el fotograma local fallido al regresar a la vista de lista', async () => {
+    const id = 'nisekoi-return-row'
+    const still = 'https://image.tmdb.org/t/p/original/nisekoi-return-row-e2.jpg'
+    const props = {
+      anime: { id, title: 'Nisekoi', cover_rev: 3 },
+      ep: { num: 2, season: 1, episode_key: 's01e002', ep_type: 'episode', in_local: true, has_thumb: true },
+      batch: { hasSelection: false, batchDone: false, hasBatch: false },
+    }
+    animeStore.epMeta = { [id]: { s01e002: { still } } }
+    wrapper = mount(EpisodeRow, {
+      props,
+      global: { stubs: { Icon: true, Spinner: true, EpisodeMediaInfo: true } },
+    })
+
+    await wrapper.get('.eprow__img').trigger('error')
+    await wrapper.get('.eprow__img').trigger('load')
+    wrapper.unmount()
+    wrapper = mount(EpisodeRow, {
+      props,
+      global: { stubs: { Icon: true, Spinner: true, EpisodeMediaInfo: true } },
+    })
+
+    const returned = wrapper.get('.eprow__img')
+    expect(decodeURIComponent(returned.attributes('src'))).toContain(still)
+    expect(returned.classes()).toContain('is-loaded')
+  })
+
   it('expone la acción de reproducir como botón accesible', async () => {
     render()
     const play = wrapper.get('.eprow__thumb')

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted, watch } from 'vue'
 import { useUiStore } from '@/stores/ui'
 import { useAnimeStore } from '@/stores/anime'
 import { supportsVT, vtGo } from '@/lib/vt'
@@ -18,6 +18,17 @@ import PlaceholderView from '@/views/PlaceholderView.vue'
 import Icon from '@/components/ui/Icon.vue'
 
 const store = useAnimeStore()
+const backfillTimers = []
+function scheduleBackfillRefresh() {
+  backfillTimers.splice(0).forEach(clearTimeout)
+  if (!store.needsAnimeMetadataBackfill()) return
+  for (const delay of [7000, 20000]) {
+    backfillTimers.push(setTimeout(() => {
+      if (store.needsAnimeMetadataBackfill()) store.loadLibrary(true, true)
+    }, delay))
+  }
+}
+let stopLibraryWatch = null
 
 const TABS = [
   { id: 'library',   label: 'Mi Anime',  icon: 'film' },
@@ -32,6 +43,15 @@ const TABS = [
 onMounted(() => {
   store.init()
   if (!store.library.length) store.loadLibrary()
+  else if (store.needsAnimeMetadataBackfill()) store.loadLibrary(true, true)
+  // Vive en el shell del módulo, no en la rejilla: el backfill también debe terminar si la ficha
+  // o cualquier otra subvista está abierta cuando se añade una serie.
+  stopLibraryWatch = watch(() => store.library.length, scheduleBackfillRefresh)
+  scheduleBackfillRefresh()
+})
+onUnmounted(() => {
+  stopLibraryWatch?.()
+  backfillTimers.splice(0).forEach(clearTimeout)
 })
 
 function selectTab(id) {

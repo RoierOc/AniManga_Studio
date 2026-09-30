@@ -82,4 +82,55 @@ describe('EpisodeCard · imagen local no disponible', () => {
     await wrapper.get('.ep__img').trigger('error')
     expect(wrapper.get('.ep__img').element.style.display).toBe('none')
   })
+
+  it('mantiene el still visible al volver a montar tras fallar el fotograma local', async () => {
+    const id = 'nisekoi-return-card'
+    const still = 'https://image.tmdb.org/t/p/original/nisekoi-return-e2.jpg'
+    const props = {
+      anime: { id, title: 'Nisekoi', cover_rev: 3 },
+      ep: { num: 2, season: 1, episode_key: 's01e002', ep_type: 'episode', in_local: true },
+      batch: { hasSelection: false, batchDone: false, hasBatch: false },
+    }
+    animeStore.epMeta = { [id]: { s01e002: { still } } }
+    wrapper = mount(EpisodeCard, {
+      props,
+      global: { stubs: { ContextMenu: true, Icon: true, Spinner: true, EpisodeMediaInfo: true } },
+    })
+
+    await wrapper.get('.ep__img').trigger('error')
+    expect(decodeURIComponent(wrapper.get('.ep__img').attributes('src'))).toContain(still)
+    await wrapper.get('.ep__img').trigger('load')
+    wrapper.unmount()
+    wrapper = mount(EpisodeCard, {
+      props,
+      global: { stubs: { ContextMenu: true, Icon: true, Spinner: true, EpisodeMediaInfo: true } },
+    })
+
+    const returned = wrapper.get('.ep__img')
+    expect(decodeURIComponent(returned.attributes('src'))).toContain(still)
+    expect(returned.classes()).toContain('is-loaded')
+  })
+
+  it('conserva visible el still de una serie añadida desde AniList al volver a la vista', async () => {
+    const id = 'anilist-return-card'
+    const still = 'https://image.tmdb.org/t/p/original/anilist-return-e1.jpg'
+    const props = {
+      anime: { id, title: 'Serie añadida', cover_rev: 1 },
+      ep: { num: 1, ep_type: 'episode', in_local: false },
+      batch: { hasSelection: false, batchDone: false, hasBatch: false },
+    }
+    animeStore.epMeta = { [id]: { 1: { still } } }
+    wrapper = mount(EpisodeCard, {
+      props,
+      global: { stubs: { ContextMenu: true, Icon: true, Spinner: true, EpisodeMediaInfo: true } },
+    })
+    await wrapper.get('.ep__img').trigger('load')
+    wrapper.unmount()
+    wrapper = mount(EpisodeCard, {
+      props,
+      global: { stubs: { ContextMenu: true, Icon: true, Spinner: true, EpisodeMediaInfo: true } },
+    })
+
+    expect(wrapper.get('.ep__img').classes()).toContain('is-loaded')
+  })
 })

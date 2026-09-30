@@ -26,6 +26,19 @@ const ui = useUiStore()
 const subbatch = useSubBatchStore()
 const anime = computed(() => store.detail)
 
+// Una ficha abierta desde AniList conserva el preview al añadirse. Cuando el backfill ya haya
+// resuelto TMDB en la entrada de biblioteca, carga sus stills bajo el mismo id del preview.
+const libraryEpisodeMeta = computed(() => {
+  const a = anime.value
+  return a?.al_id == null ? null : store.library.find(x => String(x.al_id) === String(a.al_id))?.tmdb_id || null
+})
+watch(() => [anime.value?.id, anime.value?.tmdb_id, libraryEpisodeMeta.value], ([id, ownTmdb, libraryTmdb]) => {
+  const a = anime.value
+  const tmdbId = ownTmdb || libraryTmdb
+  if (id && tmdbId && (store.epMeta[id] === undefined || store.epMetaNeedsTmdb[id]))
+    store.loadEpMeta({ ...a, tmdb_id: tmdbId })
+}, { immediate: true })
+
 /* Cruza al otro lado de la app: del anime a su manga.
    · Si YA lo tienes, abre su ficha de la biblioteca — la que tiene los capítulos y el lector.
    · Si no, abre la ficha de MangaDex encima, con su botón de añadir, SIN sacarte de aquí. Antes

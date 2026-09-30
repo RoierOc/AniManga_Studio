@@ -83,6 +83,27 @@ function dpx(cssWidth) {
  * en unos y no en otros, que es peor que no ponerlo. */
 export const THUMB_W = 960
 
+// Las vistas de Anime se desmontan al navegar. El navegador conserva los bytes en caché, pero no
+// la clase que los hace visibles ni el fallback elegido tras un fotograma local roto.
+const _animeThumbLoaded = new Set()
+const _animeThumbFailed = new Set()
+const _MAX_REMEMBERED_ANIME_THUMBS = 2048
+
+function _rememberThumb(set, src) {
+  if (!src) return
+  set.delete(src)
+  set.add(src)
+  if (set.size > _MAX_REMEMBERED_ANIME_THUMBS) set.delete(set.values().next().value)
+}
+
+export const wasAnimeThumbLoaded = (src) => _animeThumbLoaded.has(src)
+export const rememberAnimeThumbLoaded = (src) => _rememberThumb(_animeThumbLoaded, src)
+export const wasAnimeThumbFailed = (src) => _animeThumbFailed.has(src)
+export function rememberAnimeThumbFailed(src) {
+  _animeThumbLoaded.delete(src)
+  _rememberThumb(_animeThumbFailed, src)
+}
+
 export function animeThumb(animeId, num, epType, episodeKey = '') {
   const params = new URLSearchParams({ v: THUMB_W })
   if (epType === 'special') params.set('special', '1')

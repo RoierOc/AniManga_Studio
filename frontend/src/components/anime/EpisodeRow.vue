@@ -2,7 +2,10 @@
 import { computed, ref } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { animeEpLabel, animeEpisodeKey, isEpisodePlayable } from '@/lib/anime'
-import { imgProxy, animeThumb } from '@/lib/img'
+import {
+  imgProxy, animeThumb, wasAnimeThumbLoaded, wasAnimeThumbFailed,
+  rememberAnimeThumbLoaded, rememberAnimeThumbFailed,
+} from '@/lib/img'
 import Icon from '@/components/ui/Icon.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EpisodeMediaInfo from './EpisodeMediaInfo.vue'
@@ -54,12 +57,18 @@ const localThumbSrc = computed(() => playable.value || props.ep.has_thumb
   ? animeThumb(props.anime.id, props.ep.num, props.ep.ep_type, animeEpisodeKey(props.ep))
   : '')
 const thumbSrc = computed(() => {
-  if (localThumbSrc.value && failedLocalThumb.value !== localThumbSrc.value) return localThumbSrc.value
+  const local = localThumbSrc.value
+  if (local && failedLocalThumb.value !== local && !wasAnimeThumbFailed(local)) return local
   return meta.value?.still ? imgProxy(meta.value.still, 320, props.anime.cover_rev) : ''
 })
+function onThumbLoad(e) {
+  rememberAnimeThumbLoaded(thumbSrc.value)
+  e.target.classList.add('is-loaded')
+}
 function onThumbError(e) {
   if (localThumbSrc.value && thumbSrc.value === localThumbSrc.value) {
     failedLocalThumb.value = localThumbSrc.value
+    rememberAnimeThumbFailed(localThumbSrc.value)
     return
   }
   e.target.style.display = 'none'
@@ -99,8 +108,8 @@ function onPlay() { if (playable.value) store.play(props.anime, props.ep) }
       <button type="button" class="eprow__thumb" :disabled="!playable"
               :aria-label="'Reproducir ' + anime.title + ', episodio ' + ep.num" @click="onPlay">
         <div class="eprow__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 120)}')` : ''" />
-        <img v-if="thumbSrc" class="eprow__img" :src="thumbSrc"
-             loading="lazy" decoding="async" @load="$event.target.classList.add('is-loaded')" @error="onThumbError" alt="" />
+        <img v-if="thumbSrc" class="eprow__img" :class="{ 'is-loaded': wasAnimeThumbLoaded(thumbSrc) }" :src="thumbSrc"
+             loading="lazy" decoding="async" @load="onThumbLoad" @error="onThumbError" alt="" />
         <div class="eprow__num"><span class="eprow__num-k">{{ ep.ep_type === 'special' ? 'SP' : 'EP' }}</span><span class="eprow__num-v">{{ String(ep.num).padStart(2, '0') }}</span></div>
         <!-- resume / download / finished bar -->
         <div v-if="resumePct" class="eprow__bar eprow__bar--resume"><span :style="{ '--progress': resumePct / 100 }" /></div>

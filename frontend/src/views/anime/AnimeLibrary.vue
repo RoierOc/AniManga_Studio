@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { ANIME_STATUS, STATUS_ORDER, nextUnwatchedEp, animeEpisodeKey, currentSeason, isCurrentSeason, shiftSeason, SEASON_ES } from '@/lib/anime'
 import { imgProxy, animeThumb } from '@/lib/img'
@@ -27,25 +27,14 @@ tags.load()
 // Aura del hero: color dominante del banner activo, teñido sutilmente detrás del home.
 const heroTint = ref('rgb(77, 141, 255)')
 
-// El store mantiene un único sondeo de qBittorrent y sincroniza el progreso de esta vista;
-// no crear aquí otro temporizador de biblioteca mientras hay descargas.
-const reloads = []
+// El hero: 4 de cada 10 entradas enseña tu biblioteca al azar en vez de la cadena de siempre.
+// Los refrescos del backfill viven en AnimeStudio para seguir funcionando fuera de la rejilla.
 onMounted(() => {
-  // El hero: 4 de cada 10 entradas enseña tu biblioteca al azar en vez de la cadena de siempre.
   store.tirarDadoHero()
   if (!store.seasonal.length) store.loadSeasonal()
   store.loadForYou()   // recomendaciones sobre tu biblioteca (cacheadas 24 h en el backend)
   store.loadAiring()   // fresh airing schedule → "new episode just aired" hero
-  // El backfill tarda en segundo plano. Releer solo si aún falta algún dato que puede completar;
-  // si el arte ya está listo, estas comprobaciones no generan peticiones de biblioteca.
-  reloads.push(setTimeout(() => {
-    if (store.needsAnimeMetadataBackfill()) store.loadLibrary(true, true)
-  }, 7000))
-  reloads.push(setTimeout(() => {
-    if (store.needsAnimeMetadataBackfill()) store.loadLibrary(true, true)
-  }, 20000))
 })
-onUnmounted(() => reloads.forEach(clearTimeout))
 
 // Traduce "seguir viendo" de anime a la forma genérica del riel compartido. La miniatura del
 // episodio solo existe si está descargado; si no, se cae a la portada.

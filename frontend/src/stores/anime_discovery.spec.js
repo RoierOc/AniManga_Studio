@@ -108,4 +108,53 @@ describe('solicitudes de descubrimiento de anime', () => {
     store.library = [{ ...complete, banner: '' }]
     expect(store.needsAnimeMetadataBackfill?.()).toBe(true)
   })
+
+  it('no fija en caché la respuesta vacía antes de que el backfill TMDB de AniList termine', async () => {
+    const anime = { id: '42', al_id: 42, title: 'Serie añadida desde AniList' }
+    const still = 'https://image.tmdb.org/t/p/original/episode-1.jpg'
+    api.get.mockResolvedValueOnce({ source: null, meta: {} })
+      .mockResolvedValueOnce({ source: 'tmdb', meta: { 1: { still } } })
+
+    await store.loadEpMeta(anime)
+    expect(store.epMeta['42']).toBeUndefined()
+
+    await store.loadEpMeta({ ...anime, tmdb_id: 123 })
+
+    expect(api.get).toHaveBeenNthCalledWith(1, '/api/anime/episode_meta/42')
+    expect(api.get).toHaveBeenNthCalledWith(2, '/api/anime/episode_meta/42')
+    expect(store.epMeta['42'][1].still).toBe(still)
+  })
+
+  it('reintenta con la ficha enriquecida si llega mientras se usa el fallback MAL', async () => {
+    const pending = deferred()
+    const anime = { id: '43', al_id: 43, mal_id: 430, title: 'Serie AniList en enriquecimiento' }
+    const still = 'https://image.tmdb.org/t/p/original/episode-2.jpg'
+    api.get.mockReturnValueOnce(pending.promise)
+      .mockResolvedValueOnce({ titles: { 2: { title: 'Título provisional MAL' } } })
+      .mockResolvedValueOnce({ source: 'tmdb', meta: { 2: { still } } })
+
+    const first = store.loadEpMeta(anime)
+    const enriched = store.loadEpMeta({ ...anime, tmdb_id: 456 })
+    pending.resolve({ source: null, meta: {} })
+    await Promise.all([first, enriched])
+
+    expect(api.get).toHaveBeenCalledTimes(3)
+    expect(store.epMeta['43'][2].still).toBe(still)
+  })
+
+  it('actualiza el fallback de títulos MAL cuando llega el vínculo TMDB de AniList', async () => {
+    const anime = { id: '44', al_id: 44, mal_id: 440 }
+    const still = 'https://image.tmdb.org/t/p/original/episode-3.jpg'
+    api.get.mockResolvedValueOnce({ source: null, meta: {} })
+      .mockResolvedValueOnce({ titles: { 1: { title: 'Título de MAL' } } })
+      .mockResolvedValueOnce({ source: 'tmdb', meta: { 1: { title: 'Título TMDB', still } } })
+
+    await store.loadEpMeta(anime)
+    expect(store.epMeta['44'][1].title).toBe('Título de MAL')
+
+    await store.loadEpMeta({ ...anime, tmdb_id: 789 })
+
+    expect(store.epMeta['44'][1]).toEqual({ title: 'Título TMDB', still })
+    expect(api.get).toHaveBeenCalledTimes(3)
+  })
 })
