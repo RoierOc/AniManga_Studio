@@ -11,7 +11,6 @@ import Icon from '@/components/ui/Icon.vue'
 import ContextMenu from '@/components/ui/ContextMenu.vue'
 import Spinner from '@/components/ui/Spinner.vue'
 import EpisodeMediaInfo from './EpisodeMediaInfo.vue'
-import { hideEpisodeSpoilers } from '@/lib/animeSpoilers'
 
 const props = defineProps({
   anime: { type: Object, required: true },
@@ -19,9 +18,6 @@ const props = defineProps({
   batch: { type: Object, required: true },
 })
 const store = useAnimeStore()
-const revealed = ref('')
-const episodeIdentity = computed(() => `${props.anime.id}_${animeEpisodeKey(props.ep)}`)
-const spoilerHidden = computed(() => hideEpisodeSpoilers(store.hideSpoilers, props.ep, revealed.value === episodeIdentity.value))
 const a4k = useAnimeUpscaleStore()
 
 // Escalado con Anime4K: `ep.a4k` lo pone el escaneo cuando existe el fichero horneado, y entonces
@@ -97,7 +93,6 @@ function onThumbError(e) {
 
 // Título real del episodio (TMDB/MAL) si lo tenemos; si no, la etiqueta derivada del archivo.
 const epTitle = computed(() => {
-  if (spoilerHidden.value) return animeEpLabel(props.anime, { ...props.ep, title: '' })
   if (props.ep.ep_type !== 'special' && meta.value?.title) return meta.value.title
   return animeEpLabel(props.anime, props.ep)
 })
@@ -190,7 +185,7 @@ function openMenu(ev) {
 
     <button type="button" class="ep__thumb" :aria-label="primaryLabel" :disabled="downloading" @click="onPrimary">
       <div class="ep__bg" :style="anime.cover ? `background-image:url('${imgProxy(anime.cover, 200)}')` : ''" />
-      <img v-if="thumbSrc && !spoilerHidden" class="ep__img" :class="{ 'is-loaded': wasAnimeThumbLoaded(thumbSrc) }" :src="thumbSrc"
+      <img v-if="thumbSrc" class="ep__img" :class="{ 'is-loaded': wasAnimeThumbLoaded(thumbSrc) }" :src="thumbSrc"
            loading="lazy" decoding="async" @load="onThumbLoad" @error="onThumbError" alt="" />
 
       <!-- Sobre la portada se queda SÓLO el nº (y el "Visto"). El título vive debajo. -->
@@ -216,7 +211,6 @@ function openMenu(ev) {
     <!-- Título BAJO la miniatura (Crunchyroll/Netflix): misma tipografía, ahora sin competir
          con el arte de la portada. El nº se queda arriba sobre la imagen. -->
     <div class="ep__foot">
-      <button v-if="spoilerHidden" class="ep__reveal" type="button" @click="revealed = episodeIdentity">Mostrar spoilers</button>
       <div class="ep__eptitle" :data-tip="epTitle">{{ epTitle }}</div>
       <div v-if="metaLine" class="ep__meta" :class="metaLine.cls">{{ metaLine.text }}</div>
     </div>
@@ -224,8 +218,7 @@ function openMenu(ev) {
     <!-- expandable episode info (desde el menú → Descripción) -->
     <Transition name="info">
       <div v-if="infoOpen" class="ep__info">
-        <button v-if="spoilerHidden" type="button" @click="revealed = episodeIdentity">Mostrar spoilers de este episodio</button>
-        <div v-else-if="info === null" class="ep__info-load"><span class="dot" /><span class="dot" /><span class="dot" /></div>
+        <div v-if="info === null" class="ep__info-load"><span class="dot" /><span class="dot" /><span class="dot" /></div>
         <template v-else-if="info?.synopsis">
           <div v-if="info.title" class="ep__info-title">{{ info.title }}</div>
           <p class="ep__info-syn">{{ info.synopsis }}</p>
@@ -302,7 +295,6 @@ function openMenu(ev) {
 /* Pie de la tarjeta: título + estado. Mismo font-display de siempre (al usuario le gusta la
    tipografía), pero ya sobre fondo sólido: sin sombras y con el color de tinta del tema. */
 .ep__foot { padding: var(--s-2) var(--s-1) 0; }
-.ep__reveal { color: var(--azure-bright); font-size: var(--fs-xs); padding: var(--s-2) 0; }
 .ep__eptitle { font-family: var(--font-display); font-weight: 600; font-size: var(--fs-sm); line-height: 1.3;
   color: var(--ink); transition: color var(--t-fast);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }

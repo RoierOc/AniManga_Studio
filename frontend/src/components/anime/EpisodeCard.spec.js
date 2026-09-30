@@ -28,7 +28,7 @@ afterEach(() => {
 })
 
 describe('EpisodeCard · imagen local no disponible', () => {
-  it('oculta título, sinopsis e imagen hasta revelar el episodio sin perder su metadata', async () => {
+  it('muestra imagen, título y sinopsis aunque quede una preferencia antiespoilers antigua', async () => {
     animeStore.hideSpoilers = true
     animeStore.epInfoOpen = 'spoiler-card_1'
     animeStore.epMeta = { 'spoiler-card': { 1: { title: 'El giro secreto', overview: 'La revelación', still: 'https://image.tmdb.org/t/p/original/secret.jpg' } } }
@@ -37,16 +37,10 @@ describe('EpisodeCard · imagen local no disponible', () => {
         batch: { hasBatch: false, hasSelection: false, batchDone: false } },
       global: { stubs: { ContextMenu: true, Icon: true, Spinner: true, EpisodeMediaInfo: true } },
     })
-    expect(wrapper.find('.ep__img').exists()).toBe(false)
-    expect(wrapper.text()).not.toContain('El giro secreto')
-    expect(wrapper.text()).not.toContain('La revelación')
-    expect(wrapper.text()).not.toContain('Otro secreto del archivo')
-    await wrapper.get('.ep__reveal').trigger('click')
     expect(wrapper.find('.ep__img').exists()).toBe(true)
     expect(wrapper.text()).toContain('El giro secreto')
     expect(wrapper.text()).toContain('La revelación')
-    await wrapper.setProps({ ep: { num: 2, ep_type: 'episode', in_local: true } })
-    expect(wrapper.find('.ep__img').exists()).toBe(false)
+    expect(wrapper.find('.ep__reveal').exists()).toBe(false)
   })
   it('expone la acción principal del episodio como botón con nombre accesible', async () => {
     wrapper = mount(EpisodeCard, {

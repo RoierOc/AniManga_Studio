@@ -213,7 +213,7 @@ const coverUrl = computed(() => imgProxy(props.cover, boxW.value))
 
 .mcard__watch { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--s-1); font-size: var(--fs-2xs); color: var(--ice); margin-top: var(--s-2); }
 .mcard__watch div { width: 100%; height: .1875rem; background: rgba(255,255,255,.2); overflow: hidden; border-radius: var(--r-pill); }
-.mcard__watch i { display: block; width: 100%; height: 100%; background: var(--cyan); transform-origin: left; transition: transform var(--t-base); }
+.mcard__watch i { display: block; width: 100%; height: 100%; background: var(--azure-bright); transform-origin: left; transition: transform var(--t-base); }
 .mcard__extra {
   position: absolute; left: var(--s-3); right: var(--s-3); bottom: var(--s-3); height: 4.75rem; opacity: 0; visibility: hidden;
   transform: translateY(100%);

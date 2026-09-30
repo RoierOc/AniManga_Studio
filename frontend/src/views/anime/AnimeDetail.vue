@@ -460,9 +460,6 @@ const activeTab = computed(() => store.coverPicker?.tabs[store.coverPicker.tab])
          buscarla —el hero— y el contexto donde ya vivía: la rejilla. -->
     <div class="eptoolbar">
       <span class="eptoolbar__lbl">{{ mainEps.length }} episodios</span>
-      <button class="eptoolbar__batch" type="button" :aria-pressed="store.hideSpoilers" @click="store.toggleSpoilers()">
-        Antiespoilers: {{ store.hideSpoilers ? 'activado' : 'desactivado' }}
-      </button>
       <button class="eptoolbar__batch" data-tip="Buscar o traducir subtítulos en español de varios episodios"
               @click="openSubBatch">
         <Icon name="globe" :size="15" /> Subtítulos ES (lote)

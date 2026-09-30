@@ -116,7 +116,6 @@ export const useAnimeStore = defineStore('anime', {
     heroBiblioteca: Math.random() < 0.4,
     libSort: localStorage.getItem('anime-libsort') || 'last_watched',  // recently-watched first by default
     libFilter: 'all',
-    hideSpoilers: localStorage.getItem('anime-hide-spoilers') === 'true',
     forYou: [],              // recomendaciones agregadas sobre la biblioteca (B2)
     forYouReason: '',        // 'sin_historial' → hay biblioteca pero nada visto todavía
     _forYouLoading: false,
@@ -519,10 +518,6 @@ export const useAnimeStore = defineStore('anime', {
     },
 
     setLibSort(id) { this.libSort = id; localStorage.setItem('anime-libsort', id) },
-    toggleSpoilers() {
-      this.hideSpoilers = !this.hideSpoilers
-      localStorage.setItem('anime-hide-spoilers', String(this.hideSpoilers))
-    },
 
     /* ── Download location ──────────────────────────────────────────────── */
     async loadDlSettings() {
