@@ -1,7 +1,28 @@
 import { describe, expect, it, vi } from 'vitest'
 import { gridMoveIndex, gridSelectionRange, useGridKeyboard } from './useGridKeyboard'
+import { effectScope, nextTick, ref } from 'vue'
 
 describe('navegación de rejillas', () => {
+  it('recupera selección al remontar sin borrarla durante una carga vacía', async () => {
+    const options = { memoryKey: 'test:remembered-grid', ready: () => ready.value }
+    const ready = ref(true)
+    const keys = ref(['a', 'b'])
+    const first = effectScope()
+    const grid = first.run(() => useGridKeyboard(() => keys.value, options))
+    grid.onSelect('a', { ctrlKey: true, preventDefault() {} })
+    first.stop()
+    ready.value = false
+    keys.value = []
+    const second = effectScope()
+    const restored = second.run(() => useGridKeyboard(() => keys.value, options))
+    await nextTick()
+    expect([...restored.selected.value]).toEqual(['a'])
+    keys.value = ['b']
+    ready.value = true
+    await nextTick()
+    expect([...restored.selected.value]).toEqual([])
+    second.stop()
+  })
   it('mueve horizontalmente y no sale por los extremos', () => {
     expect(gridMoveIndex(0, 'ArrowLeft', 8, 4)).toBe(0)
     expect(gridMoveIndex(2, 'ArrowRight', 8, 4)).toBe(3)

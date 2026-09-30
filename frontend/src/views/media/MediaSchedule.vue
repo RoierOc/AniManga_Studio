@@ -1,4 +1,5 @@
 <script setup>
+import { rememberedRef } from '@/lib/viewMemory'
 /* Estrenos de Cine — el equivalente del calendario de anime, con la forma que pide ESTE dominio.
  *
  * En anime la rejilla de siete columnas funciona porque todo se emite semanalmente. Aquí no: un
@@ -27,7 +28,7 @@ const RANGOS = [
   { id: 'mes', label: 'Este mes', back: 7, days: 31 },
   { id: 'lejos', label: 'Todo lo anunciado', back: 7, days: 180 },
 ]
-const rango = ref('mes')
+const rango = rememberedRef('media:schedule:range', 'mes')
 
 function elegir(id) {
   rango.value = id

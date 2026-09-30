@@ -1,4 +1,5 @@
 <script setup>
+import { rememberedRef } from '@/lib/viewMemory'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { useUiStore } from '@/stores/ui'
@@ -51,8 +52,8 @@ const FILTROS = [
   { id: 'sembrando', label: 'Sembrando' },
   { id: 'todas',     label: 'Todas' },
 ]
-const filtro = ref('activas')
-const busca = ref('')
+const filtro = rememberedRef('anime:downloads:filter', 'activas')
+const busca = rememberedRef('anime:downloads:search', '')
 
 // Un torrent + lo que se puede saber de él: serie, episodio y el póster de tu biblioteca.
 const filas = computed(() => store.qbtTorrents.map(t => {
@@ -87,7 +88,7 @@ const visibles = computed(() => {
 })
 
 const groups = computed(() => groupAnimeDownloads(visibles.value))
-const expanded = ref(new Set())
+const expanded = rememberedRef('anime:downloads:expanded', new Set())
 function toggleGroup(key) {
   if (expanded.value.has(key)) expanded.value.delete(key)
   else expanded.value.add(key)

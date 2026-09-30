@@ -1,4 +1,5 @@
 <script setup>
+import { rememberedRef } from '@/lib/viewMemory'
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useAnimeStore } from '@/stores/anime'
 import { fmtCountdown, fmtAgo } from '@/lib/anime'
@@ -11,8 +12,8 @@ import { scheduleDays } from '@/lib/animeSchedule'
 
 const store = useAnimeStore()
 const nowTick = ref(Date.now())
-const scope = ref('all')
-const layout = ref('week')
+const scope = rememberedRef('anime:schedule:scope', 'all')
+const layout = rememberedRef('anime:schedule:layout', 'week')
 let timer = null
 
 onMounted(() => {

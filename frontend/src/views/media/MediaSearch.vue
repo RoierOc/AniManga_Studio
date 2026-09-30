@@ -1,4 +1,5 @@
 <script setup>
+import { rememberedRef } from '@/lib/viewMemory'
 /* Buscar y añadir. La búsqueda va contra el catálogo de Sonarr/Radarr (no TMDB), así que el id
    que vuelve ya es el del alta — sin dos identidades que reconciliar. */
 import { computed, ref } from 'vue'
@@ -10,8 +11,8 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 
 const store = useMediaStore()
-const term = ref('')
-const kind = ref('series')
+const term = rememberedRef('media:search:term', '')
+const kind = rememberedRef('media:search:kind', 'series')
 
 const results = computed(() => store.results)
 

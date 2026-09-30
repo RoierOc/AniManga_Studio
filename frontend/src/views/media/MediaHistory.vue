@@ -1,4 +1,5 @@
 <script setup>
+import { rememberedRef } from '@/lib/viewMemory'
 /* Historial de Cine — dos lentes de la misma pregunta, y por eso dos pills y no una lista mezclada:
  *   · Visto   — lo que hiciste TÚ (nuestro fichero de progreso).
  *   · Bajado  — lo que hizo la máquina (historial de Sonarr/Radarr).
@@ -18,7 +19,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import ErrorState from '@/components/ui/ErrorState.vue'
 
 const store = useMediaStore()
-const lente = ref('watched')
+const lente = rememberedRef('media:history:lens', 'watched')
 
 onMounted(() => { if (!store.historyLoaded) store.loadHistory() })
 

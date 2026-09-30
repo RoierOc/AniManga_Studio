@@ -23,6 +23,7 @@ import { useTagsStore } from '@/stores/tags'
 import { opcionesGenero, generoActivo, conGenero } from '@/lib/generos'
 import Skeleton from '@/components/ui/Skeleton.vue'
 import { useGridKeyboard } from '@/lib/useGridKeyboard'
+import { rememberedRef } from '@/lib/viewMemory'
 import { onSSE } from '@/lib/sse'
 
 const ui = useUiStore()
@@ -71,13 +72,13 @@ function openTools(e) {
 const items = ref([])
 const loading = ref(true)
 const error = ref('')   // '' = sin fallo; si falla, guarda el MENSAJE (no un booleano)
-const search = ref('')
-const statusFilter = ref('all')
+const search = rememberedRef('library:search', '')
+const statusFilter = rememberedRef('library:status', 'all')
 // "Todo" muestra solo lo ACTIVO (igual que la biblioteca de anime): completadas y abandonadas
 // solo aparecen en su propia pestaña de estado, no ensucian la lista principal.
 const INACTIVE = ['completed', 'dropped']
 const showHistory = ref(false)
-const sort = ref(localStorage.getItem('lib-sort') || 'title')
+const sort = rememberedRef('library:sort', localStorage.getItem('lib-sort') || 'title')
 const SORTS = [
   { id: 'title', label: 'Título' },
   { id: 'recent', label: 'Leído reciente' },
@@ -206,7 +207,7 @@ const filtered = computed(() => {
 })
 
 const { selected: gridSelected, count: gridSelectionCount, clear: clearGridSelection, onKey: onGridKey, onSelect: onGridSelect } =
-  useGridKeyboard(() => filtered.value.map(m => m.id))
+  useGridKeyboard(() => filtered.value.map(m => m.id), { memoryKey: 'library:downloaded', ready: () => !loading.value })
 const selectedMangas = computed(() => filtered.value.filter(m =>
   gridSelected.has(String(m.id)) && m.kind !== 'novel'))
 const selectedNovels = computed(() => filtered.value.filter(m =>

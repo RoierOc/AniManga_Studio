@@ -1,4 +1,5 @@
 <script setup>
+import { rememberedRef } from '@/lib/viewMemory'
 import { computed, ref } from 'vue'
 import { useUiStore } from '@/stores/ui'
 import { useMangaStore } from '@/stores/manga'
@@ -29,7 +30,7 @@ const monogram = (t) => (t || '?').trim().charAt(0).toUpperCase()
 
 const STATUS_LABEL = { done: 'Completado', error: 'Error', cancelled: 'Cancelado', running: 'En curso', queued: 'En cola' }
 
-const q = ref('')
+const q = rememberedRef('activity:search', '')
 const tab = computed({ get: () => ui.activityTab, set: (v) => { ui.activityTab = v } })
 
 function match(groups) {

@@ -19,6 +19,7 @@ import { useTagsStore } from '@/stores/tags'
 import { opcionesGenero, generoActivo, conGenero } from '@/lib/generos'
 import DensityToggle from '@/components/ui/DensityToggle.vue'
 import { useGridKeyboard } from '@/lib/useGridKeyboard'
+import { rememberedRef } from '@/lib/viewMemory'
 
 const store = useAnimeStore()
 const tags = useTagsStore()
@@ -62,9 +63,9 @@ const SORTS = [
 const INACTIVE = ['completed', 'dropped']
 
 // Temporada actual (recalculada por render → rueda sola cada trimestre) desplazada por el paso
-// que hayas dado con las flechas. El desplazamiento es LOCAL a la vista y no se persiste: es una
-// consulta ("¿qué vi el otoño pasado?"), no una preferencia — al salir del filtro vuelve a hoy.
-const seasonStep = ref(0)
+// que hayas dado con las flechas. Se recuerda durante la sesión al salir de la vista;
+// al abandonar el filtro Temporada vuelve a hoy.
+const seasonStep = rememberedRef('anime:library:seasonStep', 0)
 const season = computed(() => shiftSeason(currentSeason(), seasonStep.value))
 const seasonLabel = computed(() => `${SEASON_ES[season.value.season]} ${season.value.year}`)
 
@@ -108,7 +109,7 @@ const filtered = computed(() => {
 })
 
 const { selected: gridSelected, count: gridSelectionCount, clear: clearGridSelection, onKey: onGridKey, onSelect: onGridSelect } =
-  useGridKeyboard(() => filtered.value.map(a => a.id))
+  useGridKeyboard(() => filtered.value.map(a => a.id), { memoryKey: 'anime:library', ready: () => !store.loading })
 const selectedAnime = computed(() => filtered.value.filter(a => gridSelected.has(String(a.id))))
 
 async function clearSelectedAnime() {

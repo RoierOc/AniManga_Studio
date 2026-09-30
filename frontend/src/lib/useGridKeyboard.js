@@ -1,4 +1,5 @@
 import { computed, ref, watch } from 'vue'
+import { rememberedRef } from './viewMemory'
 
 const ARROWS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'])
 
@@ -33,9 +34,9 @@ function gridColumns(grid, items) {
   return columns > 0 ? columns : items.length || 1
 }
 
-export function useGridKeyboard(getVisibleKeys) {
-  const selected = ref(new Set())
-  const anchor = ref(null)
+export function useGridKeyboard(getVisibleKeys, { memoryKey = '', ready = () => true } = {}) {
+  const selected = memoryKey ? rememberedRef(`${memoryKey}:selected`, new Set()) : ref(new Set())
+  const anchor = memoryKey ? rememberedRef(`${memoryKey}:anchor`, null) : ref(null)
   const count = computed(() => selected.value.size)
 
   function clear() { selected.value = new Set(); anchor.value = null }
@@ -92,7 +93,8 @@ export function useGridKeyboard(getVisibleKeys) {
     items[next].scrollIntoView?.({ block: 'nearest', inline: 'nearest' })
   }
 
-  watch(getVisibleKeys, (keys) => {
+  watch([getVisibleKeys, ready], ([keys, loaded]) => {
+    if (!loaded) return
     const visible = new Set((keys || []).map(String))
     const next = new Set([...selected.value].filter((key) => visible.has(key)))
     if (next.size !== selected.value.size) selected.value = next

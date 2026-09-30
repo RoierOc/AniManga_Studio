@@ -1,16 +1,18 @@
 import { defineStore } from 'pinia'
 import { api } from '@/lib/api'
 import { isNative, send as nativeSend } from '@/lib/nativeBridge'
-import { vtGo } from '@/lib/vt'
+import { vtGo, marcarTarjeta } from '@/lib/vt'
 import { useAnimeStore } from './anime'
 import { useMangaStore } from './manga'
 import { useMediaStore } from './media'
 import { useNovelsStore } from './novels'
+import { viewMemoryKey, viewPositions } from '@/lib/viewMemory'
 
 const SESSION_KEY = 'animanga:session:v2'
 let _navInit = false
 let _applying = false   // true while applying a popstate, so we don't push new history
 let _scrollTimer = 0    // debounce del sellado de la posición de scroll en el historial
+let _restoreSeq = 0
 /* Ventanas en las que el scroll de la página NO representa dónde estaba el usuario, así que
  * sellarlo destruiría la memoria en vez de guardarla. Son dos, y las dos se medían mal:
  *   · al CAMBIAR de vista, la saliente se desmonta, la página encoge y el navegador te baja el
@@ -271,28 +273,38 @@ export const useUiStore = defineStore('ui', {
     // Guarda la posición actual EN la entrada de historial actual (sin crear una nueva).
     _stampScroll() {
       if (_stampFrozen) return
+      const st = history.state || this.snapshot()
+      const key = viewMemoryKey(st)
+      const card = document.activeElement?.closest?.('[data-grid-key]')?.dataset.gridKey
+      viewPositions.set(key, { scroll: window.scrollY, card: card || viewPositions.get(key)?.card })
       try { history.replaceState({ ...(history.state || {}), scroll: window.scrollY }, '') } catch {}
     },
 
     /* Devuelve la página a `y` tras un atrás/adelante. El contenido de la vista llega por fetch,
      * así que en el primer frame la página aún no tiene altura y un scrollTo() se queda corto:
      * reintenta hasta llegar (o rendirse).
-     * 12 frames (~200 ms) cubre las cargas normales; si una vista tarda más, aterrizas
+     * 90 frames (~1,5 s) cubre las cargas normales; si una vista tarda más, aterrizas
      * arriba — observar el resize del documento no compensa la complejidad. */
     _restoreScroll(y) {
+      const seq = ++_restoreSeq
+      const key = viewMemoryKey(this.snapshot())
       // Volver a una entrada sellada ARRIBA es una posición como cualquier otra, no un "no hacer
       // nada": salir del Inicio a media página y darle a "adelante" te dejaba la ficha nueva
-      // abierta a 438 px de scroll, con el hero cortado. Sin bucle de reintento porque el 0 no
-      // depende de que el contenido haya cargado.
-      if (!y) { window.scrollTo({ top: 0, behavior: 'instant' }); return }
+      // abierta a 438 px de scroll, con el hero cortado.
       _freezeStamp(2000)                                // cubre el bucle entero de reintentos
       let tries = 90                                    // ~1,5 s: cubre la carga de una biblioteca
       const tick = () => {
+        if (seq !== _restoreSeq || key !== viewMemoryKey(this.snapshot())) return
         // `behavior:'instant'` explícito: restaurar una posición NUNCA debe animarse (se ve como
         // un salto raro) y, si alguien vuelve a poner scroll suave más arriba, una animación
         // pelearía con este bucle — que relanzaría el scrollTo a media animación sin llegar nunca.
         window.scrollTo({ top: y, behavior: 'instant' })
         if (--tries > 0 && Math.abs(window.scrollY - y) > 2) { requestAnimationFrame(tick); return }
+        const card = viewPositions.get(key)?.card
+        if (card && document.activeElement === document.body) {
+          const target = [...document.querySelectorAll('[data-grid-key]')].find(el => el.dataset.gridKey === card)
+          if (target) { marcarTarjeta(card); target.focus({ preventScroll: true }) }
+        }
         // Se suelta 200 ms después: el último scrollTo aún tiene su evento en cola, y sellarlo
         // sería justo el sello malo que la congelación existe para evitar.
         _freezeStamp(200)
@@ -377,7 +389,7 @@ export const useUiStore = defineStore('ui', {
       this._stampScroll()
       this._histState('pushState')
       this.persist()
-      window.scrollTo({ top: 0, behavior: 'instant' })
+      this._restoreScroll(viewPositions.get(viewMemoryKey(this.snapshot()))?.scroll || 0)
     },
     // Replace the current entry in place (state changed but it's not a new "page").
     replaceNav() {
