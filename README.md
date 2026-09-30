@@ -94,7 +94,8 @@ opcionales; diagnóstico de biblioteca y copias de seguridad del perfil.
 
 Capturas nuevas del **30 de septiembre de 2026**, tomadas de la interfaz real
 servida por el backend local. No son renders ni maquetas. Muestran la interfaz
-Vue compartida; no se presentan como capturas del vídeo libmpv ni de Android.
+Vue compartida, excepto la imagen del reproductor, capturada directamente de la
+ventana nativa Windows durante la reproducción. No incluyen capturas de Android.
 La biblioteca oculta estaba desactivada y la ruta de exportación se ocultó en
 la captura correspondiente.
 
@@ -124,6 +125,14 @@ El estado de visionado y los archivos disponibles son conceptos separados.
 Cada episodio reúne su imagen, progreso y acciones de reproducción o descarga.
 
 ![Ficha de anime con episodios y miniaturas persistidas](docs/img/current/anime-detail.webp)
+
+### Reproductor nativo de PC
+
+Vídeo real en la ventana Windows con libmpv, capturado durante la reproducción
+sin pausarla. Los controles reúnen posición, saltos, volumen, subtítulos,
+Anime4K y acceso a episodios. En esta captura está seleccionado el perfil H.
+
+![Reproductor nativo Windows con vídeo, controles, subtítulos y Anime4K H](docs/img/current/native-player.webp)
 
 ### Calendario de estrenos
 

@@ -35,11 +35,11 @@ def main():
             checked += 1
     ET.parse(ROOT / 'docs/img/banner.svg')
     screenshots = list((ROOT / 'docs/img/current').glob('*.webp'))
-    assert len(screenshots) == 7, 'Expected seven reviewed screenshots'
+    assert len(screenshots) == 8, 'Expected eight reviewed screenshots'
     for path in screenshots:
         raw = path.read_bytes()
         assert raw[:4] == b'RIFF' and raw[8:12] == b'WEBP', f'Invalid WebP: {path.name}'
-    print(f'OK: {len(FILES)} documents, {checked} local references, seven WebP screenshots and SVG banner')
+    print(f'OK: {len(FILES)} documents, {checked} local references, eight WebP screenshots and SVG banner')
 
 if __name__ == '__main__':
     main()
