@@ -1,140 +1,132 @@
-# Instalación
+# Instalación y configuración del motor
 
-Guía paso a paso para clonar y correr el proyecto desde cero en Windows (WSL2),
-Linux o macOS.
+Esta guía describe el backend Flask y la interfaz Vue actuales. Para la ventana
+Windows con libmpv integrado, consulta [Instalación de escritorio](INSTALL_DESKTOP.md).
+No confundir el motor con la aplicación nativa: abrir el puerto 5101 en un navegador
+no proporciona el mismo reproductor.
 
-## 1. Requisitos del sistema
+## Requisitos
 
-| Componente | Necesario para | Notas |
-|---|---|---|
-| Python 3.10+ | Backend Flask | `python3 --version` |
-| Node + pnpm | Compilar el frontend | `npm install -g pnpm`; opcional si usás `/legacy` |
-| GPU NVIDIA + driver + CUDA | Escalado AI | **Requisito duro** — no hay fallback a CPU/AMD/Apple Silicon |
-| Java 21+ | Suwayomi (multi-fuente, opcional) | `java --version` |
-| ffmpeg + ffprobe | Sincronización de subtítulos (Anime Studio) | |
-| mkvmerge (MKVToolNix) | Inyectar subtítulos en `.mkv` | **No usar ffmpeg** para esto — omite el cue index y MPV no lee todos los paquetes |
-| mpv | Reproducir anime con subtítulos | |
-| qBittorrent | Descargar torrents (Anime Studio) | WebUI debe estar accesible en `:8080` |
-| Ollama (opcional) | Traducción de subtítulos local | Alternativa/fallback: Gemini API |
+- Python: las dependencias actuales necesitan al menos **3.11** (`numpy==2.4.3`).
+  El entorno de desarrollo y el CI utilizan **3.14**; no se afirma aquí que cada
+  versión intermedia haya sido validada.
+- Node: Vite 8 declara **20.19+ o 22.12+**. Usa pnpm y el lockfile del frontend.
+- Git y acceso al repositorio, actualmente privado.
+- Linux/WSL para los comandos de esta guía.
 
-`start_server.sh` corre un preflight check al arrancar y avisa (sin bloquear) qué
-falta — cada herramienta solo rompe la función específica que la usa, no la app entera.
+Herramientas adicionales según lo que uses:
 
-### Por sistema operativo
-
-**Windows (WSL2, recomendado) / Linux:**
-```bash
-sudo apt update
-sudo apt install -y ffmpeg mkvtoolnix mpv openjdk-21-jre-headless qbittorrent-nox
-```
-
-**macOS (Homebrew):**
-```bash
-brew install ffmpeg mkvtoolnix mpv openjdk@21 qbittorrent
-```
-
-### CUDA / PyTorch
-
-Instalá el driver NVIDIA y el toolkit CUDA para tu sistema primero. Luego instalá
-`torch`/`torchvision` desde el índice de PyTorch (no PyPI normal) con la build que
-coincida con tu CUDA:
-
-```bash
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
-```
-
-Verificá con:
-```bash
-python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
-```
-
-## 2. Clonar e instalar dependencias Python
-
-```bash
-git clone <tu-fork-o-este-repo>
-cd manga-upscaler
-python3 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu130
-pip install -r requirements.txt
-playwright install chromium      # descarga el navegador headless que usa playwright
-```
-
-## 3. Compilar el frontend
-
-```bash
-cd frontend
-pnpm install
-pnpm build      # genera frontend/dist/ — Flask lo sirve en /
-cd ..
-```
-
-Si no tenés Node/pnpm, `start_server.sh` sirve automáticamente la UI antigua en
-`/legacy` (sin build step, funciona igual pero con menos pulido visual).
-
-## 4. Suwayomi (multi-fuente, opcional)
-
-```bash
-mkdir -p suwayomi
-wget -O suwayomi/Suwayomi-Server.jar \
-  "$(curl -s https://api.github.com/repos/Suwayomi/Suwayomi-Server/releases/latest \
-     | grep -oP '"browser_download_url":\s*"\K[^"]+\.jar')"
-```
-
-O descargalo manualmente desde
-[github.com/Suwayomi/Suwayomi-Server/releases](https://github.com/Suwayomi/Suwayomi-Server/releases)
-(el `.jar` standalone, no el instalador) y colocalo en `suwayomi/Suwayomi-Server.jar`.
-
-`suwayomi/start.sh` lo arranca en `127.0.0.1:4567`. En Linux sin entorno gráfico
-necesita `xvfb-run` (WebView embebido) — `sudo apt install xvfb` si hace falta;
-en Windows/WSL-con-X o macOS no es necesario.
-
-Una vez arrancado, abrí `http://localhost:4567` e instalá las extensiones
-(fuentes) que quieras desde la WebUI de Suwayomi.
-
-## 5. Modelos de escalado AI ("pon tu modelo")
-
-El escalador no trae pesos incluidos (son binarios pesados, no van en git).
-Ver **[docs/MODELS.md](MODELS.md)** para:
-- dónde descargar los modelos por defecto (eula-digimanga, MangaJaNai),
-- cómo agregar cualquier otro modelo compatible con [spandrel](https://github.com/chaiNNer-org/spandrel),
-- el formato de `models/registry.json`.
-
-## 6. Configurar secretos (`.env`)
-
-```bash
-cp .env.example .env
-```
-
-Editá `.env` y completá lo que vayas a usar — todo es opcional excepto lo que
-quieras activar:
-
-| Variable(s) | De dónde sacarlas |
+| Herramienta | Función |
 |---|---|
-| `SECRET_KEY` | `python -c "import secrets; print(secrets.token_hex(32))"` |
-| `MANGADEX_CLIENT_ID/SECRET/USERNAME/PASSWORD` | [mangadex.org](https://mangadex.org) → Settings → API Clients |
-| `TMDB_API_KEY` | [themoviedb.org](https://www.themoviedb.org/settings/api) (gratis) — opcional, mejora los banners de anime |
-| `GEMINI_API_KEY` | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) — fallback de traducción de subtítulos |
-| `JIMAKU_API_KEY` / `OPENSUBTITLES_*` / `SUBDL_API_KEY` | fuentes de subtítulos opcionales |
-| `OLLAMA_MODEL` | si usás Ollama local para traducir, el modelo que tengas descargado (`ollama pull qwen2.5:14b`) |
+| NVIDIA + PyTorch CUDA + modelos | Escalado IA de manga y procesamiento GPU |
+| ffmpeg / ffprobe | Vídeo, extracción e información técnica |
+| MKVToolNix (`mkvmerge`) | Inyección de subtítulos en MKV |
+| ffsubsync | Sincronización de subtítulos |
+| Ollama + un modelo descargado | Traducción local de subtítulos |
+| qBittorrent con WebUI | Descargas de torrents |
+| Java + Suwayomi | Fuentes de manga adicionales |
+| `bsdtar` | Lectura de RAR/CBR |
+| Sonarr, Radarr, Prowlarr | Integración de Cine |
 
-`.env` está en `.gitignore` — nunca se sube. `MANGA_DIR`/`UPSCALED_DIR`/`MODELS_DIR`
-no necesitan configurarse: por defecto viven en `data/` y `models/` dentro del repo.
+Instala las herramientas del sistema por los medios de tu distribución. En WSL,
+el driver NVIDIA es el de Windows: no instales un driver Linux del kernel para
+reemplazarlo. No necesitas CUDA para todas las funciones de biblioteca o lectura.
 
-## 7. Arrancar
+## Preparar el checkout
 
 ```bash
-./start_server.sh        # Linux/WSL/macOS
-./start_server.ps1       # Windows PowerShell nativo (sin WSL)
+git clone https://github.com/RoierOc/animanga-studio.git
+cd animanga-studio
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+pnpm --dir frontend install --frozen-lockfile
+pnpm --dir frontend build
+bash scripts/init-env.sh
 ```
 
-Abrí `http://localhost:5101`.
+El script de configuración crea `.env` si falta y genera `SECRET_KEY` si está
+vacía; no sobrescribe una configuración existente. `frontend/dist/` es regenerable
+y no viene en Git. No utilices `/legacy` como alternativa equivalente a la UI actual.
 
-Para detener todo: `./stop.sh`.
+## Habilitar el escalado GPU
 
-### Windows con WSL2 (auto-arranque al iniciar sesión)
+`requirements.txt` fija las versiones de PyTorch y torchvision. El flujo WSL del
+repositorio utiliza el índice CUDA 13.0; si tu instalación requiere otra build,
+ajusta la selección a tu driver y a esas versiones, no cambies paquetes a ciegas.
 
-`start_windows.bat` lanza `start_server.sh` dentro de WSL desde un doble-click o
-acceso directo en `shell:startup`. **Editá la ruta dentro del `.bat`** (`cd
-/path/to/your/manga-upscaler`) para que apunte a donde clonaste el repo dentro
-de tu WSL — los comentarios del archivo explican cómo obtenerla (`pwd`).
+```bash
+source .venv/bin/activate
+python -m pip install --upgrade --force-reinstall \
+  torch==2.11.0 torchvision==0.26.0 \
+  --index-url https://download.pytorch.org/whl/cu130
+python -c 'import torch; print("CUDA:", torch.cuda.is_available()); print("GPU:", torch.cuda.get_device_name(0) if torch.cuda.is_available() else "no disponible")'
+```
+
+Este paso es para una instalación que necesite habilitar CUDA; no hace falta
+reinstalar una build funcional. Coloca después los pesos indicados en
+[MODELS.md](MODELS.md). `scripts/fetch-models.sh` usa el registro y URLs opcionales:
+puede informar de modelos ausentes sin descargarlos ni fallar.
+
+## Fuentes y servicios opcionales
+
+```bash
+bash scripts/fetch-suwayomi.sh
+python -m playwright install chromium
+```
+
+Suwayomi utiliza Java y se inicia bajo demanda al entrar a Fuentes. Instala y
+configura las extensiones que quieras utilizar; descargar su runtime no incorpora
+automáticamente todas las fuentes. Su WebUI local habitual es `127.0.0.1:4567`.
+Playwright instala el navegador empleado por las herramientas que lo requieren;
+no es el reproductor principal de AniManga Studio.
+
+Para qBittorrent, habilita su WebUI y configura en Ajustes la dirección y las
+credenciales que correspondan. Tener abierta su ventana no garantiza que la API
+sea accesible desde WSL. La dirección habitual es `http://127.0.0.1:8080`.
+
+Para traducir subtítulos necesitas un Ollama accesible y el modelo configurado en
+`OLLAMA_MODEL` (por defecto `qwen2.5:14b`). **No hay fallback actual a Gemini.**
+Comprueba los recursos necesarios para el modelo antes de ejecutar una traducción.
+
+Para Cine, sigue [SERVARR.md](SERVARR.md). Para Android, [ANDROID.md](ANDROID.md).
+
+## Arrancar y comprobar
+
+```bash
+./start_server.sh
+curl --fail http://127.0.0.1:5101/health
+```
+
+Abre `http://127.0.0.1:5101`. El script comprueba herramientas, evita instancias
+duplicadas y normalmente se desacopla de la terminal. Informa de su PID y de
+`/tmp/manga_server.log`; conserva esa información para detener la instancia exacta
+que has iniciado. Evita comandos de eliminación de procesos por patrones amplios.
+
+Para desarrollo del frontend, con el backend disponible:
+
+```bash
+pnpm --dir frontend dev
+```
+
+Vite imprime su dirección. Para servir cambios sin Vite, vuelve a ejecutar
+`pnpm --dir frontend build`.
+
+## Configuración y datos
+
+Consulta `.env.example` y Ajustes. Las claves de integraciones pueden guardarse
+en la configuración local; no todas viven exclusivamente en `.env`.
+`MANGA_DIR`, `UPSCALED_DIR` y `MODELS_DIR` permiten cambiar las ubicaciones;
+sus valores predeterminados se resuelven desde el proyecto en `src/api/runtime.py`.
+
+No versiones `.env`, `data/`, pesos, credenciales ni carpetas personales. Una copia
+del código no incluye tus datos ni es una copia de seguridad completa de la biblioteca.
+El acceso remoto requiere autenticación; no expongas el servicio a Internet.
+
+## Alcance de la validación
+
+El código y los scripts se revisaron para esta guía el 30-sep-2026. Se verificó la
+interfaz de una instalación existente, no una instalación limpia desde cero.
+La preparación Windows sin WSL y la compatibilidad de todas las distribuciones
+siguen siendo validaciones separadas, no consecuencias de compilar el frontend.

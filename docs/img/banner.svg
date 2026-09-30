@@ -28,7 +28,7 @@
   <line x1="120" y1="124" x2="132" y2="124" stroke="#11214a" stroke-width="1.5"/>
 
   <text x="184" y="120" font-family="Verdana, Arial, sans-serif" font-size="54" font-weight="700" fill="url(#title)">AniManga Studio</text>
-  <text x="184" y="160" font-family="Verdana, Arial, sans-serif" font-size="20" fill="#9fb6e8">Manga manager · AI upscaler · Anime tracker — self-hosted, 100% local</text>
+  <text x="184" y="160" font-family="Verdana, Arial, sans-serif" font-size="20" fill="#9fb6e8">Manga · Anime · Series y películas — tu biblioteca, tu estudio</text>
 
   <g fill="#4d8dff" fill-opacity="0.8" font-family="Verdana, Arial, sans-serif" font-size="14">
     <text x="184" y="195">MangaDex</text>
@@ -39,6 +39,6 @@
     <text x="585" y="195">·</text>
     <text x="600" y="195">AniList</text>
     <text x="675" y="195">·</text>
-    <text x="690" y="195">qBittorrent + MPV</text>
+    <text x="690" y="195">libmpv + Anime4K · Android</text>
   </g>
 </svg>
