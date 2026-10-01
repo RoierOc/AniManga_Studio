@@ -57,8 +57,8 @@ def _services_snapshot() -> list:
     (versión, error) los da cada módulo en su propio `/status`.
 
     Hasta ahora sólo Suwayomi tenía dónde verse: que Sonarr, Radarr, Prowlarr o qBittorrent
-    estuvieran caídos se notaba únicamente por una lista vacía, que es la regla del repo al revés
-    ("falló" ≠ "no había"). Ver el constraint 3 de `docs/dev/PENDING_BUGS.md`.
+    estuvieran caídos se notaba únicamente por una lista vacía. Un fallo de conexión debe distinguirse
+    de una respuesta vacía legítima.
     """
     import socket
     from urllib.parse import urlparse

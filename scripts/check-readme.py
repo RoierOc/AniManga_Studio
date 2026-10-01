@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ('README.md', 'docs/INSTALL.md', 'docs/INSTALL_DESKTOP.md',
-         'docs/ANDROID.md', 'docs/img/current/README.md')
+         'docs/ANDROID.md')
 
 def anchors(text):
     found = set()
@@ -18,6 +18,9 @@ def anchors(text):
 
 def main():
     checked = 0
+    for internal in ('docs/dev', 'docs/superpowers/plans',
+                     'docs/plan_tauri_desktop.md', 'docs/img/current/README.md'):
+        assert not (ROOT / internal).exists(), f'Internal agent document remains: {internal}'
     for name in FILES:
         path = ROOT / name
         content = path.read_text(encoding='utf-8')
@@ -39,7 +42,7 @@ def main():
     for path in screenshots:
         raw = path.read_bytes()
         assert raw[:4] == b'RIFF' and raw[8:12] == b'WEBP', f'Invalid WebP: {path.name}'
-    print(f'OK: {len(FILES)} documents, {checked} local references, eight WebP screenshots and SVG banner')
+    print(f'OK: {len(FILES)} guides, {checked} local references, eight WebP screenshots, no internal logs and SVG banner')
 
 if __name__ == '__main__':
     main()

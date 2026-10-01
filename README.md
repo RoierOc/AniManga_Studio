@@ -92,12 +92,10 @@ opcionales; diagnóstico de biblioteca y copias de seguridad del perfil.
 
 ## Recorrido visual
 
-Capturas nuevas del **30 de septiembre de 2026**, tomadas de la interfaz real
-servida por el backend local. No son renders ni maquetas. Muestran la interfaz
-Vue compartida, excepto la imagen del reproductor, capturada directamente de la
-ventana nativa Windows durante la reproducción. No incluyen capturas de Android.
-La biblioteca oculta estaba desactivada y la ruta de exportación se ocultó en
-la captura correspondiente.
+Capturas de la interfaz real, no renders ni maquetas. La ficha de Attack on Titan
+usa un estado neutral de muestra y no expone progreso personal de la biblioteca.
+El reproductor se capturó directamente de la ventana nativa Windows durante la
+reproducción. No incluyen capturas de Android.
 
 ### Biblioteca de manga
 
@@ -124,7 +122,7 @@ Obras destacadas, continuar viendo y biblioteca con filtros de estado y género.
 El estado de visionado y los archivos disponibles son conceptos separados.
 Cada episodio reúne su imagen, progreso y acciones de reproducción o descarga.
 
-![Ficha de anime con episodios y miniaturas persistidas](docs/img/current/anime-detail.webp)
+![Ficha de Attack on Titan con sus episodios y miniaturas](docs/img/current/anime-detail.webp)
 
 ### Reproductor nativo de PC
 
@@ -271,7 +269,7 @@ animanga-studio/
 ├── tests/               # Regresiones del backend
 ├── suwayomi/            # Integración de fuentes de manga
 ├── servarr/             # Integración de series y películas
-├── docs/                # Guías de uso, instalación e historial técnico
+├── docs/                # Guías de uso, instalación e integraciones
 └── data/                # Datos locales generados; fuera de Git
 ```
 
@@ -285,9 +283,6 @@ principal ni el punto de partida para nuevas funciones.
 - [Modelos de escalado](docs/MODELS.md).
 - [Series y películas: Servarr](docs/SERVARR.md).
 - [Android, independencia y acceso al PC](docs/ANDROID.md).
-- [Procedencia y mantenimiento de las capturas](docs/img/current/README.md).
-- [Estado técnico y decisiones históricas](docs/dev/PROJECT_STATE.md).
-- [Pendientes y validaciones](docs/dev/PENDING_BUGS.md).
 
 ## Licencia y contenido
 

@@ -61,8 +61,8 @@ useModal(() => !!m.value, () => store.subTrackModal = null, modalEl)
             <section v-if="m.tracks.length">
               <h3 class="sec"><Icon name="spark" :size="13" /> Traducir pista incrustada (IA)</h3>
               <!-- OJO: se manda `sub_index` (índice ENTRE SUBTÍTULOS: 0,1,2…), NO `index` (índice
-                   absoluto del stream en el MKV: 2,3,4…). Mandar `index` hacía que pedir la pista
-                   inglesa (index 2) tradujera la ÁRABE (sub_index 2) — ver PENDING_BUGS. -->
+                   absoluto del stream en el MKV: 2,3,4…). Mandar `index` confundía los dos espacios
+                   y podía traducir una pista de otro idioma con el mismo número. -->
               <button v-for="t in m.tracks" :key="'t' + t.sub_index" class="trk"
                       @click="m.onPick ? m.onPick({ kind: 'track', sub_index: t.sub_index, language: t.language }) : store.startTranslate(m.anime, m.ep, t.sub_index)">
                 <span class="trk__lang">{{ (t.language || 'und').toUpperCase().slice(0,3) }}</span>

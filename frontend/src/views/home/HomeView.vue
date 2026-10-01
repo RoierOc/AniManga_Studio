@@ -1,13 +1,6 @@
 <script setup>
-/* Portada — la puerta de entrada de la app.
- *
- * Antes se aterrizaba en `library` (una rejilla de manga) y ninguna vista cruzaba dominios.
- * Esto es lo aprobado en la maqueta `docs/dev/mockups/b1-portada/`: UNA pieza de arte a sangre
- * con UNA acción, y debajo una sola fila «Continuar» que mezcla anime, manga, cine y novelas.
- *
- * ⚠️ La vista «Hoy» de julio 2026 se rechazó por FEA, y era un panel de secciones apiladas. La
- * diferencia deliberada: esto no resume la app, ofrece lo siguiente que ibas a hacer.
- */
+/* Portada: una obra destacada y una fila «Continuar» que mezcla anime, manga,
+ * cine y novelas para llevar directamente a la siguiente acción. */
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import { useHomeStore, _hace } from '@/stores/home'
 import { useUiStore } from '@/stores/ui'

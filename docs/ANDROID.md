@@ -43,14 +43,7 @@ Para uso fuera de casa, utiliza una red privada como Tailscale o WireGuard.
 WebDAV sigue siendo una integración disponible para lectores externos, no la
 descripción de la aplicación Android propia.
 
-## Procedencia y validación
+## Instalación Android
 
-Esta descripción se contrastó el 30-sep-2026 con el checkout Android y sus
-documentos, además de los contratos del backend. El historial de aquel proyecto
-registra pruebas en Xiaomi Pad 6; no se ejecutó una nueva prueba ni
-se instaló un APK durante la renovación del README de PC.
-
-No se incluyen capturas Android nuevas hasta poder obtenerlas y revisarlas en un
-dispositivo real. [ANDROID_MIGRATION.md](dev/ANDROID_MIGRATION.md) es el plan
-histórico: incluye decisiones y pendientes que no describen por sí solos el
-estado implementado. Para construir el APK, consulta el README del proyecto Android.
+Las instrucciones para compilar e instalar la app se mantienen junto al código
+Android, en el README de su repositorio independiente.

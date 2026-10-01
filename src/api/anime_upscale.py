@@ -56,7 +56,7 @@ anime_upscale_bp = Blueprint('anime_upscale', __name__)
 # una serie que vas a ver esta noche, esperar 11 minutos por episodio no compensa.
 #
 # `min_por_min` = minutos de horno por minuto de vídeo. MEDIDO en la RTX 5070 con la GPU libre y el
-# emulador cerrado, las tres seguidas sobre el mismo clip (ver PROJECT_STATE). De ahí sale el tiempo
+# emulador cerrado, las tres seguidas sobre el mismo clip. De ahí sale el tiempo
 # que la interfaz enseña ANTES de encolar: un número inventado es peor que ninguno.
 #
 # ⚠️ Y va CALIBRADO con un episodio entero, no con el clip. La «rápida» medía 3,4 min extrapolando
