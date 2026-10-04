@@ -39,7 +39,7 @@ try:
 except Exception:
     pass
 
-from api.runtime import MANGA_DIR, UPSCALED_DIR, HIDDEN_MANGA_DIR, HIDDEN_UPSCALED_DIR, manga_dir, upscaled_dir
+from api.runtime import MANGA_DIR, UPSCALED_DIR, HIDDEN_MANGA_DIR, HIDDEN_UPSCALED_DIR
 
 os.makedirs(str(MANGA_DIR), exist_ok=True)
 os.makedirs(str(UPSCALED_DIR), exist_ok=True)
@@ -49,7 +49,7 @@ os.makedirs(str(UPSCALED_DIR), exist_ok=True)
 os.makedirs(str(HIDDEN_MANGA_DIR), exist_ok=True)
 os.makedirs(str(HIDDEN_UPSCALED_DIR), exist_ok=True)
 
-from flask import Flask, render_template, jsonify, request, send_from_directory, send_file
+from flask import Flask, request, send_from_directory, send_file
 from flask_compress import Compress
 
 app = Flask(__name__,
@@ -185,7 +185,6 @@ def _warm_anime_library():
         app.test_client().get('/api/anime/library')
 
 import threading as _t
-_t.Thread(target=_warm_anime_library, daemon=True).start()
 
 
 # ── Ciclo de vida (app de escritorio / sidecar) ───────────────────────────────
@@ -406,6 +405,9 @@ def serve_upload(filename):
     # Escalada si existe; si no, el original.
     p = _find_page(filename, prefer_upscaled=True)
     return _serve_page_file(p.parent, p.name) if p else ('Not found', 404)
+
+# Flask debe terminar de registrar las rutas antes de atender el precalentamiento.
+_t.Thread(target=_warm_anime_library, daemon=True).start()
 
 if __name__ == '__main__':
     print("🚀 Manga Upscaler Pro - http://localhost:5101")

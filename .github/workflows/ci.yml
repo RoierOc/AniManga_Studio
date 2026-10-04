@@ -1,5 +1,8 @@
 name: CI
 
+permissions:
+  contents: read
+
 # Fase 0 — red de seguridad. Corre lo que hoy se corre a mano.
 on:
   push:
@@ -20,10 +23,11 @@ jobs:
           # o de stdlib sólo aparece en uno de los dos lados.
           python-version: "3.14"
 
-      - name: Instalar ruff + pytest
-        # pydantic: los contratos de la frontera (api/contracts.py) se importan al cargar
-        # los blueprints anime/transplant, que algún test importa. Es ligero (wheel puro).
-        run: pip install ruff pytest pydantic
+      - name: Instalar dependencias de pruebas
+        run: python -m pip install -r requirements-ci.txt
+
+      - name: Comprobar documentación
+        run: python scripts/check-readme.py
 
       # --- Lint SOLO sobre archivos Python cambiados (gate baseline) ---
       # La deuda heredada (360 blind-excepts) NO bloquea: solo el código nuevo/modificado
@@ -51,10 +55,9 @@ jobs:
           fi
 
       # --- Tests de backend (costuras con historial de fallo silencioso) ---
-      # Nota: los tests actuales no requieren torch/cv2 (aíslan por costura). Si un test
-      # nuevo los necesitara, se instalarían aquí explícitamente.
+      # Los tests usan OpenCV en CPU y aíslan la inferencia: no necesitan torch ni pesos.
       - name: Pytest
-        run: pytest tests/ -q
+        run: python -m pytest tests/ -q
 
   frontend:
     runs-on: ubuntu-latest
