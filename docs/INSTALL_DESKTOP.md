@@ -77,27 +77,18 @@ No se afirma que esta ruta reproduzca las capacidades del shell libmpv principal
 ### Windows sin WSL
 
 `desktop/install.ps1` prepara Python, frontend y **Tauri**, no `desktop/native/`.
-Su propia documentación lo marca pendiente de validación completa. No se presenta
-como reemplazo probado de la combinación shell Windows + motor WSL.
+Es una ruta alternativa y no utiliza el reproductor libmpv del shell principal.
 
 ### macOS
 
-Existen ramas multiplataforma en servicios y scripts, pero eso no equivale a una
-distribución de escritorio validada con paridad de funciones. No se promete soporte
-nativo equivalente en esta guía.
+El shell principal está dirigido a Windows. Los servicios incluyen código
+multiplataforma, pero no hay una distribución de escritorio macOS equivalente.
 
 ## Actualización y datos
 
 Actualiza el checkout que usa la aplicación, recompila el frontend y reconstruye
-el shell si cambió Rust. En un checkout con historia reescrita, no mezcles ramas
-ni tags antiguos mediante un pull: parte de la historia limpia publicada.
+el shell si cambió Rust.
 
 Antes de cambiar la instalación, respalda tus bibliotecas y configuración local.
 No copies un venv entre Windows y Linux ni entre rutas como si fuera portable.
 `data/`, las claves y los modelos no llegan con una clonación de Git.
-
-## Validación
-
-El shell Windows y el reproductor son la ruta de uso actual del proyecto. El
-constructor se verificó contra su código el 30-sep-2026; no se construyó otro
-instalador ni se hizo una instalación desde cero durante esta renovación del README.

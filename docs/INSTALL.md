@@ -123,10 +123,3 @@ sus valores predeterminados se resuelven desde el proyecto en `src/api/runtime.p
 No versiones `.env`, `data/`, pesos, credenciales ni carpetas personales. Una copia
 del código no incluye tus datos ni es una copia de seguridad completa de la biblioteca.
 El acceso remoto requiere autenticación; no expongas el servicio a Internet.
-
-## Alcance de la validación
-
-El código y los scripts se revisaron para esta guía el 30-sep-2026. Se verificó la
-interfaz de una instalación existente, no una instalación limpia desde cero.
-La preparación Windows sin WSL y la compatibilidad de todas las distribuciones
-siguen siendo validaciones separadas, no consecuencias de compilar el frontend.

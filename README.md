@@ -97,12 +97,9 @@ opcionales; diagnóstico de biblioteca y copias de seguridad del perfil.
 
 ## Recorrido visual
 
-Capturas de la interfaz real, no renders ni maquetas. La ficha de Attack on Titan
-usa un estado neutral de muestra y no expone progreso personal de la biblioteca.
-El reproductor se capturó directamente de la ventana nativa Windows en el
-fotograma elegido por el usuario, sin cambiar la reproducción. El calendario
-muestra el catálogo público en la vista real,
-sin biblioteca ni historial personales. No incluyen capturas de Android.
+Un recorrido por la biblioteca, la preparación de tomos, el reproductor y los
+estrenos. Cada área reúne las herramientas que necesitas para organizar,
+leer y ver tu colección.
 
 ### Biblioteca de manga
 
@@ -146,10 +143,9 @@ Cada episodio reúne su imagen, progreso y acciones de reproducción o descarga.
 
 ### Reproductor nativo de PC
 
-Fotograma de *Orb: On the Movements of the Earth* en la ventana Windows con
-libmpv, capturado en el punto elegido por el usuario. Los controles reúnen
-posición, saltos, volumen, subtítulos, Anime4K y acceso a episodios.
-En esta captura está seleccionado el perfil Máxima H.
+Reproduce tus episodios con libmpv integrado. Selecciona audio y subtítulos,
+ajusta el volumen, salta la introducción y cambia de episodio desde los controles.
+Los perfiles Anime4K permiten mejorar la imagen en tiempo real.
 
 ![Reproductor nativo Windows mostrando Orb, subtítulos, controles y Anime4K Máxima H](docs/img/current/native-player.webp)
 
@@ -183,8 +179,7 @@ repositorio; no es una versión de la web empaquetada.
 
 El escalado de manga con IA y las tareas pesadas de traducción permanecen en el
 PC. El móvil consume sus resultados. Consulta [la separación PC/Android y el
-acceso remoto](docs/ANDROID.md); el antiguo plan de migración es documentación
-histórica, no una lista fiable del estado actual.
+acceso remoto](docs/ANDROID.md).
 
 ## Requisitos por función
 
@@ -209,8 +204,8 @@ la pila para empezar.
 ### Escritorio Windows: experiencia principal
 
 La ruta principal combina el **shell nativo de Windows** y el motor en **WSL2**.
-El repositorio contiene el constructor de `AniMangaStudio-Setup.exe`, pero no se
-promete aquí una descarga pública ni una instalación en un equipo nuevo ya validada.
+El repositorio incluye las herramientas para construir `AniMangaStudio-Setup.exe`
+y preparar las dependencias de escritorio.
 
 Para preparar el motor, compilar el shell y entender las alternativas, consulta
 [Instalación de escritorio](docs/INSTALL_DESKTOP.md).
@@ -262,10 +257,8 @@ red local, una VPN privada. **No abras el backend directamente a Internet.**
 - La opción de exportación denominada **CBR** actualmente escribe un contenedor
   ZIP con esa extensión, no un RAR auténtico. **Usa CBZ para interoperabilidad.**
   Esto no afecta a la lectura de CBR/RAR reales mediante `bsdtar`.
-- Los scripts Linux/Tauri y Windows sin WSL son rutas alternativas; no tienen
-  por ello la misma validación ni las mismas capacidades que el shell principal.
-- Las pruebas automatizadas no acreditan por sí solas una instalación nueva,
-  el rendimiento de una GPU ni la reproducción en cada dispositivo.
+- Los scripts Linux/Tauri y Windows sin WSL son rutas alternativas con
+  capacidades distintas del reproductor nativo principal.
 
 ## Desarrollo
 
