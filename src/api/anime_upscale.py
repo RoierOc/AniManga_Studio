@@ -360,7 +360,7 @@ def _bucle() -> None:
             if tid in _cancelados:
                 _pon(tid, estado='cancelado')
                 continue
-            # espera activa cada 5 s en vez de un candado compartido con upscale.py.
+            # Espera activa cada 5 s en vez de un candado compartido con upscale.py.
             # Si algún día hay más productores de trabajo GPU, sacar un semáforo a un módulo común.
             esperado = 0
             while _manga_ocupado() and tid not in _cancelados and esperado < 3600:

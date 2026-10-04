@@ -14,10 +14,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"      # raíz del repo (WSL)
 NATIVE_SRC="$ROOT/desktop/native"
 
-# Config de esta máquina (Fase 1). Fase 2 sustituye esto por detección/provisión.
-WIN_BUILD_DIR="${WIN_BUILD_DIR:-/mnt/c/Users/Example/animanga-native/native}"
-MPV_SOURCE_WIN="${MPV_SOURCE_WIN:-C:\\Users\\Example\\animanga-native\\libmpv}"
-LIBMPV_DIR="${LIBMPV_DIR:-/mnt/c/Users/Example/animanga-native/libmpv}"
+source "$ROOT/desktop/windows/build-paths.sh"
 DISTRO="${DISTRO:-${WSL_DISTRO_NAME:-archlinux}}"
 LINUX_PATH="${LINUX_PATH:-$ROOT}"
 APP_VERSION="${APP_VERSION:-0.1.0}"

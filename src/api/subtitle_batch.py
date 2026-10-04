@@ -5,7 +5,7 @@ Traducción/búsqueda de subtítulos POR LOTES — orquestador sobre el pipeline
 `subtitle.py` ya sabe hacerlo todo para un episodio (detectar pistas, buscar ES premade, traducir
 con IA, dejar el sidecar `.spa.ass` sin tocar el MKV). Este módulo NO reimplementa nada de eso:
 enumera episodios y aplica esas primitivas en serie. Va aparte porque `subtitle.py` ya pasa de
-2000 líneas (regla de documentación técnica: lo nuevo grande, en su módulo).
+2000 líneas; el procesamiento por lotes tiene su propio módulo.
 
 F1 (este commit): SOLO el escaneo de idiomas — el inventario por episodio que alimenta la tabla de
 la UI. El worker serial (start/status/cancel) llega en F2.

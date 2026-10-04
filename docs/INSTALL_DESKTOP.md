@@ -48,6 +48,7 @@ variables permiten indicar tu configuración:
 | `WIN_BUILD_DIR` | Carpeta de compilación Windows, expresada como ruta accesible desde WSL |
 | `MPV_SOURCE_WIN` | Ruta Windows de los recursos de desarrollo de libmpv |
 | `LIBMPV_DIR` | Carpeta accesible desde WSL que contiene `libmpv-2.dll` |
+| `WINDOWS_PROFILE` | Perfil Windows opcional; por defecto se detecta desde Windows |
 | `DISTRO` | Nombre de la distribución WSL que utilizará el shell |
 | `LINUX_PATH` | Ruta del checkout del motor dentro de esa distribución |
 | `APP_VERSION` | Versión que se incluye en el instalador |

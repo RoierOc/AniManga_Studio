@@ -3,14 +3,12 @@
 Reader API - Read manga chapters
 """
 
-from flask import Blueprint, jsonify, request, send_from_directory
+from flask import Blueprint, jsonify, request
 from pathlib import Path
-import json
-import random
 import time
 from decimal import Decimal, InvalidOperation
 
-from api.runtime import manga_dir, upscaled_dir, normalize_chapter, write_json_atomic
+from api.runtime import manga_dir, normalize_chapter, write_json_atomic
 
 
 def _chapter_prefix(chapter):
@@ -106,7 +104,7 @@ def _progress_read() -> dict:
 # Guardar la lápida DENTRO de la propia entrada (y no en un mapa aparte tipo `_deleted`) evita
 # inventar un espacio de nombres que podría chocar con una obra que se llame igual.
 #
-# la resolución es el `ts` de la OBRA, no el del capítulo — los marcados legados son
+# La resolución es el `ts` de la OBRA, no el del capítulo — los marcados legados son
 # `true` y no llevan hora propia. Basta para el caso real (desmarcar y volver a marcar), y si
 # algún día hiciera falta más fino, el sitio es guardar la hora en `read[cap]` en vez de `true`.
 

@@ -640,10 +640,12 @@ pub fn log_line(msg: &str) {
     let tx = LOG_TX.get_or_init(|| {
         let (tx, rx) = std::sync::mpsc::channel::<String>();
         std::thread::spawn(move || {
+            let log_dir = crate::paths::app_data_dir();
+            let _ = std::fs::create_dir_all(&log_dir);
             let Ok(mut f) = std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
-                .open(r"C:/Users/Example/AppData/Local/AniMangaStudio/ipc.log")
+                .open(log_dir.join("ipc.log"))
             else {
                 return;
             };
@@ -911,10 +913,10 @@ impl Player {
             // se desalinearía con la UI (justo el bug de .m2ts).
             let _ = init.set_property("sub-auto", "no");
             // Diagnóstico: log de mpv para ver resolución de render / scalers / hwdec.
-            let _ = init.set_property(
-                "log-file",
-                "C:/Users/Example/AppData/Local/AniMangaStudio/mpv.log",
-            );
+            let log_dir = crate::paths::app_data_dir();
+            let _ = std::fs::create_dir_all(&log_dir);
+            let log_file = log_dir.join("mpv.log");
+            let _ = init.set_property("log-file", log_file.to_string_lossy().as_ref());
             let _ = init.set_property("msg-level", "all=v");
             // Calidad del renderer — réplica exacta del mpv.conf del usuario
             // (sin estas opciones mpv escala en bilinear y la imagen se ve

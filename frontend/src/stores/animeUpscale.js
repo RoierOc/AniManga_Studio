@@ -4,8 +4,7 @@ import { useUiStore } from './ui'
 
 /* Hornear anime con Anime4K — la mitad de cliente de `api/anime_upscale.py`.
  *
- * Va en su propio store y no dentro de `anime.js` (2000 líneas) por la regla de documentación técnica: lo
- * nuevo, en su módulo.
+ * Va en su propio store para mantener el procesamiento separado de la biblioteca de anime.
  *
  * El sondeo se enciende SOLO mientras hay algo en marcha. Un `setInterval` permanente para una
  * cosa que se usa cuatro veces al mes es una petición cada 3 s durante toda la sesión.

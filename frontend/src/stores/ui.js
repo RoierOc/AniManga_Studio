@@ -283,7 +283,7 @@ export const useUiStore = defineStore('ui', {
     /* Devuelve la página a `y` tras un atrás/adelante. El contenido de la vista llega por fetch,
      * así que en el primer frame la página aún no tiene altura y un scrollTo() se queda corto:
      * reintenta hasta llegar (o rendirse).
-     * 90 frames (~1,5 s) cubre las cargas normales; si una vista tarda más, aterrizas
+     * 90 frames (~1,5 s) cubren las cargas normales; si una vista tarda más, aterrizas
      * arriba — observar el resize del documento no compensa la complejidad. */
     _restoreScroll(y) {
       const seq = ++_restoreSeq

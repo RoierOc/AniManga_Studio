@@ -17,10 +17,9 @@ def anchors(text):
 
 def main():
     checked = 0
-    for internal in ('docs/dev', 'docs/superpowers/plans',
-                     'docs/plan_tauri_desktop.md', 'docs/img/current/README.md',
-                     'documentación técnica', '.development/config.json'):
-        assert not (ROOT / internal).exists(), f'Internal agent document remains: {internal}'
+    for internal in ('docs/dev', 'docs/internal',
+                     'docs/plan_tauri_desktop.md', 'docs/img/current/README.md'):
+        assert not (ROOT / internal).exists(), f'Internal development document remains: {internal}'
     for name in FILES:
         path = ROOT / name
         content = path.read_text(encoding='utf-8')

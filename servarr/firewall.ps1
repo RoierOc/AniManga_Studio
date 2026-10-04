@@ -18,7 +18,7 @@
 param(
     [switch]$Remove,
     [string]$QbtPath = "C:\Program Files\qBittorrent\qbittorrent.exe",
-    # Tu LAN. Ethernet (192.0.2.32) y Wi-Fi (192.0.2.33) están las dos aquí dentro:
+    # Subred LAN de ejemplo: ajustarla a los adaptadores reales de la instalación.
     # cubrir la subred entera evita tener que perseguir cambios de IP por DHCP.
     [string]$LanSubnet = "192.168.0.0/24"
 )

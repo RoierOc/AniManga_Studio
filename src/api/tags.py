@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Etiquetas propias del usuario sobre obras (manga y anime).
 
-Módulo propio a propósito (regla de documentación técnica): estado nuevo + rutas nuevas = blueprint nuevo,
+Módulo propio: estado nuevo + rutas nuevas = blueprint nuevo,
 no engordar `library.py` ni `anime.py`.
 
 Modelo deliberadamente tonto: un único JSON `{kind: {id: [etiquetas]}}`. No hay tabla de

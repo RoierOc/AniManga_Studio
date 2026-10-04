@@ -13,6 +13,7 @@ use std::io::{Read, Write};
 use std::mem::size_of;
 use std::net::TcpStream;
 use std::os::windows::process::CommandExt;
+use std::os::windows::ffi::OsStrExt;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -84,6 +85,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 mod player;
+mod paths;
 use player::{Player, TIMER_RENDER};
 
 const BASE_HOST: &str = "127.0.0.1:5101";
@@ -711,10 +713,11 @@ fn create_environment() -> windows::core::Result<ICoreWebView2Environment> {
     let sink = out.clone();
     CreateCoreWebView2EnvironmentCompletedHandler::wait_for_async_operation(
         Box::new(move |handler| unsafe {
-            let userdata = w!("C:\\Users\\Example\\animanga-native\\wv2-userdata");
+            let userdata: Vec<u16> = paths::webview_data_dir()
+                .as_os_str().encode_wide().chain(Some(0)).collect();
             webview2_com::Microsoft::Web::WebView2::Win32::CreateCoreWebView2EnvironmentWithOptions(
                 PCWSTR::null(),
-                userdata,
+                PCWSTR(userdata.as_ptr()),
                 None,
                 &handler,
             )

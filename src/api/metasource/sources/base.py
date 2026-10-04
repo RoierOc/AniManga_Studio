@@ -5,7 +5,7 @@ Cada adapter expone:
     search(query: str, limit: int) -> list[dict]     # parciales normalizados (con id canónico)
     fetch(ext_id: str) -> dict | None                # parcial completo de UNA obra
 
-Reglas comunes a TODOS los adapters (documentación técnica · «falló ≠ vacío»):
+Reglas comunes a TODOS los adapters («falló ≠ vacío»):
   · Envuelven su red en try/except.
   · Excepción / HTTP no-ok  → `record_error('discovery', …)` y devuelven [] / None (fail-safe).
   · Respuesta vacía LEGÍTIMA (la fuente no tiene la obra) → devuelven [] / None SIN loguear.
@@ -22,7 +22,7 @@ from api.observability import record_error
 COMPONENT = "discovery"
 
 # Timing de rendimiento OPCIONAL: coste cero salvo que se active con la env. Una sola línea
-# por llamada (nunca por-resultado → no es bucle caliente). Ver documentación técnica «LEE los logs».
+# por llamada (nunca por resultado: no es un bucle caliente).
 _LOG_TIMING = os.getenv("DISCOVERY_LOG_TIMING", "0") == "1"
 
 

@@ -34,7 +34,7 @@ _ARCHIVE_EXTS = {'.cbz', '.cbr', '.zip', '.rar'}
 _IMAGE_EXTS   = {'.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif'}
 _MIME = {'.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
          '.webp': 'image/webp', '.gif': 'image/gif', '.avif': 'image/avif'}
-# one process-wide lock is enough for this single-user desktop state; use per-key or
+# One process-wide lock is enough for this single-user desktop state; use per-key or
 # cross-process locking only if concurrent server instances become a supported mode.
 _progress_lock = threading.Lock()
 

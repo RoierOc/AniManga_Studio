@@ -1,4 +1,3 @@
-from api.roots import series_dir, series_up_dir  # resuelve el DISCO de la obra
 """Fusión «lo que hay en disco» + «lo que sigues» — la vista completa de la Biblioteca.
 
 Esto vivía en el frontend (`views/LibraryView.vue::load()`): dos peticiones y ~60 líneas de
@@ -6,7 +5,7 @@ emparejamiento por id compuesto, por id y, en último término, por título en m
 correcto es el backend, donde ya viven `manga_identity.py` y `source_identity.py` — el navegador
 no tiene por qué saber cómo se decide que una carpeta y una entrada seguida son la misma obra.
 
-Módulo aparte a propósito: `library.py` ya pasa de 900 líneas (regla de documentación técnica).
+Módulo separado para mantener acotadas las responsabilidades de `library.py`.
 """
 from api.observability import record_error
 

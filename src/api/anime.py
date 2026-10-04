@@ -178,9 +178,8 @@ def _lib_key(lib: dict, al_id=None, mal_id=None, title: str = '') -> str:
 
 # ── Una serie, VARIAS carpetas ────────────────────────────────────────────────
 # ⚠️ `local_path` era UNA carpeta, y una serie se reparte entre discos con toda naturalidad:
-# basta con cambiar la carpeta de descargas a mitad de temporada. Medido: los episodios 1-7 de
-# «Class de 2-banme…» estaban en `C:\Users\Example\Downloads\…` y los 8-12 en `D:\…`; la entrada
-# apuntaba a la de D: y la app enseñaba SÓLO los nuevos, como si los viejos no existieran.
+# basta con cambiar la carpeta de descargas a mitad de temporada. Si la entrada apunta solo a
+# la carpeta nueva, los episodios de la carpeta anterior desaparecen de la vista.
 # `local_path` sigue siendo la carpeta principal (todo lo demás la usa); las otras van en
 # `local_paths` y se recorren siempre juntas.
 
@@ -2599,7 +2598,7 @@ def anime_airing_get():
         return jsonify(_fetch_airing(al_ids))
     except Exception as e:
         # 🔴 Aquí había un `except Exception: return jsonify({})` mudo, que es EXACTAMENTE el error
-        # que documentación técnica llama el más caro del proyecto: «falló» y «no había» devolviendo el mismo
+        # de confundir «falló» y «no había» devolviendo el mismo
         # valor. El carril «Emitido hoy» del móvil se quedaba vacío y decía «hoy no emite nada» con
         # la misma cara con la que diría «no pude preguntar a AniList» — y no aparecía ni en el log
         # ni en el contador de errores, así que desde fuera era indistinguible.

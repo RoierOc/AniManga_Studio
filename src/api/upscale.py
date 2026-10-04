@@ -154,7 +154,7 @@ _FULL_THROTTLE_MS = 0
 _gpu_throttle_ms = [GPU_THROTTLE_MS]   # mutable; worker reads this after each batch
 _gpu_tile_throttle_ms = [0]            # mutable; worker reads this between tiles
 
-# un único lock cubre modelo, throttling, worker y buffers por capítulo; separar
+# Un único lock cubre modelo, throttling, worker y buffers por capítulo; separar
 # locks por modelo sólo tendría sentido si se admite más de un dispositivo GPU.
 _gpu_job_lock = threading.Lock()
 

@@ -11,7 +11,7 @@ Solo se degradan a FRÍO las que RESPONDIERON `_COLD_AFTER` veces y **nunca** di
 NO se descartan: se re-sondean por round-robin (las de sondeo más antiguo primero), de modo que una
 fuente fría que MÁS TARDE gane el manga se re-descubre en ≤`_PROBE_EVERY` descubrimientos.
 
-Fail-safe (regla de oro «falló ≠ no había», ver documentación técnica): si no hay histórico o está corrupto, se
+Fail-safe («falló ≠ no había»): si no hay histórico o está corrupto, se
 buscan TODAS las fuentes. Nunca se reduce el conjunto por un fallo de lectura. Una fuente NUEVA (sin
 historial) es CALIENTE por defecto hasta que demuestre estar muerta.
 
