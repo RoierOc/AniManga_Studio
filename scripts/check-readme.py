@@ -6,8 +6,7 @@ from urllib.parse import unquote, urlsplit
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ('README.md', 'docs/INSTALL.md', 'docs/INSTALL_DESKTOP.md',
-         'docs/ANDROID.md', 'docs/MANGA.md', 'docs/ANIME.md', 'docs/CINE.md')
+FILES = ('README.md', *(str(p.relative_to(ROOT)) for p in sorted((ROOT / 'docs').glob('*.md'))))
 
 def anchors(text):
     found = set()

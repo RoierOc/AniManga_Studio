@@ -1,14 +1,19 @@
-# Modelos de escalado — "pon tu modelo"
+# Modelos de escalado
+
+Encuentra y compara modelos en [OpenModelDB](https://openmodeldb.info/), un
+catálogo comunitario de escalado. Revisa en cada ficha la licencia, arquitectura,
+escala y tipo de imagen recomendado antes de descargar los pesos.
 
 El escalador no tiene ningún modelo cableado en el código: lee `models/registry.json`
 al arrancar y carga lo que encuentre ahí. Para usar un modelo nuevo, basta con
 **descargar el archivo de pesos, colocarlo en `models/`, y agregar una entrada al JSON**
 — no hace falta tocar `src/api/upscale.py`.
 
-Cualquier arquitectura soportada por [spandrel](https://github.com/chaiNNer-org/spandrel)
-funciona (ESRGAN, RRDBNet, SwinIR, HAT, DAT, Real-ESRGAN, etc.), en cualquier escala
-(2x, 4x, ...) — la escala y los canales de entrada (B&N vs color) se leen del propio
-archivo de pesos en tiempo de carga, no se asumen.
+El cargador utiliza [spandrel](https://github.com/chaiNNer-org/spandrel).
+El archivo debe ser compatible con su versión instalada y con el flujo de imágenes
+de la app; aparecer en OpenModelDB no garantiza esa compatibilidad. La escala y
+los canales de entrada se leen del archivo de pesos. Prueba una página antes de
+procesar una colección completa.
 
 ## Formato de `models/registry.json`
 
@@ -70,7 +75,7 @@ MODELS_DIR=/ruta/a/tu/carpeta/de/modelos
 Los pesos (`.pth`, `.safetensors`, `.onnx*`) están en `.gitignore` — nunca se
 suben al repo, solo `registry.json` (que es texto, no binario).
 
-## Modelos incluidos por defecto (enlaces de descarga)
+## Archivos del registro predeterminado
 
 > El repo no trae los pesos por su tamaño. Hay dos formas de colocarlos:
 >
@@ -88,11 +93,15 @@ suben al repo, solo `registry.json` (que es texto, no binario).
 > **Manual** — descargalos de las fuentes oficiales y colocalos en `models/` con
 > estos nombres exactos para que el `registry.json` por defecto los encuentre:
 
-| Archivo | Modelo | Descarga |
-|---|---|---|
-| `4x-eula-digimanga-bw-v2-nc1.pth` | eula-digimanga (B&N) | _(completar enlace)_ |
-| `4x_MangaJaNai_1200p_V1_ESRGAN_70k.pth` | MangaJaNai V1 — variante 1200p | _(completar enlace)_ |
-| `4x_MangaJaNai_1400p_V1_ESRGAN_105k.pth` | MangaJaNai V1 — variante 1400p | _(completar enlace)_ |
+| Archivo | Modelo que debes buscar |
+|---|---|
+| `4x-eula-digimanga-bw-v2-nc1.pth` | eula-digimanga, blanco y negro |
+| `4x_MangaJaNai_1200p_V1_ESRGAN_70k.pth` | MangaJaNai V1, variante 1200p |
+| `4x_MangaJaNai_1400p_V1_ESRGAN_105k.pth` | MangaJaNai V1, variante 1400p |
+
+Consulta OpenModelDB o la publicación original del autor. Si eliges otra variante,
+actualiza el nombre y la entrada del registro: no renombres pesos diferentes para
+simular que corresponden al modelo predeterminado.
 
 Otros modelos compatibles que podés agregar tú mismo siguiendo el formato de
 arriba: IllustrationJaNai, AnimeSharp, DWTP, o cualquier modelo spandrel-compatible

@@ -8,10 +8,9 @@ no proporciona el mismo reproductor.
 ## Requisitos
 
 - Python: las dependencias actuales necesitan al menos **3.11** (`numpy==2.4.3`).
-  El entorno de desarrollo y el CI utilizan **3.14**; no se afirma aquí que cada
-  versión intermedia haya sido validada.
+  El CI utiliza **3.14**.
 - Node: Vite 8 declara **20.19+ o 22.12+**. Usa pnpm y el lockfile del frontend.
-- Git y acceso al repositorio, actualmente privado.
+- Git y acceso al repositorio.
 - Linux/WSL para los comandos de esta guía.
 
 Herramientas adicionales según lo que uses:

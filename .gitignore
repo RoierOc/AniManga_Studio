@@ -47,6 +47,8 @@ data/
 
 # Environment secrets
 .env
+.env.*
+!.env.example
 google_credentials.json
 
 # MPV screenshot artifacts

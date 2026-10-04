@@ -24,7 +24,7 @@ Si dispones de un `AniMangaStudio-Setup.exe` construido para tu configuración:
 
 El código del instalador incluye aprovisionamiento de WSL, backend, frontend y
 recursos. Eso **no garantiza una instalación desatendida en cualquier PC nuevo**:
-el repositorio es privado, los pesos pueden necesitar URLs y los servicios tienen
+los pesos pueden necesitar URLs y los servicios tienen
 credenciales propias. No se ofrece aquí un enlace de descarga pública del Setup.
 
 ## Construir el instalador desde WSL

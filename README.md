@@ -51,7 +51,8 @@ Cada guía explica el recorrido y qué integraciones necesitas.
   propio por volumen. La lectura de RAR/CBR requiere `bsdtar`.
 - **Escalar con IA** utilizando modelos registrados en `models/registry.json`,
   compatibles con spandrel. Los pesos se añaden por separado y el procesamiento
-  necesita una GPU NVIDIA con CUDA. [Guía de modelos](docs/MODELS.md).
+  necesita una GPU NVIDIA con CUDA. [Guía de modelos](docs/MODELS.md) ·
+  [Catálogo de modelos OpenModelDB](https://openmodeldb.info/).
 - **Comparar versiones y trabajar con traducciones** desde la ficha, con tareas
   de procesamiento y revisión separadas de la lectura cotidiana.
 - **Construir tomos CBZ**: seleccionar capítulos, portada, JPEG o WebP y calidad;
@@ -226,7 +227,6 @@ bash scripts/init-env.sh
 
 Abre `http://127.0.0.1:5101`. Este acceso sirve para desarrollo y para la
 interfaz compartida; **no sustituye el reproductor nativo principal**.
-El repositorio necesita autorización para clonarse mientras sea privado.
 Para GPU, dependencias del sistema e integraciones, sigue [la guía completa](docs/INSTALL.md).
 
 ### Configuración

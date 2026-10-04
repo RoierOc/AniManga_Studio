@@ -25,6 +25,9 @@ El escalado genera páginas de mayor resolución usando un modelo que registras
 por separado. Requiere GPU NVIDIA, CUDA y pesos compatibles con spandrel.
 No necesitas esos componentes para limitarte a leer u organizar.
 
+Encuentra modelos en [OpenModelDB](https://openmodeldb.info/). Revisa la licencia,
+la arquitectura y el uso recomendado antes de descargar sus pesos.
+
 ![Comparación animada del original y el escalado 4×](img/upscale_compare.gif)
 
 Registra el modelo según la [guía de modelos](MODELS.md), selecciona un capítulo
