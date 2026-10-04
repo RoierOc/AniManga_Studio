@@ -99,8 +99,9 @@ opcionales; diagnóstico de biblioteca y copias de seguridad del perfil.
 
 Capturas de la interfaz real, no renders ni maquetas. La ficha de Attack on Titan
 usa un estado neutral de muestra y no expone progreso personal de la biblioteca.
-El reproductor se capturó directamente de la ventana nativa Windows durante la
-reproducción. El calendario muestra el catálogo público en la vista real,
+El reproductor se capturó directamente de la ventana nativa Windows en el
+fotograma elegido por el usuario, sin cambiar la reproducción. El calendario
+muestra el catálogo público en la vista real,
 sin biblioteca ni historial personales. No incluyen capturas de Android.
 
 ### Biblioteca de manga
@@ -145,11 +146,12 @@ Cada episodio reúne su imagen, progreso y acciones de reproducción o descarga.
 
 ### Reproductor nativo de PC
 
-Vídeo real en la ventana Windows con libmpv, capturado durante la reproducción
-sin pausarla. Los controles reúnen posición, saltos, volumen, subtítulos,
-Anime4K y acceso a episodios. En esta captura está seleccionado el perfil H.
+Fotograma de *Orb: On the Movements of the Earth* en la ventana Windows con
+libmpv, capturado en el punto elegido por el usuario. Los controles reúnen
+posición, saltos, volumen, subtítulos, Anime4K y acceso a episodios.
+En esta captura está seleccionado el perfil Máxima H.
 
-![Reproductor nativo Windows con vídeo, controles, subtítulos y Anime4K H](docs/img/current/native-player.webp)
+![Reproductor nativo Windows mostrando Orb, subtítulos, controles y Anime4K Máxima H](docs/img/current/native-player.webp)
 
 ### Calendario de estrenos
 
