@@ -36,6 +36,11 @@ Pinia; no es necesario abrir un navegador para usar la aplicación nativa.
 
 ## Qué puedes hacer
 
+Empieza por el área que quieras utilizar:
+[Manga y escalado](docs/MANGA.md) · [Anime y reproductor](docs/ANIME.md) ·
+[Series y películas](docs/CINE.md) · [Android](docs/ANDROID.md).
+Cada guía explica el recorrido y qué integraciones necesitas.
+
 ### Manga: descubrir, leer y preparar tu edición
 
 - **Explorar MangaDex y otras fuentes** mediante Suwayomi, añadir obras y
@@ -95,7 +100,8 @@ opcionales; diagnóstico de biblioteca y copias de seguridad del perfil.
 Capturas de la interfaz real, no renders ni maquetas. La ficha de Attack on Titan
 usa un estado neutral de muestra y no expone progreso personal de la biblioteca.
 El reproductor se capturó directamente de la ventana nativa Windows durante la
-reproducción. No incluyen capturas de Android.
+reproducción. El calendario muestra el catálogo público en la vista real,
+sin biblioteca ni historial personales. No incluyen capturas de Android.
 
 ### Biblioteca de manga
 
@@ -110,6 +116,19 @@ Selección de capítulos y ajustes de salida dentro de la ficha. Puedes preparar
 otro tomo mientras el anterior se procesa; no hace falta esperar a que termine.
 
 ![Tomo Builder con selección de capítulos, formato CBZ, compresión y calidad](docs/img/current/tomo-builder.webp)
+
+### Escalado de manga: antes y después
+
+Una comparación animada del mismo recorte original y su versión escalada 4×.
+Permite apreciar los trazos y las tramas; el resultado depende del modelo y
+de la calidad de la página de entrada.
+
+<p align="center">
+  <img src="docs/img/upscale_compare.gif" width="720" alt="Comparación animada con deslizador entre una página original y su escalado con IA 4×">
+</p>
+
+Para preparar tu propio modelo y comparar páginas, consulta la
+[guía de manga](docs/MANGA.md) y la [guía de modelos](docs/MODELS.md).
 
 ### Mi Anime
 

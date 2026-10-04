@@ -79,6 +79,18 @@ _shots*.mjs
 _mark_shot.mjs
 docs/dev/mockups/
 
+# Instrucciones, planes y configuraciones locales de agentes
+/AGENTS.md
+/.agents/
+/.kiro/
+/.superpowers/
+/skills-lock.json
+/docs/dev/
+/docs/superpowers/
+/.github/agents/
+/.github/hooks/
+/.github/skills/
+
 # Local configuration and public repository metadata.
 /.*/
 !/.github/

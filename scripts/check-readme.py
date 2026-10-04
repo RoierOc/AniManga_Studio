@@ -7,7 +7,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ('README.md', 'docs/INSTALL.md', 'docs/INSTALL_DESKTOP.md',
-         'docs/ANDROID.md')
+         'docs/ANDROID.md', 'docs/MANGA.md', 'docs/ANIME.md', 'docs/CINE.md')
 
 def anchors(text):
     found = set()
@@ -19,7 +19,8 @@ def anchors(text):
 def main():
     checked = 0
     for internal in ('docs/dev', 'docs/superpowers/plans',
-                     'docs/plan_tauri_desktop.md', 'docs/img/current/README.md'):
+                     'docs/plan_tauri_desktop.md', 'docs/img/current/README.md',
+                     'documentación técnica', '.development/config.json'):
         assert not (ROOT / internal).exists(), f'Internal agent document remains: {internal}'
     for name in FILES:
         path = ROOT / name
