@@ -6,7 +6,7 @@ from urllib.parse import unquote, urlsplit
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
-FILES = ('README.md', *(str(p.relative_to(ROOT)) for p in sorted((ROOT / 'docs').glob('*.md'))))
+FILES = ('README.md', 'README.es.md', *(str(p.relative_to(ROOT)) for p in sorted((ROOT / 'docs').glob('*.md'))))
 
 def anchors(text):
     found = set()
@@ -37,11 +37,17 @@ def main():
             checked += 1
     ET.parse(ROOT / 'docs/img/banner.svg')
     screenshots = list((ROOT / 'docs/img/current').glob('*.webp'))
-    assert len(screenshots) == 8, 'Expected eight reviewed screenshots'
+    expected = {
+        'home.webp', 'manga-library.webp', 'tomo-builder.webp',
+        'anime-library.webp', 'anime-detail.webp', 'native-player.webp',
+        'anime-schedule.webp', 'cine.webp', 'manga-versions.webp',
+        'manga-translation.webp', 'manga-model-selector.webp',
+    }
+    assert {p.name for p in screenshots} == expected, 'Reviewed screenshot set does not match'
     for path in screenshots:
         raw = path.read_bytes()
         assert raw[:4] == b'RIFF' and raw[8:12] == b'WEBP', f'Invalid WebP: {path.name}'
-    print(f'OK: {len(FILES)} guides, {checked} local references, eight WebP screenshots, no internal logs and SVG banner')
+    print(f'OK: {len(FILES)} guides, {checked} local references, {len(screenshots)} WebP screenshots, no internal logs and SVG banner')
 
 if __name__ == '__main__':
     main()
