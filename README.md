@@ -1,308 +1,222 @@
-<p align="center">
-  <img src="docs/img/banner.svg" alt="AniManga Studio — manga, anime, series y películas" width="100%">
-</p>
+<p align="center"><img src="docs/img/banner.svg" alt="AniManga Studio" width="100%"></p>
 
-<p align="center">
-  <strong>Tu biblioteca. Tu reproductor. Tu estudio de manga.</strong><br>
-  Una aplicación de escritorio para leer, ver, organizar y mejorar tu colección,<br>
-  con una app Android complementaria que también puede leer manga sin depender del PC.
-</p>
+<p align="center"><strong>English</strong> · <a href="README.es.md">Español</a></p>
 
-<p align="center">
-  <a href="LICENSE">Licencia MIT</a> ·
-  <a href="#recorrido-visual">Recorrido visual</a> ·
-  <a href="#instalación">Instalación</a> ·
-  <a href="#android">Android</a> ·
-  <a href="#documentación">Documentación</a>
-</p>
+# AniManga Studio
 
-![Inicio de AniManga Studio con una obra destacada y la acción de continuar](docs/img/current/home.webp)
+**A self-hosted anime and manga manager powered by AI image enhancement.** Organize your collection, discover releases, read manga and watch anime in one desktop application: real-time Anime4K CNN shaders for anime, and local PyTorch super-resolution models for manga.
 
-## Qué es AniManga Studio
+Anime shaders process frames during playback without changing the video file. Manga models generate higher-resolution pages for reading and export. Enhancement does not guarantee recovery of the original artwork's missing detail.
 
-AniManga Studio reúne **manga, anime, series y películas** en una interfaz con
-bibliotecas, descubrimiento, progreso y herramientas de procesamiento. El contenido
-y el estado se guardan en tu equipo; los catálogos, las fuentes y los servicios de
-metadatos necesitan Internet cuando se consultan.
+[Features](#features) · [Visual tour](#visual-tour) · [Android](#android) · [Getting started](#getting-started) · [Integrations](#integrations) · [Content and licenses](#content-and-licenses)
 
-La experiencia principal en Windows utiliza una **ventana propia en Rust/WebView2
-y un reproductor libmpv integrado**. El backend Flask y las herramientas de
-procesamiento se ejecutan en WSL2. La interfaz compartida está hecha con Vue 3 y
-Pinia; no es necesario abrir un navegador para usar la aplicación nativa.
+![AniManga Studio home with featured works and continue actions](docs/img/current/home.webp)
 
-> Es un proyecto en desarrollo activo, no una plataforma de streaming ni un
-> paquete con contenido incluido. Las integraciones y las herramientas externas
-> se configuran por separado. Consulta [los límites actuales](#límites-actuales).
+## Features
 
-## Qué puedes hacer
+### Manga: choose the edition, improve the pages, keep reading
 
-Empieza por el área que quieras utilizar:
-[Manga y escalado](docs/MANGA.md) · [Anime y reproductor](docs/ANIME.md) ·
-[Series y películas](docs/CINE.md) · [Android](docs/ANDROID.md).
-Cada guía explica el recorrido y qué integraciones necesitas.
+- **Library and discovery.** Search MangaDex and sources exposed by Suwayomi, manage downloaded chapters and local imports, and keep reading progress. Source downloads and imported archives can coexist within the same manga.
+- **Versions and source selection.** Browse editions by language, read samples and compare source quality before downloading. Rankings use sampled pages and are selection aids, not a guarantee that every page is better.
+- **Chapter coverage.** See which sources provide each chapter, filter the coverage grid by language and select sources to fill gaps rather than treating every edition as a separate work.
+- **Translation by text transplant.** Combine higher-quality artwork with an existing Spanish edition. The pipeline aligns corresponding pages, detects speech balloons and composites Spanish text regions onto the chosen artwork. This is **not unrestricted machine translation**: it requires compatible editions and a Spanish translation. Different layouts or artwork can prevent reliable matching; inspect the result before using it as your main chapter.
+- **Local PyTorch super-resolution.** Load supported models through [spandrel](https://github.com/chaiNNer-org/spandrel). The visual selector separates black-and-white and color use cases, shows unavailable weights and requires explicit confirmation before changing the active model. Before/after comparisons appear when local preview assets have been prepared.
+- **Model choice.** The registry covers families such as MangaJaNai, eula-digimanga, DWTP, APISR, IllustrationJaNai and AnimeSharp. Availability depends on installed weights. Scaling factors belong to each model, not a universal “4K” switch; adaptive entries can select weights by input-page height.
+- **Bring compatible models.** Get weights from original releases or [OpenModelDB](https://openmodeldb.info/), place them in the models directory and register them in `models/registry.json`. Compatibility and model licenses apply. This is a file-and-registry workflow, **not an in-app upload feature**. See [Models](docs/MODELS.md).
+- **Integrated reader.** Read original or enhanced pages, resume reading, navigate by keyboard or page edges, scroll with the wheel and zoom with Ctrl + wheel. Hide controls for distraction-free reading.
+- **CBZ/CBR import.** Import multiple archives, including drag and drop, into a new or existing manga. Review chapter assignment to avoid duplicates caused only by different titles.
+- **Volume builder.** Assemble chapters from original or enhanced pages, choose a cover or color page, and export comic archives with ComicInfo.xml metadata. Compatible cover formats are preserved when possible. Encoding and quality settings affect size and processing time. Use CBZ for interoperability: the current export option named CBR writes ZIP content with a .cbr extension, not a genuine RAR archive.
+- **Multiple exports.** Start one volume and configure another while jobs run, with progress tracking and local output files. Worker limits still govern concurrency.
 
-### Manga: descubrir, leer y preparar tu edición
+### Anime: discovery, downloads and native playback
 
-- **Explorar MangaDex y otras fuentes** mediante Suwayomi, añadir obras y
-  descargar capítulos a la biblioteca local.
-- **Continuar la lectura** desde la página guardada, con modos paginado y continuo,
-  zoom y acceso a originales y páginas escaladas.
-- **Leer archivos CBZ/CBR locales** en una biblioteca diferenciada, con progreso
-  propio por volumen. La lectura de RAR/CBR requiere `bsdtar`.
-- **Escalar con IA** utilizando modelos registrados en `models/registry.json`,
-  compatibles con spandrel. Los pesos se añaden por separado y el procesamiento
-  necesita una GPU NVIDIA con CUDA. [Guía de modelos](docs/MODELS.md) ·
-  [Catálogo de modelos OpenModelDB](https://openmodeldb.info/).
-- **Comparar versiones y trabajar con traducciones** desde la ficha, con tareas
-  de procesamiento y revisión separadas de la lectura cotidiana.
-- **Construir tomos CBZ**: seleccionar capítulos, portada, JPEG o WebP y calidad;
-  incluir `ComicInfo.xml`, preparar varios trabajos y seguir su progreso tanto
-  en la ficha como en Actividad. La cola admite hasta tres exportaciones simultáneas.
-- **Guardar los tomos en el equipo** desde la app, sin depender de la bandeja de
-  descargas de un navegador; también hay integraciones con Google Drive y WebDAV.
+- **Discovery and library.** AniList-backed search, seasonal releases, daily airing calendar, related works and franchise navigation. Explore genres and themes, combine filters and set theme-relevance thresholds.
+- **Episode management.** Track watched episodes and continue watching, import local folders, correct episode numbering and manage files across disks. Viewing history is separate from the downloaded files.
+- **Torrents.** Search Nyaa and send releases to qBittorrent. Batch releases offer file selection before downloading: choose a season or individual episodes instead of the whole collection. qBittorrent remains a separately configured client.
+- **Native player.** The Windows Rust/WebView2 shell embeds **libmpv**. Video and subtitles use mpv rendering; the browser player is a separate path, not the native shader implementation.
+- **Real-time CNN enhancement.** Anime4K presets range from lighter processing to multi-stage restoration:
+  - **Double restoration:** two CNN restoration stages, two UL CNN upscaling stages and Thin HQ line refinement.
+  - **Maximum / triple restoration:** highlight clamp → Restore CNN VL → Upscale CNN x2 UL → automatic pre-downscale stages → Restore CNN VL → Upscale CNN x2 UL → Restore CNN UL → Thin HQ.
 
-### Anime: biblioteca, estrenos y reproducción
+  VL and UL identify Anime4K network variants. “Triple” counts restoration stages: it does **not** mean three full video encodes, guaranteed 3× quality or fixed output resolution. Effective processing depends on shader conditions, input resolution and playback size; higher presets consume more GPU time.
+- **Subtitles.** Select embedded tracks or search configured external providers, synchronize timing with ffsubsync, translate with local Ollama inference and embed prepared subtitles with mkvmerge. Availability depends on provider access, credentials and compatible tracks. The current translation implementation has no Gemini fallback.
+- **Language study.** This development branch also supports English/Japanese study tracks with a secondary translation track, always-visible or on-demand assistance, independent timing and text sizes, and Japanese dictionary lookup. It requires actual subtitle tracks, not automatic speech transcription.
 
-- **Buscar en AniList**, explorar temporadas y recomendaciones, y consultar las
-  relaciones y el orden de estreno de una franquicia.
-- **Vincular carpetas que ya tienes** o buscar releases en Nyaa y enviarlos a
-  qBittorrent. No necesitas volver a descargar un anime para incorporarlo.
-- **Ver portadas y títulos de episodios**, con metadatos por temporada cuando
-  pueden resolverse y miniaturas locales persistidas cuando hay vídeo disponible.
-- **Consultar estrenos por día**, en vista semanal o agenda, y distinguir los
-  episodios vistos de los que están descargados.
-- **Reproducir con libmpv**: audio y subtítulos seleccionables, progreso,
-  siguiente episodio y preferencias de reproducción por anime.
-- **Aplicar Anime4K en tiempo real**, con perfiles desde Calidad hasta Máxima
-  calidad, incluidas las variantes Referencia y H. Es distinto del escalado
-  que genera y guarda un archivo nuevo.
-- **Buscar, sincronizar y traducir subtítulos**, usando las fuentes configuradas,
-  ffsubsync y Ollama local; inyectarlos en MKV con MKVToolNix cuando corresponda.
-- **Consultar la ficha técnica** de un episodio y administrar descargas desde
-  una vista común de qBittorrent.
+### Local-first collection
 
-### Cine: series y películas en su propio espacio
+Progress, history, activity and storage tools are part of the application. WebDAV can expose configured local content to compatible readers. The Android companion is a **separate project**; this desktop checkout does not build its APK.
 
-- **Cambiar al modo Cine**, con biblioteca, búsqueda, descubrimiento, estrenos e
-  historial propios, sin mezclar los títulos con la biblioteca de anime.
-- **Integrar Sonarr, Radarr y Prowlarr** para organizar series, películas y búsquedas
-  de releases, con qBittorrent como cliente de descarga.
-- **Continuar viendo** y utilizar el reproductor compartido, incluyendo pistas
-  de audio y subtítulos.
+Self-hosted does not mean entirely offline: discovery, sources, torrents and external subtitle services need network access. Local enhancement runs on your own hardware.
 
-### Herramientas compartidas
+### Cinema: a separate space for series and films
 
-Inicio con obras destacadas y accesos para continuar; etiquetas y filtros;
-historial; paleta de comandos; actividad con progreso de trabajos; avisos nativos
-opcionales; diagnóstico de biblioteca y copias de seguridad del perfil.
+Manage series and films in their own library, with discovery, history and continue-watching actions. Sonarr, Radarr and Prowlarr integrations handle the configured collection and release workflows, with qBittorrent as the download client. Playback uses the shared player.
 
-## Recorrido visual
+## Visual tour
 
-Un recorrido por la biblioteca, la preparación de tomos, el reproductor y los
-estrenos. Cada área reúne las herramientas que necesitas para organizar,
-leer y ver tu colección.
+### Choosing a manga edition
 
-### Biblioteca de manga
+Start with the work, compare available editions and choose sources chapter by chapter. Language and coverage filters narrow the selection; page samples help judge the artwork.
 
-La lectura pendiente, los estados y los filtros viven junto a tu colección.
-Las pestañas distinguen los descargados de los archivos locales.
+![Versions tab with source discovery and chapter-coverage controls](docs/img/current/manga-versions.webp)
 
-![Biblioteca de manga con continuar leyendo, estados, géneros y densidad de tarjetas](docs/img/current/manga-library.webp)
+*The entry point for version discovery; source results appear after a search.*
 
-### Tomo Builder
+```mermaid
+flowchart LR
+    A["Manga"] --> B["Versions by language"]
+    B --> C["Page samples and quality comparison"]
+    C --> D["Chapter coverage and source selection"]
+    D --> E["Download selected chapters"]
+    E --> F["Read original pages"]
+    E --> G["PyTorch enhancement"]
+    G --> H["Read or export enhanced pages"]
+```
 
-Selección de capítulos y ajustes de salida dentro de la ficha. Puedes preparar
-otro tomo mientras el anterior se procesa; no hace falta esperar a que termine.
+### Manga translation: keep the artwork, use an existing translation
 
-![Tomo Builder con selección de capítulos, formato CBZ, compresión y calidad](docs/img/current/tomo-builder.webp)
+Text transplant uses two editions of the same chapter. It transfers an existing Spanish translation rather than asking a language model to translate the whole manga.
 
-### Escalado de manga: antes y después
+![Manga translation controls with the option to use downloaded artwork](docs/img/current/manga-translation.webp)
 
-Una comparación animada del mismo recorte original y su versión escalada 4×.
-Permite apreciar los trazos y las tramas; el resultado depende del modelo y
-de la calidad de la página de entrada.
+*Prepare source discovery here, optionally keeping local enhanced pages as the artwork.*
 
-<p align="center">
-  <img src="docs/img/upscale_compare.gif" width="720" alt="Comparación animada con deslizador entre una página original y su escalado con IA 4×">
-</p>
+```mermaid
+flowchart LR
+    A["Higher-quality artwork edition"] --> C["Align matching pages"]
+    B["Existing Spanish edition"] --> C
+    C --> D["Detect and match speech balloons"]
+    D --> E["Composite Spanish text regions"]
+    E --> F["Review the resulting chapter"]
+    F --> G["Read, upscale or export"]
+```
 
-Para preparar tu propio modelo y comparar páginas, consulta la
-[guía de manga](docs/MANGA.md) y la [guía de modelos](docs/MODELS.md).
+Differences between editions can prevent reliable alignment. Review is important: this diagram describes the processing path, not a guarantee that every page can be composed.
 
-### Mi Anime
+### Manga library
 
-Obras destacadas, continuar viendo y biblioteca con filtros de estado y género.
+Continue reading, filter your collection and distinguish downloaded chapters from local archives.
 
-![Mi Anime con la biblioteca y las acciones para continuar](docs/img/current/anime-library.webp)
+![Manga library with reading progress and filters](docs/img/current/manga-library.webp)
 
-### Ficha y episodios
+### Volume builder
 
-El estado de visionado y los archivos disponibles son conceptos separados.
-Cada episodio reúne su imagen, progreso y acciones de reproducción o descarga.
+Choose chapters, cover, encoding and quality within the manga details. Prepare another volume while an export is processing.
 
-![Ficha de Attack on Titan con sus episodios y miniaturas](docs/img/current/anime-detail.webp)
+![Volume builder with chapter selection and export settings](docs/img/current/tomo-builder.webp)
 
-### Reproductor nativo de PC
+### Manga enhancement
 
-Reproduce tus episodios con libmpv integrado. Selecciona audio y subtítulos,
-ajusta el volumen, salta la introducción y cambia de episodio desde los controles.
-Los perfiles Anime4K permiten mejorar la imagen en tiempo real.
+Compare the original page with the enhanced result before deciding how to prepare your edition.
 
-![Reproductor nativo Windows mostrando Orb, subtítulos, controles y Anime4K Máxima H](docs/img/current/native-player.webp)
+![Model selector with black-and-white and color groups and a before/after comparison](docs/img/current/manga-model-selector.webp)
 
-### Calendario de estrenos
+*Previewing a model does not activate it. Confirm explicitly when you want to change the model used for enhancement.*
 
-Consulta qué sale cada día y cambia entre la semana y una agenda compacta.
-Los horarios dependen de la información recibida del catálogo.
+![Original and enhanced manga comparison](docs/img/upscale_compare.gif)
 
-![Calendario semanal de estrenos de anime](docs/img/current/anime-schedule.webp)
+*The same crop before and after 4× enhancement. Results vary by source and model.*
 
-### Series y películas
+### Anime library
 
-El modo Cine cambia la navegación y mantiene una biblioteca propia.
+Featured works, continue watching and your collection with status and genre filters.
 
-![Biblioteca de Cine con una serie destacada y acceso para continuar](docs/img/current/cine.webp)
+![Anime library](docs/img/current/anime-library.webp)
+
+### Details and episodes
+
+Episode thumbnails, viewing progress and playback/download actions, with watched state separate from file availability.
+
+![Attack on Titan details and episodes](docs/img/current/anime-detail.webp)
+
+### Native PC player
+
+Integrated libmpv playback with timeline, audio, subtitles, Anime4K and episode controls. The screenshot shows a double-restoration preset; the current maximum adds a third CNN restoration stage.
+
+![Native Windows player with Anime4K and subtitles](docs/img/current/native-player.webp)
+
+### Airing calendar
+
+See releases by day and switch between weekly and agenda views. Times depend on catalog metadata.
+
+![Weekly anime airing calendar](docs/img/current/anime-schedule.webp)
+
+### Subtitle preparation
+
+Embedded tracks and external subtitles are distinct inputs. Use an existing suitable track when available; translation and synchronization are separate operations, not mandatory steps for every episode.
+
+```mermaid
+flowchart LR
+    A["Embedded subtitle track"] --> C["Choose subtitle"]
+    B["Configured external provider"] --> C
+    C --> D["Optional local translation with Ollama"]
+    C --> E["Optional timing synchronization with ffsubsync"]
+    D --> E
+    E --> F["Prepared subtitle"]
+    C --> F
+    F --> G["Select for playback"]
+    F --> H["Optional MKV embedding with mkvmerge"]
+```
+
+### Series and films
+
+Cinema mode has its own library and navigation, without mixing titles into the anime collection.
+
+![Cinema library](docs/img/current/cine.webp)
 
 ## Android
 
-**Android es otro proyecto**, desarrollado en Kotlin y Jetpack Compose, en la
-carpeta hermana `animanga-android`. Su código y su APK no forman parte de este
-repositorio; no es una versión de la web empaquetada.
+The companion is a separate Kotlin/Jetpack Compose project in the sibling folder `animanga-android`; its code and APK are not included here.
 
-- MangaDex y extensiones compatibles con Mihon, con biblioteca y descargas locales.
-- Lectura sin conexión y sin necesitar que el PC esté encendido para los mangas
-  añadidos desde las fuentes del móvil.
-- **Mi PC** como origen adicional: importar capítulos concretos, incluidas las
-  páginas escaladas, sin copiar toda la biblioteca de escritorio.
-- Biblioteca **Archivos** para CBZ/CBR, separada de MangaDex y del PC.
-- Anime del PC mediante libmpv, descarga para verlo sin conexión, progreso y
-  calendario de temporada.
+- Local manga library and downloads through MangaDex and compatible extensions.
+- Offline manga reading without requiring an active PC for mobile-source titles.
+- PC as an additional source, including downloading enhanced manga chapters.
+- A separate CBZ/CBR archive library.
+- PC anime playback/downloads and a seasonal calendar.
 
-El escalado de manga con IA y las tareas pesadas de traducción permanecen en el
-PC. El móvil consume sus resultados. Consulta [la separación PC/Android y el
-acceso remoto](docs/ANDROID.md).
+Heavy AI upscaling and translation remain on the PC; Android can consume their results.
 
-## Requisitos por función
+## Getting started
 
-| Función | Qué necesita |
-|---|---|
-| Backend e interfaz | Python **3.11 o posterior** por las dependencias actuales; Node **20.19+ o 22.12+** y pnpm para compilar |
-| Escritorio Windows principal | Windows, WebView2, shell Rust con libmpv y backend en WSL2 |
-| Escalado de manga con IA | GPU NVIDIA, driver compatible, PyTorch con CUDA y pesos de modelos |
-| Anime4K en vivo | GPU compatible con el renderizador de libmpv y shaders instalados; no utiliza el worker PyTorch |
-| Torrents | qBittorrent con WebUI/API habilitada y accesible desde el backend |
-| Fuentes de manga | Java y Suwayomi con sus extensiones configuradas |
-| Cine | Sonarr, Radarr y Prowlarr configurados según las funciones utilizadas |
-| Subtítulos y herramientas de vídeo | ffmpeg/ffprobe, ffsubsync, MKVToolNix y Ollama según la operación |
-| Lectura CBR/RAR | `bsdtar` |
+The main desktop configuration is **Windows with a native Rust/WebView2 + libmpv shell and a backend in WSL2**. Other installation paths have different requirements and are not equivalent to this native playback configuration.
 
-**CUDA no es un requisito universal para leer, organizar o ver tu biblioteca.**
-Una integración ausente limita su función; no implica que debas instalar toda
-la pila para empezar.
-
-## Instalación
-
-### Escritorio Windows: experiencia principal
-
-La ruta principal combina el **shell nativo de Windows** y el motor en **WSL2**.
-El repositorio incluye las herramientas para construir `AniMangaStudio-Setup.exe`
-y preparar las dependencias de escritorio.
-
-Para preparar el motor, compilar el shell y entender las alternativas, consulta
-[Instalación de escritorio](docs/INSTALL_DESKTOP.md).
-
-### Backend e interfaz para desarrollo en Linux/WSL
+1. Follow [Desktop installation](docs/INSTALL_DESKTOP.md) for setup/build instructions.
+2. Configure library paths and optional integrations using `.env.example`.
+3. Install compatible weights for manga enhancement: [Model guide](docs/MODELS.md).
+4. Configure qBittorrent's WebUI for torrents and Suwayomi for additional sources.
 
 ```bash
 git clone https://github.com/RoierOc/animanga-studio.git
 cd animanga-studio
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-pnpm --dir frontend install --frozen-lockfile
-pnpm --dir frontend build
-bash scripts/init-env.sh
-./start_server.sh
 ```
 
-Abre `http://127.0.0.1:5101`. Este acceso sirve para desarrollo y para la
-interfaz compartida; **no sustituye el reproductor nativo principal**.
-Para GPU, dependencias del sistema e integraciones, sigue [la guía completa](docs/INSTALL.md).
+[Backend installation](docs/INSTALL.md) covers dependencies, frontend compilation and system tools. After setup, `./start_server.sh` starts the backend at `http://localhost:5101` by default; it does not itself build the native Windows player.
 
-### Configuración
+**Hardware:** manga PyTorch upscaling requires a supported NVIDIA GPU and compatible CUDA/PyTorch installation. Anime4K uses the playback GPU through shaders, not the manga worker. Memory needs depend on model, page size and preset. Basic library management does not require AI inference.
 
-Los directorios de datos y los modelos se configuran aparte del código.
-Usa `.env.example` y **Ajustes → Conexiones y claves API** como puntos de partida.
+**Optional tools:** Suwayomi/Java for additional sources; qBittorrent for torrents; FFmpeg/MKVToolNix for media operations; Ollama with downloaded language-model weights for subtitle translation; bsdtar for reading genuine CBR/RAR archives. Credentials are needed only for integrations that require them. Never commit your `.env`, personal library or secrets.
 
-| Integración | Configuración principal |
+## Integrations
+
+AniManga Studio integrates these projects and services without claiming their authorship or replacing their licenses:
+
+| Project/service | Role |
 |---|---|
-| MangaDex | Credenciales opcionales para las funciones de cuenta; el catálogo público no exige iniciar sesión |
-| TMDB | Clave para metadatos e imágenes cuando la correspondencia puede resolverse |
-| qBittorrent | WebUI, dirección y credenciales configuradas en Ajustes |
-| Subtítulos | Credenciales de las fuentes que quieras usar y modelo local de Ollama |
-| Suwayomi | Servicio Java y extensiones instaladas |
-| Cine | Conexiones y claves de Sonarr, Radarr y Prowlarr |
-| Modelos IA | Pesos locales y entradas en `models/registry.json` |
+| [Anime4K](https://github.com/bloc97/Anime4K) | CNN restoration, upscaling and line-refinement shaders |
+| [mpv / libmpv](https://mpv.io/) | Native video and subtitle playback |
+| [PyTorch](https://pytorch.org/) / [spandrel](https://github.com/chaiNNer-org/spandrel) | Local image inference and supported architecture loading |
+| [Suwayomi Server](https://github.com/Suwayomi/Suwayomi-Server) | Optional manga-source server and extension integration |
+| [MangaDex](https://mangadex.org/) / [AniList](https://anilist.co/) | Source access, discovery and metadata |
+| [qBittorrent](https://www.qbittorrent.org/) / [Nyaa](https://nyaa.si/) | Torrent client integration and release discovery |
+| [FFmpeg](https://ffmpeg.org/) / [MKVToolNix](https://mkvtoolnix.download/) | Media inspection and container/subtitle operations |
+| [Ollama](https://ollama.com/) | Local subtitle-translation inference |
 
-No publiques `.env`, tokens, configuración personal ni bibliotecas. Para acceso
-desde Android, usa el emparejamiento y la autenticación de la app; fuera de la
-red local, una VPN privada. **No abras el backend directamente a Internet.**
+Suwayomi is an optional, separately obtained runtime, **not an included manga catalog**. Extensions access third-party services subject to their own terms and availability. Downloaded model weights, dictionaries and dependencies also keep their respective licenses.
 
-## Límites actuales
+## Content and licenses
 
-- Las fuentes, los catálogos y los metadatos son servicios externos: pueden
-  cambiar, limitar solicitudes o no tener una correspondencia para tu edición.
-- Las dependencias y los pesos de IA no se incluyen en Git. Los scripts de descarga
-  no garantizan conseguir todos los modelos sin configurar sus URLs.
-- La opción de exportación denominada **CBR** actualmente escribe un contenedor
-  ZIP con esa extensión, no un RAR auténtico. **Usa CBZ para interoperabilidad.**
-  Esto no afecta a la lectura de CBR/RAR reales mediante `bsdtar`.
-- Los scripts Linux/Tauri y Windows sin WSL son rutas alternativas con
-  capacidades distintas del reproductor nativo principal.
+AniManga Studio is a software tool, **not a distributor of anime episodes, manga chapters or subtitle collections**. Cloning the code does not include a personal media library. Imported/downloaded content is the user's responsibility: use material you own or are authorized to access, and respect copyright and service terms.
 
-## Desarrollo
+Interface screenshots and illustrative media in this documentation may show third-party artwork. They do not grant rights to the depicted works. The application license does not cover third-party artwork, media, extensions, model weights or dependencies.
 
-```bash
-pnpm --dir frontend test
-pnpm --dir frontend build
-python -m pytest tests/ -q
-```
-
-Las pruebas Python necesitan pytest y las dependencias de los módulos que
-importan. El workflow [CI](.github/workflows/ci.yml) describe su entorno.
-
-```text
-animanga-studio/
-├── frontend/            # Vue 3 + Pinia + Vite; interfaz actual
-├── src/api/             # API Flask y servicios por dominio
-├── desktop/native/      # Shell Windows: Rust, WebView2 y libmpv
-├── desktop/windows/     # Constructor y aprovisionamiento del instalador
-├── desktop/wsl/         # Preparación del motor WSL
-├── models/              # Registro versionado; pesos fuera de Git
-├── scripts/             # Configuración y descarga de recursos
-├── tests/               # Regresiones del backend
-├── suwayomi/            # Integración de fuentes de manga
-├── servarr/             # Integración de series y películas
-├── docs/                # Guías de uso, instalación e integraciones
-└── data/                # Datos locales generados; fuera de Git
-```
-
-`static/` y `templates/` contienen la interfaz histórica. No son el frontend
-principal ni el punto de partida para nuevas funciones.
-
-## Documentación
-
-- [Instalación y configuración del motor](docs/INSTALL.md).
-- [Aplicación de escritorio y rutas de instalación](docs/INSTALL_DESKTOP.md).
-- [Modelos de escalado](docs/MODELS.md).
-- [Series y películas: Servarr](docs/SERVARR.md).
-- [Android, independencia y acceso al PC](docs/ANDROID.md).
-
-## Licencia y contenido
-
-El código de este repositorio se distribuye bajo [MIT](LICENSE).
-Las dependencias, los modelos y sus pesos conservan sus propias licencias.
-Las portadas, los logotipos y las obras visibles en las capturas pertenecen a
-sus respectivos titulares y **no quedan cubiertos por la licencia MIT del código**.
-Utiliza las fuentes y los archivos conforme a sus condiciones y a tus derechos
-de acceso. El proyecto no incluye manga, episodios, películas ni credenciales.
+The project's own code is [MIT licensed](LICENSE). Third-party components keep their own licenses and any obligations applicable to redistribution of packaged builds.
